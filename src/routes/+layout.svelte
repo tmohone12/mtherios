@@ -1,8 +1,15 @@
 <script>
 	import '../app.css';
 	import AppShell from '$lib/components/layout/AppShell.svelte';
+	import OnboardingWizard from '$lib/components/wizard/OnboardingWizard.svelte';
+	import { app } from '$lib/stores/app.svelte';
+	import { onMount } from 'svelte';
 
 	let { children } = $props();
+
+	onMount(() => {
+		app.init();
+	});
 </script>
 
 <svelte:head>
@@ -15,6 +22,21 @@
 	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 </svelte:head>
 
-<AppShell>
-	{@render children()}
-</AppShell>
+{#if app.loading}
+	<!-- Loading splash -->
+	<div class="flex h-[100dvh] items-center justify-center bg-[#08090c]">
+		<svg viewBox="0 0 48 48" fill="none" class="h-12 w-12 animate-pulse text-[#d4a853]">
+			<path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="currentColor" stroke-width="1.5" fill="none"/>
+			<circle cx="24" cy="24" r="5" fill="currentColor" opacity="0.6"/>
+		</svg>
+	</div>
+{:else if app.showWizard}
+	<OnboardingWizard
+		onComplete={(storyId) => app.completeOnboarding(storyId)}
+		onSkip={() => { app.showWizard = false; app.onboardingComplete = true; }}
+	/>
+{:else}
+	<AppShell>
+		{@render children()}
+	</AppShell>
+{/if}
