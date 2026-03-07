@@ -18,6 +18,15 @@
 	let isGenerating = $state(false);
 	let abortController = $state<AbortController | null>(null);
 
+	// Listen for injected text from suggestion/choice chips
+	$effect(() => {
+		const injected = (window as any).__mtherios_input_inject;
+		if (injected) {
+			inputValue = injected;
+			(window as any).__mtherios_input_inject = null;
+		}
+	});
+
 	const isCreativeMode = $derived(story.storyMode === 'creative-writing');
 
 	const actionConfig: Record<ActionType, {
