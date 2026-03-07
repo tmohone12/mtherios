@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Sword, Feather, ChevronLeft, ChevronRight, Globe, Zap, Play, Plus, X, Sparkles, Upload } from 'lucide-svelte';
 	import { fly, fade } from 'svelte/transition';
+	import { onMount } from 'svelte';
 	import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 	import { getSetting, setSetting, createStory, createCharacter, createLorebookEntry } from '$lib/services/database';
 	import { convertToEntries, type ImportedEntry } from '$lib/services/lorebookImporter';
@@ -17,11 +18,29 @@
 	// ── Wizard State ──
 	let currentStep = $state(0);
 	let direction = $state(1);
+	let hasExistingProfile = $state(false);
 
 	// Step 0: Provider
 	let provider = $state<string>('nanogpt');
 	let apiKey = $state('');
 	let showKey = $state(false);
+
+	// On mount: check if provider already configured → skip Step 0
+	onMount(async () => {
+		const profilesJson = await getSetting('apiProfiles');
+		if (profilesJson) {
+			try {
+				const profiles: APIProfile[] = JSON.parse(profilesJson);
+				if (profiles.length > 0 && profiles[0].apiKey) {
+					hasExistingProfile = true;
+					provider = profiles[0].providerType;
+					apiKey = profiles[0].apiKey;
+					// Skip to Step 1 (Mode)
+					currentStep = 1;
+				}
+			} catch { /* start at step 0 */ }
+		}
+	});
 
 	// Step 1: Story Mode
 	let storyMode = $state<StoryMode>('adventure');
@@ -86,23 +105,25 @@
 	}
 
 	async function finish() {
-		// Save provider as proper APIProfile
-		const profileId = crypto.randomUUID();
-		const providerConfig = PROVIDERS[provider as keyof typeof PROVIDERS];
-		const profile: APIProfile = {
-			id: profileId,
-			name: providerConfig?.name ?? provider,
-			providerType: provider as ProviderType,
-			apiKey,
-			customModels: [],
-			fetchedModels: [],
-			reasoningModels: [],
-			hiddenModels: [],
-			favoriteModels: [],
-			createdAt: Date.now(),
-		};
-		await setSetting('apiProfiles', JSON.stringify([profile]));
-		await setSetting('activeProfileId', profileId);
+		// Only save provider if we don't already have one, or if user changed the key
+		if (!hasExistingProfile) {
+			const profileId = crypto.randomUUID();
+			const providerConfig = PROVIDERS[provider as keyof typeof PROVIDERS];
+			const profile: APIProfile = {
+				id: profileId,
+				name: providerConfig?.name ?? provider,
+				providerType: provider as ProviderType,
+				apiKey,
+				customModels: [],
+				fetchedModels: [],
+				reasoningModels: [],
+				hiddenModels: [],
+				favoriteModels: [],
+				createdAt: Date.now(),
+			};
+			await setSetting('apiProfiles', JSON.stringify([profile]));
+			await setSetting('activeProfileId', profileId);
+		}
 
 		// Create story
 		const storyId = crypto.randomUUID();
@@ -214,7 +235,7 @@
 
 	let canProceed = $derived.by(() => {
 		switch (currentStep) {
-			case 0: return !!apiKey.trim();
+			case 0: return !!apiKey.trim() || hasExistingProfile;
 			case 1: return true;
 			case 2: return !!storyTitle.trim();
 			case 3: return true; // protagonist is optional
