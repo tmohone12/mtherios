@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { Sword, Feather, ChevronLeft, ChevronRight, Globe, Zap, Play, Plus, X, Sparkles } from 'lucide-svelte';
+	import { Sword, Feather, ChevronLeft, ChevronRight, Globe, Zap, Play, Plus, X, Sparkles, Upload } from 'lucide-svelte';
 	import { fly, fade } from 'svelte/transition';
 	import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 	import { getSetting, setSetting, createStory, createCharacter, createLorebookEntry } from '$lib/services/database';
+	import LorebookImport from '$lib/components/lorebook/LorebookImport.svelte';
 	import type { Story, Character, Entry, StoryMode } from '$lib/types';
 
 	interface Props {
@@ -375,8 +376,17 @@
 		<!-- Step 4: Lorebook -->
 		<div class="space-y-5" in:fly={{ x: direction * 200, duration: 250 }}>
 			<p class="text-sm text-[var(--text-muted)]">
-				Add lore entries the AI will remember. Locations, factions, magic systems, key NPCs — anything that defines your world. You can always add more later.
+				Import an existing lorebook or add entries manually. The AI will use these to stay consistent with your world.
 			</p>
+
+			<!-- Import section -->
+			<LorebookImport storyId="pending" onImported={(count) => {}} />
+
+			<div class="flex items-center gap-4">
+				<div class="h-px flex-1 bg-[var(--border-primary)]"></div>
+				<span class="font-display text-xs tracking-wider uppercase text-[var(--text-muted)]">or add manually</span>
+				<div class="h-px flex-1 bg-[var(--border-primary)]"></div>
+			</div>
 
 			{#each lorebookEntries as entry, i}
 				<div class="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
