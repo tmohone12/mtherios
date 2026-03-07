@@ -2,13 +2,25 @@
 	import '../app.css';
 	import AppShell from '$lib/components/layout/AppShell.svelte';
 	import OnboardingWizard from '$lib/components/wizard/OnboardingWizard.svelte';
+	import StoryView from '$lib/components/story/StoryView.svelte';
 	import { app } from '$lib/stores/app.svelte';
+	import { story } from '$lib/stores/story.svelte';
+	import { settings } from '$lib/stores/settings.svelte';
 	import { onMount } from 'svelte';
 
 	let { children } = $props();
 
-	onMount(() => {
-		app.init();
+	onMount(async () => {
+		await settings.init();
+		await app.init();
+	});
+
+	// Load story when currentStoryId changes
+	$effect(() => {
+		const id = app.currentStoryId;
+		if (id && (!story.currentStory || story.currentStory.id !== id)) {
+			story.loadStory(id);
+		}
 	});
 </script>
 
@@ -40,6 +52,8 @@
 			app.onboardingComplete = true;
 		}}
 	/>
+{:else if app.currentStoryId && story.currentStory}
+	<StoryView />
 {:else}
 	<AppShell>
 		{@render children()}
