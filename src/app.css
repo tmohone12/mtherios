@@ -1,0 +1,248 @@
+@import 'tailwindcss';
+
+/* =============================================
+   MTHERIOS THEME — Dark Medieval
+   Cold stone, cathedral gold, void blacks
+   ============================================= */
+
+@theme {
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
+	--color-ring: var(--ring);
+
+	/* Surface scale (dark → light) */
+	--color-surface-50: #e2ddd4;
+	--color-surface-100: #c4bdb2;
+	--color-surface-200: #9a9590;
+	--color-surface-300: #7d7a74;
+	--color-surface-400: #5a5750;
+	--color-surface-500: #3a3832;
+	--color-surface-600: #2e3038;
+	--color-surface-700: #24262e;
+	--color-surface-800: #1a1c22;
+	--color-surface-850: #12141a;
+	--color-surface-900: #0d0f14;
+	--color-surface-950: #08090c;
+
+	/* Gold accent scale */
+	--color-gold-50: #fef9e7;
+	--color-gold-100: #fdf0c4;
+	--color-gold-200: #f5e08a;
+	--color-gold-300: #f0d078;
+	--color-gold-400: #d4a853;
+	--color-gold-500: #b8923a;
+	--color-gold-600: #7a6b42;
+	--color-gold-700: #5c4f30;
+	--color-gold-800: #3d3520;
+	--color-gold-900: #1f1a10;
+
+	/* Crimson accent */
+	--color-crimson-50: #fce8ec;
+	--color-crimson-400: #a0384a;
+	--color-crimson-500: #8b2e3b;
+	--color-crimson-600: #722536;
+	--color-crimson-900: #2d0e14;
+}
+
+:root {
+	/* Shadcn semantic tokens — Mtherios Dark Medieval */
+	--radius: 0.5rem;
+	--background: hsl(225 25% 4%);           /* void #08090c */
+	--foreground: hsl(30 12% 86%);           /* bone #e2ddd4 */
+
+	--card: hsl(225 14% 12%);                /* parchment #1a1c22 */
+	--card-foreground: hsl(30 12% 86%);
+
+	--popover: hsl(225 14% 12%);
+	--popover-foreground: hsl(30 12% 86%);
+
+	--primary: hsl(40 55% 58%);              /* gold #d4a853 */
+	--primary-foreground: hsl(225 25% 4%);
+
+	--secondary: hsl(225 12% 16%);           /* stone #24262e */
+	--secondary-foreground: hsl(30 12% 86%);
+
+	--muted: hsl(225 12% 16%);
+	--muted-foreground: hsl(30 5% 47%);      /* ash #7d7a74 */
+
+	--accent: hsl(225 12% 16%);
+	--accent-foreground: hsl(40 55% 58%);
+
+	--destructive: hsl(348 50% 36%);         /* crimson #8b2e3b */
+	--destructive-foreground: hsl(30 12% 86%);
+
+	--border: hsl(225 12% 16%);
+	--input: hsl(225 12% 16%);
+	--ring: hsl(40 55% 58%);
+
+	/* Semantic layout colors */
+	--bg-primary: var(--color-surface-950);
+	--bg-secondary: var(--color-surface-900);
+	--bg-tertiary: var(--color-surface-800);
+	--text-primary: var(--color-surface-50);
+	--text-secondary: var(--color-surface-300);
+	--text-muted: var(--color-surface-400);
+	--text-accent: var(--color-gold-400);
+	--border-primary: var(--color-surface-700);
+	--border-secondary: var(--color-surface-800);
+
+	/* Scrollbar */
+	--scrollbar-track: var(--color-surface-950);
+	--scrollbar-thumb: var(--color-surface-700);
+	--scrollbar-thumb-hover: var(--color-surface-600);
+
+	/* Story font */
+	--font-story: 'Cormorant Garamond', Georgia, serif;
+	--font-display: 'Cinzel', serif;
+	--font-mono: 'JetBrains Mono', monospace;
+}
+
+/* =============================================
+   BASE STYLES
+   ============================================= */
+@layer base {
+	* {
+		@apply border-border;
+	}
+
+	body {
+		@apply bg-background text-foreground;
+		font-family: var(--font-story);
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+	}
+
+	/* Scrollbar */
+	::-webkit-scrollbar {
+		width: 4px;
+	}
+	::-webkit-scrollbar-track {
+		background-color: transparent;
+	}
+	::-webkit-scrollbar-thumb {
+		background-color: var(--scrollbar-thumb);
+		border-radius: 2px;
+	}
+	::-webkit-scrollbar-thumb:hover {
+		background-color: var(--scrollbar-thumb-hover);
+	}
+
+	/* Hide scrollbars on mobile */
+	@media (max-width: 768px) {
+		::-webkit-scrollbar {
+			display: none;
+			width: 0;
+			height: 0;
+		}
+		* {
+			-ms-overflow-style: none;
+			scrollbar-width: none;
+		}
+	}
+}
+
+/* =============================================
+   ATMOSPHERIC EFFECTS
+   ============================================= */
+@layer utilities {
+	/* Grain texture overlay */
+	.grain-overlay {
+		position: fixed;
+		inset: 0;
+		pointer-events: none;
+		z-index: 1000;
+		opacity: 0.025;
+		background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+	}
+
+	/* Cathedral light glow */
+	.cathedral-glow {
+		position: fixed;
+		top: -30%;
+		left: 50%;
+		transform: translateX(-50%);
+		width: 70vw;
+		height: 70vh;
+		background: radial-gradient(ellipse at center, rgba(212, 168, 83, 0.12) 0%, transparent 65%);
+		pointer-events: none;
+		z-index: 0;
+		animation: breathe 10s ease-in-out infinite;
+	}
+
+	@keyframes breathe {
+		0%, 100% { opacity: 0.4; }
+		50% { opacity: 0.7; }
+	}
+
+	/* Display font utility */
+	.font-display {
+		font-family: var(--font-display);
+	}
+
+	.font-story {
+		font-family: var(--font-story);
+	}
+
+	.font-mono {
+		font-family: var(--font-mono);
+	}
+
+	/* Story text */
+	.story-text {
+		font-family: var(--font-story);
+		@apply text-lg leading-relaxed;
+		color: var(--text-secondary);
+	}
+
+	.user-action {
+		@apply font-medium;
+		color: var(--text-accent);
+	}
+
+	/* Gold glow effect */
+	.gold-glow {
+		box-shadow: 0 0 20px rgba(212, 168, 83, 0.2);
+	}
+
+	.gold-glow-strong {
+		box-shadow: 0 0 40px rgba(212, 168, 83, 0.35);
+	}
+
+	/* Streaming cursor */
+	.streaming-cursor {
+		display: inline-block;
+		width: 0.5em;
+		height: 1em;
+		background-color: currentColor;
+		opacity: 0.7;
+		animation: blink 1s step-end infinite;
+		vertical-align: text-bottom;
+		margin-left: 1px;
+	}
+
+	@keyframes blink {
+		0%, 100% { opacity: 0.7; }
+		50% { opacity: 0; }
+	}
+}
