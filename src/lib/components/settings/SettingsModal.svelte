@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { X, ChevronLeft, ChevronRight, Check, ExternalLink, Zap, Globe, Server, Eye, EyeOff, Cpu, Palette, SlidersHorizontal, Sparkles } from 'lucide-svelte';
+	import { X, ChevronLeft, ChevronRight, Check, ExternalLink, Zap, Globe, Server, Eye, EyeOff, Cpu, Palette, SlidersHorizontal, Sparkles, Wrench } from 'lucide-svelte';
+	import ServiceConfigPanel from './ServiceConfigPanel.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { PROVIDERS, getProviderList } from '$lib/services/ai/sdk/providers/config';
 	import type { ProviderType, APIProfile } from '$lib/types';
@@ -14,7 +15,7 @@
 	let { open, onClose }: Props = $props();
 
 	// Slide deck state
-	type Step = 'main' | 'provider' | 'configure' | 'generation' | 'interface';
+	type Step = 'main' | 'provider' | 'configure' | 'generation' | 'interface' | 'services';
 	let step = $state<Step>('main');
 	let direction = $state<1 | -1>(1);
 
@@ -137,6 +138,7 @@
 					{:else if step === 'configure'}{PROVIDERS[selectedProvider!]?.name ?? 'Configure'}
 					{:else if step === 'generation'}Generation
 					{:else if step === 'interface'}Interface
+					{:else if step === 'services'}AI Services
 					{/if}
 				</h2>
 			</div>
@@ -171,6 +173,18 @@
 					<div class="flex-1">
 						<div class="font-display text-sm font-semibold tracking-wide text-[var(--text-primary)]">Generation</div>
 						<div class="text-sm text-[var(--text-muted)]">Temperature, tokens, reasoning</div>
+					</div>
+					<ChevronRight class="h-4 w-4 text-[var(--text-muted)]" />
+				</button>
+
+				<button class="flex w-full items-center gap-4 rounded-xl border border-[var(--border-primary)] p-4 text-left transition-all hover:border-[var(--color-gold-600)] hover:bg-[rgba(212,168,83,0.05)]"
+					onclick={() => goTo('services')}>
+					<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-[rgba(168,85,247,0.15)]">
+						<Wrench class="h-5 w-5 text-purple-400" />
+					</div>
+					<div class="flex-1">
+						<div class="font-display text-sm font-semibold tracking-wide text-[var(--text-primary)]">AI Services</div>
+						<div class="text-sm text-[var(--text-muted)]">Per-service models, prompts, params</div>
 					</div>
 					<ChevronRight class="h-4 w-4 text-[var(--text-muted)]" />
 				</button>
@@ -376,6 +390,12 @@
 						<input type="checkbox" class="h-4 w-4 accent-[var(--color-gold-400)]" />
 					</label>
 				</div>
+			</div>
+
+			{:else if step === 'services'}
+			<!-- AI Services Configuration -->
+			<div in:fly={{ x: direction * 100, duration: 200 }}>
+				<ServiceConfigPanel onBack={() => goTo('main')} />
 			</div>
 
 			{:else if step === 'interface'}

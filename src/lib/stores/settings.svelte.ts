@@ -7,6 +7,29 @@ import { getSetting, setSetting, getAllSettings } from '$lib/services/database';
 import { PROVIDERS, type ProviderConfig } from '$lib/services/ai/sdk/providers/config';
 import type { UISettings, APIProfile, ProviderType, ReasoningEffort } from '$lib/types';
 
+// ── Per-Service Configuration ──
+export interface ServiceConfig {
+	model: string;
+	temperature: number;
+	maxTokens: number;
+	systemPromptOverride: string; // empty = use default
+	enabled: boolean;
+}
+
+export const SERVICE_DEFINITIONS: Record<string, { label: string; description: string; category: string; defaultTemp: number; defaultMaxTokens: number }> = {
+	narrative: { label: 'Narrative', description: 'Main story generation', category: 'Generation', defaultTemp: 1.0, defaultMaxTokens: 4096 },
+	classifier: { label: 'Classifier', description: 'Extract world state from narrative', category: 'Generation', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	suggestions: { label: 'Suggestions', description: 'Generate action suggestions', category: 'Generation', defaultTemp: 0.8, defaultMaxTokens: 2048 },
+	actionChoices: { label: 'Action Choices', description: 'Generate branching choices', category: 'Generation', defaultTemp: 0.8, defaultMaxTokens: 2048 },
+	memory: { label: 'Memory', description: 'Chapter summarization & retrieval', category: 'Memory', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	styleReviewer: { label: 'Style Reviewer', description: 'Review narrative quality', category: 'Quality', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	timelineFill: { label: 'Timeline Fill', description: 'Auto-generate lorebook entries', category: 'Lorebook', defaultTemp: 0.5, defaultMaxTokens: 4096 },
+	loreManagement: { label: 'Lore Management', description: 'Curate lorebook automatically', category: 'Lorebook', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	agenticRetrieval: { label: 'Agentic Retrieval', description: 'Multi-step context retrieval', category: 'Retrieval', defaultTemp: 0.3, defaultMaxTokens: 2048 },
+	interactiveVault: { label: 'Interactive Vault', description: 'Natural language lorebook management', category: 'Lorebook', defaultTemp: 0.5, defaultMaxTokens: 4096 },
+	imageGeneration: { label: 'Image Generation', description: 'Scene image generation', category: 'Image', defaultTemp: 0.7, defaultMaxTokens: 1024 },
+};
+
 // ── Service Settings ──
 export interface NarrativeSettings {
 	model: string;
@@ -60,6 +83,9 @@ class SettingsStore {
 		showScrollToTop: true,
 		showScrollToBottom: true,
 	});
+
+	// ── Per-Service Configs ──
+	serviceConfigs = $state<Record<string, ServiceConfig>>({});
 
 	serviceSpecificSettings = $state<{
 		contextWindow?: Record<string, number>;
@@ -126,6 +152,11 @@ class SettingsStore {
 				this.narrativeSettings.model = all.narrativeModel;
 			}
 
+			// Service configs
+			if (all.serviceConfigs) {
+				try { this.serviceConfigs = JSON.parse(all.serviceConfigs); } catch { /* keep default */ }
+			}
+
 			// UI settings
 			if (all.uiSettings) {
 				try { Object.assign(this.uiSettings, JSON.parse(all.uiSettings)); } catch { /* keep default */ }
@@ -153,6 +184,29 @@ class SettingsStore {
 
 	async saveUISettings() {
 		await setSetting('uiSettings', JSON.stringify(this.uiSettings));
+	}
+
+	async saveServiceConfigs() {
+		await setSetting('serviceConfigs', JSON.stringify(this.serviceConfigs));
+	}
+
+	getServiceConfig(serviceId: string): ServiceConfig {
+		const existing = this.serviceConfigs[serviceId];
+		if (existing) return existing;
+		const def = SERVICE_DEFINITIONS[serviceId];
+		return {
+			model: '',
+			temperature: def?.defaultTemp ?? 0.5,
+			maxTokens: def?.defaultMaxTokens ?? 4096,
+			systemPromptOverride: '',
+			enabled: true,
+		};
+	}
+
+	async setServiceConfig(serviceId: string, config: Partial<ServiceConfig>) {
+		const current = this.getServiceConfig(serviceId);
+		this.serviceConfigs = { ...this.serviceConfigs, [serviceId]: { ...current, ...config } };
+		await this.saveServiceConfigs();
 	}
 
 	async setActiveProfile(profileId: string) {
