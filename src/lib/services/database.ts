@@ -228,7 +228,12 @@ export async function deleteChapter(id: string): Promise<void> {
 // ============================================================================
 
 export async function createLorebookEntry(entry: Entry): Promise<void> {
-	await db.lorebookEntries.add(entry);
+	try {
+		await db.lorebookEntries.add(entry);
+	} catch (e) {
+		console.error('createLorebookEntry failed:', { id: entry.id, storyId: entry.storyId, name: entry.name, type: entry.type }, e);
+		throw e;
+	}
 }
 
 export async function getLorebookEntries(storyId: string): Promise<Entry[]> {

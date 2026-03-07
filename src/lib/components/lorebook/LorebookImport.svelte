@@ -23,6 +23,7 @@
 	let saved = $state(false);
 	let showDetails = $state(false);
 	let selectedEntries = $state<Set<number>>(new Set());
+	let errorMsg = $state('');
 
 	function handleDrop(e: DragEvent) {
 		e.preventDefault();
@@ -80,6 +81,7 @@
 
 	async function saveSelected() {
 		saving = true;
+		errorMsg = '';
 		const selected = importedEntries.filter((_, i) => selectedEntries.has(i));
 
 		if (isBuffered) {
@@ -89,23 +91,34 @@
 			onImported?.(selected);
 		} else {
 			// Direct mode: write to DB immediately
-			const converted = convertToEntries(selected, 'import');
-			const now = Date.now();
+			try {
+				const converted = convertToEntries(selected, 'import');
+				const now = Date.now();
+				let successCount = 0;
 
-			for (const entry of converted) {
-				const fullEntry: Entry = {
-					...entry,
-					id: crypto.randomUUID(),
-					storyId,
-					createdAt: now,
-					updatedAt: now,
-				} as Entry;
-				await createLorebookEntry(fullEntry);
+				for (const entry of converted) {
+					try {
+						const fullEntry: Entry = {
+							...entry,
+							id: crypto.randomUUID(),
+							storyId,
+							createdAt: now,
+							updatedAt: now,
+						} as Entry;
+						await createLorebookEntry(fullEntry);
+						successCount++;
+					} catch (entryErr) {
+						console.error('Failed to save lorebook entry:', entry.name, entryErr);
+					}
+				}
+
+				saved = true;
+				onImported?.(successCount);
+			} catch (e) {
+				console.error('Lorebook import failed:', e);
+				errorMsg = e instanceof Error ? e.message : 'Import failed — check console for details';
 			}
-
 			saving = false;
-			saved = true;
-			onImported?.(selected.length);
 		}
 	}
 
@@ -250,6 +263,12 @@
 					{#if saving}Importing...{:else}Import {selectedCount} Entries{/if}
 				</button>
 			</div>
+
+			{#if errorMsg}
+				<div class="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+					{errorMsg}
+				</div>
+			{/if}
 
 			{#if importResult.warnings.length > 0}
 				<div class="text-xs text-amber-400/70">

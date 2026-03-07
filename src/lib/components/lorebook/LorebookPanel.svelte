@@ -164,7 +164,7 @@
 	<!-- Import section -->
 	{#if showImport && selectedStoryId}
 		<div class="border-b border-[var(--border-primary)] px-4 py-4">
-			<LorebookImport storyId={selectedStoryId} onImported={() => { showImport = false; loadEntries(); }} />
+			<LorebookImport storyId={selectedStoryId} onImported={(result) => { showImport = false; loadEntries(); }} />
 		</div>
 	{/if}
 
