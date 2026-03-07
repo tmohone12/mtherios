@@ -1,17 +1,19 @@
 <script lang="ts">
 	import { BookOpen, Library, ScrollText, Globe, Settings } from 'lucide-svelte';
 	import type { Snippet } from 'svelte';
+	import SettingsModal from '$lib/components/settings/SettingsModal.svelte';
 
 	let { children }: { children?: Snippet } = $props();
 
 	let activePanel = $state<'story' | 'library' | 'lorebook' | 'world' | 'settings'>('library');
+	let settingsOpen = $state(false);
 
 	const navItems = [
 		{ id: 'library' as const, icon: Library, label: 'Library' },
 		{ id: 'lorebook' as const, icon: ScrollText, label: 'Lorebook' },
 		{ id: 'story' as const, icon: BookOpen, label: 'Story' },
 		{ id: 'world' as const, icon: Globe, label: 'World' },
-		{ id: 'settings' as const, icon: Settings, label: 'Settings' },
+		{ id: 'settings' as const, icon: Settings, label: 'Settings', action: () => settingsOpen = true },
 	];
 </script>
 
@@ -40,7 +42,7 @@
 						{activePanel === item.id
 							? 'bg-[rgba(212,168,83,0.12)] text-[var(--text-accent)]'
 							: 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
-					onclick={() => activePanel = item.id}
+					onclick={() => item.action ? item.action() : (activePanel = item.id)}
 				>
 					<item.icon class="h-4 w-4" />
 					<span class="font-display text-xs tracking-wider uppercase">{item.label}</span>
@@ -86,6 +88,10 @@
 				<div class="text-center">
 					<h2 class="font-display text-2xl text-[var(--text-accent)]">Settings</h2>
 					<p class="mt-2 text-[var(--text-muted)]">Configure the scriptorium</p>
+					<button class="mt-4 rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] px-6 py-3 font-display text-sm font-semibold tracking-wide text-[var(--bg-primary)]"
+						onclick={() => settingsOpen = true}>
+						Open Settings
+					</button>
 				</div>
 			</div>
 		{/if}
@@ -103,7 +109,7 @@
 					{activePanel === item.id
 						? 'text-[var(--text-accent)]'
 						: 'text-[var(--text-muted)]'}"
-				onclick={() => activePanel = item.id}
+				onclick={() => item.action ? item.action() : (activePanel = item.id)}
 			>
 				<item.icon class="h-5 w-5" />
 				<span class="text-[10px] font-display tracking-wider uppercase">{item.label}</span>
@@ -111,6 +117,9 @@
 		{/each}
 	</nav>
 </div>
+
+<!-- Settings Modal -->
+<SettingsModal open={settingsOpen} onClose={() => settingsOpen = false} />
 
 <style>
 	.app-shell {
