@@ -55,7 +55,5 @@
 {:else if app.currentStoryId && story.currentStory}
 	<StoryView />
 {:else}
-	<AppShell>
-		{@render children()}
-	</AppShell>
+	<AppShell />
 {/if}
