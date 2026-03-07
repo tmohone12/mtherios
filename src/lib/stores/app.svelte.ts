@@ -12,17 +12,22 @@ class AppStore {
 	loading = $state(true);
 
 	async init() {
-		const onboarded = await getSetting('onboardingComplete');
-		this.onboardingComplete = onboarded === 'true';
+		try {
+			const onboarded = await getSetting('onboardingComplete');
+			this.onboardingComplete = onboarded === 'true';
 
-		const lastStory = await getSetting('lastStoryId');
-		this.currentStoryId = lastStory ?? null;
+			const lastStory = await getSetting('lastStoryId');
+			this.currentStoryId = lastStory ?? null;
 
-		this.loading = false;
-
-		// Show wizard if not onboarded
-		if (!this.onboardingComplete) {
+			if (!this.onboardingComplete) {
+				this.showWizard = true;
+			}
+		} catch (e) {
+			console.error('DB init failed:', e);
+			// Degrade gracefully — show wizard so user can still set up
 			this.showWizard = true;
+		} finally {
+			this.loading = false;
 		}
 	}
 

@@ -6,11 +6,15 @@
 	import { fade } from 'svelte/transition';
 
 	interface Props {
+		/** Pass a real storyId to save immediately, or 'buffer' to defer (wizard mode). */
 		storyId: string;
-		onImported?: (count: number) => void;
+		/** Called with count when saving directly, or with the raw ImportedEntry[] when buffered. */
+		onImported?: (countOrEntries: number | ImportedEntry[]) => void;
 	}
 
 	let { storyId, onImported }: Props = $props();
+
+	const isBuffered = $derived(storyId === 'buffer');
 
 	let dragOver = $state(false);
 	let importResult = $state<LorebookImportResult | null>(null);
@@ -77,23 +81,32 @@
 	async function saveSelected() {
 		saving = true;
 		const selected = importedEntries.filter((_, i) => selectedEntries.has(i));
-		const converted = convertToEntries(selected, 'import');
-		const now = Date.now();
 
-		for (const entry of converted) {
-			const fullEntry: Entry = {
-				...entry,
-				id: crypto.randomUUID(),
-				storyId,
-				createdAt: now,
-				updatedAt: now,
-			} as Entry;
-			await createLorebookEntry(fullEntry);
+		if (isBuffered) {
+			// Wizard mode: hand entries back to parent, don't write to DB yet
+			saving = false;
+			saved = true;
+			onImported?.(selected);
+		} else {
+			// Direct mode: write to DB immediately
+			const converted = convertToEntries(selected, 'import');
+			const now = Date.now();
+
+			for (const entry of converted) {
+				const fullEntry: Entry = {
+					...entry,
+					id: crypto.randomUUID(),
+					storyId,
+					createdAt: now,
+					updatedAt: now,
+				} as Entry;
+				await createLorebookEntry(fullEntry);
+			}
+
+			saving = false;
+			saved = true;
+			onImported?.(selected.length);
 		}
-
-		saving = false;
-		saved = true;
-		onImported?.(selected.length);
 	}
 
 	const summary = $derived(importedEntries.length > 0 ? getImportSummary(importedEntries) : null);

@@ -33,7 +33,12 @@
 {:else if app.showWizard}
 	<OnboardingWizard
 		onComplete={(storyId) => app.completeOnboarding(storyId)}
-		onSkip={() => { app.showWizard = false; app.onboardingComplete = true; }}
+		onSkip={async () => {
+			const { setSetting } = await import('$lib/services/database');
+			await setSetting('onboardingComplete', 'true');
+			app.showWizard = false;
+			app.onboardingComplete = true;
+		}}
 	/>
 {:else}
 	<AppShell>

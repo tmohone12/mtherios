@@ -3,8 +3,9 @@
 	import { fly, fade } from 'svelte/transition';
 	import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 	import { getSetting, setSetting, createStory, createCharacter, createLorebookEntry } from '$lib/services/database';
+	import { convertToEntries, type ImportedEntry } from '$lib/services/lorebookImporter';
 	import LorebookImport from '$lib/components/lorebook/LorebookImport.svelte';
-	import type { Story, Character, Entry, StoryMode } from '$lib/types';
+	import type { Story, Character, Entry, StoryMode, APIProfile, ProviderType } from '$lib/types';
 
 	interface Props {
 		onComplete: (storyId: string) => void;
@@ -36,6 +37,7 @@
 
 	// Step 4: Lorebook entries
 	let lorebookEntries = $state<Array<{ name: string; content: string; keywords: string }>>([]);
+	let importedFileEntries = $state<ImportedEntry[]>([]);
 
 	const genres = [
 		{ id: 'fantasy', label: 'Fantasy', emoji: '⚔️' },
@@ -84,11 +86,23 @@
 	}
 
 	async function finish() {
-		// Save provider
-		const profiles: Record<string, any> = {};
-		profiles[provider] = { apiKey, model: PROVIDERS[provider as keyof typeof PROVIDERS]?.fallbackModels[0] ?? '' };
-		await setSetting('apiProfiles', JSON.stringify(profiles));
-		await setSetting('activeProvider', provider);
+		// Save provider as proper APIProfile
+		const profileId = crypto.randomUUID();
+		const providerConfig = PROVIDERS[provider as keyof typeof PROVIDERS];
+		const profile: APIProfile = {
+			id: profileId,
+			name: providerConfig?.name ?? provider,
+			providerType: provider as ProviderType,
+			apiKey,
+			customModels: [],
+			fetchedModels: [],
+			reasoningModels: [],
+			hiddenModels: [],
+			favoriteModels: [],
+			createdAt: Date.now(),
+		};
+		await setSetting('apiProfiles', JSON.stringify([profile]));
+		await setSetting('activeProfileId', profileId);
 
 		// Create story
 		const storyId = crypto.randomUUID();
@@ -178,7 +192,23 @@
 			await createLorebookEntry(lorebookEntry);
 		}
 
+		// Write buffered file-imported entries with the real storyId
+		if (importedFileEntries.length > 0) {
+			const converted = convertToEntries(importedFileEntries, 'import');
+			for (const entry of converted) {
+				const fullEntry: Entry = {
+					...entry,
+					id: crypto.randomUUID(),
+					storyId,
+					createdAt: now,
+					updatedAt: now,
+				} as Entry;
+				await createLorebookEntry(fullEntry);
+			}
+		}
+
 		await setSetting('onboardingComplete', 'true');
+		await setSetting('lastStoryId', storyId);
 		onComplete(storyId);
 	}
 
@@ -379,8 +409,10 @@
 				Import an existing lorebook or add entries manually. The AI will use these to stay consistent with your world.
 			</p>
 
-			<!-- Import section -->
-			<LorebookImport storyId="pending" onImported={(count) => {}} />
+			<!-- Import section (buffered — entries saved in finish() with real storyId) -->
+			<LorebookImport storyId="buffer" onImported={(result) => {
+				if (Array.isArray(result)) importedFileEntries = result;
+			}} />
 
 			<div class="flex items-center gap-4">
 				<div class="h-px flex-1 bg-[var(--border-primary)]"></div>
