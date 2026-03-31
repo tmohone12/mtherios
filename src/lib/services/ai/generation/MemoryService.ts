@@ -92,7 +92,15 @@ ${prevContext ? `═══ PREVIOUS CHAPTERS ═══\n${prevContext}\n` : ''}$
 
 ═══ OUTPUT FORMAT ═══
 
-Respond with JSON matching the schema.`;
+Respond with JSON:
+{
+  "title": "Evocative 2-5 word chapter title",
+  "summary": "300-500 word summary of this chapter",
+  "keywords": ["keyword1", "keyword2", "...5-10 terms for retrieval"],
+  "keyCharacters": ["character names that appear in this chapter"],
+  "keyLocations": ["location names visited in this chapter"],
+  "emotionalTone": "one or two words describing the emotional tone"
+}`;
 
 		return this.generateStructured(chapterSummaryResultSchema, system, `Chapter content:\n${entriesText}`);
 	}
@@ -105,20 +113,23 @@ Respond with JSON matching the schema.`;
 	): Promise<ChapterAnalysis> {
 		log('analyzeForChapter', { entryCount: entries.length, tokensOutsideBuffer });
 
-		// Truncate entries to fit within input budget
+		// Truncate entries to fit within input budget — use 0-based indices
 		let entriesText = '';
 		let tokensSoFar = 0;
+		let entryCount = 0;
 		for (let i = 0; i < entries.length; i++) {
-			const line = `[Message ${lastChapterEndIndex + 1 + i}] [${entries[i].type}]: ${entries[i].content}\n\n`;
+			const line = `[Entry ${i}] [${entries[i].type}]: ${entries[i].content}\n\n`;
 			const lineTokens = countTokens(line);
 			if (tokensSoFar + lineTokens > MAX_INPUT_TOKENS) break;
 			entriesText += line;
 			tokensSoFar += lineTokens;
+			entryCount = i + 1;
 		}
 
 		const system = `You analyze ${mode} story entries (${pov} person, ${tense} tense) to determine whether a chapter boundary should be created.
 
 The story has ${tokensOutsideBuffer} tokens outside the active context buffer. Chapter boundaries help manage memory by summarizing older content.
+There are ${entries.length} unchaptered entries (${entryCount} shown below, labelled Entry 0 through Entry ${entryCount - 1}).
 
 ═══ WHEN TO CREATE A CHAPTER ═══
 
@@ -144,7 +155,7 @@ Respond with JSON:
   "reason": string
 }
 
-- optimalEndIndex: The message index (from the provided entries) where the chapter should END. Choose the last entry before the natural break.
+- optimalEndIndex: The 0-based index of the LAST entry to include in the chapter (e.g. if entries 0-12 form a natural chapter, return 12). Must be between 0 and ${entryCount - 1}.
 - keywords: 5-10 terms capturing this chapter's key content for future retrieval
 - reason: Brief explanation of why this is (or isn't) a good chapter boundary`;
 

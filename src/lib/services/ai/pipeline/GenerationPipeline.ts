@@ -574,7 +574,14 @@ export class GenerationPipeline {
 		console.log('[Pipeline] Chapter analysis result:', analysis);
 		if (!analysis.shouldCreateChapter) return;
 
-		const chapterEntries = entriesOutsideChapter.slice(0, analysis.optimalEndIndex + 1);
+		// Clamp optimalEndIndex to the valid range of the analysis window
+		const maxIndex = analysisWindow.length - 1;
+		const clampedIndex = Math.max(0, Math.min(analysis.optimalEndIndex, maxIndex));
+		if (clampedIndex !== analysis.optimalEndIndex) {
+			console.warn(`[Pipeline] Clamped optimalEndIndex from ${analysis.optimalEndIndex} to ${clampedIndex} (window size: ${analysisWindow.length})`);
+		}
+
+		const chapterEntries = entriesOutsideChapter.slice(0, clampedIndex + 1);
 		if (chapterEntries.length === 0) return;
 
 		// Gather classifier beats for this chapter's time range
@@ -613,7 +620,8 @@ export class GenerationPipeline {
 		console.log(`Chapter ${chapter.number} created: "${chapter.title}"`);
 
 		// Embed chapter summary (background)
-		ai.embeddings.embed(`${chapter.title ?? 'Chapter ' + chapter.number}: ${chapter.summary}`, chapter.id, 'chapter').catch(() => {});
+		ai.embeddings.embed(`${chapter.title ?? 'Chapter ' + chapter.number}: ${chapter.summary}`, chapter.id, 'chapter')
+			.catch(e => console.error(`[Pipeline] Failed to embed chapter ${chapter.number}:`, e));
 
 		const allChapters = [...chapters, chapter];
 
