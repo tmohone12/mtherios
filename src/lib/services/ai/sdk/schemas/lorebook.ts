@@ -8,6 +8,10 @@ export const loreUpdateSchema = z.object({
 	description: z.string(),
 	keywords: z.array(z.string()),
 	reason: z.string(),
+	// Character enrichment (only for character type entries)
+	bio: z.string().nullable().optional(),
+	motivations: z.array(z.string()).nullable().optional(),
+	personality: z.string().nullable().optional(),
 });
 
 export const loreManagementResultSchema = z.object({

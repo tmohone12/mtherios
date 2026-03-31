@@ -1,0 +1,543 @@
+{
+  "meta": {
+    "name": "A Song of Ice and Fire — Major Factions",
+    "description": "Pre-built faction lorebook entries for Westeros, set roughly at the start of the War of the Five Kings. Goals, resources, and inter-faction relations seeded from canonical state.",
+    "version": 1,
+    "setting": "asoiaf",
+    "periodHint": "298 AC — Robert's death, realm fracturing"
+  },
+  "factions": [
+    {
+      "name": "House Stark",
+      "type": "faction",
+      "description": "The ancient Kings in the North, ruling from Winterfell for eight thousand years. The Starks are hard, honorable, and stubbornly principled — traits that command fierce loyalty in the North but sit uneasily in the viper pit of southern politics. Their words, 'Winter Is Coming,' are not a boast but a warning. Wardens of the North, they command the largest single territory in the Seven Kingdoms but suffer from sparse population and brutal winters.",
+      "hiddenInfo": "Robb Stark is being pressured toward declaring independence. The old Northern lords remember when Starks were kings, not wardens. Loyalty runs deep here — deeper than any southern alliance.",
+      "aliases": ["Starks", "Winterfell", "Kings in the North", "Wolves"],
+      "keywords": ["stark", "winterfell", "north", "direwolf", "robb", "eddard", "ned", "catelyn", "wolf"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Avenge Eddard Stark and recover Sansa and Arya from King's Landing", "priority": 10, "progress": 5, "type": "military" },
+          { "description": "Secure Northern independence or at minimum Northern autonomy", "priority": 8, "progress": 10, "type": "diplomatic" },
+          { "description": "Defend the North against Lannister invasion", "priority": 9, "progress": 20, "type": "military" },
+          { "description": "Maintain alliance with the Riverlands through Tully ties", "priority": 7, "progress": 60, "type": "diplomatic" }
+        ],
+        "resources": {
+          "military": 70,
+          "wealth": 35,
+          "influence": 55,
+          "information": 25,
+          "morale": 85
+        },
+        "disposition": "aggressive",
+        "interFactionRelations": {
+          "House Lannister": -90,
+          "House Baratheon (Stannis)": 10,
+          "House Baratheon (Renly)": 5,
+          "House Tully": 80,
+          "House Greyjoy": -30,
+          "House Tyrell": 0,
+          "House Arryn": 40,
+          "House Martell": 0,
+          "Night's Watch": 60,
+          "House Frey": 30,
+          "House Bolton": 20
+        },
+        "territory": ["The North", "Winterfell", "White Harbor", "The Neck", "Last Hearth", "Karhold", "Bear Island"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "House Lannister",
+      "type": "faction",
+      "description": "The richest house in Westeros, seated at Casterly Rock atop the gold mines of the Westerlands. Tywin Lannister rules with cold, calculating precision — every move a chess piece, every alliance a transaction. Their unofficial motto, 'A Lannister always pays his debts,' carries both promise and threat. They hold the Iron Throne through Cersei's children and Tywin's gold, but their legitimacy is a lie built on incest.",
+      "hiddenInfo": "Joffrey is not Robert's son — he is the product of Cersei and Jaime's incest. If this secret spreads with proof, the Lannister claim to the throne collapses entirely. Tywin knows the crown is deeply in debt to the Iron Bank of Braavos.",
+      "aliases": ["Lannisters", "Casterly Rock", "Lions", "Westerlands"],
+      "keywords": ["lannister", "casterly rock", "tywin", "cersei", "jaime", "joffrey", "tyrion", "lion", "gold", "westerlands"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Crush the Northern rebellion and reassert Lannister dominance", "priority": 10, "progress": 15, "type": "military" },
+          { "description": "Secure a marriage alliance to strengthen the throne's position", "priority": 8, "progress": 10, "type": "diplomatic" },
+          { "description": "Eliminate rival claimants to the Iron Throne", "priority": 9, "progress": 5, "type": "intelligence" },
+          { "description": "Manage the crown's mounting debt to the Iron Bank", "priority": 7, "progress": 20, "type": "economic" }
+        ],
+        "resources": {
+          "military": 85,
+          "wealth": 90,
+          "influence": 80,
+          "information": 65,
+          "morale": 60
+        },
+        "disposition": "aggressive",
+        "interFactionRelations": {
+          "House Stark": -90,
+          "House Baratheon (Stannis)": -80,
+          "House Baratheon (Renly)": -70,
+          "House Tully": -60,
+          "House Greyjoy": -10,
+          "House Tyrell": 20,
+          "House Arryn": -5,
+          "House Martell": -50,
+          "Night's Watch": 0,
+          "House Frey": 40,
+          "House Bolton": 15
+        },
+        "territory": ["The Westerlands", "Casterly Rock", "King's Landing", "Lannisport", "The Crownlands"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "House Baratheon (Stannis)",
+      "type": "faction",
+      "description": "Stannis Baratheon, Lord of Dragonstone, is Robert's elder brother and by law the rightful heir to the Iron Throne — a fact he pursues with iron determination and zero charm. Rigid, just, and utterly humorless, Stannis commands a modest fleet and a smaller army but wields something more dangerous: a legitimate claim and a red priestess who whispers of destiny in his ear. Melisandre's fire magic is real, and Stannis is pragmatic enough to use it.",
+      "hiddenInfo": "Melisandre possesses genuine power — shadow magic, visions in flame, and rituals that demand blood sacrifice. Stannis is pragmatic enough to use tools others would reject on principle. His conversion to R'hllor alienates many traditional Westerosi lords who see it as foreign heresy.",
+      "aliases": ["Stannis", "Dragonstone", "Baratheon of Dragonstone", "The Mannis"],
+      "keywords": ["stannis", "dragonstone", "baratheon", "melisandre", "red woman", "davos", "rightful king", "iron throne"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Claim the Iron Throne as Robert's lawful heir", "priority": 10, "progress": 10, "type": "military" },
+          { "description": "Expose Cersei's children as illegitimate bastards born of incest", "priority": 9, "progress": 30, "type": "intelligence" },
+          { "description": "Outmaneuver Renly and consolidate the Baratheon claim under one banner", "priority": 8, "progress": 5, "type": "diplomatic" },
+          { "description": "Win the support of the Stormlands lords who currently favor Renly", "priority": 7, "progress": 10, "type": "diplomatic" }
+        ],
+        "resources": {
+          "military": 40,
+          "wealth": 25,
+          "influence": 35,
+          "information": 45,
+          "morale": 65
+        },
+        "disposition": "aggressive",
+        "interFactionRelations": {
+          "House Stark": 10,
+          "House Lannister": -80,
+          "House Baratheon (Renly)": -60,
+          "House Tully": 5,
+          "House Greyjoy": -20,
+          "House Tyrell": -40,
+          "House Arryn": 10,
+          "House Martell": 0,
+          "Night's Watch": 20
+        },
+        "territory": ["Dragonstone", "Narrow Sea islands"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "House Baratheon (Renly)",
+      "type": "faction",
+      "description": "Renly Baratheon, the youngest brother, has no legal claim to the throne ahead of Stannis — and does not care. Charismatic, beloved, and backed by the enormous wealth and armies of the Reach through his marriage to Margaery Tyrell, Renly commands the largest army in Westeros. His court is a tournament, his war a pageant. He believes the realm needs a king people want to follow, not one they're obligated to obey.",
+      "hiddenInfo": "Renly's marriage to Margaery is a political arrangement — he is secretly in a relationship with Loras Tyrell, Margaery's brother. The Tyrells know this and consider it useful leverage. Renly's enormous army has never actually fought a battle and may prove less formidable than its numbers suggest.",
+      "aliases": ["Renly", "Baratheon of Storm's End", "The King in Highgarden"],
+      "keywords": ["renly", "storms end", "baratheon", "margaery", "loras", "tyrell alliance", "stormlands"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "March on King's Landing and take the Iron Throne by show of overwhelming force", "priority": 10, "progress": 15, "type": "military" },
+          { "description": "Convince the remaining lords that charisma and popular support outweigh birth order", "priority": 8, "progress": 50, "type": "diplomatic" },
+          { "description": "Neutralize Stannis before he becomes a rallying point for legalists", "priority": 7, "progress": 5, "type": "military" }
+        ],
+        "resources": {
+          "military": 90,
+          "wealth": 75,
+          "influence": 70,
+          "information": 30,
+          "morale": 80
+        },
+        "disposition": "aggressive",
+        "interFactionRelations": {
+          "House Stark": 5,
+          "House Lannister": -70,
+          "House Baratheon (Stannis)": -60,
+          "House Tully": 10,
+          "House Greyjoy": -10,
+          "House Tyrell": 90,
+          "House Arryn": 5,
+          "House Martell": 10,
+          "Night's Watch": 0
+        },
+        "territory": ["The Stormlands", "Storm's End", "Parts of the Reach (via Tyrell alliance)"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "House Tyrell",
+      "type": "faction",
+      "description": "The Tyrells of Highgarden command the Reach — the most fertile and populous region in Westeros. They are stewards who became lords, merchants who became kings, gardeners who grew an empire. Mace Tyrell is a buffoon, but his mother Olenna — the Queen of Thorns — is the true power. The Tyrells fight with food, marriages, and gold rather than swords. They backed Renly, but their loyalty follows advantage, not principle.",
+      "hiddenInfo": "Olenna Tyrell is the decision-maker, not Mace. The Tyrells' true loyalty is to opportunity, not to Renly specifically. Their ultimate goal is getting Margaery onto the Iron Throne as queen — the king's identity is negotiable. If circumstances shift, they will pivot without hesitation.",
+      "aliases": ["Tyrells", "Highgarden", "The Reach", "Growing Strong"],
+      "keywords": ["tyrell", "highgarden", "reach", "olenna", "margaery", "mace", "loras", "roses", "food"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Place Margaery Tyrell on the Iron Throne as queen", "priority": 10, "progress": 25, "type": "diplomatic" },
+          { "description": "Control the food supply to leverage political position", "priority": 8, "progress": 70, "type": "economic" },
+          { "description": "Secure a permanent seat on the Small Council", "priority": 7, "progress": 10, "type": "diplomatic" }
+        ],
+        "resources": {
+          "military": 80,
+          "wealth": 85,
+          "influence": 70,
+          "information": 55,
+          "morale": 75
+        },
+        "disposition": "scheming",
+        "interFactionRelations": {
+          "House Stark": 0,
+          "House Lannister": 20,
+          "House Baratheon (Stannis)": -40,
+          "House Baratheon (Renly)": 90,
+          "House Tully": 5,
+          "House Greyjoy": -10,
+          "House Arryn": 10,
+          "House Martell": -30,
+          "Night's Watch": 0
+        },
+        "territory": ["The Reach", "Highgarden", "Oldtown", "The Arbor"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "House Greyjoy",
+      "type": "faction",
+      "description": "The ironborn of the Iron Islands are reavers, raiders, and fanatics of the Drowned God. Balon Greyjoy, who lost a rebellion nine years ago and two sons to it, nurses a grievance that has calcified into obsession. The Iron Islands are poor, barren, and dependent on what they take from others — the 'iron price.' Balon sees the War of the Five Kings as his moment to strike while the mainland bleeds, seizing the North while its armies march south.",
+      "hiddenInfo": "Theon Greyjoy has returned to Pyke after a decade as a Stark ward. Balon despises him for becoming 'green-lander soft' but may use him if useful. The ironborn are eyeing the North's undefended western coast — Balon sees opportunity in the Stark armies marching south, leaving Winterfell vulnerable.",
+      "aliases": ["Greyjoys", "Ironborn", "Iron Islands", "Krakens", "Pyke"],
+      "keywords": ["greyjoy", "iron islands", "ironborn", "balon", "theon", "pyke", "reaver", "kraken", "drowned god"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Raid and conquer the North's western coast while Stark armies are south", "priority": 10, "progress": 15, "type": "military" },
+          { "description": "Declare independence as the Kingdom of the Iron Islands and the North", "priority": 9, "progress": 5, "type": "expansion" },
+          { "description": "Seize Winterfell as a symbol of ironborn dominance over the greenlanders", "priority": 8, "progress": 0, "type": "military" }
+        ],
+        "resources": {
+          "military": 55,
+          "wealth": 20,
+          "influence": 15,
+          "information": 30,
+          "morale": 75
+        },
+        "disposition": "aggressive",
+        "interFactionRelations": {
+          "House Stark": -30,
+          "House Lannister": -10,
+          "House Baratheon (Stannis)": -15,
+          "House Baratheon (Renly)": -10,
+          "House Tully": -20,
+          "House Tyrell": -10,
+          "House Arryn": -5,
+          "House Martell": 0,
+          "Night's Watch": -10
+        },
+        "territory": ["The Iron Islands", "Pyke", "Great Wyk", "Old Wyk", "Harlaw"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "House Arryn",
+      "type": "faction",
+      "description": "The Eyrie is impregnable and the Vale of Arryn is rich, but since Jon Arryn's death, the Vale has been ruled by his widow Lysa — who is paranoid, unstable, and obsessively devoted to her sickly son Robert. The Vale has the military strength to tip the balance of the war but refuses to commit to any side. The Vale lords chafe under Lysa's isolation policy, many eager to ride to war for one cause or another.",
+      "hiddenInfo": "Lysa poisoned Jon Arryn on Littlefinger's instruction — the act that started everything. Petyr Baelish is manipulating Lysa remotely and has designs on the Vale itself. Several Vale lords, particularly the Royces, are close to defying Lysa and marching to war independently.",
+      "aliases": ["Arryns", "The Eyrie", "The Vale", "Knights of the Vale"],
+      "keywords": ["arryn", "eyrie", "vale", "lysa", "robin", "littlefinger", "baelish", "knights of the vale"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Maintain isolation and protect the Vale from the war", "priority": 8, "progress": 80, "type": "defensive", "deadline": "Until Lysa is removed or persuaded" },
+          { "description": "Protect young Robert Arryn and secure the Arryn succession", "priority": 9, "progress": 50, "type": "survival" }
+        ],
+        "resources": {
+          "military": 75,
+          "wealth": 60,
+          "influence": 40,
+          "information": 20,
+          "morale": 50
+        },
+        "disposition": "defensive",
+        "interFactionRelations": {
+          "House Stark": 40,
+          "House Lannister": -5,
+          "House Baratheon (Stannis)": 10,
+          "House Baratheon (Renly)": 5,
+          "House Tully": 50,
+          "House Greyjoy": -5,
+          "House Tyrell": 5,
+          "House Martell": 0,
+          "Night's Watch": 15
+        },
+        "territory": ["The Vale of Arryn", "The Eyrie", "Gulltown", "The Bloody Gate"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "House Martell",
+      "type": "faction",
+      "description": "Dorne is the only kingdom that was never conquered by the Targaryens — it joined through marriage, on its own terms. The Martells rule from Sunspear with a patience that masks deep, generational rage. Elia Martell was raped and murdered by the Mountain during the Sack of King's Landing, and Dorne has never forgiven the Lannisters. Prince Doran appears passive, sitting in his Water Gardens — but Doran thinks in decades, not days.",
+      "hiddenInfo": "Doran Martell has a secret long-term plan to destroy the Lannisters and restore the Targaryens. His brother Oberyn — the Red Viper — is the instrument of his vengeance, a deadly fighter who poisons his blades. Doran has been in communication with the Targaryen exiles across the Narrow Sea. Arianne, his daughter, is being groomed for a Targaryen marriage alliance.",
+      "aliases": ["Martells", "Dorne", "Sunspear", "Unbowed Unbent Unbroken"],
+      "keywords": ["martell", "dorne", "sunspear", "doran", "oberyn", "red viper", "elia", "arianne", "sand snakes"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Avenge Elia Martell — destroy Tywin Lannister and the Mountain", "priority": 10, "progress": 10, "type": "intelligence" },
+          { "description": "Restore the Targaryens to the Iron Throne through a marriage alliance", "priority": 9, "progress": 15, "type": "diplomatic", "deadline": "When a Targaryen claimant returns to Westeros" },
+          { "description": "Maintain Dornish independence and avoid being drawn into the war prematurely", "priority": 8, "progress": 70, "type": "survival" }
+        ],
+        "resources": {
+          "military": 50,
+          "wealth": 55,
+          "influence": 35,
+          "information": 60,
+          "morale": 70
+        },
+        "disposition": "scheming",
+        "interFactionRelations": {
+          "House Stark": 0,
+          "House Lannister": -50,
+          "House Baratheon (Stannis)": 0,
+          "House Baratheon (Renly)": 10,
+          "House Tully": 0,
+          "House Greyjoy": 0,
+          "House Tyrell": -30,
+          "House Arryn": 0,
+          "Night's Watch": 0,
+          "House Targaryen (Exiles)": 60
+        },
+        "territory": ["Dorne", "Sunspear", "The Water Gardens", "Starfall", "Yronwood"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "House Tully",
+      "type": "faction",
+      "description": "The Tullys of Riverrun rule the Riverlands — the crossroads of Westeros and perpetually the first place to burn when war breaks out. Hoster Tully is dying, his son Edmure is brave but reckless, and the Riverlands are already being ravaged by Lannister raiding parties led by the Mountain. Their strength lies not in arms but in alliances: Catelyn married a Stark, Lysa married an Arryn. The Tullys are the connective tissue of the anti-Lannister coalition.",
+      "hiddenInfo": "Hoster Tully is on his deathbed, raving about tansy — a reference to forcing his daughter Lysa to abort Littlefinger's child years ago. Edmure is brave but prone to acting without consulting his allies. The Blackfish (Brynden Tully) is the true military mind of the house.",
+      "aliases": ["Tullys", "Riverrun", "Riverlands", "Family Duty Honor"],
+      "keywords": ["tully", "riverrun", "riverlands", "edmure", "catelyn", "blackfish", "brynden", "hoster"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Defend the Riverlands from Lannister devastation", "priority": 10, "progress": 25, "type": "military" },
+          { "description": "Maintain the Stark-Tully alliance as the backbone of the Northern war effort", "priority": 9, "progress": 70, "type": "diplomatic" },
+          { "description": "Convince Lysa Arryn to bring the Vale into the war", "priority": 7, "progress": 5, "type": "diplomatic" }
+        ],
+        "resources": {
+          "military": 45,
+          "wealth": 40,
+          "influence": 45,
+          "information": 30,
+          "morale": 55
+        },
+        "disposition": "defensive",
+        "interFactionRelations": {
+          "House Stark": 80,
+          "House Lannister": -60,
+          "House Baratheon (Stannis)": 5,
+          "House Baratheon (Renly)": 10,
+          "House Greyjoy": -20,
+          "House Tyrell": 5,
+          "House Arryn": 50,
+          "House Martell": 0,
+          "Night's Watch": 10,
+          "House Frey": 35
+        },
+        "territory": ["The Riverlands", "Riverrun", "Seagard", "Harrenhal (contested)"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "Night's Watch",
+      "type": "faction",
+      "description": "The Night's Watch guards the Wall — a 700-foot barrier of ice at the northern edge of the world. Once a noble calling, the Watch has dwindled to a few thousand men, mostly criminals and outcasts. Lord Commander Jeor Mormont is a capable leader struggling with desertion, wildling raids, and reports of something far worse stirring beyond the Wall. No one in the south believes the warnings. No one ever does.",
+      "hiddenInfo": "Rangers have reported disturbing signs beyond the Wall — corpses that move, cold that kills without wind, entire wildling villages found empty. Jon Snow, Ned Stark's bastard, serves at the Wall as a new recruit. The Watch is desperately under-strength — if the wildling threat is real, they need ten times their current numbers.",
+      "aliases": ["The Watch", "The Wall", "Black Brothers", "Crows", "Castle Black"],
+      "keywords": ["nights watch", "wall", "castle black", "jeor mormont", "jon snow", "wildlings", "white walkers", "beyond the wall"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Investigate the disappearance of rangers beyond the Wall", "priority": 10, "progress": 20, "type": "intelligence" },
+          { "description": "Request reinforcements and supplies from the southern lords", "priority": 9, "progress": 5, "type": "diplomatic" },
+          { "description": "Defend the Wall against the growing wildling threat under Mance Rayder", "priority": 8, "progress": 15, "type": "military", "deadline": "Before the wildling army arrives" },
+          { "description": "Survive. The Watch is dying.", "priority": 10, "progress": 40, "type": "survival" }
+        ],
+        "resources": {
+          "military": 15,
+          "wealth": 5,
+          "influence": 10,
+          "information": 40,
+          "morale": 45
+        },
+        "disposition": "desperate",
+        "interFactionRelations": {
+          "House Stark": 60,
+          "House Lannister": 0,
+          "House Baratheon (Stannis)": 20,
+          "House Baratheon (Renly)": 0,
+          "House Tully": 10,
+          "House Greyjoy": -10,
+          "House Tyrell": 0,
+          "House Arryn": 15,
+          "House Martell": 0,
+          "Free Folk": -70
+        },
+        "territory": ["The Wall", "Castle Black", "Eastwatch-by-the-Sea", "The Shadow Tower"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "House Frey",
+      "type": "faction",
+      "description": "The Freys control the Twins — the only bridge crossing of the Green Fork for hundreds of miles. Lord Walder Frey is ancient, bitter, and transactional. He has outlived four wives, sired dozens of children and bastards, and spent ninety years being slighted by every great house in Westeros. He sells his bridge crossing to the highest bidder and nurses grudges like vintage wine. His loyalty lasts exactly as long as the deal that purchased it.",
+      "hiddenInfo": "Walder Frey is fundamentally transactional — he arrived late to Robert's Rebellion and has never forgotten the scorn it earned him. He considers every alliance a contract, and any perceived breach of terms is met with disproportionate spite. The Freys keep channels open to multiple sides at all times.",
+      "aliases": ["Freys", "The Twins", "Late Lord Frey", "The Crossing"],
+      "keywords": ["frey", "twins", "walder", "crossing", "bridge", "late lord"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Secure a royal marriage for House Frey to elevate their status", "priority": 10, "progress": 40, "type": "diplomatic" },
+          { "description": "Extract maximum concessions from whoever needs to cross the Twins", "priority": 8, "progress": 80, "type": "economic" },
+          { "description": "Ensure House Frey survives the war on the winning side", "priority": 9, "progress": 30, "type": "survival" }
+        ],
+        "resources": {
+          "military": 40,
+          "wealth": 50,
+          "influence": 25,
+          "information": 45,
+          "morale": 40
+        },
+        "disposition": "scheming",
+        "interFactionRelations": {
+          "House Stark": 30,
+          "House Lannister": 40,
+          "House Tully": 35,
+          "House Baratheon (Stannis)": 0,
+          "House Baratheon (Renly)": 0,
+          "Night's Watch": 0
+        },
+        "territory": ["The Twins", "The Crossing"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "House Bolton",
+      "type": "faction",
+      "description": "The Boltons of the Dreadfort are the Starks' most dangerous vassals — an ancient house whose sigil is a flayed man and whose ancestors wore the skins of their enemies. Roose Bolton is quiet, pale-eyed, and terrifyingly controlled. He speaks in whispers, leeches himself daily, and calculates every interaction for advantage. Officially loyal to Robb Stark, Roose Bolton fights in the Northern army. But Bolton loyalty has always been conditional.",
+      "hiddenInfo": "Roose Bolton's loyalty is conditional and self-serving. He has a pattern of preserving Bolton forces while positioning rival Northern houses in harm's way. His bastard son Ramsay is a sadist operating semi-independently from the Dreadfort — torturing, hunting humans for sport, and terrorizing the northern countryside. Bolton ambition runs deeper than anyone suspects.",
+      "aliases": ["Boltons", "Dreadfort", "Flayed Man", "Our Blades Are Sharp"],
+      "keywords": ["bolton", "dreadfort", "roose", "ramsay", "flayed man", "betrayal", "leech lord"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "neutral",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Position House Bolton to supplant the Starks as dominant Northern power", "priority": 10, "progress": 15, "type": "intelligence" },
+          { "description": "Weaken rival Northern houses while maintaining the appearance of loyalty", "priority": 9, "progress": 30, "type": "intelligence" },
+          { "description": "Cultivate contingency alliances outside the Northern coalition", "priority": 8, "progress": 10, "type": "diplomatic" }
+        ],
+        "resources": {
+          "military": 45,
+          "wealth": 35,
+          "influence": 30,
+          "information": 70,
+          "morale": 55
+        },
+        "disposition": "scheming",
+        "interFactionRelations": {
+          "House Stark": 20,
+          "House Lannister": 15,
+          "House Frey": 25,
+          "House Tully": 5,
+          "Night's Watch": 0,
+          "House Greyjoy": -15
+        },
+        "territory": ["The Dreadfort", "Parts of the eastern North"]
+      },
+      "adventureState": { "discovered": true, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    },
+    {
+      "name": "Free Folk",
+      "type": "faction",
+      "description": "The Free Folk — called 'wildlings' by southerners — are the descendants of the First Men who were sealed north of the Wall when it was raised eight thousand years ago. They have no lords, no taxes, and no laws beyond strength. Mance Rayder, a former Night's Watch brother, has done the impossible: united a hundred feuding clans, giants, and wargs into a single army marching south. Not for conquest — for survival. Something is driving them south. Something terrible.",
+      "hiddenInfo": "The Free Folk are fleeing something — Mance Rayder's army of 100,000 is desperate, not aggressive. They want south of the Wall before whatever is driving them reaches their camps. Among the Free Folk are genuine magical abilities: skinchangers who can inhabit animals, and knowledge of the old magic that the south has forgotten. If the Wall is breached, 100,000 refugees pour into the North — and whatever follows them.",
+      "aliases": ["Wildlings", "Free Folk", "Beyond the Wall", "Mance Rayder's Host"],
+      "keywords": ["wildlings", "free folk", "mance rayder", "beyond the wall", "giants", "wargs", "skinchangers", "ygritte"],
+      "state": {
+        "type": "faction",
+        "playerStanding": 0,
+        "status": "hostile",
+        "knownMembers": [],
+        "goals": [
+          { "description": "Break through or circumvent the Wall before winter and the dead army arrive", "priority": 10, "progress": 25, "type": "military", "deadline": "Before the dead reach them" },
+          { "description": "Find safety south of the Wall for the entire Free Folk population", "priority": 10, "progress": 5, "type": "survival" },
+          { "description": "Unite the remaining holdout clans (Thenns, ice-river clans) into the host", "priority": 7, "progress": 70, "type": "diplomatic" }
+        ],
+        "resources": {
+          "military": 60,
+          "wealth": 5,
+          "influence": 5,
+          "information": 50,
+          "morale": 60
+        },
+        "disposition": "desperate",
+        "interFactionRelations": {
+          "Night's Watch": -70,
+          "House Stark": -40,
+          "House Lannister": -20,
+          "House Baratheon (Stannis)": -20
+        },
+        "territory": ["Beyond the Wall", "The Haunted Forest", "Frostfangs", "Thenn"]
+      },
+      "adventureState": { "discovered": false, "interactedWith": false, "notes": [] },
+      "creativeState": null
+    }
+  ]
+}

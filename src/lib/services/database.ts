@@ -4,7 +4,7 @@
  * Works on iPhone Safari, Chrome, Firefox — no native dependencies.
  */
 
-import Dexie, { type EntityTable } from 'dexie';
+import Dexie, { type Table } from 'dexie';
 import type {
 	Story,
 	StoryEntry,
@@ -13,6 +13,7 @@ import type {
 	Item,
 	StoryBeat,
 	Chapter,
+	Arc,
 	Entry,
 	EmbeddedImage,
 	MemoryConfig,
@@ -21,6 +22,11 @@ import type {
 	TimeTracker,
 	PersistentRetryState,
 	PersistentStyleReviewState,
+	ProceduralRule,
+	EmbeddingCacheEntry,
+	EntryRelationship,
+	ConversationMemoryEntry,
+	WorldEvent,
 } from '$lib/types';
 
 // ============================================================================
@@ -28,21 +34,28 @@ import type {
 // ============================================================================
 
 interface MtheriosDB extends Dexie {
-	stories: EntityTable<Story, 'id'>;
-	storyEntries: EntityTable<StoryEntry, 'id'>;
-	characters: EntityTable<Character, 'id'>;
-	locations: EntityTable<Location, 'id'>;
-	items: EntityTable<Item, 'id'>;
-	storyBeats: EntityTable<StoryBeat, 'id'>;
-	chapters: EntityTable<Chapter, 'id'>;
-	lorebookEntries: EntityTable<Entry, 'id'>;
-	embeddedImages: EntityTable<EmbeddedImage, 'id'>;
-	appSettings: EntityTable<{ key: string; value: string }, 'key'>;
+	stories: Table<Story, string>;
+	storyEntries: Table<StoryEntry, string>;
+	characters: Table<Character, string>;
+	locations: Table<Location, string>;
+	items: Table<Item, string>;
+	storyBeats: Table<StoryBeat, string>;
+	chapters: Table<Chapter, string>;
+	lorebookEntries: Table<Entry, string>;
+	embeddedImages: Table<EmbeddedImage, string>;
+	arcs: Table<Arc, string>;
+	proceduralRules: Table<ProceduralRule, string>;
+	embeddingCache: Table<EmbeddingCacheEntry, string>;
+	entryRelationships: Table<EntryRelationship, string>;
+	conversationMemory: Table<ConversationMemoryEntry, string>;
+	worldEvents: Table<WorldEvent, string>;
+	appSettings: Table<{ key: string; value: string }, string>;
 }
 
 const db = new Dexie('mtherios') as MtheriosDB;
 
-db.version(1).stores({
+// Version 4: Clean schema with explicit upgrade to clear lorebook issues
+db.version(4).stores({
 	stories: 'id, title, createdAt, updatedAt',
 	storyEntries: 'id, storyId, position, type, [storyId+position], [storyId+branchId+position]',
 	characters: 'id, storyId, name, [storyId+name]',
@@ -53,7 +66,82 @@ db.version(1).stores({
 	lorebookEntries: 'id, storyId, name, type, [storyId+type]',
 	embeddedImages: 'id, storyId, entryId, status, [storyId+entryId]',
 	appSettings: 'key',
+}).upgrade(async (tx) => {
+	console.log('Upgrading to v4 - checking lorebookEntries table');
+	// Clear lorebook entries on upgrade to fix any schema issues
+	await tx.table('lorebookEntries').clear();
+	console.log('Cleared lorebookEntries table during upgrade');
 });
+
+db.version(5).stores({
+	stories: 'id, title, createdAt, updatedAt',
+	storyEntries: 'id, storyId, position, type, [storyId+position], [storyId+branchId+position]',
+	characters: 'id, storyId, name, [storyId+name]',
+	locations: 'id, storyId, name, [storyId+name]',
+	items: 'id, storyId, name, [storyId+name]',
+	storyBeats: 'id, storyId, type, status',
+	chapters: 'id, storyId, number, [storyId+number]',
+	lorebookEntries: 'id, storyId, name, type, [storyId+type]',
+	embeddedImages: 'id, storyId, entryId, status, [storyId+entryId]',
+	appSettings: 'key',
+	arcs: 'id, storyId, arcNumber, [storyId+arcNumber]',
+});
+
+// Version 6: Procedural memory + embedding cache (CASS-inspired)
+db.version(6).stores({
+	stories: 'id, title, createdAt, updatedAt',
+	storyEntries: 'id, storyId, position, type, [storyId+position], [storyId+branchId+position]',
+	characters: 'id, storyId, name, [storyId+name]',
+	locations: 'id, storyId, name, [storyId+name]',
+	items: 'id, storyId, name, [storyId+name]',
+	storyBeats: 'id, storyId, type, status',
+	chapters: 'id, storyId, number, [storyId+number]',
+	lorebookEntries: 'id, storyId, name, type, [storyId+type]',
+	embeddedImages: 'id, storyId, entryId, status, [storyId+entryId]',
+	appSettings: 'key',
+	arcs: 'id, storyId, arcNumber, [storyId+arcNumber]',
+	proceduralRules: 'id, storyId, category, maturity, [storyId+category], [storyId+maturity]',
+	embeddingCache: 'id, sourceId, sourceType, [sourceType+sourceId]',
+});
+
+// Version 7: Tier 2 living world — relationships, conversation memory, world events
+db.version(7).stores({
+	stories: 'id, title, createdAt, updatedAt',
+	storyEntries: 'id, storyId, position, type, [storyId+position], [storyId+branchId+position]',
+	characters: 'id, storyId, name, [storyId+name]',
+	locations: 'id, storyId, name, [storyId+name]',
+	items: 'id, storyId, name, [storyId+name]',
+	storyBeats: 'id, storyId, type, status',
+	chapters: 'id, storyId, number, [storyId+number]',
+	lorebookEntries: 'id, storyId, name, type, [storyId+type]',
+	embeddedImages: 'id, storyId, entryId, status, [storyId+entryId]',
+	appSettings: 'key',
+	arcs: 'id, storyId, arcNumber, [storyId+arcNumber]',
+	proceduralRules: 'id, storyId, category, maturity, [storyId+category], [storyId+maturity]',
+	embeddingCache: 'id, sourceId, sourceType, [sourceType+sourceId]',
+	entryRelationships: 'id, storyId, sourceEntryId, targetEntryId, type, [storyId+sourceEntryId], [storyId+targetEntryId]',
+	conversationMemory: 'id, storyId, npcEntryId, storyPosition, [storyId+npcEntryId], [storyId+storyPosition]',
+	worldEvents: 'id, storyId, triggerPosition, type, [storyId+triggerPosition]',
+});
+
+// Debug function to check DB status
+export async function debugDatabaseStatus(): Promise<void> {
+	console.log('=== Database Debug Info ===');
+	console.log('DB Name:', db.name);
+	console.log('DB Version:', db.verno);
+	console.log('Is Open:', db.isOpen());
+	console.log('Tables:', db.tables.map(t => t.name));
+	
+	if (db.isOpen()) {
+		try {
+			const count = await db.lorebookEntries.count();
+			console.log('Lorebook entries count:', count);
+		} catch (e) {
+			console.error('Error counting lorebook entries:', e);
+		}
+	}
+	console.log('=========================');
+}
 
 // ============================================================================
 // Story CRUD
@@ -76,7 +164,7 @@ export async function updateStory(id: string, updates: Partial<Story>): Promise<
 }
 
 export async function deleteStory(id: string): Promise<void> {
-	await db.transaction('rw', [db.stories, db.storyEntries, db.characters, db.locations, db.items, db.storyBeats, db.chapters, db.lorebookEntries, db.embeddedImages], async () => {
+	await db.transaction('rw', [db.stories, db.storyEntries, db.characters, db.locations, db.items, db.storyBeats, db.chapters, db.lorebookEntries, db.embeddedImages, db.arcs, db.proceduralRules, db.entryRelationships, db.conversationMemory, db.worldEvents], async () => {
 		await db.stories.delete(id);
 		await db.storyEntries.where('storyId').equals(id).delete();
 		await db.characters.where('storyId').equals(id).delete();
@@ -86,6 +174,11 @@ export async function deleteStory(id: string): Promise<void> {
 		await db.chapters.where('storyId').equals(id).delete();
 		await db.lorebookEntries.where('storyId').equals(id).delete();
 		await db.embeddedImages.where('storyId').equals(id).delete();
+		await db.arcs.where('storyId').equals(id).delete();
+		await db.proceduralRules.where('storyId').equals(id).delete();
+		await db.entryRelationships.where('storyId').equals(id).delete();
+		await db.conversationMemory.where('storyId').equals(id).delete();
+		await db.worldEvents.where('storyId').equals(id).delete();
 	});
 }
 
@@ -224,14 +317,37 @@ export async function deleteChapter(id: string): Promise<void> {
 }
 
 // ============================================================================
+// Arcs CRUD
+// ============================================================================
+
+export async function createArc(arc: Arc): Promise<void> {
+	await db.arcs.add(arc);
+}
+
+export async function getArcs(storyId: string): Promise<Arc[]> {
+	return db.arcs.where('storyId').equals(storyId).sortBy('arcNumber');
+}
+
+export async function updateArc(id: string, updates: Partial<Arc>): Promise<void> {
+	await db.arcs.update(id, updates);
+}
+
+export async function deleteArc(id: string): Promise<void> {
+	await db.arcs.delete(id);
+}
+
+// ============================================================================
 // Lorebook Entries CRUD
 // ============================================================================
 
 export async function createLorebookEntry(entry: Entry): Promise<void> {
+	// Sanitize entry - remove any potential circular refs or undefined values
+	const cleanEntry: Entry = JSON.parse(JSON.stringify(entry));
+	
 	try {
-		await db.lorebookEntries.add(entry);
-	} catch (e) {
-		console.error('createLorebookEntry failed:', { id: entry.id, storyId: entry.storyId, name: entry.name, type: entry.type }, e);
+		await db.lorebookEntries.put(cleanEntry);
+	} catch (e: unknown) {
+		console.error('Lorebook save failed:', e);
 		throw e;
 	}
 }
@@ -273,6 +389,58 @@ export async function deleteEmbeddedImage(id: string): Promise<void> {
 }
 
 // ============================================================================
+// Procedural Rules CRUD (CASS-inspired)
+// ============================================================================
+
+export async function createProceduralRule(rule: ProceduralRule): Promise<void> {
+	await db.proceduralRules.put(rule);
+}
+
+export async function getProceduralRules(storyId: string): Promise<ProceduralRule[]> {
+	return db.proceduralRules.where('storyId').equals(storyId).toArray();
+}
+
+export async function getProceduralRulesByCategory(storyId: string, category: string): Promise<ProceduralRule[]> {
+	return db.proceduralRules.where({ storyId, category }).toArray();
+}
+
+export async function updateProceduralRule(id: string, updates: Partial<ProceduralRule>): Promise<void> {
+	await db.proceduralRules.update(id, updates);
+}
+
+export async function deleteProceduralRule(id: string): Promise<void> {
+	await db.proceduralRules.delete(id);
+}
+
+export async function bulkPutProceduralRules(rules: ProceduralRule[]): Promise<void> {
+	await db.proceduralRules.bulkPut(rules);
+}
+
+// ============================================================================
+// Embedding Cache CRUD
+// ============================================================================
+
+export async function getEmbedding(sourceType: string, sourceId: string): Promise<EmbeddingCacheEntry | undefined> {
+	return db.embeddingCache.where({ sourceType, sourceId }).first();
+}
+
+export async function putEmbedding(entry: EmbeddingCacheEntry): Promise<void> {
+	await db.embeddingCache.put(entry);
+}
+
+export async function getEmbeddingsByType(sourceType: string): Promise<EmbeddingCacheEntry[]> {
+	return db.embeddingCache.where('sourceType').equals(sourceType).toArray();
+}
+
+export async function deleteEmbedding(id: string): Promise<void> {
+	await db.embeddingCache.delete(id);
+}
+
+export async function deleteEmbeddingsBySource(sourceType: string, sourceId: string): Promise<void> {
+	await db.embeddingCache.where({ sourceType, sourceId }).delete();
+}
+
+// ============================================================================
 // App Settings
 // ============================================================================
 
@@ -297,6 +465,62 @@ export async function getAllSettings(): Promise<Record<string, string>> {
 // ============================================================================
 // Export the database instance
 // ============================================================================
+
+// ============================================================================
+// Entry Relationships (Tier 2)
+// ============================================================================
+
+export async function createEntryRelationship(rel: EntryRelationship): Promise<void> {
+	await db.entryRelationships.add(rel);
+}
+
+export async function getEntryRelationships(storyId: string): Promise<EntryRelationship[]> {
+	return db.entryRelationships.where('storyId').equals(storyId).toArray();
+}
+
+export async function getRelationshipsForEntry(storyId: string, entryId: string): Promise<EntryRelationship[]> {
+	return db.entryRelationships.where('[storyId+sourceEntryId]').equals([storyId, entryId]).toArray();
+}
+
+export async function updateEntryRelationship(id: string, updates: Partial<EntryRelationship>): Promise<void> {
+	await db.entryRelationships.update(id, updates);
+}
+
+export async function deleteEntryRelationship(id: string): Promise<void> {
+	await db.entryRelationships.delete(id);
+}
+
+// ============================================================================
+// Conversation Memory (Tier 2)
+// ============================================================================
+
+export async function createConversationMemory(entry: ConversationMemoryEntry): Promise<void> {
+	await db.conversationMemory.add(entry);
+}
+
+export async function getConversationMemory(storyId: string): Promise<ConversationMemoryEntry[]> {
+	return db.conversationMemory.where('storyId').equals(storyId).toArray();
+}
+
+export async function getNpcConversationMemory(storyId: string, npcEntryId: string): Promise<ConversationMemoryEntry[]> {
+	return db.conversationMemory.where('[storyId+npcEntryId]').equals([storyId, npcEntryId]).toArray();
+}
+
+// ============================================================================
+// World Events (Tier 2)
+// ============================================================================
+
+export async function createWorldEvent(event: WorldEvent): Promise<void> {
+	await db.worldEvents.add(event);
+}
+
+export async function getWorldEvents(storyId: string): Promise<WorldEvent[]> {
+	return db.worldEvents.where('storyId').equals(storyId).toArray();
+}
+
+export async function updateWorldEvent(id: string, updates: Partial<WorldEvent>): Promise<void> {
+	await db.worldEvents.update(id, updates);
+}
 
 export { db };
 export type { MtheriosDB };

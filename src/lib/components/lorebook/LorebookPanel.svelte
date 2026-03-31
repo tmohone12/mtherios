@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { Plus, X, Search, ChevronDown, Upload, Edit3, Trash2, Save } from 'lucide-svelte';
 	import { getAllStories, getLorebookEntries, createLorebookEntry, updateLorebookEntry, deleteLorebookEntry } from '$lib/services/database';
+	import { uuid } from '$lib/utils/uuid';
 	import LorebookImport from './LorebookImport.svelte';
+	import SeedImport from './SeedImport.svelte';
 	import type { Story, Entry, EntryType } from '$lib/types';
 	import { onMount } from 'svelte';
 
@@ -10,6 +12,7 @@
 	let entries = $state<Entry[]>([]);
 	let showCreate = $state(false);
 	let showImport = $state(false);
+	let showSeedImport = $state(false);
 	let editingId = $state<string | null>(null);
 	let searchQuery = $state('');
 
@@ -56,7 +59,7 @@
 		if (!selectedStoryId || !newName.trim()) return;
 		const now = Date.now();
 		const entry: Entry = {
-			id: crypto.randomUUID(),
+			id: uuid(),
 			storyId: selectedStoryId,
 			branchId: null,
 			name: newName.trim(),
@@ -130,9 +133,14 @@
 	<!-- Header -->
 	<div class="border-b border-[var(--border-primary)] px-4 py-4">
 		<div class="flex items-center justify-between mb-3">
-			<h2 class="font-display text-lg tracking-wide text-[var(--text-primary)]">Lorebook</h2>
+			<h2 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Lorebook</h2>
 			<div class="flex gap-2">
-				<button onclick={() => showImport = !showImport}
+				<button onclick={() => { showSeedImport = !showSeedImport; showImport = false; }}
+					class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:text-amber-400 hover:bg-[rgba(212,168,83,0.08)]"
+					title="Import faction seed packs">
+					🏴 Seeds
+				</button>
+				<button onclick={() => { showImport = !showImport; showSeedImport = false; }}
 					class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)] hover:bg-[rgba(212,168,83,0.08)]">
 					<Upload class="h-3.5 w-3.5" /> Import
 				</button>
@@ -165,6 +173,13 @@
 	{#if showImport && selectedStoryId}
 		<div class="border-b border-[var(--border-primary)] px-4 py-4">
 			<LorebookImport storyId={selectedStoryId} onImported={(result) => { showImport = false; loadEntries(); }} />
+		</div>
+	{/if}
+
+	<!-- Seed import section -->
+	{#if showSeedImport && selectedStoryId}
+		<div class="border-b border-[var(--border-primary)] px-4 py-4">
+			<SeedImport storyId={selectedStoryId} onComplete={() => { showSeedImport = false; loadEntries(); }} />
 		</div>
 	{/if}
 
@@ -223,10 +238,10 @@
 							<div class="flex items-start justify-between">
 								<div class="flex items-center gap-2">
 									<span class="text-sm">{typeIcons[entry.type] ?? '📄'}</span>
-									<span class="font-display text-sm font-semibold text-[var(--text-primary)]">{entry.name}</span>
+									<span class="font-story text-sm font-semibold text-[var(--text-primary)]">{entry.name}</span>
 									<span class="rounded-md bg-[var(--bg-primary)] px-1.5 py-0.5 text-[10px] capitalize text-[var(--text-muted)]">{entry.type}</span>
 								</div>
-								<div class="hidden items-center gap-1 group-hover:flex">
+								<div class="flex items-center gap-1 opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
 									<button onclick={() => startEdit(entry)} class="rounded p-1 text-[var(--text-muted)] hover:text-[var(--text-accent)]"><Edit3 class="h-3.5 w-3.5" /></button>
 									<button onclick={() => handleDelete(entry.id)} class="rounded p-1 text-[var(--text-muted)] hover:text-red-400"><Trash2 class="h-3.5 w-3.5" /></button>
 								</div>

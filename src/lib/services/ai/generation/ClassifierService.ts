@@ -35,37 +35,80 @@ export class ClassifierService extends BaseAIService {
 		const itemList = existingItems.map(i => `- ${i.name}${i.equipped ? ' [equipped]' : ''}`).join('\n');
 		const recentContext = recentEntries.slice(-3).map(e => `[${e.type}]: ${e.content}`).join('\n\n');
 
-		const system = `You are a world state classifier for a ${mode} story (${pov} person, ${tense} tense).
+		const system = `You are a world state classifier for a ${mode} interactive fiction story written in ${pov} person, ${tense} tense.
 
-Analyze the latest narrative and extract ALL world state changes. Be thorough — capture every character mentioned, location visited, and item encountered.
+Your job is to read the LATEST NARRATIVE passage and extract every world state change it introduces. You must be thorough — missing a character, location, or item means the world model falls out of sync.
 
-EXISTING WORLD STATE:
-Characters:
-${charList || '(none)'}
+═══ EXISTING WORLD STATE ═══
 
-Locations:
-${locList || '(none)'}
+CHARACTERS (already tracked):
+${charList || '(none yet)'}
 
-Items:
-${itemList || '(none)'}
+LOCATIONS (already tracked):
+${locList || '(none yet)'}
 
-RULES:
-- For NEW characters not in the existing list, include them with full details
-- For EXISTING characters, only include them if their state changed (status, relationship, etc.)
-- Mark the current location as current: true
-- Track item acquisition, loss, equipping
-- Identify significant story beats (plot points, revelations, decisions)
-- If a character dies or leaves, update their status
+ITEMS (already tracked):
+${itemList || '(none yet)'}
 
-Respond with a JSON object matching this schema:
-{
-  "characters": [{ "name": string, "description": string|null, "relationship": string|null, "status": "active"|"inactive"|"deceased"|"unknown", "traits": string[] }],
-  "locations": [{ "name": string, "description": string|null, "current": boolean }],
-  "items": [{ "name": string, "description": string|null, "quantity": number, "equipped": boolean, "location": string }],
-  "storyBeats": [{ "title": string, "description": string, "significance": "minor"|"moderate"|"major"|"critical" }],
-  "mood": string,
-  "timeProgression": string
-}`;
+═══ EXTRACTION RULES ═══
+
+CHARACTERS:
+- Include any character who SPEAKS, ACTS, or is PHYSICALLY PRESENT in the scene
+- For NEW characters (not in the list above): provide name, description (appearance + role), relationship to protagonist, status, and personality traits
+- For EXISTING characters: ONLY include if something changed — new status, changed relationship, revealed trait, death, departure
+- IMPORTANT — Departures: If a character LEAVES the scene (walks away, storms out, teleports, is dragged off, etc.), set their status to "departed". This is how we track that they are no longer physically present at the current location.
+  - "active" = present and participating in the scene
+  - "departed" = left the current location during this passage
+  - "inactive" = off-screen, unconscious, imprisoned, etc.
+  - "deceased" = dead
+- Do NOT re-list existing characters whose state is unchanged
+- ${pov === 'second' ? 'The "you" character is the protagonist — do not list them as a new character' : 'Track the POV character separately'}
+
+LOCATIONS:
+- Set current: true for the location where the scene ENDS (only one location can be current)
+- Include new locations with vivid, concise descriptions drawn from the narrative
+- For existing locations, only include if the narrative reveals new details about them
+
+ITEMS:
+- Track items that are GAINED, LOST, EQUIPPED, UNEQUIPPED, USED, or DISCOVERED
+- Set equipped: true if the protagonist is actively wielding/wearing the item
+- Include the location where the item currently is (character name if held, location name if placed)
+- Do not list items that were merely mentioned in passing without changing hands
+
+STORY BEATS:
+- Capture significant plot developments: revelations, decisions, confrontations, discoveries, relationship shifts
+- minor: flavor moments, small observations
+- moderate: meaningful character interactions, minor plot developments
+- major: key plot turns, important discoveries, relationship changes
+- critical: life-or-death moments, major revelations, irreversible decisions
+
+MOOD: A 2-4 word description of the scene's emotional atmosphere (e.g., "tense anticipation", "quiet melancholy")
+
+TIME PROGRESSION: Estimate how much story-time passed ("moments", "a few minutes", "several hours", "a full day", "unknown")
+
+RELATIONSHIPS:
+- When entities interact in a way that establishes or changes a relationship, note it
+- Types: member-of, leader-of, allied-with, enemy-of, located-in, part-of, created-by, knows-about, owns, serves, related-to
+- Only include relationships NEWLY ESTABLISHED or CHANGED in this passage
+- bidirectional: true for symmetric relationships (allied-with, enemy-of)
+- strength: 0-100 (how strong/certain the relationship is)
+
+LOCATION CONNECTIONS:
+- When the narrative mentions paths, doors, roads, passages, or travel between locations, note the connection
+- Include direction (north/south/east/west/up/down/through) if mentioned, and estimated travel time in minutes
+- Only include connections NEWLY REVEALED in this passage
+
+CONVERSATIONS:
+- When the protagonist SPEAKS with an NPC and meaningful information is exchanged, track it
+- playerRevealed: specific facts the player told the NPC
+- npcLearned: what the NPC now knows that they didn't before
+- emotionalShift: how the conversation changed the NPC's attitude (null if unchanged)
+- importance: trivial (small talk), minor (info exchange), significant (secrets revealed), critical (alliance/betrayal)
+- Only track conversations where MEANINGFUL information was exchanged
+
+═══ OUTPUT FORMAT ═══
+
+Respond with a JSON object matching the schema. All arrays default to []. Only include fields where changes were detected. Never hallucinate elements not in the text.`;
 
 		const prompt = `RECENT CONTEXT:
 ${recentContext}

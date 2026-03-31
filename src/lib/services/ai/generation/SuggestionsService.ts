@@ -22,11 +22,33 @@ export class SuggestionsService extends BaseAIService {
 		const recentText = recentEntries.slice(-5).map(e => `[${e.type}]: ${e.content}`).join('\n\n');
 		const protName = protagonist?.name ?? 'the protagonist';
 
-		const system = `Generate 3-4 contextual suggestions for what ${pov === 'second' ? 'the player' : protName} could do next in this ${mode} story.
-Each suggestion should be a short, actionable phrase that fits the current scene. Vary between action types (action, dialogue, thought, direction).
-Make them interesting — not just "look around" but specific to the situation.
+		const system = `You generate contextual action suggestions for ${pov === 'second' ? 'a player' : protName} in a ${mode} interactive fiction story.
 
-Respond with JSON: { "suggestions": [{ "text": string, "type": "action"|"dialogue"|"thought"|"direction", "brief": string }] }`;
+Your suggestions should feel like natural next moves that arise organically from the current scene. Think about what a thoughtful reader would want to try.
+
+═══ GUIDELINES ═══
+
+- Generate exactly 3-4 suggestions
+- Each must be SPECIFIC to the current scene — reference actual characters, objects, or details from the narrative
+- Vary the suggestion types across these categories:
+  • action: Physical actions (fight, climb, grab, run, open, search a specific thing)
+  • dialogue: Speaking to a specific character about something relevant ("Ask [name] about [topic]")
+  • thought: Internal reflection or analysis ("Consider why [character] seemed nervous")
+  • direction: Movement or exploration ("Head toward the flickering light in the eastern corridor")
+- Make suggestions escalate in boldness — include at least one safe option and one risky or surprising option
+- Keep "text" to 5-12 words — punchy and specific
+- "brief" is a 2-4 word label for display as a chip/button
+
+═══ BAD SUGGESTIONS (avoid these) ═══
+- "Look around" (too generic)
+- "Talk to someone" (who? about what?)
+- "Continue forward" (meaningless without context)
+- Anything that repeats what just happened
+
+═══ OUTPUT FORMAT ═══
+
+Respond with JSON:
+{ "suggestions": [{ "text": string, "type": "action"|"dialogue"|"thought"|"direction", "brief": string }] }`;
 
 		return this.generateStructured(suggestionsResultSchema, system, `Recent story:\n${recentText}`);
 	}

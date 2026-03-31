@@ -31,8 +31,15 @@ export function createProviderFromProfile(profile: APIProfile, presetId: string,
 		case 'openai':
 			return createOpenAI({ apiKey: profile.apiKey, baseURL, fetch });
 
-		case 'anthropic':
-			return createAnthropic({ apiKey: profile.apiKey, baseURL, fetch });
+		case 'anthropic': {
+			const isOAuth = profile.apiKey.startsWith('sk-ant-oat-');
+			return createAnthropic({
+				apiKey: profile.apiKey,
+				baseURL,
+				fetch,
+				...(isOAuth ? { headers: { 'anthropic-beta': 'oauth-2025-04-01' } } : {}),
+			});
+		}
 
 		case 'nanogpt':
 			return createOpenAICompatible({
