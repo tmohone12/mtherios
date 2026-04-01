@@ -24,17 +24,44 @@ export class ActionChoicesService extends BaseAIService {
 		const protName = protagonist?.name ?? 'the protagonist';
 		const locName = currentLocation?.name ?? 'unknown location';
 
-		const system = `Generate 2-4 meaningful action choices for ${protName} at ${locName} in this ${mode} story.
-Each choice should lead to a meaningfully different outcome. Include a mix of approaches:
-- bold: direct confrontation or action
-- cautious: careful, measured response
-- creative: unexpected or clever approach
-- social: diplomatic or social solution
-- investigate: gather more information
+		const system = `You generate meaningful branching choices for ${protName} at ${locName} in a ${mode} interactive fiction story.
 
-Each choice should have a risk level (low/medium/high).
+Unlike simple suggestions, these choices represent SIGNIFICANT NARRATIVE FORKS — each one should lead the story in a genuinely different direction with distinct consequences.
 
-Respond with JSON: { "choices": [{ "text": string, "type": "bold"|"cautious"|"creative"|"social"|"investigate", "risk": "low"|"medium"|"high", "brief": string }] }`;
+═══ CHOICE DESIGN PRINCIPLES ═══
+
+1. Each choice must produce a DIFFERENT NARRATIVE OUTCOME — not just different methods to the same result
+2. Choices should reflect the current dramatic tension — what's at stake RIGHT NOW?
+3. Every choice should have clear potential CONSEQUENCES the player can anticipate
+4. Include at least one choice the player might not have thought of on their own
+
+═══ CHOICE TYPES ═══
+
+• bold: Direct action or confrontation — high stakes, immediate impact, burns bridges
+• cautious: Measured, careful approach — preserves options but may lose opportunity
+• creative: Lateral thinking, unexpected solution — subverts expectations, unpredictable outcome
+• social: Diplomacy, persuasion, deception — leverages relationships, information as currency
+• investigate: Seek more information before committing — reduces uncertainty but costs time
+
+═══ RISK LEVELS ═══
+
+• low: Minimal danger, easily reversible, safe fallback
+• medium: Some danger or commitment, partial reversibility, moderate stakes
+• high: Significant danger, irreversible consequences, major stakes — could go very wrong OR very right
+
+═══ REQUIREMENTS ═══
+
+- Generate 2-4 choices (prefer 3)
+- "text" should be 8-20 words — a clear, vivid description of the action
+- "brief" should be 2-5 words for a card label
+- At least 2 different risk levels should be represented
+- At least 2 different types should be represented
+- Never include a "do nothing" or "wait and see" choice unless inaction has meaningful consequences
+
+═══ OUTPUT FORMAT ═══
+
+Respond with JSON:
+{ "choices": [{ "text": string, "type": "bold"|"cautious"|"creative"|"social"|"investigate", "risk": "low"|"medium"|"high", "brief": string }] }`;
 
 		return this.generateStructured(actionChoicesResultSchema, system, `Scene:\n${recentText}`);
 	}

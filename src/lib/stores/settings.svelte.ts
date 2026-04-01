@@ -14,21 +14,45 @@ export interface ServiceConfig {
 	maxTokens: number;
 	systemPromptOverride: string; // empty = use default
 	enabled: boolean;
+	profileId: string; // API profile to use — empty = active profile (default)
 }
 
-export const SERVICE_DEFINITIONS: Record<string, { label: string; description: string; category: string; defaultTemp: number; defaultMaxTokens: number }> = {
-	narrative: { label: 'Narrative', description: 'Main story generation', category: 'Generation', defaultTemp: 1.0, defaultMaxTokens: 4096 },
-	classifier: { label: 'Classifier', description: 'Extract world state from narrative', category: 'Generation', defaultTemp: 0.3, defaultMaxTokens: 4096 },
-	suggestions: { label: 'Suggestions', description: 'Generate action suggestions', category: 'Generation', defaultTemp: 0.8, defaultMaxTokens: 2048 },
-	actionChoices: { label: 'Action Choices', description: 'Generate branching choices', category: 'Generation', defaultTemp: 0.8, defaultMaxTokens: 2048 },
-	memory: { label: 'Memory', description: 'Chapter summarization & retrieval', category: 'Memory', defaultTemp: 0.3, defaultMaxTokens: 4096 },
-	styleReviewer: { label: 'Style Reviewer', description: 'Review narrative quality', category: 'Quality', defaultTemp: 0.3, defaultMaxTokens: 4096 },
-	timelineFill: { label: 'Timeline Fill', description: 'Auto-generate lorebook entries', category: 'Lorebook', defaultTemp: 0.5, defaultMaxTokens: 4096 },
-	loreManagement: { label: 'Lore Management', description: 'Curate lorebook automatically', category: 'Lorebook', defaultTemp: 0.3, defaultMaxTokens: 4096 },
-	agenticRetrieval: { label: 'Agentic Retrieval', description: 'Multi-step context retrieval', category: 'Retrieval', defaultTemp: 0.3, defaultMaxTokens: 2048 },
-	interactiveVault: { label: 'Interactive Vault', description: 'Natural language lorebook management', category: 'Lorebook', defaultTemp: 0.5, defaultMaxTokens: 4096 },
-	imageGeneration: { label: 'Image Generation', description: 'Scene image generation', category: 'Image', defaultTemp: 0.7, defaultMaxTokens: 1024 },
+export const SERVICE_DEFINITIONS: Record<string, { label: string; description: string; profile: string; defaultTemp: number; defaultMaxTokens: number }> = {
+	narrative: { label: 'Narrative', description: 'Main story generation', profile: 'narrative', defaultTemp: 1.0, defaultMaxTokens: 4096 },
+	classifier: { label: 'Classifier', description: 'Extract world state from narrative', profile: 'worldState', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	suggestions: { label: 'Suggestions', description: 'Generate action suggestions', profile: 'guidance', defaultTemp: 0.8, defaultMaxTokens: 2048 },
+	actionChoices: { label: 'Action Choices', description: 'Generate branching choices', profile: 'guidance', defaultTemp: 0.8, defaultMaxTokens: 2048 },
+	memory: { label: 'Memory', description: 'Chapter summarization & retrieval', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	styleReviewer: { label: 'Style Reviewer', description: 'Review narrative quality', profile: 'style', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	loreManagement: { label: 'Lore Management', description: 'Discover and curate lorebook entries automatically', profile: 'lorebook', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	agenticRetrieval: { label: 'Agentic Retrieval', description: 'Multi-step context retrieval', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 2048 },
+	interactiveVault: { label: 'Interactive Vault', description: 'Natural language lorebook management', profile: 'lorebook', defaultTemp: 0.5, defaultMaxTokens: 4096 },
+	imageGeneration: { label: 'Image Generation', description: 'Scene image generation', profile: 'image', defaultTemp: 0.7, defaultMaxTokens: 1024 },
+	worldSimulation: { label: 'World Simulation', description: 'Living world DM — plot injection, faction movements, rumors, world tension', profile: 'worldState', defaultTemp: 0.6, defaultMaxTokens: 8192 },
+	arcCondensation: { label: 'Arc Condensation', description: 'Condense chapters into arc summaries', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	proceduralMemory: { label: 'Procedural Memory', description: 'CASS-inspired narrative rule extraction and injection', profile: 'memoryContext', defaultTemp: 0.4, defaultMaxTokens: 4096 },
+	loreRAG: { label: 'Lore RAG', description: 'External world lore retrieval from vector database (Qdrant). Deep background knowledge without lorebook entries.', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 2048 },
 };
+
+// ── Service Profile Groups ──
+// Services in the same profile share one LLM model setting.
+export interface ServiceProfile {
+	id: string;
+	label: string;
+	description: string;
+	icon: string;
+	serviceIds: string[];
+}
+
+export const SERVICE_PROFILES: ServiceProfile[] = [
+	{ id: 'narrative', label: 'Narrative', description: 'Main story generation engine', icon: '✍️', serviceIds: ['narrative'] },
+	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, items + living world simulation', icon: '🌍', serviceIds: ['classifier', 'worldSimulation'] },
+	{ id: 'guidance', label: 'Player Guidance', description: 'Suggestions and branching action choices', icon: '🧭', serviceIds: ['suggestions', 'actionChoices'] },
+	{ id: 'memoryContext', label: 'Memory & Context', description: 'Chapter summaries, context retrieval, procedural memory, and external lore RAG', icon: '🧠', serviceIds: ['memory', 'agenticRetrieval', 'arcCondensation', 'proceduralMemory', 'loreRAG'] },
+	{ id: 'lorebook', label: 'Lorebook', description: 'Discover, curate, and query lore entries', icon: '📜', serviceIds: ['loreManagement', 'interactiveVault'] },
+	{ id: 'style', label: 'Style Review', description: 'POV, tense, and prose quality checks', icon: '✨', serviceIds: ['styleReviewer'] },
+	{ id: 'image', label: 'Image Generation', description: 'Scene and character image generation', icon: '🎨', serviceIds: ['imageGeneration'] },
+];
 
 // ── Service Settings ──
 export interface NarrativeSettings {
@@ -47,7 +71,6 @@ export interface ClassifierSettings {
 
 export interface SystemServicesSettings {
 	classifier: ClassifierSettings;
-	timelineFill: { enabled: boolean; mode: 'static' | 'agentic'; maxQueries: number };
 	loreManagement: { maxIterations: number };
 	agenticRetrieval: { maxIterations: number };
 }
@@ -82,10 +105,12 @@ class SettingsStore {
 		autoScroll: true,
 		showScrollToTop: true,
 		showScrollToBottom: true,
+		imageGenerationMode: 'none',
 	});
 
 	// ── Per-Service Configs ──
 	serviceConfigs = $state<Record<string, ServiceConfig>>({});
+	profileModels = $state<Record<string, string>>({});
 
 	serviceSpecificSettings = $state<{
 		contextWindow?: Record<string, number>;
@@ -95,7 +120,6 @@ class SettingsStore {
 
 	systemServicesSettings = $state<SystemServicesSettings>({
 		classifier: { model: '', temperature: 0.5, maxTokens: 8192, chatHistoryTruncation: 100 },
-		timelineFill: { enabled: false, mode: 'static', maxQueries: 5 },
 		loreManagement: { maxIterations: 5 },
 		agenticRetrieval: { maxIterations: 10 },
 	});
@@ -107,6 +131,9 @@ class SettingsStore {
 		translateUserInput: false,
 		translateWorldState: false,
 	});
+
+	/** Context budget in tokens (0 = auto: 30% tiers + 60% history of model context) */
+	contextBudget = $state(0);
 
 	// ── Derived ──
 	get activeProfile(): APIProfile | null {
@@ -157,6 +184,11 @@ class SettingsStore {
 				try { this.serviceConfigs = JSON.parse(all.serviceConfigs); } catch { /* keep default */ }
 			}
 
+			// Profile models
+			if (all.profileModels) {
+				try { this.profileModels = JSON.parse(all.profileModels); } catch { /* keep default */ }
+			}
+
 			// UI settings
 			if (all.uiSettings) {
 				try { Object.assign(this.uiSettings, JSON.parse(all.uiSettings)); } catch { /* keep default */ }
@@ -165,6 +197,11 @@ class SettingsStore {
 			// System services
 			if (all.systemServicesSettings) {
 				try { Object.assign(this.systemServicesSettings, JSON.parse(all.systemServicesSettings)); } catch { /* keep default */ }
+			}
+
+			// Context budget
+			if (all.contextBudget) {
+				this.contextBudget = parseInt(all.contextBudget, 10) || 0;
 			}
 		} catch (e) {
 			console.error('Settings init failed:', e);
@@ -190,36 +227,67 @@ class SettingsStore {
 		await setSetting('serviceConfigs', JSON.stringify(this.serviceConfigs));
 	}
 
+	async saveProfileModels() {
+		await setSetting('profileModels', JSON.stringify(this.profileModels));
+	}
+
+	async saveContextBudget() {
+		await setSetting('contextBudget', String(this.contextBudget));
+	}
+
 	getServiceConfig(serviceId: string): ServiceConfig {
 		const existing = this.serviceConfigs[serviceId];
-		if (existing) return existing;
 		const def = SERVICE_DEFINITIONS[serviceId];
+		// Resolve model: per-service override → profile model → empty (provider default)
+		const profileModel = def ? (this.profileModels[def.profile] ?? '') : '';
+		if (existing) {
+			return { ...existing, model: existing.model || profileModel, profileId: existing.profileId ?? '' };
+		}
 		return {
-			model: '',
+			model: profileModel,
 			temperature: def?.defaultTemp ?? 0.5,
 			maxTokens: def?.defaultMaxTokens ?? 4096,
 			systemPromptOverride: '',
 			enabled: true,
+			profileId: '',
 		};
 	}
 
 	async setServiceConfig(serviceId: string, config: Partial<ServiceConfig>) {
-		const current = this.getServiceConfig(serviceId);
+		const current = this.serviceConfigs[serviceId] ?? {
+			model: '',
+			temperature: SERVICE_DEFINITIONS[serviceId]?.defaultTemp ?? 0.5,
+			maxTokens: SERVICE_DEFINITIONS[serviceId]?.defaultMaxTokens ?? 4096,
+			systemPromptOverride: '',
+			enabled: true,
+			profileId: '',
+		};
 		this.serviceConfigs = { ...this.serviceConfigs, [serviceId]: { ...current, ...config } };
 		await this.saveServiceConfigs();
+	}
+
+	getProfileModel(profileId: string): string {
+		return this.profileModels[profileId] ?? '';
+	}
+
+	async setProfileModel(profileId: string, model: string) {
+		this.profileModels = { ...this.profileModels, [profileId]: model };
+		await this.saveProfileModels();
 	}
 
 	async setActiveProfile(profileId: string) {
 		this.activeProfileId = profileId;
 		await setSetting('activeProfileId', profileId);
 
-		// Reset narrative model to provider default
-		const profile = this.profiles.find(p => p.id === profileId);
-		if (profile) {
-			const provider = PROVIDERS[profile.providerType as ProviderType];
-			if (provider?.services?.narrative) {
-				this.narrativeSettings.model = provider.services.narrative.model;
-				await this.saveNarrativeSettings();
+		// Only set narrative model to provider default if user hasn't set one
+		if (!this.narrativeSettings.model) {
+			const profile = this.profiles.find(p => p.id === profileId);
+			if (profile) {
+				const provider = PROVIDERS[profile.providerType as ProviderType];
+				if (provider?.services?.narrative) {
+					this.narrativeSettings.model = provider.services.narrative.model;
+					await this.saveNarrativeSettings();
+				}
 			}
 		}
 	}

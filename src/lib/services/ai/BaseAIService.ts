@@ -44,6 +44,11 @@ export abstract class BaseAIService {
 		return settings.getServiceConfig(this.serviceId).enabled;
 	}
 
+	/** Get per-service API profile ID (empty = use active/default profile). */
+	protected get serviceProfileId(): string {
+		return settings.getServiceConfig(this.serviceId).profileId;
+	}
+
 	/**
 	 * Generate a structured response using JSON mode.
 	 * If the user has set a system prompt override, it replaces the default.
@@ -59,9 +64,12 @@ export abstract class BaseAIService {
 		const raw = await generateNarrative({
 			system: system + jsonInstruction,
 			prompt,
+			model: this.serviceModel || undefined,
 			temperature: this.serviceTemperature,
 			maxTokens: this.serviceMaxTokens,
-		});
+			profileId: this.serviceProfileId || undefined,
+			_service: this.serviceId,
+		} as any);
 
 		// Strip markdown code fences if present
 		let cleaned = raw.trim();
@@ -83,6 +91,13 @@ export abstract class BaseAIService {
 	 */
 	protected async generateText(defaultSystem: string, prompt: string): Promise<string> {
 		const system = this.promptOverride || defaultSystem;
-		return generateNarrative({ system, prompt, temperature: this.serviceTemperature });
+		return generateNarrative({
+			system, prompt,
+			model: this.serviceModel || undefined,
+			temperature: this.serviceTemperature,
+			maxTokens: this.serviceMaxTokens,
+			profileId: this.serviceProfileId || undefined,
+			_service: this.serviceId,
+		} as any);
 	}
 }

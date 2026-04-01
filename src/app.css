@@ -245,4 +245,121 @@
 		0%, 100% { opacity: 0.7; }
 		50% { opacity: 0; }
 	}
+
+	/* ── Dialogue highlighting (SillyTavern style) ── */
+	.dialogue {
+		color: #e8e0d0;
+		font-style: normal;
+		text-shadow: 0 0 8px rgba(232, 224, 208, 0.15);
+	}
+
+	/* ── Dice Roll Cards ── */
+	.dice-card {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+		margin: 8px 0;
+		padding: 12px 16px;
+		border-radius: 12px;
+		border: 1px solid;
+		font-family: var(--font-display);
+		text-align: center;
+	}
+
+	.dice-card.dice-pass {
+		border-color: rgba(74, 222, 128, 0.25);
+		background: rgba(74, 222, 128, 0.06);
+	}
+
+	.dice-card.dice-fail {
+		border-color: rgba(248, 113, 113, 0.25);
+		background: rgba(248, 113, 113, 0.06);
+	}
+
+	.dice-card.dice-crit-success {
+		border-color: rgba(250, 204, 21, 0.4);
+		background: linear-gradient(135deg, rgba(250, 204, 21, 0.08), rgba(74, 222, 128, 0.08));
+		box-shadow: 0 0 20px rgba(250, 204, 21, 0.12);
+	}
+
+	.dice-card.dice-crit-failure {
+		border-color: rgba(239, 68, 68, 0.4);
+		background: linear-gradient(135deg, rgba(239, 68, 68, 0.08), rgba(168, 50, 50, 0.08));
+		box-shadow: 0 0 20px rgba(239, 68, 68, 0.12);
+	}
+
+	.dice-card-header {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 10px;
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		color: var(--color-surface-300);
+	}
+
+	.dice-card-icon {
+		font-size: 16px;
+		line-height: 1;
+	}
+
+	.dice-card-body {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+	}
+
+	.dice-card-total {
+		font-size: 28px;
+		font-weight: 700;
+		line-height: 1;
+		color: var(--color-surface-50);
+	}
+
+	.dice-pass .dice-card-total { color: #4ade80; }
+	.dice-fail .dice-card-total { color: #f87171; }
+	.dice-crit-success .dice-card-total { color: #facc15; }
+	.dice-crit-failure .dice-card-total { color: #ef4444; }
+
+	.dice-card-detail {
+		font-size: 11px;
+		color: var(--color-surface-300);
+		font-family: var(--font-mono);
+	}
+
+	.dice-card-outcome {
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.15em;
+		text-transform: uppercase;
+	}
+
+	.dice-pass .dice-card-outcome { color: #4ade80; }
+	.dice-fail .dice-card-outcome { color: #f87171; }
+	.dice-crit-success .dice-card-outcome { color: #facc15; }
+	.dice-crit-failure .dice-card-outcome { color: #ef4444; }
+
+	.dice-card-desc {
+		font-size: 11px;
+		color: var(--color-surface-400);
+		font-style: italic;
+		font-family: var(--font-story);
+	}
+
+	/* Player /roll result (system entry) */
+	.dice-player-roll {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		padding: 8px 16px;
+		border-radius: 10px;
+		border: 1px solid rgba(212, 168, 83, 0.2);
+		background: rgba(212, 168, 83, 0.06);
+		font-family: var(--font-mono);
+		font-size: 12px;
+		color: var(--color-gold-400);
+		text-align: center;
+	}
 }

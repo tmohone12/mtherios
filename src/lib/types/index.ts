@@ -38,6 +38,10 @@ export interface Story {
   timeTracker: TimeTracker | null
   currentBranchId: string | null // Active branch (null = main branch for legacy stories)
   currentBgImage: string | null
+  headerPrompt: string | null // Per-story preamble: tone, rules, and narrative guidelines
+  lastWorldSimDay: number | null // Total in-world days when world sim last ran
+  compactedLore: string | null // Button-controlled world state block injected after headerPrompt
+  compactedLoreHistory: string[] | null // Version history for undo, max 10 entries
 }
 
 // Persistent retry state - lightweight version saved to database
@@ -406,6 +410,23 @@ export interface Chapter {
   createdAt: number
 }
 
+// Arc — condensed summary of multiple chapters
+export interface Arc {
+  id: string
+  storyId: string
+  arcNumber: number
+  title: string
+  summary: string
+  keyPlotPoints: string[]
+  characterArcs: Array<{ name: string; development: string }>
+  unresolvedThreads: string[]
+  emotionalProgression: string
+  chapterIds: string[] // IDs of chapters condensed into this arc
+  chapterRange: string // e.g. "1-5"
+  branchId: string | null
+  createdAt: number
+}
+
 // Checkpoint for save/restore functionality
 export interface Checkpoint {
   id: string
@@ -448,7 +469,7 @@ export interface Branch {
 
 export type EntryType = 'character' | 'location' | 'item' | 'faction' | 'concept' | 'event'
 export type EntryInjectionMode = 'always' | 'keyword' | 'never'
-export type EntryCreator = 'user' | 'ai' | 'import'
+export type EntryCreator = 'user' | 'ai' | 'import' | 'forge'
 
 /**
  * Entry - Unified lorebook and tracker system.
@@ -517,6 +538,14 @@ export interface CharacterEntryState extends BaseEntryState {
   }
   knownFacts: string[]
   revealedSecrets: string[]
+  // Conversation memory
+  conversationTopics?: string[]
+  lastConversationAt?: number | null
+  personalOpinion?: string | null
+  // Character enrichment (populated by lore management)
+  bio?: string | null
+  motivations?: string[] | null
+  personality?: string | null
 }
 
 export interface RelationshipChange {
@@ -526,13 +555,26 @@ export interface RelationshipChange {
 }
 
 // Location-specific state
+export interface LocationConnection {
+  targetLocationId: string
+  targetLocationName: string
+  direction: string | null
+  travelTime: number
+  description: string | null
+  blocked: boolean
+  blockedReason: string | null
+}
+
 export interface LocationEntryState extends BaseEntryState {
   type: 'location'
   isCurrentLocation: boolean
   visitCount: number
   changes: { description: string; entryId: string }[]
-  presentCharacters: string[] // Entry IDs
-  presentItems: string[] // Entry IDs
+  presentCharacters: string[]
+  presentItems: string[]
+  connections?: LocationConnection[]
+  region?: string | null
+  terrain?: string | null
 }
 
 // Item-specific state
@@ -550,6 +592,31 @@ export interface FactionEntryState extends BaseEntryState {
   playerStanding: number // -100 to 100
   status: 'allied' | 'neutral' | 'hostile' | 'unknown'
   knownMembers: string[] // Entry IDs of known members
+  // Extended faction simulation fields (optional for backward compatibility)
+  goals?: FactionGoal[]
+  resources?: FactionResources
+  disposition?: 'aggressive' | 'defensive' | 'scheming' | 'neutral' | 'desperate'
+  interFactionRelations?: Record<string, number> // factionName → standing (-100 to 100)
+  territory?: string[] // Region/location names this faction controls
+  lastActionChapter?: number // Chapter number when faction last acted (for cadence tracking)
+}
+
+// Faction goal tracking
+export interface FactionGoal {
+  description: string
+  priority: number // 1-10, higher = more important
+  progress: number // 0-100, percentage toward completion
+  type: 'military' | 'diplomatic' | 'economic' | 'intelligence' | 'survival' | 'expansion'
+  deadline?: string // Narrative deadline (e.g., "before winter", "when the king dies")
+}
+
+// Faction resource tracking
+export interface FactionResources {
+  military: number    // 0-100 relative strength
+  wealth: number      // 0-100 relative wealth
+  influence: number   // 0-100 political influence / soft power
+  information: number // 0-100 spy network / intelligence capability
+  morale: number      // 0-100 internal cohesion / loyalty
 }
 
 // Concept-specific state (lore concepts, magic systems, etc.)
@@ -627,7 +694,7 @@ export interface LoreManagementResult {
 
 export interface AgenticSession {
   id: string
-  type: 'lore-management' | 'agentic-retrieval' | 'timeline-fill'
+  type: 'lore-management' | 'agentic-retrieval'
   storyId: string
   status: 'running' | 'completed' | 'failed' | 'cancelled'
   startedAt: number
@@ -674,6 +741,9 @@ export type ProviderType =
   | 'zhipu' // zhipu-ai-provider (Z.AI/GLM)
   | 'deepseek' // @ai-sdk/deepseek
   | 'mistral' // @ai-sdk/mistral
+  | 'google-ai-studio' // OpenAI-compatible at generativelanguage.googleapis.com
+  | 'google-vertex' // OpenAI-compatible at Vertex AI endpoint
+  | 'anthropic-proxy' // Local proxy for Claude subscription users
 
 // API Profile for saving OpenAI-compatible endpoint configurations
 export interface APIProfile {
@@ -734,6 +804,7 @@ export interface UISettings {
   autoScroll: boolean
   showScrollToTop: boolean
   showScrollToBottom: boolean
+  imageGenerationMode: 'none' | 'inline' | 'agentic'
 }
 
 export interface UpdateSettings {
@@ -975,6 +1046,69 @@ export interface WorldStateSnapshot {
   createdAt: number
 }
 
+// ===== Procedural Memory System (CASS-inspired) =====
+
+export type RuleCategory =
+	| 'character_behavior'  // "Kira betrays allies under pressure"
+	| 'world_rule'          // "Magic fails in the Northern Wastes"
+	| 'narrative_pattern'   // "Player prefers political intrigue"
+	| 'player_preference'   // "Player dislikes exposition dumps"
+	| 'anti_pattern'        // "Don't reuse the betrayal twist"
+	| 'lore_connection'     // "The Sunstone is tied to the Eclipse Prophecy"
+
+export type RuleMaturity = 'candidate' | 'established' | 'proven' | 'deprecated'
+export type RuleScope = 'global' | 'story' | 'arc' | 'chapter'
+
+export interface RuleFeedback {
+	type: 'helpful' | 'harmful'
+	entryId: string // Story entry where feedback occurred
+	timestamp: number
+}
+
+/**
+ * ProceduralRule — CASS PlaybookBullet equivalent for narrative.
+ * Confidence-scored, decay-adjusted rules that evolve over time.
+ */
+export interface ProceduralRule {
+	id: string
+	storyId: string
+	content: string
+	category: RuleCategory
+	scope: RuleScope
+	type: 'rule' | 'anti_pattern'
+	maturity: RuleMaturity
+
+	// Scoring (CASS-inspired decay + feedback)
+	helpfulCount: number
+	harmfulCount: number
+	effectiveScore: number // decay-adjusted composite score (0-1)
+
+	// Provenance
+	sourceChapterIds: string[]
+	sourceArcIds: string[]
+	relatedEntryIds: string[] // lorebook entry IDs this rule references
+
+	// Embedding vector for semantic retrieval
+	embedding: number[] | null
+
+	tags: string[]
+	createdAt: number
+	updatedAt: number
+	lastReinforcedAt: number // last time this rule got positive feedback
+}
+
+// ===== Embedding Cache =====
+
+export interface EmbeddingCacheEntry {
+	id: string
+	sourceId: string // ID of the embedded entity
+	sourceType: 'lorebook' | 'chapter' | 'arc' | 'rule' | 'query'
+	contentHash: string // hash of embedded text (for invalidation)
+	vector: number[]
+	model: string
+	createdAt: number
+}
+
 export type VaultType = 'character' | 'lorebook' | 'scenario'
 
 export interface VaultTag {
@@ -993,4 +1127,75 @@ export interface VaultConversation {
   messages: string // JSON blob — AI SDK ModelMessage[]
   chatMessages: string // JSON blob — ChatMessage[] (UI display state with diff cards, images, reasoning)
   pendingChanges: string // JSON blob — VaultPendingChange[] (full list including status)
+}
+
+// ===== Tier 2: Relationship Graph =====
+
+export type RelationshipType =
+  | 'member-of' | 'leader-of' | 'allied-with' | 'enemy-of'
+  | 'located-in' | 'part-of' | 'created-by' | 'triggered-by'
+  | 'knows-about' | 'owns' | 'serves' | 'related-to'
+
+export interface EntryRelationship {
+  id: string
+  storyId: string
+  sourceEntryId: string
+  targetEntryId: string
+  type: RelationshipType
+  label: string | null
+  strength: number
+  bidirectional: boolean
+  metadata: Record<string, unknown> | null
+  createdAt: number
+  updatedAt: number
+}
+
+// ===== Tier 2: Conversation Memory =====
+
+export interface ConversationMemoryEntry {
+  id: string
+  storyId: string
+  npcEntryId: string
+  npcName: string
+  storyEntryId: string
+  storyPosition: number
+  topic: string
+  playerSaid: string
+  npcLearned: string[]
+  emotionalImpact: string | null
+  importance: 'trivial' | 'minor' | 'significant' | 'critical'
+  createdAt: number
+}
+
+// ===== Tier 2: Event/Consequence System =====
+
+export type ConsequenceStatus = 'pending' | 'applied' | 'expired' | 'reversed'
+
+export interface WorldEvent {
+  id: string
+  storyId: string
+  name: string
+  description: string
+  triggerEntryId: string
+  triggerPosition: number
+  sourceEntityId: string | null
+  type: 'death' | 'hostility_change' | 'territory_change' | 'alliance_formed' |
+        'alliance_broken' | 'item_destroyed' | 'location_blocked' | 'secret_revealed' | 'custom'
+  severity: 'minor' | 'moderate' | 'major' | 'catastrophic'
+  consequences: Consequence[]
+  appliedAt: number | null
+  createdAt: number
+}
+
+export interface Consequence {
+  id: string
+  description: string
+  status: ConsequenceStatus
+  targetEntityId: string | null
+  targetEntityName: string
+  effectType: 'relationship_change' | 'faction_status_change' | 'location_blocked' |
+              'location_unblocked' | 'npc_status_change' | 'rumor_spread' | 'custom'
+  effectPayload: Record<string, unknown>
+  delay: number
+  appliedAt: number | null
 }

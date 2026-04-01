@@ -1,7 +1,10 @@
 <script lang="ts">
-	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, Square, Loader2 } from 'lucide-svelte';
+	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, Square, Loader2, Dices } from 'lucide-svelte';
 	import { story } from '$lib/stores/story.svelte';
+	import { settings } from '$lib/stores/settings.svelte';
+	import { ai } from '$lib/services/ai';
 	import { streamNarrative } from '$lib/services/ai/sdk/generate';
+	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
 
 	type ActionType = 'do' | 'say' | 'think' | 'story' | 'free';
 
@@ -20,14 +23,16 @@
 
 	// Listen for injected text from suggestion/choice chips
 	$effect(() => {
-		const injected = (window as any).__mtherios_input_inject;
-		if (injected) {
-			inputValue = injected;
-			(window as any).__mtherios_input_inject = null;
+		function onInject(e: Event) {
+			const text = (e as CustomEvent<string>).detail;
+			if (text) inputValue = text;
 		}
+		window.addEventListener('mtherios:inject-input', onInject);
+		return () => window.removeEventListener('mtherios:inject-input', onInject);
 	});
 
 	const isCreativeMode = $derived(story.storyMode === 'creative-writing');
+	const isAdventure = $derived(story.storyMode === 'adventure');
 
 	const actionConfig: Record<ActionType, {
 		icon: typeof Wand2;
@@ -75,34 +80,181 @@
 	const protagonistName = $derived(story.protagonist?.name ?? 'The protagonist');
 	const pov = $derived(story.pov);
 
-	const actionPrefixes = $derived.by(() => {
-		if (pov === 'third') {
-			return {
-				do: `${protagonistName} `,
-				say: `${protagonistName} says, "`,
-				think: `${protagonistName} thinks, "`,
-				story: '', free: '',
-			};
-		}
-		return {
-			do: 'I ', say: 'I say, "', think: 'I think to myself, "',
-			story: '', free: '',
-		};
-	});
-	const actionSuffixes: Record<ActionType, string> = {
-		do: '', say: '"', think: '"', story: '', free: '',
+	/**
+	 * Text adventure shorthand commands (Do mode only).
+	 * Classic interactive fiction verbs.
+	 */
+	const SHORTHAND_COMMANDS: Record<string, string> = {
+		l: 'look around',
+		i: 'check my inventory',
+		z: 'wait',
+		n: 'go north', s: 'go south', e: 'go east', w: 'go west',
+		ne: 'go northeast', nw: 'go northwest', se: 'go southeast', sw: 'go southwest',
+		u: 'go up', d: 'go down',
 	};
+
+	/**
+	 * Build the action content from raw input + action type.
+	 * Handles: shorthand commands, say punctuation variants,
+	 * wildcards (*), narrator prefix (!), and mode overrides ("/").
+	 */
+	function buildActionContent(rawInput: string, type: ActionType): string {
+		const thirdPerson = pov === 'third';
+		const name = protagonistName;
+
+		// ── ! prefix: narrator/world event (not a player action) ──
+		if (rawInput.startsWith('!')) {
+			return `> ${rawInput.slice(1).trim()}`;
+		}
+
+		// ── " prefix in Do mode: force Say behavior ──
+		if (type === 'do' && rawInput.startsWith('"')) {
+			return buildSayContent(rawInput.slice(1).replace(/"$/, ''), thirdPerson, name);
+		}
+
+		// ── Mode-specific building ──
+		if (type === 'do') {
+			// Check shorthand commands first
+			const lower = rawInput.toLowerCase();
+			const xMatch = lower.match(/^x\s+(.+)$/);
+			if (xMatch) {
+				return thirdPerson
+					? `> ${name} examines the ${xMatch[1]}.`
+					: `> You examine the ${xMatch[1]}.`;
+			}
+			if (SHORTHAND_COMMANDS[lower]) {
+				const expanded = SHORTHAND_COMMANDS[lower];
+				return thirdPerson
+					? `> ${name} ${expanded.replace(/^(go|check|look|wait)/, (m) => m === 'check' ? 'checks' : m === 'look' ? 'looks' : m === 'wait' ? 'waits' : 'goes')}.`
+					: `> You ${expanded}.`;
+			}
+
+			// Wildcard: * at end means AI should continue/complete the action
+			const isWildcard = rawInput.endsWith('*') || rawInput.endsWith(',');
+			const cleanInput = isWildcard ? rawInput.slice(0, -1).trim() : rawInput;
+
+			const prefix = thirdPerson ? `> ${name} ` : '> You ';
+			return prefix + cleanInput + (isWildcard ? '' : '.');
+		}
+
+		if (type === 'say') {
+			return buildSayContent(rawInput, thirdPerson, name);
+		}
+
+		if (type === 'think') {
+			return thirdPerson
+				? `> ${name} thinks: "${rawInput}"`
+				: `> You think to yourself: "${rawInput}"`;
+		}
+
+		// story / free — pass through
+		return rawInput;
+	}
+
+	/**
+	 * Build say content with punctuation-aware verb (say/ask/yell).
+	 */
+	function buildSayContent(text: string, thirdPerson: boolean, name: string): string {
+		const lastChar = text.trim().slice(-1);
+		let verb: string;
+		if (lastChar === '?') {
+			verb = thirdPerson ? 'asks' : 'ask';
+		} else if (lastChar === '!') {
+			verb = thirdPerson ? 'yells' : 'yell';
+		} else {
+			verb = thirdPerson ? 'says' : 'say';
+		}
+		return thirdPerson
+			? `> ${name} ${verb}, "${text}"`
+			: `> You ${verb}, "${text}"`;
+	}
+
+	/**
+	 * Handle player /roll command — standalone dice roll, no AI generation.
+	 */
+	async function handlePlayerRoll(rawInput: string): Promise<boolean> {
+		const notation = parseRollCommand(rawInput);
+		if (!notation) return false;
+
+		const result = rollDice(notation);
+		const rollText = formatRollText(result);
+		await story.addEntry('system', `Roll: ${rollText}`);
+		onStreamStart?.();
+		onStreamEnd?.('');
+		return true;
+	}
+
+	/**
+	 * After AI narrative streams, check for roll markers.
+	 * If found: execute the roll, embed the result, and stream a continuation.
+	 */
+	async function handleAIRollContinuation(
+		fullResponse: string,
+		systemPrompt: string,
+		conversationHistory: { role: 'user' | 'assistant'; content: string }[],
+	): Promise<string> {
+		const { preText, marker } = parseRollMarker(fullResponse);
+		if (!marker) return fullResponse;
+
+		// Execute the roll
+		const result = rollCheck(marker.notation, marker.dc, marker.ability, marker.description);
+		const diceMarker = encodeDiceMarker(result);
+
+		// Build the narrative so far with the dice result embedded
+		let combined = preText + '\n\n' + diceMarker + '\n\n';
+		onStreamChunk?.(combined);
+
+		// Build the continuation prompt with roll outcome
+		const critLabel = result.critical === 'success' ? ' (NATURAL 20 — CRITICAL SUCCESS!)' :
+			result.critical === 'failure' ? ' (NATURAL 1 — CRITICAL FAILURE!)' : '';
+		const outcomeLabel = result.success ? 'SUCCESS' : 'FAILURE';
+		const rollSummary = `[Roll Result: ${marker.ability} Check — ${result.notation} = ${result.total} (natural ${result.natural}) vs DC ${marker.dc} — ${outcomeLabel}${critLabel}]`;
+
+		// Continue generation with roll result as context
+		const continuationMessages = [
+			...conversationHistory,
+			{ role: 'assistant' as const, content: preText },
+			{ role: 'user' as const, content: `${rollSummary}\n\nContinue narrating the outcome. Do NOT include another roll marker.` },
+		];
+
+		const continuationStream = streamNarrative({
+			system: systemPrompt,
+			prompt: rollSummary,
+			messages: continuationMessages,
+			temperature: settings.narrativeSettings.temperature,
+			signal: abortController?.signal,
+			_service: 'narrative',
+		} as any);
+
+		for await (const chunk of continuationStream) {
+			if (chunk.done) break;
+			if (chunk.content) {
+				combined += chunk.content;
+				onStreamChunk?.(combined);
+			}
+		}
+
+		return combined;
+	}
 
 	async function handleSubmit() {
 		if (!inputValue.trim() || isGenerating || !story.currentStory) return;
 
 		const rawInput = inputValue.trim();
+
+		// Check for /roll command first
+		if (rawInput.match(/^\/roll\s/i)) {
+			inputValue = '';
+			await handlePlayerRoll(rawInput);
+			return;
+		}
+
 		let content: string;
 
-		if (isCreativeMode || actionType === 'free' || actionType === 'story') {
+		if (isCreativeMode) {
 			content = rawInput;
 		} else {
-			content = actionPrefixes[actionType] + rawInput + actionSuffixes[actionType];
+			content = buildActionContent(rawInput, actionType);
 		}
 
 		inputValue = '';
@@ -113,19 +265,54 @@
 		// Generate response
 		isGenerating = true;
 		abortController = new AbortController();
-		onStreamStart?.();
 
 		let fullResponse = '';
 
 		try {
-			const systemPrompt = story.buildSystemPrompt();
+			// Pre-generation: assemble tiered context before streaming
+			const assembled = await ai.contextAssembler.assemble({
+				storyId: story.currentStory.id,
+				userAction: content,
+				entries: story.entries,
+				characters: story.characters,
+				locations: story.locations,
+				items: story.items,
+				lorebookEntries: story.lorebookEntries,
+				lastWorldSimResult: story.lastWorldSimResult,
+				pendingFactionReactions: story.pendingFactionReactions,
+				entryRelationships: story.entryRelationships,
+				worldEvents: story.worldEvents,
+				storyMode: story.storyMode,
+				pov: story.pov,
+				tense: story.tense,
+				maxChaptersPerRetrieval: story.currentStory.memoryConfig?.maxChaptersPerRetrieval,
+			});
+
+			// Clear consumed faction reactions after injection into context
+			if (story.pendingFactionReactions.length > 0) {
+				story.pendingFactionReactions = [];
+			}
+
+			const systemPrompt = story.buildSystemPrompt(assembled.contextBlock);
+			const conversationHistory = story.buildConversationMessages();
 			const userPrompt = story.buildUserPrompt(content);
+
+			// Store context stats for the meter
+			story.lastTierUsage = assembled.tierUsage as unknown as Record<string, number>;
+			const estimateTokens = (t: string) => Math.ceil(t.length / 4);
+			const historyTokens = conversationHistory.reduce((s, m) => s + estimateTokens(m.content), 0);
+			story.lastContextTotal = estimateTokens(systemPrompt) + historyTokens + estimateTokens(userPrompt);
+
+			onStreamStart?.();
 
 			const stream = streamNarrative({
 				system: systemPrompt,
 				prompt: userPrompt,
+				messages: conversationHistory,
+				temperature: settings.narrativeSettings.temperature,
 				signal: abortController.signal,
-			});
+				_service: 'narrative',
+			} as any);
 
 			for await (const chunk of stream) {
 				if (chunk.done) break;
@@ -133,6 +320,15 @@
 					fullResponse += chunk.content;
 					onStreamChunk?.(fullResponse);
 				}
+			}
+
+			// Check for AI-initiated dice roll markers and handle continuation
+			if (isAdventure && fullResponse.includes('{{roll:')) {
+				fullResponse = await handleAIRollContinuation(
+					fullResponse,
+					systemPrompt,
+					conversationHistory,
+				);
 			}
 
 			if (fullResponse.trim()) {

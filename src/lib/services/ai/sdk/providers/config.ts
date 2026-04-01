@@ -72,6 +72,31 @@ export interface ProviderConfig {
 }
 
 // ============================================================================
+// Service Defaults Factory
+// ============================================================================
+
+function makeServiceDefaults(
+  models: { narrative: string; classification: string; memory: string; suggestions: string; agentic: string; wizard: string; translation: string },
+  overrides?: Partial<Record<keyof ProviderServices, Partial<ServiceModelDefaults>>>,
+): ProviderServices {
+  const base: ProviderServices = {
+    narrative: { model: models.narrative, temperature: 1.0, maxTokens: 8192, reasoningEffort: 'high' },
+    classification: { model: models.classification, temperature: 0.5, maxTokens: 8192, reasoningEffort: 'high' },
+    memory: { model: models.memory, temperature: 0.5, maxTokens: 8192, reasoningEffort: 'high' },
+    suggestions: { model: models.suggestions, temperature: 0.8, maxTokens: 8192, reasoningEffort: 'off' },
+    agentic: { model: models.agentic, temperature: 1.0, maxTokens: 8192, reasoningEffort: 'high' },
+    wizard: { model: models.wizard, temperature: 0.8, maxTokens: 8192, reasoningEffort: 'off' },
+    translation: { model: models.translation, temperature: 1.0, maxTokens: 8192, reasoningEffort: 'off' },
+  };
+  if (overrides) {
+    for (const [key, vals] of Object.entries(overrides)) {
+      Object.assign(base[key as keyof ProviderServices], vals);
+    }
+  }
+  return base;
+}
+
+// ============================================================================
 // Provider Configurations
 // ============================================================================
 
@@ -100,50 +125,17 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
       'deepseek/deepseek-v3.2',
       'stepfun/step-3.5-flash:free',
     ],
-    services: {
-      narrative: {
-        model: 'z-ai/glm-5',
-        temperature: 1.0,
-        maxTokens: 8192,
-        reasoningEffort: 'high',
+    services: makeServiceDefaults(
+      {
+        narrative: 'z-ai/glm-5',
+        classification: 'x-ai/grok-4.1-fast',
+        memory: 'x-ai/grok-4.1-fast',
+        suggestions: 'deepseek/deepseek-v3.2',
+        agentic: 'z-ai/glm-5',
+        wizard: 'deepseek/deepseek-v3.2',
+        translation: 'google/gemini-3-flash-preview',
       },
-      classification: {
-        model: 'x-ai/grok-4.1-fast',
-        temperature: 0.5,
-        maxTokens: 8192,
-        reasoningEffort: 'high',
-      },
-      memory: {
-        model: 'x-ai/grok-4.1-fast',
-        temperature: 0.5,
-        maxTokens: 8192,
-        reasoningEffort: 'high',
-      },
-      suggestions: {
-        model: 'deepseek/deepseek-v3.2',
-        temperature: 0.8,
-        maxTokens: 8192,
-        reasoningEffort: 'off',
-      },
-      agentic: {
-        model: 'z-ai/glm-5',
-        temperature: 1.0,
-        maxTokens: 8192,
-        reasoningEffort: 'high',
-      },
-      wizard: {
-        model: 'deepseek/deepseek-v3.2',
-        temperature: 0.8,
-        maxTokens: 8192,
-        reasoningEffort: 'off',
-      },
-      translation: {
-        model: 'google/gemini-3-flash-preview',
-        temperature: 1.0,
-        maxTokens: 8192,
-        reasoningEffort: 'off',
-      },
-    },
+    ),
   },
 
   nanogpt: {
@@ -169,50 +161,22 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
       'stepfun-ai/step-3.5-flash:thinking',
       'openai/gpt-oss-120b',
     ],
-    services: {
-      narrative: {
-        model: 'zai-org/glm-5:thinking',
-        temperature: 0.8,
-        maxTokens: 8192,
-        reasoningEffort: 'high',
+    services: makeServiceDefaults(
+      {
+        narrative: 'zai-org/glm-5:thinking',
+        classification: 'stepfun-ai/step-3.5-flash:thinking',
+        memory: 'stepfun-ai/step-3.5-flash:thinking',
+        suggestions: 'deepseek/deepseek-v3.2',
+        agentic: 'zai-org/glm-5:thinking',
+        wizard: 'deepseek/deepseek-v3.2',
+        translation: 'openai/gpt-oss-120b',
       },
-      classification: {
-        model: 'stepfun-ai/step-3.5-flash:thinking',
-        temperature: 0.5,
-        maxTokens: 8192,
-        reasoningEffort: 'high',
+      {
+        narrative: { temperature: 0.8 },
+        wizard: { reasoningEffort: 'high' },
+        translation: { reasoningEffort: 'high' },
       },
-      memory: {
-        model: 'stepfun-ai/step-3.5-flash:thinking',
-        temperature: 0.5,
-        maxTokens: 8192,
-        reasoningEffort: 'high',
-      },
-      suggestions: {
-        model: 'deepseek/deepseek-v3.2',
-        temperature: 0.8,
-        maxTokens: 8192,
-        reasoningEffort: 'off',
-      },
-      agentic: {
-        model: 'zai-org/glm-5:thinking',
-        temperature: 1.0,
-        maxTokens: 8192,
-        reasoningEffort: 'high',
-      },
-      wizard: {
-        model: 'deepseek/deepseek-v3.2',
-        temperature: 0.8,
-        maxTokens: 8192,
-        reasoningEffort: 'high',
-      },
-      translation: {
-        model: 'openai/gpt-oss-120b',
-        temperature: 1.0,
-        maxTokens: 8192,
-        reasoningEffort: 'high',
-      },
-    },
+    ),
   },
 
   chutes: {
@@ -407,8 +371,8 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
       reasoning: false,
     },
     imageDefaults: {
-      defaultModel: 'imagen-3.0-generate-002',
-      referenceModel: 'imagen-3.0-generate-002',
+      defaultModel: 'gemini-2.0-flash',
+      referenceModel: 'gemini-2.0-flash',
       supportedSizes: ['512x512', '1024x1024'],
     },
     fallbackModels: [
@@ -518,6 +482,79 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
       'pixtral-large-latest',
       'ministral-8b-latest',
       'ministral-3b-latest',
+    ],
+    // No service defaults - user must configure models in Generation Settings
+  },
+
+  'google-ai-studio': {
+    name: 'Google AI Studio',
+    description: 'Gemini models via Google AI Studio (free tier available)',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    requiresApiKey: true,
+    capabilities: {
+      textGeneration: true,
+      imageGeneration: true,
+      structuredOutput: true,
+      reasoning: false,
+    },
+    imageDefaults: {
+      defaultModel: 'gemini-2.0-flash',
+      referenceModel: 'gemini-2.0-flash',
+      supportedSizes: ['512x512', '1024x1024'],
+    },
+    fallbackModels: [
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash',
+    ],
+    // No service defaults - user must configure models in Generation Settings
+  },
+
+  'google-vertex': {
+    name: 'Google Vertex AI',
+    description: 'Gemini models via Google Cloud Vertex AI',
+    baseUrl: '', // User must set: https://{REGION}-aiplatform.googleapis.com/v1beta1/projects/{PROJECT}/locations/{REGION}/endpoints/openapi
+    requiresApiKey: true,
+    capabilities: {
+      textGeneration: true,
+      imageGeneration: true,
+      structuredOutput: true,
+      reasoning: false,
+    },
+    imageDefaults: {
+      defaultModel: 'imagen-3.0-generate-002',
+      referenceModel: 'imagen-3.0-generate-002',
+      supportedSizes: ['512x512', '1024x1024'],
+    },
+    fallbackModels: [
+      'google/gemini-2.5-pro',
+      'google/gemini-2.5-flash',
+      'google/gemini-2.5-flash-lite',
+      'google/gemini-2.0-flash',
+    ],
+    // No service defaults - user must configure models in Generation Settings
+  },
+
+  'anthropic-proxy': {
+    name: 'Claude (Subscription Proxy)',
+    description: 'Use Claude via local proxy (for Claude Pro/Max subscribers)',
+    baseUrl: 'http://localhost:3456/v1',
+    requiresApiKey: false,
+    capabilities: {
+      textGeneration: true,
+      imageGeneration: false,
+      structuredOutput: true,
+      reasoning: 'heuristic',
+      reasoningExtraction: 'think-tag',
+    },
+    fallbackModels: [
+      'claude-opus-4-5-20251101',
+      'claude-haiku-4-5-20251001',
+      'claude-sonnet-4-5-20250929',
+      'claude-opus-4-1-20250805',
+      'claude-sonnet-4-20250514',
+      'claude-opus-4-20250514',
     ],
     // No service defaults - user must configure models in Generation Settings
   },

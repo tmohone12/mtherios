@@ -521,13 +521,10 @@ export function convertToEntries(
       }
     }
 
-    const baseState = { type: imported.type }
-
     let state: Entry['state']
     switch (imported.type) {
       case 'character':
         state = {
-          ...baseState,
           type: 'character',
           isPresent: false,
           lastSeenLocation: null,
@@ -543,7 +540,6 @@ export function convertToEntries(
         break
       case 'location':
         state = {
-          ...baseState,
           type: 'location',
           isCurrentLocation: false,
           visitCount: 0,
@@ -554,7 +550,6 @@ export function convertToEntries(
         break
       case 'item':
         state = {
-          ...baseState,
           type: 'item',
           inInventory: false,
           currentLocation: null,
@@ -564,7 +559,6 @@ export function convertToEntries(
         break
       case 'faction':
         state = {
-          ...baseState,
           type: 'faction',
           playerStanding: 0,
           status: 'unknown',
@@ -573,7 +567,6 @@ export function convertToEntries(
         break
       case 'event':
         state = {
-          ...baseState,
           type: 'event',
           occurred: false,
           occurredAt: null,
@@ -584,7 +577,6 @@ export function convertToEntries(
       case 'concept':
       default:
         state = {
-          ...baseState,
           type: 'concept',
           revealed: false,
           comprehensionLevel: 'unknown',

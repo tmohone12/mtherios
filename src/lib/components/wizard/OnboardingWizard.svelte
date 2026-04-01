@@ -1,10 +1,13 @@
 <script lang="ts">
-	import { Sword, Feather, ChevronLeft, ChevronRight, Globe, Zap, Play, Plus, X, Sparkles, Upload } from 'lucide-svelte';
-	import { fly, fade } from 'svelte/transition';
+	import { Sword, Feather, ChevronLeft, ChevronRight, Globe, Zap, Play, Plus, X, Upload, Loader2 } from 'lucide-svelte';
+	import { fly } from 'svelte/transition';
 	import { onMount } from 'svelte';
+	import { uuid } from '$lib/utils/uuid';
 	import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 	import { getSetting, setSetting, createStory, createCharacter, createLorebookEntry } from '$lib/services/database';
 	import { convertToEntries, type ImportedEntry } from '$lib/services/lorebookImporter';
+	import { importStoryFromJson } from '$lib/services/storySync';
+	import { settings } from '$lib/stores/settings.svelte';
 	import LorebookImport from '$lib/components/lorebook/LorebookImport.svelte';
 	import type { Story, Character, Entry, StoryMode, APIProfile, ProviderType } from '$lib/types';
 
@@ -58,6 +61,35 @@
 	let lorebookEntries = $state<Array<{ name: string; content: string; keywords: string }>>([]);
 	let importedFileEntries = $state<ImportedEntry[]>([]);
 
+	let createdStoryId = $state<string | null>(null);
+	let saving = $state(false);
+	let saveError = $state<string | null>(null);
+
+	// Story file import (from another device)
+	let storyFileInput: HTMLInputElement;
+	let importingStory = $state(false);
+
+	async function handleStoryFileImport(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		importingStory = true;
+		try {
+			const storyId = await importStoryFromJson(file);
+			// Re-init settings so bundled API profiles are live in memory
+			await settings.init();
+			await setSetting('onboardingComplete', 'true');
+			await setSetting('lastStoryId', storyId);
+			onComplete(storyId);
+		} catch (err) {
+			console.error('Story import failed:', err);
+			alert(`Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+		} finally {
+			importingStory = false;
+			input.value = '';
+		}
+	}
+
 	const genres = [
 		{ id: 'fantasy', label: 'Fantasy', emoji: '⚔️' },
 		{ id: 'sci-fi', label: 'Sci-Fi', emoji: '🚀' },
@@ -104,10 +136,11 @@
 		lorebookEntries = lorebookEntries.filter((_, i) => i !== index);
 	}
 
-	async function finish() {
-		// Only save provider if we don't already have one, or if user changed the key
+	/** Save story + entities to DB, returns the storyId */
+	async function saveStoryToDb(): Promise<string> {
+		// Only save provider if we don't already have one
 		if (!hasExistingProfile) {
-			const profileId = crypto.randomUUID();
+			const profileId = uuid();
 			const providerConfig = PROVIDERS[provider as keyof typeof PROVIDERS];
 			const profile: APIProfile = {
 				id: profileId,
@@ -125,8 +158,7 @@
 			await setSetting('activeProfileId', profileId);
 		}
 
-		// Create story
-		const storyId = crypto.randomUUID();
+		const storyId = uuid();
 		const now = Date.now();
 		const story: Story = {
 			id: storyId,
@@ -149,20 +181,22 @@
 				chapterBuffer: 10,
 				autoSummarize: true,
 				enableRetrieval: true,
-				maxChaptersPerRetrieval: 3,
+				maxChaptersPerRetrieval: 5,
 			},
 			retryState: null,
 			styleReviewState: null,
 			timeTracker: null,
 			currentBranchId: null,
 			currentBgImage: null,
+			headerPrompt: null,
+			lastWorldSimDay: null,
 		};
 		await createStory(story);
 
 		// Create protagonist
 		if (protagonistName) {
 			const char: Character = {
-				id: crypto.randomUUID(),
+				id: uuid(),
 				storyId,
 				branchId: null,
 				name: protagonistName,
@@ -181,7 +215,7 @@
 		for (const entry of lorebookEntries) {
 			if (!entry.name.trim()) continue;
 			const lorebookEntry: Entry = {
-				id: crypto.randomUUID(),
+				id: uuid(),
 				storyId,
 				branchId: null,
 				name: entry.name,
@@ -219,7 +253,7 @@
 			for (const entry of converted) {
 				const fullEntry: Entry = {
 					...entry,
-					id: crypto.randomUUID(),
+					id: uuid(),
 					storyId,
 					createdAt: now,
 					updatedAt: now,
@@ -228,9 +262,24 @@
 			}
 		}
 
-		await setSetting('onboardingComplete', 'true');
-		await setSetting('lastStoryId', storyId);
-		onComplete(storyId);
+		return storyId;
+	}
+
+	/** Save story to DB and finish onboarding */
+	async function beginStory() {
+		if (createdStoryId || saving) return;
+		saving = true;
+		saveError = null;
+		try {
+			const storyId = await saveStoryToDb();
+			createdStoryId = storyId;
+			await setSetting('onboardingComplete', 'true');
+			await setSetting('lastStoryId', storyId);
+			onComplete(storyId);
+		} catch (err) {
+			saveError = err instanceof Error ? err.message : 'Failed to save story';
+			saving = false;
+		}
 	}
 
 	let canProceed = $derived.by(() => {
@@ -326,6 +375,23 @@
 					{/if}
 				</p>
 			</div>
+			<!-- Import from another device -->
+			<div class="flex items-center gap-4">
+				<div class="h-px flex-1 bg-[var(--border-primary)]"></div>
+				<span class="font-display text-xs tracking-wider uppercase text-[var(--text-muted)]">or</span>
+				<div class="h-px flex-1 bg-[var(--border-primary)]"></div>
+			</div>
+
+			<input bind:this={storyFileInput} type="file" accept=".json" class="hidden" onchange={handleStoryFileImport} />
+			<button
+				class="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--border-primary)] py-4 text-sm text-[var(--text-muted)] transition-colors hover:border-[var(--color-gold-600)] hover:text-[var(--text-accent)]"
+				disabled={importingStory}
+				onclick={() => storyFileInput.click()}
+			>
+				<Upload class="h-4 w-4" />
+				{importingStory ? 'Importing...' : 'Import from another device'}
+			</button>
+			<p class="text-center text-xs text-[var(--text-muted)]">Import a .mtherios.json file — includes API settings</p>
 		</div>
 
 		{:else if currentStep === 1}
@@ -464,7 +530,12 @@
 				<Plus class="h-4 w-4" />
 				Add Lore Entry
 			</button>
+
+			{#if saveError}
+				<p class="text-sm text-red-400">{saveError}</p>
+			{/if}
 		</div>
+
 		{/if}
 
 		</div>
@@ -481,12 +552,20 @@
 				Back
 			</button>
 
-			{#if currentStep === steps.length - 1}
+			{#if currentStep === 4}
+				<!-- Final step: Begin Story -->
 				<button
-					class="flex items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] px-8 py-3 font-display text-sm font-semibold tracking-wide text-[var(--bg-primary)] transition-all hover:shadow-lg hover:shadow-[rgba(212,168,83,0.3)]"
-					onclick={finish}>
-					<Play class="h-4 w-4" />
-					Begin Story
+					class="flex items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] px-8 py-3 font-display text-sm font-semibold tracking-wide text-[var(--bg-primary)] transition-all hover:shadow-lg hover:shadow-[rgba(212,168,83,0.3)]
+						{saving ? 'opacity-70 cursor-not-allowed' : ''}"
+					disabled={saving}
+					onclick={beginStory}>
+					{#if saving}
+						<Loader2 class="h-4 w-4 animate-spin" />
+						Saving...
+					{:else}
+						<Play class="h-4 w-4" />
+						Begin Story
+					{/if}
 				</button>
 			{:else}
 				<button

@@ -2,6 +2,7 @@
 	import { Upload, FileJson, Check, AlertCircle, ChevronDown, ChevronUp, Trash2 } from 'lucide-svelte';
 	import { parseLorebook, getImportSummary, convertToEntries, type ImportedEntry, type LorebookImportResult } from '$lib/services/lorebookImporter';
 	import { createLorebookEntry } from '$lib/services/database';
+	import { uuid } from '$lib/utils/uuid';
 	import type { Entry } from '$lib/types';
 	import { fade } from 'svelte/transition';
 
@@ -82,7 +83,12 @@
 	async function saveSelected() {
 		saving = true;
 		errorMsg = '';
-		const selected = importedEntries.filter((_, i) => selectedEntries.has(i));
+		
+		// Debug: Check DB status
+		const { debugDatabaseStatus } = await import('$lib/services/database');
+		await debugDatabaseStatus();
+		
+		const selected = $state.snapshot(importedEntries).filter((_, i: number) => selectedEntries.has(i));
 
 		if (isBuffered) {
 			// Wizard mode: hand entries back to parent, don't write to DB yet
@@ -98,17 +104,41 @@
 
 				for (const entry of converted) {
 					try {
+						const id = uuid();
+						console.log('Creating lorebook entry:', { name: entry.name, id, storyId });
+						
 						const fullEntry: Entry = {
 							...entry,
-							id: crypto.randomUUID(),
+							id,
 							storyId,
-							createdAt: now,
-							updatedAt: now,
-						} as Entry;
+						};
+						
+						// Debug: log the full entry structure
+						console.log('Full entry structure:', {
+							id: fullEntry.id,
+							storyId: fullEntry.storyId,
+							name: fullEntry.name,
+							type: fullEntry.type,
+							stateType: fullEntry.state?.type,
+							hasDescription: !!fullEntry.description,
+							hasInjection: !!fullEntry.injection,
+							injectionMode: fullEntry.injection?.mode,
+							createdAt: fullEntry.createdAt,
+							updatedAt: fullEntry.updatedAt,
+						});
+						
 						await createLorebookEntry(fullEntry);
 						successCount++;
 					} catch (entryErr) {
 						console.error('Failed to save lorebook entry:', entry.name, entryErr);
+						// Log the actual entry data to diagnose schema issues
+						console.error('Entry data:', JSON.stringify({
+							name: entry.name,
+							type: entry.type,
+							stateType: entry.state?.type,
+							hasInjection: !!entry.injection,
+							injectionMode: entry.injection?.mode
+						}, null, 2));
 					}
 				}
 

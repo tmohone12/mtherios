@@ -19,7 +19,10 @@
 	$effect(() => {
 		const id = app.currentStoryId;
 		if (id && (!story.currentStory || story.currentStory.id !== id)) {
-			story.loadStory(id);
+			story.loadStory(id).catch(() => {
+				// Story doesn't exist (deleted or DB cleared) — clear stale reference
+				app.closeStory();
+			});
 		}
 	});
 </script>
@@ -54,6 +57,14 @@
 	/>
 {:else if app.currentStoryId && story.currentStory}
 	<StoryView />
+{:else if app.currentStoryId && story.loading}
+	<!-- Story is loading from DB — show loading state instead of flashing AppShell -->
+	<div class="flex h-[100dvh] items-center justify-center bg-[#08090c]">
+		<svg viewBox="0 0 48 48" fill="none" class="h-12 w-12 animate-pulse text-[#d4a853]">
+			<path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="currentColor" stroke-width="1.5" fill="none"/>
+			<circle cx="24" cy="24" r="5" fill="currentColor" opacity="0.6"/>
+		</svg>
+	</div>
 {:else}
 	<AppShell />
 {/if}
