@@ -68,6 +68,7 @@ export interface AssembleParams {
 	items: Item[];
 	lorebookEntries: Entry[];
 	lastWorldSimResult: (WorldSimulationResult & { seasonEffect?: SeasonEffect }) | null;
+	pendingFactionReactions?: import('../sdk/schemas/microfaction').MicroFactionResult[];
 	entryRelationships: EntryRelationship[];
 	worldEvents: WorldEvent[];
 	storyMode: string;
@@ -218,7 +219,7 @@ export class ContextAssembler {
 
 		// Build each tier (scene, procedural and retrieved are async)
 		const recentTier = this.buildRecentTier(chapters, arcs, budgets);
-		const worldTier = this.buildWorldTier(arcs, params.lastWorldSimResult, params.locations, params.worldEvents ?? [], budgets);
+		const worldTier = this.buildWorldTier(arcs, params.lastWorldSimResult, params.pendingFactionReactions ?? [], params.locations, params.worldEvents ?? [], budgets);
 
 		const [sceneTier, proceduralTier, retrievedTier] = await Promise.all([
 			this.buildSceneTier(params, budgets),
@@ -425,6 +426,7 @@ export class ContextAssembler {
 	private buildWorldTier(
 		arcs: Arc[],
 		ws: (WorldSimulationResult & { seasonEffect?: SeasonEffect }) | null,
+		factionReactions: import('../sdk/schemas/microfaction').MicroFactionResult[],
 		locations: Location[],
 		worldEvents: WorldEvent[],
 		budgets: TierBudget,
@@ -495,6 +497,24 @@ export class ContextAssembler {
 		if (ws.plotSeeds && ws.plotSeeds.length > 0) {
 			block += `\n[FACTION PLOT SEEDS — plant subtly, do not force]\n`;
 			for (const seed of ws.plotSeeds) block += `- ${seed}\n`;
+		}
+
+		// Micro-faction reactions (event-driven, from classifier signals)
+		if (factionReactions.length > 0) {
+			const visible = factionReactions.filter(r => r.reaction.visible || r.reaction.rumor);
+			if (visible.length > 0) {
+				block += '\n[RECENT FACTION MOVES — weave naturally, not all at once]\n';
+				for (const r of visible) {
+					if (r.reaction.rumor) {
+						block += `- (rumor) ${r.reaction.rumor}\n`;
+					} else if (r.reaction.visible) {
+						block += `- ${r.factionName}: ${r.reaction.action}\n`;
+					}
+					if (r.reaction.consequence) {
+						block += `  → ${r.reaction.consequence}\n`;
+					}
+				}
+			}
 		}
 
 		// Recent world events (Tier 2 consequence system)

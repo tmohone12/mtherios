@@ -29,6 +29,8 @@ class StoryStore {
 	worldEvents = $state<WorldEvent[]>([]);
 	loading = $state(false);
 	lastWorldSimResult = $state<import('$lib/services/ai/sdk/schemas/worldsim').WorldSimulationResult & { seasonEffect?: import('$lib/services/ai/generation/WorldSimulationService').SeasonEffect } | null>(null);
+	/** Micro-faction reactions pending injection into next narrator context */
+	pendingFactionReactions = $state<import('$lib/services/ai/sdk/schemas/microfaction').MicroFactionResult[]>([]);
 	/** Last known tier usage from ContextAssembler (updated each generation) */
 	lastTierUsage = $state<Record<string, number> | null>(null);
 	/** Last known total context tokens sent to API */

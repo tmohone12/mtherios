@@ -23,9 +23,10 @@ import {
 	createStoryBeat, getStoryBeats,
 } from '$lib/services/database';
 import { LORE_MGMT_CHAPTER_INTERVAL } from '$lib/services/ai/lorebook/LoreManagementService';
-import type { ClassificationResult } from '$lib/services/ai/sdk/schemas/classifier';
+import type { ClassificationResult, FactionSignal } from '$lib/services/ai/sdk/schemas/classifier';
 import type { ActionChoice } from '$lib/services/ai/sdk/schemas/actionchoices';
 import type { StyleReview } from '$lib/services/ai/sdk/schemas/style';
+import type { MicroFactionResult } from '$lib/services/ai/sdk/schemas/microfaction';
 import type {
 	Chapter, Arc, Entry, EntryType, StoryEntry, TimeTracker,
 	CharacterEntryState, LocationEntryState, LocationConnection,
@@ -159,6 +160,16 @@ export class GenerationPipeline {
 			}
 		}
 
+		// ── Phase 1b: Micro-faction sim (event-driven, runs when classifier detects faction signals) ──
+		if (result.classificationResult?.factionSignals?.length) {
+			try {
+				await this.runMicroFactionSim(result.classificationResult.factionSignals);
+			} catch (e) {
+				result.errors.push(`MicroFactionSim: ${e}`);
+				console.error('Micro faction sim failed:', e);
+			}
+		}
+
 		// ── Phase 2 + 3: Background + enrichment (parallel) ──
 		const jobs: Promise<void>[] = [];
 
@@ -211,6 +222,7 @@ export class GenerationPipeline {
 	// ══════════════════════════════════════════════════════════════
 
 	private async runClassifier(narrative: string): Promise<ClassificationResult> {
+		const factionEntries = story.lorebookEntries.filter(e => e.type === 'faction');
 		const result = await ai.classifier.classify(
 			narrative,
 			story.entries.slice(-5),
@@ -220,6 +232,7 @@ export class GenerationPipeline {
 			story.storyMode,
 			story.pov,
 			story.tense,
+			factionEntries,
 		);
 
 		// Persist characters
@@ -737,6 +750,65 @@ export class GenerationPipeline {
 		if (result.plotInjection) {
 			console.log(`World sim: plot injection (${result.plotInjection.urgency})`);
 		}
+	}
+
+	// ── Micro-faction sim (event-driven, triggered by classifier signals) ──
+
+	private async runMicroFactionSim(signals: FactionSignal[]): Promise<void> {
+		if (!story.currentStory) return;
+		const wsConfig = settings.getServiceConfig('worldSimulation');
+		if (!wsConfig.enabled) return;
+
+		const factionEntries = story.lorebookEntries.filter(e => e.type === 'faction');
+		const characterEntries = story.lorebookEntries.filter(e => e.type === 'character');
+
+		const results = await ai.microFactionSim.processSignals(
+			signals, factionEntries, characterEntries, story.entryRelationships,
+		);
+
+		if (results.length === 0) return;
+
+		// Apply resource mutations for non-"none" reactions
+		const chapters = await getChapters(story.currentStory.id);
+		const currentChapterNum = chapters.length > 0 ? chapters[chapters.length - 1].number : 0;
+		const factionsByName: Record<string, Entry> = {};
+		for (const e of factionEntries) factionsByName[e.name.toLowerCase()] = e;
+		const updatedEntries = new Map<string, Entry>();
+
+		for (const r of results) {
+			if (r.reaction.actionType === 'none') continue;
+			const factionEntry = factionsByName[r.factionName.toLowerCase()];
+			if (!factionEntry) continue;
+			const state = { ...(factionEntry.state as FactionEntryState) };
+
+			// Apply lightweight resource costs (same constants as full sim)
+			if (state.resources) {
+				const costs = RESOURCE_COSTS[r.reaction.actionType];
+				if (costs) {
+					const res = { ...state.resources };
+					for (const [key, delta] of Object.entries(costs)) {
+						(res as any)[key] = clamp((res as any)[key] + delta, 0, 100);
+					}
+					state.resources = res;
+				}
+			}
+
+			state.lastActionChapter = currentChapterNum;
+			await updateLorebookEntry(factionEntry.id, { state: state as any, updatedAt: Date.now() });
+			updatedEntries.set(factionEntry.id, { ...factionEntry, state: state as any });
+		}
+
+		if (updatedEntries.size > 0) {
+			story.lorebookEntries = story.lorebookEntries.map(e => updatedEntries.get(e.id) ?? e);
+		}
+
+		// Store reactions for context assembly injection
+		story.pendingFactionReactions = [
+			...(story.pendingFactionReactions ?? []),
+			...results,
+		];
+
+		console.log(`Micro-faction sim: ${results.length} reaction(s) from ${signals.length} signal(s)`);
 	}
 
 	private async applyWorldSimMutations(result: WorldSimulationResult, chapters: Chapter[]): Promise<void> {

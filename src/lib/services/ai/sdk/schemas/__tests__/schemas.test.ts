@@ -17,6 +17,8 @@ import {
 import { arcSummarySchema } from '../arc';
 import { extractedRuleSchema, reflectionResultSchema, ruleRelevanceSchema } from '../procedural';
 import { vaultQuerySchema, vaultActionSchema, vaultResultSchema } from '../vault';
+import { factionSignalSchema } from '../classifier';
+import { microFactionReactionSchema, microFactionResultSchema } from '../microfaction';
 
 // ════════════════════════════════════════════════════════════════
 // Action Choices
@@ -216,6 +218,60 @@ describe('classificationResultSchema', () => {
 			mood: 'tense', timeProgression: '2 hours later',
 		};
 		expect(classificationResultSchema.parse(data).mood).toBe('tense');
+	});
+
+	it('defaults factionSignals to empty array', () => {
+		const data = { characters: [], locations: [], items: [], storyBeats: [] };
+		expect(classificationResultSchema.parse(data).factionSignals).toEqual([]);
+	});
+
+	it('accepts factionSignals', () => {
+		const data = {
+			characters: [], locations: [], items: [], storyBeats: [],
+			factionSignals: [{
+				factionName: 'Lannisters', trigger: 'provoked',
+				context: 'Player killed a Lannister guard', urgency: 'high',
+			}],
+		};
+		const parsed = classificationResultSchema.parse(data);
+		expect(parsed.factionSignals).toHaveLength(1);
+		expect(parsed.factionSignals[0].trigger).toBe('provoked');
+	});
+});
+
+// ════════════════════════════════════════════════════════════════
+// Faction Signals
+// ════════════════════════════════════════════════════════════════
+
+describe('factionSignalSchema', () => {
+	it('accepts valid faction signal', () => {
+		const data = {
+			factionName: 'Boltons', trigger: 'threatened',
+			context: 'Northern lords are gathering', urgency: 'medium',
+		};
+		expect(factionSignalSchema.parse(data)).toEqual(data);
+	});
+
+	it('defaults urgency to low', () => {
+		const data = {
+			factionName: 'Freys', trigger: 'informed',
+			context: 'A raven arrived',
+		};
+		expect(factionSignalSchema.parse(data).urgency).toBe('low');
+	});
+
+	it('accepts all trigger types', () => {
+		for (const trigger of ['threatened', 'opportunity', 'informed', 'provoked', 'weakened']) {
+			expect(factionSignalSchema.parse({
+				factionName: 'X', trigger, context: 'Y',
+			})).toBeTruthy();
+		}
+	});
+
+	it('rejects invalid trigger type', () => {
+		expect(() => factionSignalSchema.parse({
+			factionName: 'X', trigger: 'bored', context: 'Y',
+		})).toThrow();
 	});
 });
 
@@ -546,5 +602,70 @@ describe('vaultResultSchema', () => {
 			reasoning: 'Created one entry',
 		};
 		expect(vaultResultSchema.parse(data)).toBeTruthy();
+	});
+});
+
+// ════════════════════════════════════════════════════════════════
+// Micro-Faction Simulation
+// ════════════════════════════════════════════════════════════════
+
+describe('microFactionReactionSchema', () => {
+	it('accepts valid reaction', () => {
+		const data = {
+			action: 'Sent a spy to the northern camp',
+			actionType: 'intelligence',
+			visible: false,
+			rumor: null,
+			consequence: 'Boltons now know about the gathering',
+		};
+		expect(microFactionReactionSchema.parse(data)).toEqual(data);
+	});
+
+	it('accepts "none" action type', () => {
+		const data = {
+			action: 'The faction takes no action',
+			actionType: 'none',
+			visible: false,
+			rumor: null,
+			consequence: null,
+		};
+		expect(microFactionReactionSchema.parse(data).actionType).toBe('none');
+	});
+
+	it('accepts visible reaction with rumor', () => {
+		const data = {
+			action: 'Mobilized troops at the border',
+			actionType: 'military',
+			visible: true,
+			rumor: 'Soldiers were seen marching south from the Dreadfort',
+			consequence: 'Road to Winterfell is now patrolled',
+		};
+		const parsed = microFactionReactionSchema.parse(data);
+		expect(parsed.visible).toBe(true);
+		expect(parsed.rumor).toBeTruthy();
+	});
+
+	it('accepts all action types', () => {
+		for (const actionType of ['military', 'diplomatic', 'economic', 'intelligence', 'internal', 'none']) {
+			expect(microFactionReactionSchema.parse({
+				action: 'x', actionType, visible: false, rumor: null, consequence: null,
+			})).toBeTruthy();
+		}
+	});
+});
+
+describe('microFactionResultSchema', () => {
+	it('accepts valid result', () => {
+		const data = {
+			factionName: 'Lannisters',
+			reaction: {
+				action: 'Recalled their envoy', actionType: 'diplomatic',
+				visible: true, rumor: 'The Lannister envoy left in haste',
+				consequence: 'Diplomatic relations severed',
+			},
+		};
+		const parsed = microFactionResultSchema.parse(data);
+		expect(parsed.factionName).toBe('Lannisters');
+		expect(parsed.reaction.actionType).toBe('diplomatic');
 	});
 });

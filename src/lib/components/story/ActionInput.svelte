@@ -279,6 +279,7 @@
 				items: story.items,
 				lorebookEntries: story.lorebookEntries,
 				lastWorldSimResult: story.lastWorldSimResult,
+				pendingFactionReactions: story.pendingFactionReactions,
 				entryRelationships: story.entryRelationships,
 				worldEvents: story.worldEvents,
 				storyMode: story.storyMode,
@@ -286,6 +287,11 @@
 				tense: story.tense,
 				maxChaptersPerRetrieval: story.currentStory.memoryConfig?.maxChaptersPerRetrieval,
 			});
+
+			// Clear consumed faction reactions after injection into context
+			if (story.pendingFactionReactions.length > 0) {
+				story.pendingFactionReactions = [];
+			}
 
 			const systemPrompt = story.buildSystemPrompt(assembled.contextBlock);
 			const conversationHistory = story.buildConversationMessages();

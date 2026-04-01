@@ -18,6 +18,7 @@ export { LoreManagementService } from './lorebook/LoreManagementService';
 export { InteractiveVaultService } from './vault/InteractiveVaultService';
 export { ImageGenerationService } from './image/ImageGenerationService';
 export { WorldSimulationService } from './generation/WorldSimulationService';
+export { MicroFactionSimService } from './generation/MicroFactionSimService';
 export { ArcCondensationService } from './generation/ArcCondensationService';
 export { ProceduralMemoryService } from './memory/ProceduralMemoryService';
 export { CompactionService } from './memory/CompactionService';
@@ -39,6 +40,7 @@ import { LoreManagementService } from './lorebook/LoreManagementService';
 import { InteractiveVaultService } from './vault/InteractiveVaultService';
 import { ImageGenerationService } from './image/ImageGenerationService';
 import { WorldSimulationService } from './generation/WorldSimulationService';
+import { MicroFactionSimService } from './generation/MicroFactionSimService';
 import { ArcCondensationService } from './generation/ArcCondensationService';
 import { ProceduralMemoryService } from './memory/ProceduralMemoryService';
 import { CompactionService } from './memory/CompactionService';
@@ -59,6 +61,7 @@ let _loreManagement: LoreManagementService;
 let _vault: InteractiveVaultService;
 let _imageGen: ImageGenerationService;
 let _worldSim: WorldSimulationService;
+let _microFactionSim: MicroFactionSimService;
 let _arcCondensation: ArcCondensationService;
 let _proceduralMemory: ProceduralMemoryService;
 let _compaction: CompactionService;
@@ -80,6 +83,7 @@ export const ai = {
 	get vault() { return _vault ??= new InteractiveVaultService(); },
 	get imageGen() { return _imageGen ??= new ImageGenerationService(); },
 	get worldSim() { return _worldSim ??= new WorldSimulationService(); },
+	get microFactionSim() { return _microFactionSim ??= new MicroFactionSimService(); },
 	get arcCondensation() { return _arcCondensation ??= new ArcCondensationService(); },
 	get proceduralMemory() { return _proceduralMemory ??= new ProceduralMemoryService(); },
 	get compaction() { return _compaction ??= new CompactionService(); },

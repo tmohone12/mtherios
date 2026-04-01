@@ -9,7 +9,7 @@
 import { BaseAIService } from '../BaseAIService';
 import { classificationResultSchema, type ClassificationResult } from '../sdk/schemas/classifier';
 import { createLogger } from '../core/config';
-import type { Character, Location, Item, StoryEntry } from '$lib/types';
+import type { Character, Location, Item, StoryEntry, Entry } from '$lib/types';
 
 const log = createLogger('Classifier');
 
@@ -27,12 +27,14 @@ export class ClassifierService extends BaseAIService {
 		mode: string = 'adventure',
 		pov: string = 'second',
 		tense: string = 'present',
+		factionEntries: Entry[] = [],
 	): Promise<ClassificationResult> {
-		log('classify', { narrativeLen: narrative.length, charCount: existingCharacters.length });
+		log('classify', { narrativeLen: narrative.length, charCount: existingCharacters.length, factionCount: factionEntries.length });
 
 		const charList = existingCharacters.map(c => `- ${c.name} (${c.relationship}, ${c.status})`).join('\n');
 		const locList = existingLocations.map(l => `- ${l.name}${l.current ? ' [current]' : ''}`).join('\n');
 		const itemList = existingItems.map(i => `- ${i.name}${i.equipped ? ' [equipped]' : ''}`).join('\n');
+		const factionList = factionEntries.map(f => `- ${f.name}: ${f.description.slice(0, 80)}`).join('\n');
 		const recentContext = recentEntries.slice(-3).map(e => `[${e.type}]: ${e.content}`).join('\n\n');
 
 		const system = `You are a world state classifier for a ${mode} interactive fiction story written in ${pov} person, ${tense} tense.
@@ -49,6 +51,9 @@ ${locList || '(none yet)'}
 
 ITEMS (already tracked):
 ${itemList || '(none yet)'}
+
+FACTIONS (tracked):
+${factionList || '(none)'}
 
 ═══ EXTRACTION RULES ═══
 
@@ -105,6 +110,19 @@ CONVERSATIONS:
 - emotionalShift: how the conversation changed the NPC's attitude (null if unchanged)
 - importance: trivial (small talk), minor (info exchange), significant (secrets revealed), critical (alliance/betrayal)
 - Only track conversations where MEANINGFUL information was exchanged
+
+FACTION SIGNALS:
+- When the narrative contains events that a TRACKED FACTION would care about, flag it
+- Only signal factions from the FACTIONS list above — never invent factions
+- trigger types:
+  - "threatened" = something endangers the faction's territory, members, or goals
+  - "opportunity" = events create an opening the faction could exploit
+  - "informed" = the faction would learn about this through spies, ravens, or witnesses
+  - "provoked" = direct insult, attack, or betrayal against the faction
+  - "weakened" = the faction lost resources, allies, or a key member
+- context: 1 sentence explaining WHY this faction cares
+- urgency: low (background awareness), medium (will want to act soon), high (demands immediate reaction)
+- Default to EMPTY array. Most narrations affect zero factions. Only signal when events have clear faction relevance.
 
 ═══ OUTPUT FORMAT ═══
 

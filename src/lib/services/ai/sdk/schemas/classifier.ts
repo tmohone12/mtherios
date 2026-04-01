@@ -54,6 +54,13 @@ export const conversationDetectionSchema = z.object({
 	importance: z.enum(['trivial', 'minor', 'significant', 'critical']),
 });
 
+export const factionSignalSchema = z.object({
+	factionName: z.string(),
+	trigger: z.enum(['threatened', 'opportunity', 'informed', 'provoked', 'weakened']),
+	context: z.string().describe('1 sentence: why this faction cares about what just happened'),
+	urgency: z.enum(['low', 'medium', 'high']).default('low'),
+});
+
 export const classificationResultSchema = z.object({
 	characters: z.array(characterUpdateSchema),
 	locations: z.array(locationUpdateSchema),
@@ -65,6 +72,7 @@ export const classificationResultSchema = z.object({
 	})),
 	relationships: z.array(relationshipExtractionSchema).default([]),
 	conversations: z.array(conversationDetectionSchema).default([]),
+	factionSignals: z.array(factionSignalSchema).default([]),
 	mood: z.string().optional(),
 	timeProgression: z.string().optional(),
 });
@@ -75,3 +83,4 @@ export type LocationUpdate = z.infer<typeof locationUpdateSchema>;
 export type ItemUpdate = z.infer<typeof itemUpdateSchema>;
 export type RelationshipExtraction = z.infer<typeof relationshipExtractionSchema>;
 export type ConversationDetection = z.infer<typeof conversationDetectionSchema>;
+export type FactionSignal = z.infer<typeof factionSignalSchema>;
