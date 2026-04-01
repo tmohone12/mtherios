@@ -29,6 +29,7 @@
 	let loadingClassifier = $state(false);
 	let loadingImage = $state(false);
 	let imageError = $state<string | null>(null);
+	let pipelineErrors = $state<string[]>([]);
 
 	// World drawer & floating menu
 	let drawerOpen = $state(false);
@@ -158,6 +159,9 @@
 		}
 		if (result.sceneImageUrl) {
 			sceneImageUrl = result.sceneImageUrl;
+		}
+		if (result.errors.length > 0) {
+			pipelineErrors = result.errors;
 		}
 
 		scrollToBottom();
@@ -302,6 +306,22 @@
 							<span class="font-semibold">Image failed:</span> {imageError}
 						</div>
 						<button onclick={() => imageError = null} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+							<X class="h-3.5 w-3.5" />
+						</button>
+					</div>
+				{/if}
+
+				<!-- Pipeline Errors -->
+				{#if pipelineErrors.length > 0}
+					<div class="flex items-start gap-2 rounded-xl border border-[var(--color-crimson-500)]/20 bg-[var(--color-crimson-900)]/10 px-3 py-2.5">
+						<AlertTriangle class="h-4 w-4 shrink-0 text-[var(--color-crimson-400)] mt-0.5" />
+						<div class="flex-1 text-xs text-[var(--color-crimson-400)]">
+							<span class="font-semibold">Pipeline {pipelineErrors.length === 1 ? 'error' : 'errors'}:</span>
+							{#each pipelineErrors as error}
+								<div class="mt-0.5 text-[var(--color-crimson-400)]/80">{error}</div>
+							{/each}
+						</div>
+						<button onclick={() => pipelineErrors = []} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
 							<X class="h-3.5 w-3.5" />
 						</button>
 					</div>
