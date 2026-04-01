@@ -126,7 +126,21 @@ FACTION SIGNALS:
 
 ═══ OUTPUT FORMAT ═══
 
-Respond with a JSON object matching the schema. All arrays default to []. Only include fields where changes were detected. Never hallucinate elements not in the text.`;
+Respond with a JSON object using EXACTLY these field names:
+
+{
+  "characters": [{ "name": "...", "description": "...", "relationship": "...", "status": "active"|"inactive"|"departed"|"deceased"|"unknown", "traits": ["..."] }],
+  "locations": [{ "name": "...", "description": "...", "current": true|false, "region": "...", "terrain": "...", "connections": [{ "targetName": "...", "direction": "...", "travelTimeMinutes": 5, "description": "..." }] }],
+  "items": [{ "name": "...", "description": "...", "quantity": 1, "equipped": false, "location": "..." }],
+  "storyBeats": [{ "title": "...", "description": "...", "significance": "minor"|"moderate"|"major"|"critical" }],
+  "relationships": [{ "sourceName": "...", "targetName": "...", "type": "allied-with", "label": "...", "strength": 50, "bidirectional": true }],
+  "conversations": [{ "npcName": "...", "topicSummary": "...", "playerRevealed": ["..."], "npcLearned": ["..."], "emotionalShift": null, "importance": "minor" }],
+  "factionSignals": [{ "factionName": "...", "trigger": "informed", "context": "...", "urgency": "low" }],
+  "mood": "...",
+  "timeProgression": "..."
+}
+
+Use EMPTY arrays [] for categories with no changes. Never hallucinate elements not in the text.`;
 
 		const prompt = `RECENT CONTEXT:
 ${recentContext}
