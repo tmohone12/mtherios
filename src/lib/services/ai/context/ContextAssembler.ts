@@ -4,9 +4,9 @@
  * Pre-generation context assembly with dynamic, model-aware token budgets.
  * Runs BEFORE the narrator generates, not after.
  *
- * Tiers (in prompt order):
- *   1. Scene      — current location, present characters, equipped items
- *   2. Recent     — ALL uncovered chapter summaries (not yet condensed into arcs)
+ * Tiers (in prompt order — chapters first for memory-driven continuity):
+ *   1. Recent     — ALL uncovered chapter summaries (not yet condensed into arcs)
+ *   2. Scene      — current location, present characters (capped), equipped items
  *   3. World      — arc summaries, unresolved threads, DM plot injection
  *   4. Procedural — CASS-inspired narrative rules (decay-scored, relevance-matched)
  *   5. Retrieved  — AI-selected chapters + agentic lore search (single unified lore path)
@@ -236,10 +236,10 @@ export class ContextAssembler {
 			retrieved: estimateTokens(retrievedTier),
 		};
 
-		// Assemble in order — include everything, truncate only the combined total
+		// Assemble in order — chapters first for memory-driven continuity, then scene snapshot
 		let contextBlock = '';
-		if (sceneTier) contextBlock += sceneTier + '\n';
 		if (recentTier) contextBlock += recentTier + '\n';
+		if (sceneTier) contextBlock += sceneTier + '\n';
 		if (worldTier) contextBlock += worldTier + '\n';
 		if (proceduralTier) contextBlock += proceduralTier + '\n';
 		if (retrievedTier) contextBlock += retrievedTier + '\n';
@@ -280,15 +280,20 @@ export class ContextAssembler {
 			)
 			: [];
 
-		if (presentChars.length > 0) {
+		// Cap present characters to 6 most recently seen to keep scene tier lean
+		const cappedChars = presentChars.slice(0, 6);
+		if (cappedChars.length > 0) {
 			block += `\n**Present:**\n`;
-			for (const c of presentChars) {
+			if (presentChars.length > cappedChars.length) {
+				block += `(${presentChars.length - cappedChars.length} others nearby)\n`;
+			}
+			for (const c of cappedChars) {
 				const desc = c.description
 					? c.description.slice(0, 100) + (c.description.length > 100 ? '...' : '')
 					: '';
 				block += `- ${c.name}${c.relationship ? ` (${c.relationship})` : ''}${desc ? ': ' + desc : ''}\n`;
 
-				// NPC conversation memory — what this character remembers
+				// NPC context — lightweight snapshot (detailed bio/personality available via lore retrieval)
 				const charEntry = params.lorebookEntries.find(e =>
 					e.type === 'character' && e.name.toLowerCase() === c.name.toLowerCase()
 				);
@@ -301,12 +306,12 @@ export class ContextAssembler {
 						block += `  [Attitude: ${cState.personalOpinion}]\n`;
 					}
 
-					// Relationships for this character
+					// Relationships — top 2 only
 					const rels = params.entryRelationships.filter(r =>
 						r.sourceEntryId === charEntry.id || (r.bidirectional && r.targetEntryId === charEntry.id)
 					);
 					if (rels.length > 0) {
-						const relLabels = rels.slice(0, 4).map(r => {
+						const relLabels = rels.slice(0, 2).map(r => {
 							const otherId = r.sourceEntryId === charEntry.id ? r.targetEntryId : r.sourceEntryId;
 							const other = params.lorebookEntries.find(e => e.id === otherId);
 							return other ? `${r.type} ${other.name}` : null;
@@ -316,18 +321,7 @@ export class ContextAssembler {
 						}
 					}
 
-					// Character enrichment fields
-					if (cState?.bio) {
-						block += `  [Bio: ${cState.bio}]\n`;
-					}
-					if (cState?.personality) {
-						block += `  [Personality: ${cState.personality}]\n`;
-					}
-					if (cState?.motivations?.length) {
-						block += `  [Drives: ${cState.motivations.join('; ')}]\n`;
-					}
-
-					// Conversation memory records from DB (presence-based)
+					// Conversation memory — top 2 only (detailed history in lore retrieval)
 					const convMemories = await getNpcConversationMemory(params.storyId, charEntry.id);
 					if (convMemories.length > 0) {
 						const importanceRank: Record<string, number> = { critical: 4, significant: 3, minor: 2, trivial: 1 };
@@ -336,7 +330,7 @@ export class ContextAssembler {
 								const diff = (importanceRank[b.importance] ?? 0) - (importanceRank[a.importance] ?? 0);
 								return diff !== 0 ? diff : b.storyPosition - a.storyPosition;
 							})
-							.slice(0, 5);
+							.slice(0, 2);
 						block += `  [Past exchanges:\n`;
 						for (const mem of ranked) {
 							block += `    - (${mem.importance}) ${mem.topic}`;
@@ -398,10 +392,15 @@ export class ContextAssembler {
 		const included: Chapter[] = [];
 
 		for (const ch of newest) {
-			const summary = ch.summary.length > 600
-				? ch.summary.slice(0, 597) + '...'
+			// Most recent 3 chapters get higher summary cap for better continuity
+			const isRecent = included.length < 3;
+			const cap = isRecent ? 800 : 600;
+			const summary = ch.summary.length > cap
+				? ch.summary.slice(0, cap - 3) + '...'
 				: ch.summary;
-			const chBlock = `\n**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**\n${summary}\n`;
+			let chBlock = `\n**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**\n${summary}\n`;
+			if (ch.emotionalTone) chBlock += `[Tone: ${ch.emotionalTone}]\n`;
+			if (ch.plotThreads?.length) chBlock += `[Threads: ${ch.plotThreads.join(', ')}]\n`;
 			const chTokens = estimateTokens(chBlock);
 
 			if (tokensSoFar + chTokens > budgets.recent) break;
@@ -411,11 +410,16 @@ export class ContextAssembler {
 
 		// Reverse back to chronological for reading
 		included.sort((a, b) => a.number - b.number);
-		for (const ch of included) {
-			const summary = ch.summary.length > 600
-				? ch.summary.slice(0, 597) + '...'
+		for (let i = 0; i < included.length; i++) {
+			const ch = included[i];
+			const isRecent = i >= included.length - 3;
+			const cap = isRecent ? 800 : 600;
+			const summary = ch.summary.length > cap
+				? ch.summary.slice(0, cap - 3) + '...'
 				: ch.summary;
 			block += `\n**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**\n${summary}\n`;
+			if (ch.emotionalTone) block += `[Tone: ${ch.emotionalTone}]\n`;
+			if (ch.plotThreads?.length) block += `[Threads: ${ch.plotThreads.join(', ')}]\n`;
 		}
 
 		return block;
@@ -652,17 +656,15 @@ export class ContextAssembler {
 			} catch (e) {
 				console.error('Pre-gen agentic retrieval failed:', e);
 			}
-
-			// Standalone RAG fallback — if agentic retrieval is disabled but RAG is enabled
-			if (!agenticConfig.enabled) {
-				try {
-					const ragResult = await ai.loreRAG.retrieve(params.userAction);
-					if (ragResult.contextBlock) {
-						block += ragResult.contextBlock;
-					}
-				} catch (e) {
-					console.error('Standalone RAG retrieval failed:', e);
+		} else {
+			// Standalone RAG fallback — agentic retrieval is disabled but RAG may be available
+			try {
+				const ragResult = await ai.loreRAG.retrieve(params.userAction);
+				if (ragResult.contextBlock) {
+					block += ragResult.contextBlock;
 				}
+			} catch (e) {
+				console.error('Standalone RAG retrieval failed:', e);
 			}
 		}
 

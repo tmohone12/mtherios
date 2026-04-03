@@ -251,7 +251,16 @@ export class GenerationPipeline {
 			}
 		}
 
-		// Persist locations
+		// Persist locations — enforce single current location
+		const currentLocations = result.locations.filter(l => l.current);
+		if (currentLocations.length > 1) {
+			console.warn(`[Pipeline] Classifier returned ${currentLocations.length} current locations, keeping last: ${currentLocations[currentLocations.length - 1].name}`);
+			for (const loc of result.locations) {
+				if (loc.current && loc !== currentLocations[currentLocations.length - 1]) {
+					loc.current = false;
+				}
+			}
+		}
 		for (const locUpdate of result.locations) {
 			if (!locUpdate.name) continue;
 			await story.addOrUpdateLocation(locUpdate.name, locUpdate.description, locUpdate.current);
@@ -263,7 +272,7 @@ export class GenerationPipeline {
 			await story.addOrUpdateItem(itemUpdate.name, itemUpdate.description, itemUpdate.quantity, itemUpdate.equipped, itemUpdate.location);
 		}
 
-		// Presence tracking
+		// Presence tracking — 'unknown' status means classifier couldn't determine, do not alter presence
 		const departedNames = result.characters
 			.filter(c => c.name && (c.status === 'departed' || c.status === 'deceased'))
 			.map(c => c.name);
@@ -299,9 +308,9 @@ export class GenerationPipeline {
 				await createStoryBeat({
 					id: uuid(), storyId: story.currentStory.id,
 					title: beat.title, description: beat.description,
-					type, status: 'active',
+					type, significance: beat.significance ?? null, status: 'active',
 					triggeredAt: Date.now(), resolvedAt: null,
-					metadata: { significance: beat.significance, mood: result.mood ?? null },
+					metadata: { mood: result.mood ?? null },
 					branchId: story.currentStory.currentBranchId ?? null,
 				});
 			}
@@ -632,6 +641,11 @@ export class GenerationPipeline {
 		await createChapter(chapter);
 		console.log(`Chapter ${chapter.number} created: "${chapter.title}"`);
 
+		// Advance conversation history floor — chapter summary now carries the older context,
+		// so keep only the last 10 entries in raw chat history to prevent context rot.
+		const POST_CHAPTER_HISTORY = 10;
+		story.chatHistoryFloor = Math.max(story.chatHistoryFloor, story.entries.length - POST_CHAPTER_HISTORY);
+
 		// Embed chapter summary (background)
 		ai.embeddings.embed(`${chapter.title ?? 'Chapter ' + chapter.number}: ${chapter.summary}`, chapter.id, 'chapter')
 			.catch(e => console.error(`[Pipeline] Failed to embed chapter ${chapter.number}:`, e));
@@ -802,7 +816,8 @@ export class GenerationPipeline {
 			story.lorebookEntries = story.lorebookEntries.map(e => updatedEntries.get(e.id) ?? e);
 		}
 
-		// Store reactions for context assembly injection
+		// Store reactions for context assembly injection.
+		// Lifecycle: appended here → consumed by ContextAssembler.assemble() → cleared by ActionInput after context read.
 		story.pendingFactionReactions = [
 			...(story.pendingFactionReactions ?? []),
 			...results,

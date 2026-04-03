@@ -58,15 +58,25 @@ ${factionList || '(none)'}
 ═══ EXTRACTION RULES ═══
 
 CHARACTERS:
-- Include any character who SPEAKS, ACTS, or is PHYSICALLY PRESENT in the scene
 - For NEW characters (not in the list above): provide name, description (appearance + role), relationship to protagonist, status, and personality traits
-- For EXISTING characters: ONLY include if something changed — new status, changed relationship, revealed trait, death, departure
-- IMPORTANT — Departures: If a character LEAVES the scene (walks away, storms out, teleports, is dragged off, etc.), set their status to "departed". This is how we track that they are no longer physically present at the current location.
-  - "active" = present and participating in the scene
-  - "departed" = left the current location during this passage
+- For EXISTING characters: ONLY include if something CONCRETELY changed — new status, changed relationship, revealed trait, death, or explicit departure
+- CRITICAL: Do NOT include existing characters whose state is UNCHANGED. If a character speaks or acts but their name, description, relationship, status, and traits are all the same as listed above, OMIT them entirely. An empty characters array is correct when nothing changed.
+- Status values:
+  - "active" = present and participating in the scene (DEFAULT — use when unsure)
+  - "departed" = ONLY when the narrative EXPLICITLY describes the character physically leaving the current location
   - "inactive" = off-screen, unconscious, imprisoned, etc.
   - "deceased" = dead
-- Do NOT re-list existing characters whose state is unchanged
+- DEPARTURES — STRICT RULES:
+  Set "departed" ONLY when the narrative explicitly describes a character physically leaving:
+    - They walk/run/teleport/fly OUT of the location
+    - They are carried, dragged, or taken away
+    - They explicitly say goodbye and leave
+  Do NOT set "departed" when:
+    - A character is simply not mentioned in this passage (they may still be present)
+    - The scene shifts to a different location (that's a LOCATION change, not a departure)
+    - A character is in the background or silent (they're still "active")
+    - You're unsure whether they left (default to "active")
+  When in doubt, do NOT mark departed. False departures break the world model.
 - ${pov === 'second' ? 'The "you" character is the protagonist — do not list them as a new character' : 'Track the POV character separately'}
 
 LOCATIONS:
@@ -111,25 +121,27 @@ CONVERSATIONS:
 - importance: trivial (small talk), minor (info exchange), significant (secrets revealed), critical (alliance/betrayal)
 - Only track conversations where MEANINGFUL information was exchanged
 
-FACTION SIGNALS:
-- When the narrative contains events that a TRACKED FACTION would care about, flag it
-- Only signal factions from the FACTIONS list above — never invent factions
+FACTION SIGNALS — CONSERVATIVE:
+- Default to EMPTY array []. The vast majority of passages affect zero factions.
+- Only signal factions from the FACTIONS list above — never invent factions.
+- If no factions are listed above, ALWAYS return an empty factionSignals array.
+- Only signal when the narrative contains a DIRECT, CONCRETE event that a specific faction would verifiably care about.
+- Do NOT signal based on vague atmosphere, mood, or speculative implications.
 - trigger types:
-  - "threatened" = something endangers the faction's territory, members, or goals
-  - "opportunity" = events create an opening the faction could exploit
+  - "threatened" = something directly endangers the faction's territory, members, or goals
+  - "opportunity" = events create a clear opening the faction could exploit
   - "informed" = the faction would learn about this through spies, ravens, or witnesses
   - "provoked" = direct insult, attack, or betrayal against the faction
   - "weakened" = the faction lost resources, allies, or a key member
-- context: 1 sentence explaining WHY this faction cares
+- context: 1 sentence explaining WHY this faction cares (required, not empty)
 - urgency: low (background awareness), medium (will want to act soon), high (demands immediate reaction)
-- Default to EMPTY array. Most narrations affect zero factions. Only signal when events have clear faction relevance.
 
 ═══ OUTPUT FORMAT ═══
 
 Respond with a JSON object using EXACTLY these field names:
 
 {
-  "characters": [{ "name": "...", "description": "...", "relationship": "...", "status": "active"|"inactive"|"departed"|"deceased"|"unknown", "traits": ["..."] }],
+  "characters": [{ "name": "...", "description": "...", "relationship": "...", "status": "active"|"inactive"|"departed"|"deceased", "traits": ["..."] }],
   "locations": [{ "name": "...", "description": "...", "current": true|false, "region": "...", "terrain": "...", "connections": [{ "targetName": "...", "direction": "...", "travelTimeMinutes": 5, "description": "..." }] }],
   "items": [{ "name": "...", "description": "...", "quantity": 1, "equipped": false, "location": "..." }],
   "storyBeats": [{ "title": "...", "description": "...", "significance": "minor"|"moderate"|"major"|"critical" }],

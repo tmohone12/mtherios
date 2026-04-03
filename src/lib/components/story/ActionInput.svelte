@@ -211,15 +211,15 @@
 		const rollSummary = `[Roll Result: ${marker.ability} Check — ${result.notation} = ${result.total} (natural ${result.natural}) vs DC ${marker.dc} — ${outcomeLabel}${critLabel}]`;
 
 		// Continue generation with roll result as context
+		const continuationPrompt = `${rollSummary}\n\nContinue narrating the outcome. Do NOT include another roll marker.`;
 		const continuationMessages = [
 			...conversationHistory,
 			{ role: 'assistant' as const, content: preText },
-			{ role: 'user' as const, content: `${rollSummary}\n\nContinue narrating the outcome. Do NOT include another roll marker.` },
 		];
 
 		const continuationStream = streamNarrative({
 			system: systemPrompt,
-			prompt: rollSummary,
+			prompt: continuationPrompt,
 			messages: continuationMessages,
 			temperature: settings.narrativeSettings.temperature,
 			signal: abortController?.signal,
@@ -294,7 +294,11 @@
 			}
 
 			const systemPrompt = story.buildSystemPrompt(assembled.contextBlock);
-			const conversationHistory = story.buildConversationMessages();
+			// Build conversation history EXCLUDING the current action (it's sent separately as the prompt)
+			const allHistory = story.buildConversationMessages();
+			const conversationHistory = allHistory.length > 0 && allHistory[allHistory.length - 1].role === 'user'
+				? allHistory.slice(0, -1)
+				: allHistory;
 			const userPrompt = story.buildUserPrompt(content);
 
 			// Store context stats for the meter

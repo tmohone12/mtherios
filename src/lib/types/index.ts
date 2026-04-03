@@ -326,6 +326,7 @@ export interface Location {
   description: string | null
   visited: boolean
   current: boolean
+  /** @deprecated Rich connection data lives in LocationEntryState.connections (lorebook). This field is unused. */
   connections: string[]
   metadata: Record<string, unknown> | null
   branchId: string | null // Branch this location belongs to (null = main/inherited)
@@ -361,6 +362,7 @@ export interface StoryBeat {
   title: string
   description: string | null
   type: 'milestone' | 'quest' | 'revelation' | 'event' | 'plot_point'
+  significance?: 'minor' | 'moderate' | 'major' | 'critical' | null
   status: 'pending' | 'active' | 'completed' | 'failed'
   triggeredAt: number | null
   resolvedAt?: number | null

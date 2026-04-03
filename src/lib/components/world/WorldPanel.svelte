@@ -27,6 +27,13 @@
 	let creatingChapter = $state(false);
 	let chapterStatus = $state('');
 
+	// Manual chapter creation
+	let showManualChapter = $state(false);
+	let manualTitle = $state('');
+	let manualSummary = $state('');
+	let manualCharacters = $state('');
+	let manualLocations = $state('');
+
 	// Context viewer
 	let showContext = $state(false);
 	let contextPreview = $state('');
@@ -141,9 +148,62 @@
 
 			await createChapter(chapter);
 			chapters = [...chapters, chapter];
+			// Advance history floor — chapter summary carries context, keep last 10 entries in chat
+			story.chatHistoryFloor = Math.max(story.chatHistoryFloor, story.entries.length - 10);
 			chapterStatus = `Chapter ${chapter.number}: "${chapter.title}" created!`;
 		} catch (e) {
 			console.error('Force chapter creation failed:', e);
+			chapterStatus = `Failed: ${e instanceof Error ? e.message : String(e)}`;
+		}
+		creatingChapter = false;
+	}
+
+	async function createManualChapter() {
+		if (!selectedStoryId || !manualSummary.trim()) return;
+		creatingChapter = true;
+		chapterStatus = 'Creating manual chapter...';
+		try {
+			const existingChapters = await getChapters(selectedStoryId);
+			const allEntries = await getStoryEntries(selectedStoryId);
+
+			// Use the last entry as a boundary anchor, or a sentinel if no entries exist
+			const lastEntry = allEntries.length > 0 ? allEntries[allEntries.length - 1] : null;
+			const anchorId = lastEntry?.id ?? 'manual';
+
+			const chapter: Chapter = {
+				id: uuid(),
+				storyId: selectedStoryId,
+				number: existingChapters.length + 1,
+				title: manualTitle.trim() || null,
+				startEntryId: anchorId,
+				endEntryId: anchorId,
+				entryCount: 0,
+				summary: manualSummary.trim(),
+				startTime: null,
+				endTime: null,
+				keywords: [],
+				characters: manualCharacters.trim() ? manualCharacters.split(',').map(s => s.trim()).filter(Boolean) : [],
+				locations: manualLocations.trim() ? manualLocations.split(',').map(s => s.trim()).filter(Boolean) : [],
+				plotThreads: [],
+				emotionalTone: null,
+				branchId: null,
+				createdAt: Date.now(),
+			};
+
+			await createChapter(chapter);
+			chapters = [...chapters, chapter];
+			// Advance history floor — chapter summary carries context, keep last 10 entries in chat
+			story.chatHistoryFloor = Math.max(story.chatHistoryFloor, story.entries.length - 10);
+			chapterStatus = `Manual chapter ${chapter.number}: "${chapter.title ?? 'Untitled'}" created!`;
+
+			// Reset form
+			manualTitle = '';
+			manualSummary = '';
+			manualCharacters = '';
+			manualLocations = '';
+			showManualChapter = false;
+		} catch (e) {
+			console.error('Manual chapter creation failed:', e);
 			chapterStatus = `Failed: ${e instanceof Error ? e.message : String(e)}`;
 		}
 		creatingChapter = false;
@@ -636,7 +696,13 @@
 						{:else}
 							<Zap class="h-3.5 w-3.5" />
 						{/if}
-						Create Chapter Now
+						AI Chapter
+					</button>
+					<button onclick={() => { showManualChapter = !showManualChapter; }}
+						disabled={!selectedStoryId}
+						class="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5 py-2.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40 transition-colors">
+						<Edit3 class="h-3.5 w-3.5" />
+						Manual Chapter
 					</button>
 					<button onclick={() => { showContext = !showContext; if (showContext) buildContextPreview(); }}
 						class="flex items-center justify-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/5 px-3 py-2.5 text-xs font-medium text-blue-400 hover:bg-blue-500/10 transition-colors"
@@ -648,6 +714,55 @@
 				{#if chapterStatus}
 					<div class="rounded-lg bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-muted)]">
 						{chapterStatus}
+					</div>
+				{/if}
+
+				<!-- Manual Chapter Form -->
+				{#if showManualChapter}
+					<div class="rounded-xl border border-emerald-500/20 bg-[var(--bg-tertiary)] overflow-hidden">
+						<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-3 py-2">
+							<div class="flex items-center gap-2">
+								<Edit3 class="h-3.5 w-3.5 text-emerald-400" />
+								<span class="font-display text-xs tracking-wider uppercase text-emerald-400">Manual Chapter</span>
+							</div>
+							<button onclick={() => showManualChapter = false} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+								<X class="h-3.5 w-3.5" />
+							</button>
+						</div>
+						<div class="px-3 py-3 space-y-3">
+							<div>
+								<label class="block text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">Title</label>
+								<input type="text" bind:value={manualTitle} placeholder="e.g. The Fall of Ashenmere"
+									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-emerald-500/50 focus:outline-none" />
+							</div>
+							<div>
+								<label class="block text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">Summary / Timeline</label>
+								<textarea bind:value={manualSummary} rows="6" placeholder="Paste your condensed timeline or chapter summary here..."
+									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-emerald-500/50 focus:outline-none resize-y" ></textarea>
+							</div>
+							<div class="grid grid-cols-2 gap-2">
+								<div>
+									<label class="block text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">Characters (comma-separated)</label>
+									<input type="text" bind:value={manualCharacters} placeholder="Kael, Lirien, Thorne"
+										class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-emerald-500/50 focus:outline-none" />
+								</div>
+								<div>
+									<label class="block text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">Locations (comma-separated)</label>
+									<input type="text" bind:value={manualLocations} placeholder="Ashenmere, The Hollow"
+										class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-emerald-500/50 focus:outline-none" />
+								</div>
+							</div>
+							<button onclick={createManualChapter}
+								disabled={creatingChapter || !manualSummary.trim()}
+								class="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 py-2.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/25 disabled:opacity-40 transition-colors">
+								{#if creatingChapter}
+									<Loader2 class="h-3.5 w-3.5 animate-spin" />
+								{:else}
+									<Check class="h-3.5 w-3.5" />
+								{/if}
+								Create Chapter
+							</button>
+						</div>
 					</div>
 				{/if}
 			</div>

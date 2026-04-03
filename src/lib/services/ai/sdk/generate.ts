@@ -223,12 +223,12 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 		? `${baseUrl || '/api/anthropic'}/v1/messages`
 		: `${baseUrl}/chat/completions`;
 	const headers = useAnthropic ? buildAnthropicHeaders(profile) : buildAuthHeaders(profile);
-	const body = useAnthropic
-		? toAnthropicBody(options.system, messages, model, temperature, maxTokens, true)
-		: { model, messages: [{ role: 'system', content: options.system }, ...messages.filter(m => m.role !== 'system').length ? messages : []], stream: true, temperature, max_tokens: maxTokens };
 
-	// For OpenAI path, rebuild messages properly
-	if (!useAnthropic) {
+	let body: Record<string, any>;
+	if (useAnthropic) {
+		body = toAnthropicBody(options.system, messages, model, temperature, maxTokens, true);
+	} else {
+		// OpenAI-compatible: system as a message role, then history, then user prompt
 		const oaiMessages: Array<{ role: string; content: string }> = [
 			{ role: 'system', content: options.system },
 		];
@@ -236,7 +236,7 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 			for (const msg of options.messages) oaiMessages.push({ role: msg.role, content: msg.content });
 		}
 		oaiMessages.push({ role: 'user', content: options.prompt });
-		Object.assign(body, { messages: oaiMessages, model, stream: true, temperature, max_tokens: maxTokens });
+		body = { model, messages: oaiMessages, stream: true, temperature, max_tokens: maxTokens };
 	}
 
 	try {

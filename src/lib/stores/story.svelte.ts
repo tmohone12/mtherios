@@ -35,6 +35,9 @@ class StoryStore {
 	lastTierUsage = $state<Record<string, number> | null>(null);
 	/** Last known total context tokens sent to API */
 	lastContextTotal = $state<number>(0);
+	/** Entry index floor for conversation history — set when a chapter is created to prevent context rot.
+	 *  buildConversationMessages() won't include entries before this index. */
+	chatHistoryFloor = $state<number>(0);
 
 	// ── Derived ──
 	get storyMode() { return this.currentStory?.mode ?? 'adventure'; }
@@ -68,6 +71,21 @@ class StoryStore {
 			this.entryRelationships = entryRelationships;
 			this.conversationMemories = conversationMemories;
 			this.worldEvents = worldEvents;
+
+			// If story has chapters, set history floor so only recent entries are in chat.
+			// Older entries are summarized in chapters/arcs — sending them as raw history causes context rot.
+			const chapters = await getChapters(storyId);
+			if (chapters.length > 0) {
+				const lastChapter = chapters.sort((a, b) => b.number - a.number)[0];
+				const endIdx = this.entries.findIndex(e => e.id === lastChapter.endEntryId);
+				if (endIdx >= 0) {
+					// Floor starts after the last chapter's end, keeping at most 10 entries of raw history
+					this.chatHistoryFloor = Math.max(0, this.entries.length - 10);
+				}
+			} else {
+				this.chatHistoryFloor = 0;
+			}
+
 			// Pre-embed lorebook + chapters in background (non-blocking)
 			this.preEmbedLorebook().catch(() => {});
 			this.preEmbedChapters().catch(() => {});
@@ -155,7 +173,12 @@ class StoryStore {
 		if (updates.relationship && updates.relationship !== char.relationship) merged.relationship = updates.relationship;
 		if (updates.status && updates.status !== char.status) {
 			// "departed" is a transient classifier signal — persist as "active" (they're alive, just elsewhere)
-			merged.status = (updates.status === 'departed' ? 'active' : updates.status) as Character['status'];
+			// "unknown" means the classifier couldn't determine status — keep existing status unchanged
+			if (updates.status === 'unknown') {
+				// Do not update — preserve current status
+			} else {
+				merged.status = (updates.status === 'departed' ? 'active' : updates.status) as Character['status'];
+			}
 		}
 		if (updates.traits && updates.traits.length > 0) {
 			// Merge traits, don't replace
@@ -460,11 +483,14 @@ class StoryStore {
 				: Math.floor(contextWindow * 0.60);
 		}
 
-		// Hard cap on entries to avoid context rot (token budget is the real gate)
+		// Hard cap on entries to avoid context rot (token budget is the real gate).
+		// chatHistoryFloor is advanced when chapters are created — older entries are
+		// summarized in chapters/arcs and no longer need to be in raw chat history.
 		const MAX_HISTORY_ENTRIES = 200;
+		const historyFloor = Math.max(this.chatHistoryFloor, this.entries.length - MAX_HISTORY_ENTRIES);
 
 		let tokensSoFar = 0;
-		const floor = Math.max(0, this.entries.length - MAX_HISTORY_ENTRIES);
+		const floor = Math.max(0, historyFloor);
 		let startIdx = this.entries.length;
 
 		for (let i = this.entries.length - 1; i >= floor; i--) {
@@ -645,6 +671,7 @@ class StoryStore {
 		this.lastWorldSimResult = null;
 		this.lastTierUsage = null;
 		this.lastContextTotal = 0;
+		this.chatHistoryFloor = 0;
 	}
 }
 

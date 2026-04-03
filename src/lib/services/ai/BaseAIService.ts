@@ -81,9 +81,73 @@ export abstract class BaseAIService {
 			const parsed = JSON.parse(cleaned);
 			return schema.parse(parsed);
 		} catch (e) {
+			// Attempt to salvage truncated JSON by closing open structures
+			const salvaged = this.tryRepairJson(cleaned);
+			if (salvaged !== null) {
+				try {
+					log(`Salvaged truncated JSON for ${this.serviceId}`);
+					return schema.parse(salvaged);
+				} catch {
+					// Salvage parsed but failed schema validation — fall through
+				}
+			}
 			log(`Structured generation parse failed for ${this.serviceId}`, { error: e, raw: cleaned.slice(0, 200) });
 			throw new Error(`AI returned invalid JSON for ${this.serviceId}: ${e instanceof Error ? e.message : String(e)}`);
 		}
+	}
+
+	/**
+	 * Attempt to repair truncated JSON by removing the last incomplete value
+	 * and closing all open brackets/braces. Returns parsed object or null.
+	 */
+	private tryRepairJson(raw: string): unknown | null {
+		// Iterative truncation: find the last comma outside a string, trim there,
+		// close open brackets, try parse. Repeat up to 5 times.
+		let candidate = raw;
+		for (let attempt = 0; attempt < 5; attempt++) {
+			const closed = this.closeOpenBrackets(candidate);
+			try {
+				return JSON.parse(closed);
+			} catch {
+				// Find last comma outside a string and truncate there
+				const commaIdx = this.findLastOutsideString(candidate, ',');
+				if (commaIdx <= 0) return null;
+				candidate = candidate.slice(0, commaIdx);
+			}
+		}
+		return null;
+	}
+
+	/** Find the last index of `char` that is NOT inside a JSON string. Returns -1 if not found. */
+	private findLastOutsideString(text: string, char: string): number {
+		let inString = false;
+		let escape = false;
+		let lastIdx = -1;
+		for (let i = 0; i < text.length; i++) {
+			const ch = text[i];
+			if (escape) { escape = false; continue; }
+			if (ch === '\\' && inString) { escape = true; continue; }
+			if (ch === '"') { inString = !inString; continue; }
+			if (!inString && ch === char) lastIdx = i;
+		}
+		return lastIdx;
+	}
+
+	/** Close any unclosed brackets/braces by scanning for open structures. */
+	private closeOpenBrackets(text: string): string {
+		const stack: string[] = [];
+		let inString = false;
+		let escape = false;
+		for (const ch of text) {
+			if (escape) { escape = false; continue; }
+			if (ch === '\\' && inString) { escape = true; continue; }
+			if (ch === '"') { inString = !inString; continue; }
+			if (inString) continue;
+			if (ch === '{') stack.push('}');
+			else if (ch === '[') stack.push(']');
+			else if (ch === '}' || ch === ']') stack.pop();
+		}
+		return text + stack.reverse().join('');
 	}
 
 	/**
