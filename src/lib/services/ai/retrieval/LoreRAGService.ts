@@ -57,9 +57,9 @@ export interface LoreRAGConfig {
 }
 
 const DEFAULT_CONFIG: LoreRAGConfig = {
-	enabled: false,
+	enabled: true,
 	endpoint: 'http://localhost:6333',
-	collection: 'westeros_lore',
+	collection: 'rise_lore',
 	embeddingEndpoint: 'http://localhost:11434',
 	embeddingModel: 'nomic-embed-text',
 	maxChunks: 8,

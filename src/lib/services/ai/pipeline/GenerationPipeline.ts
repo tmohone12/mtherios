@@ -668,7 +668,7 @@ export class GenerationPipeline {
 
 		const arcs = await getArcs(story.currentStory.id);
 		const coveredChapterIds = new Set(arcs.flatMap(a => a.chapterIds));
-		const uncoveredChapters = chapters.filter(c => !coveredChapterIds.has(c.id)).sort((a, b) => a.number - b.number);
+		const uncoveredChapters = chapters.filter(c => !coveredChapterIds.has(c.id) && !c.pinned).sort((a, b) => a.number - b.number);
 		if (uncoveredChapters.length < 5) return;
 
 		const arcNumber = arcs.length + 1;

@@ -547,6 +547,12 @@ class StoryStore {
 			}
 		}
 
+		// Cap final message count to prevent context rot
+		const MAX_MESSAGES = 40;
+		if (messages.length > MAX_MESSAGES) {
+			return messages.slice(-MAX_MESSAGES);
+		}
+
 		return messages;
 	}
 

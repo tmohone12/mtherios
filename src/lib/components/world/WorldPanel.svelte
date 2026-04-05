@@ -33,6 +33,7 @@
 	let manualSummary = $state('');
 	let manualCharacters = $state('');
 	let manualLocations = $state('');
+	let manualPin = $state(true);
 
 	// Context viewer
 	let showContext = $state(false);
@@ -187,6 +188,7 @@
 				plotThreads: [],
 				emotionalTone: null,
 				branchId: null,
+				pinned: manualPin,
 				createdAt: Date.now(),
 			};
 
@@ -201,6 +203,7 @@
 			manualSummary = '';
 			manualCharacters = '';
 			manualLocations = '';
+			manualPin = true;
 			showManualChapter = false;
 		} catch (e) {
 			console.error('Manual chapter creation failed:', e);
@@ -752,6 +755,11 @@
 										class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-emerald-500/50 focus:outline-none" />
 								</div>
 							</div>
+							<label class="flex items-center gap-2 cursor-pointer">
+								<input type="checkbox" bind:checked={manualPin}
+									class="rounded border-[var(--border-primary)] bg-[var(--bg-primary)] accent-amber-500 h-3.5 w-3.5" />
+								<span class="text-[10px] uppercase tracking-wider text-amber-400">Pin — never condensed into arcs</span>
+							</label>
 							<button onclick={createManualChapter}
 								disabled={creatingChapter || !manualSummary.trim()}
 								class="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 py-2.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/25 disabled:opacity-40 transition-colors">
@@ -854,6 +862,9 @@
 								<div class="flex-1 min-w-0">
 									<div class="flex items-center gap-2 flex-wrap">
 										<span class="rounded bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-bold text-rose-400">CH.{chapter.number}</span>
+										{#if chapter.pinned}
+											<span class="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-bold text-amber-400">PINNED</span>
+										{/if}
 										<span class="font-display text-sm font-semibold text-[var(--text-primary)] truncate">{chapter.title ?? 'Untitled'}</span>
 									</div>
 									{#if !expandedChapter || expandedChapter !== chapter.id}

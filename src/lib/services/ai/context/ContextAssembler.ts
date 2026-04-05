@@ -376,8 +376,9 @@ export class ContextAssembler {
 		if (chapters.length === 0) return '';
 
 		const coveredIds = new Set(arcs.flatMap(a => a.chapterIds));
+		// Pinned chapters always appear in Recent tier — they're persistent grounding context
 		const uncovered = chapters
-			.filter(c => !coveredIds.has(c.id))
+			.filter(c => c.pinned || !coveredIds.has(c.id))
 			.sort((a, b) => a.number - b.number); // chronological
 
 		if (uncovered.length === 0) return '';
@@ -385,20 +386,25 @@ export class ContextAssembler {
 		let block = '\n## Recent Story\n';
 		let tokensSoFar = estimateTokens(block);
 
-		// Include ALL uncovered chapters, budget permitting.
-		// Start from newest and work backwards so the most recent context
-		// is preserved if we hit the budget limit.
-		const newest = [...uncovered].reverse();
-		const included: Chapter[] = [];
+		// Pinned chapters are always included (full text, no truncation).
+		// Non-pinned chapters are included newest-first until the budget runs out.
+		const pinned = uncovered.filter(c => c.pinned);
+		const unpinned = uncovered.filter(c => !c.pinned);
+
+		// Include pinned chapters first — they always go in at full length
+		for (const ch of pinned) {
+			let chBlock = `\n**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**\n${ch.summary}\n`;
+			if (ch.emotionalTone) chBlock += `[Tone: ${ch.emotionalTone}]\n`;
+			if (ch.plotThreads?.length) chBlock += `[Threads: ${ch.plotThreads.join(', ')}]\n`;
+			tokensSoFar += estimateTokens(chBlock);
+		}
+
+		// Fill remaining budget with unpinned chapters (newest first)
+		const newest = [...unpinned].reverse();
+		const included: Chapter[] = [...pinned];
 
 		for (const ch of newest) {
-			// Most recent 3 chapters get higher summary cap for better continuity
-			const isRecent = included.length < 3;
-			const cap = isRecent ? 800 : 600;
-			const summary = ch.summary.length > cap
-				? ch.summary.slice(0, cap - 3) + '...'
-				: ch.summary;
-			let chBlock = `\n**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**\n${summary}\n`;
+			let chBlock = `\n**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**\n${ch.summary}\n`;
 			if (ch.emotionalTone) chBlock += `[Tone: ${ch.emotionalTone}]\n`;
 			if (ch.plotThreads?.length) chBlock += `[Threads: ${ch.plotThreads.join(', ')}]\n`;
 			const chTokens = estimateTokens(chBlock);
@@ -408,16 +414,10 @@ export class ContextAssembler {
 			tokensSoFar += chTokens;
 		}
 
-		// Reverse back to chronological for reading
+		// Sort chronologically for reading
 		included.sort((a, b) => a.number - b.number);
-		for (let i = 0; i < included.length; i++) {
-			const ch = included[i];
-			const isRecent = i >= included.length - 3;
-			const cap = isRecent ? 800 : 600;
-			const summary = ch.summary.length > cap
-				? ch.summary.slice(0, cap - 3) + '...'
-				: ch.summary;
-			block += `\n**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**\n${summary}\n`;
+		for (const ch of included) {
+			block += `\n**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**\n${ch.summary}\n`;
 			if (ch.emotionalTone) block += `[Tone: ${ch.emotionalTone}]\n`;
 			if (ch.plotThreads?.length) block += `[Threads: ${ch.plotThreads.join(', ')}]\n`;
 		}

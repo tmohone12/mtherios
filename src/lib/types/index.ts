@@ -408,6 +408,9 @@ export interface Chapter {
   emotionalTone: string | null
 
   branchId: string | null // Branch this chapter belongs to (null = main branch for legacy)
+  /** Pinned chapters are never consumed by arcs — they stay in the Recent tier permanently
+   *  as persistent grounding context (lore bibles, timelines, reference material). */
+  pinned?: boolean
 
   createdAt: number
 }

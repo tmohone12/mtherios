@@ -120,20 +120,20 @@
 			if (xMatch) {
 				return thirdPerson
 					? `> ${name} examines the ${xMatch[1]}.`
-					: `> You examine the ${xMatch[1]}.`;
+					: `> I examine the ${xMatch[1]}.`;
 			}
 			if (SHORTHAND_COMMANDS[lower]) {
 				const expanded = SHORTHAND_COMMANDS[lower];
 				return thirdPerson
 					? `> ${name} ${expanded.replace(/^(go|check|look|wait)/, (m) => m === 'check' ? 'checks' : m === 'look' ? 'looks' : m === 'wait' ? 'waits' : 'goes')}.`
-					: `> You ${expanded}.`;
+					: `> I ${expanded}.`;
 			}
 
 			// Wildcard: * at end means AI should continue/complete the action
 			const isWildcard = rawInput.endsWith('*') || rawInput.endsWith(',');
 			const cleanInput = isWildcard ? rawInput.slice(0, -1).trim() : rawInput;
 
-			const prefix = thirdPerson ? `> ${name} ` : '> You ';
+			const prefix = thirdPerson ? `> ${name} ` : '> I ';
 			return prefix + cleanInput + (isWildcard ? '' : '.');
 		}
 
@@ -144,7 +144,7 @@
 		if (type === 'think') {
 			return thirdPerson
 				? `> ${name} thinks: "${rawInput}"`
-				: `> You think to yourself: "${rawInput}"`;
+				: `> I think to myself: "${rawInput}"`;
 		}
 
 		// story / free — pass through
@@ -166,7 +166,7 @@
 		}
 		return thirdPerson
 			? `> ${name} ${verb}, "${text}"`
-			: `> You ${verb}, "${text}"`;
+			: `> I ${verb}, "${text}"`;
 	}
 
 	/**

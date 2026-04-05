@@ -1,6 +1,9 @@
 <script lang="ts">
-	import { ChevronDown, ChevronUp, RotateCcw, Save } from 'lucide-svelte';
+	import { ChevronDown, ChevronUp, RotateCcw, Save, Trash2, Loader2, CheckCircle, XCircle } from 'lucide-svelte';
 	import { settings, SERVICE_DEFINITIONS, SERVICE_PROFILES, type ServiceConfig } from '$lib/stores/settings.svelte';
+	import { ai } from '$lib/services/ai';
+	import { story } from '$lib/stores/story.svelte';
+	import { getProceduralRules, deleteProceduralRule } from '$lib/services/database';
 
 	interface Props {
 		onBack: () => void;
@@ -13,6 +16,85 @@
 	let editingConfigs = $state<Record<string, ServiceConfig>>({});
 	let editingProfileModels = $state<Record<string, string>>({});
 	let saving = $state(false);
+
+	// ── CASS / Procedural Memory state ──
+	let cassRuleCount = $state<number | null>(null);
+	let cassFlushing = $state(false);
+	let cassStatus = $state('');
+
+	// ── Qdrant / LoreRAG state ──
+	let ragEndpoint = $state('');
+	let ragCollection = $state('');
+	let ragEmbeddingEndpoint = $state('');
+	let ragEmbeddingModel = $state('');
+	let ragMaxChunks = $state(8);
+	let ragMinScore = $state(0.3);
+	let ragMaxContextTokens = $state(2000);
+	let ragLoaded = $state(false);
+	let ragSaving = $state(false);
+	let ragHealth = $state<{ qdrant: boolean; embeddings: boolean; collection: boolean; pointCount: number } | null>(null);
+	let ragTesting = $state(false);
+	let ragCollections = $state<string[]>([]);
+
+	async function loadCassRules() {
+		if (!story.currentStory) { cassRuleCount = 0; return; }
+		const rules = await getProceduralRules(story.currentStory.id);
+		cassRuleCount = rules.length;
+	}
+
+	async function flushCassRules(filter: 'deprecated' | 'all') {
+		if (!story.currentStory) return;
+		cassFlushing = true;
+		cassStatus = filter === 'all' ? 'Flushing all rules...' : 'Flushing deprecated rules...';
+		try {
+			const rules = await getProceduralRules(story.currentStory.id);
+			const toDelete = filter === 'all' ? rules : rules.filter(r => r.maturity === 'deprecated' || r.effectiveScore < 0.2);
+			for (const rule of toDelete) {
+				await deleteProceduralRule(rule.id);
+			}
+			cassStatus = `Flushed ${toDelete.length} rule(s).`;
+			cassRuleCount = (cassRuleCount ?? rules.length) - toDelete.length;
+		} catch (e) {
+			cassStatus = `Failed: ${e instanceof Error ? e.message : String(e)}`;
+		}
+		cassFlushing = false;
+	}
+
+	async function loadRagConfig() {
+		const config = await ai.loreRAG.getConfig();
+		ragEndpoint = config.endpoint;
+		ragCollection = config.collection;
+		ragEmbeddingEndpoint = config.embeddingEndpoint;
+		ragEmbeddingModel = config.embeddingModel;
+		ragMaxChunks = config.maxChunks;
+		ragMinScore = config.minScore;
+		ragMaxContextTokens = config.maxContextTokens;
+		ragLoaded = true;
+	}
+
+	async function saveRagConfig() {
+		ragSaving = true;
+		await ai.loreRAG.saveConfig({
+			endpoint: ragEndpoint,
+			collection: ragCollection,
+			embeddingEndpoint: ragEmbeddingEndpoint,
+			embeddingModel: ragEmbeddingModel,
+			maxChunks: ragMaxChunks,
+			minScore: ragMinScore,
+			maxContextTokens: ragMaxContextTokens,
+		});
+		ragSaving = false;
+	}
+
+	async function testRagConnection() {
+		ragTesting = true;
+		ragHealth = null;
+		// Save first so health check uses current values
+		await saveRagConfig();
+		ragHealth = await ai.loreRAG.healthCheck();
+		ragCollections = await ai.loreRAG.listCollections();
+		ragTesting = false;
+	}
 
 	function getConfig(serviceId: string): ServiceConfig {
 		return editingConfigs[serviceId] ?? settings.getServiceConfig(serviceId);
@@ -206,6 +288,127 @@
 											onclick={() => resetService(serviceId)}>
 											<RotateCcw class="h-3 w-3" /> Reset
 										</button>
+
+										<!-- ── CASS / Procedural Memory extras ── -->
+										{#if serviceId === 'proceduralMemory'}
+											<div class="border-t border-[var(--border-primary)]/50 pt-3 space-y-2">
+												<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Rule Management</span>
+												{#if cassRuleCount === null}
+													<button class="text-xs text-[var(--text-accent)] hover:underline" onclick={loadCassRules}>Load rule count</button>
+												{:else}
+													<p class="text-xs text-[var(--text-muted)]">{cassRuleCount} rule(s) for current story</p>
+												{/if}
+												<div class="flex gap-2">
+													<button class="flex items-center gap-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-1.5 text-[10px] text-amber-400 hover:bg-amber-500/10 disabled:opacity-40"
+														onclick={() => flushCassRules('deprecated')} disabled={cassFlushing || !story.currentStory}>
+														{#if cassFlushing}<Loader2 class="h-3 w-3 animate-spin" />{:else}<Trash2 class="h-3 w-3" />{/if}
+														Flush Bad Rules
+													</button>
+													<button class="flex items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-1.5 text-[10px] text-red-400 hover:bg-red-500/10 disabled:opacity-40"
+														onclick={() => flushCassRules('all')} disabled={cassFlushing || !story.currentStory}>
+														{#if cassFlushing}<Loader2 class="h-3 w-3 animate-spin" />{:else}<Trash2 class="h-3 w-3" />{/if}
+														Flush All
+													</button>
+												</div>
+												{#if cassStatus}
+													<p class="text-[10px] text-[var(--text-muted)]">{cassStatus}</p>
+												{/if}
+											</div>
+										{/if}
+
+										<!-- ── Qdrant / LoreRAG extras ── -->
+										{#if serviceId === 'loreRAG'}
+											{#if !ragLoaded}
+												<div class="border-t border-[var(--border-primary)]/50 pt-3">
+													<button class="text-xs text-[var(--text-accent)] hover:underline" onclick={loadRagConfig}>Load Qdrant settings</button>
+												</div>
+											{:else}
+												<div class="border-t border-[var(--border-primary)]/50 pt-3 space-y-3">
+													<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Qdrant Connection</span>
+													<div class="grid grid-cols-2 gap-2">
+														<div class="space-y-1">
+															<label class="text-[10px] text-[var(--text-muted)]">Qdrant URL</label>
+															<input type="text" bind:value={ragEndpoint} placeholder="http://localhost:6333"
+																class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+														</div>
+														<div class="space-y-1">
+															<label class="text-[10px] text-[var(--text-muted)]">Collection</label>
+															<input type="text" bind:value={ragCollection} placeholder="rise_lore"
+																class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+														</div>
+													</div>
+
+													<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Embedding Service</span>
+													<div class="grid grid-cols-2 gap-2">
+														<div class="space-y-1">
+															<label class="text-[10px] text-[var(--text-muted)]">Embedding URL</label>
+															<input type="text" bind:value={ragEmbeddingEndpoint} placeholder="http://localhost:11434"
+																class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+														</div>
+														<div class="space-y-1">
+															<label class="text-[10px] text-[var(--text-muted)]">Model</label>
+															<input type="text" bind:value={ragEmbeddingModel} placeholder="nomic-embed-text"
+																class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+														</div>
+													</div>
+
+													<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Retrieval Tuning</span>
+													<div class="grid grid-cols-3 gap-2">
+														<div class="space-y-1">
+															<label class="text-[10px] text-[var(--text-muted)]">Max Chunks</label>
+															<input type="number" bind:value={ragMaxChunks} min="1" max="30" step="1"
+																class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+														</div>
+														<div class="space-y-1">
+															<label class="text-[10px] text-[var(--text-muted)]">Min Score</label>
+															<input type="number" bind:value={ragMinScore} min="0" max="1" step="0.05"
+																class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+														</div>
+														<div class="space-y-1">
+															<label class="text-[10px] text-[var(--text-muted)]">Max Tokens</label>
+															<input type="number" bind:value={ragMaxContextTokens} min="500" max="8000" step="250"
+																class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+														</div>
+													</div>
+
+													<div class="flex gap-2 items-center">
+														<button class="flex items-center gap-1 rounded-lg border border-blue-500/30 bg-blue-500/5 px-3 py-1.5 text-[10px] text-blue-400 hover:bg-blue-500/10 disabled:opacity-40"
+															onclick={testRagConnection} disabled={ragTesting}>
+															{#if ragTesting}<Loader2 class="h-3 w-3 animate-spin" />{:else}<CheckCircle class="h-3 w-3" />{/if}
+															Test Connection
+														</button>
+														<button class="flex items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-1.5 text-[10px] text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40"
+															onclick={saveRagConfig} disabled={ragSaving}>
+															{#if ragSaving}<Loader2 class="h-3 w-3 animate-spin" />{:else}<Save class="h-3 w-3" />{/if}
+															Save
+														</button>
+													</div>
+
+													{#if ragHealth}
+														<div class="rounded-lg bg-[var(--bg-primary)] px-3 py-2 space-y-1">
+															<div class="flex items-center gap-2 text-[10px]">
+																{#if ragHealth.qdrant}<CheckCircle class="h-3 w-3 text-emerald-400" />{:else}<XCircle class="h-3 w-3 text-red-400" />{/if}
+																<span class="text-[var(--text-muted)]">Qdrant</span>
+															</div>
+															<div class="flex items-center gap-2 text-[10px]">
+																{#if ragHealth.collection}<CheckCircle class="h-3 w-3 text-emerald-400" />{:else}<XCircle class="h-3 w-3 text-red-400" />{/if}
+																<span class="text-[var(--text-muted)]">Collection "{ragCollection}" ({ragHealth.pointCount} points)</span>
+															</div>
+															<div class="flex items-center gap-2 text-[10px]">
+																{#if ragHealth.embeddings}<CheckCircle class="h-3 w-3 text-emerald-400" />{:else}<XCircle class="h-3 w-3 text-red-400" />{/if}
+																<span class="text-[var(--text-muted)]">Embedding service</span>
+															</div>
+															{#if ragCollections.length > 0}
+																<div class="pt-1">
+																	<span class="text-[10px] text-[var(--text-muted)]">Collections: </span>
+																	<span class="text-[10px] font-mono text-[var(--text-primary)]">{ragCollections.join(', ')}</span>
+																</div>
+															{/if}
+														</div>
+													{/if}
+												</div>
+											{/if}
+										{/if}
 									</div>
 								{/if}
 							</div>
