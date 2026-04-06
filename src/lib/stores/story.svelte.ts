@@ -12,7 +12,7 @@ import {
 } from '$lib/services/database';
 import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
-import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent } from '$lib/types';
+import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState } from '$lib/types';
 import type { ChatMessage } from '$lib/services/ai/sdk/generate';
 import { getModelContextWindow } from '$lib/services/ai/context/ContextAssembler';
 import { settings } from '$lib/stores/settings.svelte';
@@ -662,6 +662,74 @@ class StoryStore {
 		};
 		await updateStory(this.currentStory.id, updates);
 		this.currentStory = { ...this.currentStory, ...updates };
+	}
+
+	/**
+	 * Build a compact world-state snapshot for AI services (classifier, world sim).
+	 * Includes top relevant lorebook entries, latest chapter summary, arc threads, and faction standings.
+	 * Targets under ~1000 tokens.
+	 */
+	buildStateSnapshot(opts?: {
+		latestChapterSummary?: string;
+		unresolvedThreads?: string[];
+		lastUserAction?: string;
+	}): string {
+		const parts: string[] = [];
+
+		// Top 5-10 relevant lorebook entries — keyword match against last user action
+		const query = opts?.lastUserAction?.toLowerCase() ?? '';
+		const entries = this.lorebookEntries;
+		let relevantEntries: Entry[];
+
+		if (query && entries.length > 0) {
+			const scored = entries.map(e => {
+				const keywords = e.injection?.keywords ?? [];
+				const nameMatch = query.includes(e.name.toLowerCase()) ? 3 : 0;
+				const kwMatches = keywords.filter(k => query.includes(k.toLowerCase())).length * 2;
+				const descSnip = e.description.slice(0, 60).toLowerCase();
+				const descMatch = query.split(' ').filter(w => w.length > 3 && descSnip.includes(w)).length;
+				return { e, score: nameMatch + kwMatches + descMatch };
+			}).sort((a, b) => b.score - a.score);
+			const hasMatches = scored[0]?.score > 0;
+			relevantEntries = hasMatches
+				? scored.slice(0, 8).map(s => s.e)
+				: entries.slice(0, 5);
+		} else {
+			relevantEntries = entries.slice(0, 8);
+		}
+
+		if (relevantEntries.length > 0) {
+			const lines = relevantEntries.map(e =>
+				`- **${e.name}** (${e.type}): ${e.description.slice(0, 100)}`
+			);
+			parts.push(`## Lorebook\n${lines.join('\n')}`);
+		}
+
+		// Latest chapter summary
+		if (opts?.latestChapterSummary) {
+			parts.push(`## Latest Chapter\n${opts.latestChapterSummary.slice(0, 400)}`);
+		}
+
+		// Latest arc's unresolved threads
+		if (opts?.unresolvedThreads?.length) {
+			const threads = opts.unresolvedThreads.slice(0, 5).map(t => `- ${t}`).join('\n');
+			parts.push(`## Open Threads\n${threads}`);
+		}
+
+		// Active faction standings
+		const factions = entries.filter(e => e.type === 'faction');
+		if (factions.length > 0) {
+			const standings = factions.map(f => {
+				const state = f.state as FactionEntryState;
+				const standing = state?.playerStanding ?? 0;
+				const status = state?.status ?? 'unknown';
+				return `- ${f.name}: ${status} (standing: ${standing > 0 ? '+' : ''}${standing})`;
+			}).join('\n');
+			parts.push(`## Faction Standings\n${standings}`);
+		}
+
+		// Hard cap ~1000 tokens
+		return parts.join('\n\n').slice(0, 4000);
 	}
 
 	clear() {

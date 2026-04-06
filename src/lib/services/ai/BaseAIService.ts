@@ -81,18 +81,55 @@ export abstract class BaseAIService {
 			const parsed = JSON.parse(cleaned);
 			return schema.parse(parsed);
 		} catch (e) {
+			// Try extracting a JSON object/array from within text
+			// Handles cases where the LLM wraps JSON in prose or adds a preamble.
+			// Validates against schema before accepting — never blindly treat extracted
+			// JSON as a valid tool call if it doesn't match the expected structure.
+			const extracted = this.extractJsonFromText(cleaned);
+			if (extracted !== null) {
+				try {
+					const validated = schema.parse(extracted);
+					log(`Extracted JSON from text response for ${this.serviceId}`);
+					return validated;
+				} catch {
+					// Extracted JSON doesn't match schema — fall through to repair
+				}
+			}
+
 			// Attempt to salvage truncated JSON by closing open structures
 			const salvaged = this.tryRepairJson(cleaned);
 			if (salvaged !== null) {
 				try {
+					const validated = schema.parse(salvaged);
 					log(`Salvaged truncated JSON for ${this.serviceId}`);
-					return schema.parse(salvaged);
+					return validated;
 				} catch {
 					// Salvage parsed but failed schema validation — fall through
 				}
 			}
 			log(`Structured generation parse failed for ${this.serviceId}`, { error: e, raw: cleaned.slice(0, 200) });
 			throw new Error(`AI returned invalid JSON for ${this.serviceId}: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+
+	/**
+	 * Find the first JSON object or array in a text response and parse it.
+	 * Handles cases where the LLM adds prose before or after the JSON payload.
+	 * Returns the parsed value or null if no valid JSON structure is found.
+	 * Intentionally does NOT validate against any schema — callers must do that.
+	 */
+	private extractJsonFromText(text: string): unknown | null {
+		const objectStart = text.indexOf('{');
+		const arrayStart = text.indexOf('[');
+		// Prefer whichever comes first
+		const starts = [objectStart, arrayStart].filter(i => i >= 0);
+		if (starts.length === 0) return null;
+		const start = Math.min(...starts);
+		const candidate = text.slice(start);
+		try {
+			return JSON.parse(candidate);
+		} catch {
+			return this.tryRepairJson(candidate);
 		}
 	}
 

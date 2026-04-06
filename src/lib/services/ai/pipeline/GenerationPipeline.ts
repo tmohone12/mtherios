@@ -77,20 +77,43 @@ function makeLoreEntry(storyId: string, name: string, type: EntryType, descripti
 
 // ── Time helpers ──
 
+const WORD_NUMBERS: Record<string, number> = {
+	'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+	'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+	'eleven': 11, 'twelve': 12, 'fifteen': 15, 'twenty': 20,
+	'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60,
+	'couple': 2, 'few': 3, 'several': 4, 'handful': 5,
+};
+
+function extractTimeNumber(s: string): number {
+	const numMatch = s.match(/\b(\d+)\b/);
+	if (numMatch) return parseInt(numMatch[1], 10);
+	for (const [word, val] of Object.entries(WORD_NUMBERS)) {
+		if (s.includes(word)) return val;
+	}
+	return 1; // "a", "an", or no quantifier
+}
+
 function parseTimeProgression(s: string): number {
+	if (!s) return 0;
 	const t = s.toLowerCase();
-	if (t.includes('moment'))                          return 2;
-	if (t.includes('minute') && t.includes('few'))     return 5;
-	if (t.includes('minute') && t.includes('several')) return 15;
-	if (t.includes('minute'))                           return 5;
-	if (t.includes('hour') && (t.includes('few') || t.includes('several'))) return 180;
-	if (t.includes('hour') && t.includes('half'))      return 30;
-	if (t.includes('hour'))                            return 60;
-	if (t.includes('day') && (t.includes('few') || t.includes('several'))) return 4320;
-	if (t.includes('day') && t.includes('half'))       return 720;
-	if (t.includes('day'))                             return 1440;
-	if (t.includes('week'))                            return 10080;
-	if (t.includes('month'))                           return 43200;
+
+	// Instant / negligible
+	if (/\b(moment|moments|instant|instantly|briefly|brief|blink|seconds?)\b/.test(t)) return 2;
+
+	// Half-unit patterns (must check before generic unit matching)
+	if (/half[\s-]+(an?\s+)?hour|half\s+hour/.test(t)) return 30;
+	if (/half[\s-]+(a\s+)?day/.test(t))  return 720;
+	if (/half[\s-]+(a\s+)?week/.test(t)) return 5040;
+
+	const n = extractTimeNumber(t);
+
+	if (/\bminutes?\b/.test(t)) return n;
+	if (/\bhours?\b/.test(t))   return n * 60;
+	if (/\bdays?\b/.test(t))    return n * 1440;
+	if (/\bweeks?\b/.test(t))   return n * 10080;
+	if (/\bmonths?\b/.test(t))  return n * 43200;
+
 	return 0;
 }
 
@@ -180,6 +203,20 @@ export class GenerationPipeline {
 			jobs.push(this.runChapterCheck().catch(e => { console.error('[Pipeline] ChapterCheck error:', e); result.errors.push(`ChapterCheck: ${e}`); }));
 		}
 
+		// Independent arc condensation check — runs even when no chapter is created this turn.
+		// runAutoArcCondensation has its own uncoveredChapters < 5 guard, so this is safe to call freely.
+		const arcConfig = settings.getServiceConfig('arcCondensation');
+		if (arcConfig.enabled) {
+			jobs.push(this.runBackgroundArcCheck().catch(e => { console.error('[Pipeline] BackgroundArcCheck error:', e); result.errors.push(`BackgroundArcCheck: ${e}`); }));
+		}
+
+		// Independent lore management check — fires every LORE_MGMT_ENTRY_INTERVAL entries
+		// so it can run even when chapter creation hasn't triggered recently.
+		const loreConfig = settings.getServiceConfig('loreManagement');
+		if (loreConfig.enabled) {
+			jobs.push(this.runBackgroundLoreCheck().catch(e => { console.error('[Pipeline] BackgroundLoreCheck error:', e); result.errors.push(`BackgroundLoreCheck: ${e}`); }));
+		}
+
 		// Enrichment: choices, style, images
 		const choicesConfig = settings.getServiceConfig('actionChoices');
 		if (choicesConfig.enabled && isAdventure && story.entries.length >= 4) {
@@ -223,17 +260,77 @@ export class GenerationPipeline {
 
 	private async runClassifier(narrative: string): Promise<ClassificationResult> {
 		const factionEntries = story.lorebookEntries.filter(e => e.type === 'faction');
-		const result = await ai.classifier.classify(
-			narrative,
-			story.entries.slice(-5),
-			story.characters,
-			story.locations,
-			story.items,
-			story.storyMode,
-			story.pov,
-			story.tense,
-			factionEntries,
-		);
+
+		// Build "story so far" context: latest chapter summary + last 2-3 user actions
+		let storySoFar: string | undefined;
+		if (story.currentStory) {
+			const chapters = await getChapters(story.currentStory.id);
+			const latestChapter = chapters.sort((a, b) => b.number - a.number)[0];
+			const recentActions = story.entries
+				.filter(e => e.type === 'user_action')
+				.slice(-3)
+				.map(e => e.content)
+				.join('\n');
+			const soFarParts: string[] = [];
+			if (latestChapter) soFarParts.push(`Chapter ${latestChapter.number} — ${latestChapter.title}:\n${latestChapter.summary.slice(0, 300)}`);
+			if (recentActions) soFarParts.push(`Recent actions:\n${recentActions}`);
+			if (soFarParts.length > 0) storySoFar = soFarParts.join('\n\n');
+		}
+
+		// Attempt 1: full classification
+		let result: ClassificationResult | null = null;
+		try {
+			result = await ai.classifier.classify(
+				narrative,
+				story.entries.slice(-5),
+				story.characters,
+				story.locations,
+				story.items,
+				story.storyMode,
+				story.pov,
+				story.tense,
+				factionEntries,
+				storySoFar,
+			);
+		} catch (e) {
+			console.warn('[Pipeline] Classifier attempt 1 failed, retrying with simpler prompt:', e);
+		}
+
+		// Attempt 2: retry without storySoFar and fewer entries (simpler context)
+		if (!result) {
+			try {
+				result = await ai.classifier.classify(
+					narrative,
+					story.entries.slice(-2),
+					story.characters.slice(0, 10),
+					story.locations.slice(0, 5),
+					story.items.slice(0, 10),
+					story.storyMode,
+					story.pov,
+					story.tense,
+					[],
+				);
+			} catch (e) {
+				console.warn('[Pipeline] Classifier attempt 2 failed, using minimal fallback:', e);
+			}
+		}
+
+		// Fallback: minimal extraction — preserve current location and present characters
+		if (!result) {
+			console.warn('[Pipeline] Classifier falling back to minimal world state (characters + location only)');
+			const currentLoc = story.locations.find(l => l.current);
+			result = {
+				characters: [],
+				locations: currentLoc ? [{ name: currentLoc.name, description: currentLoc.description ?? null, current: true, region: null, terrain: null, connections: [] }] : [],
+				items: [],
+				storyBeats: [],
+				relationships: [],
+				conversations: [],
+				factionSignals: [],
+				mood: undefined,
+				timeProgression: undefined,
+			};
+		}
 
 		// Persist characters
 		for (const charUpdate of result.characters) {
@@ -353,7 +450,20 @@ export class GenerationPipeline {
 			existingNames.add(i.name.toLowerCase());
 		}
 
-		if (newEntries.length > 0) story.lorebookEntries = [...story.lorebookEntries, ...newEntries];
+		if (newEntries.length > 0) {
+			story.lorebookEntries = [...story.lorebookEntries, ...newEntries];
+			// Embed new entries immediately so semantic search can find them on the next turn.
+			// preEmbedLorebook() at the end of the pipeline re-embeds everything, but new entries
+			// need to be queryable within the same session without waiting for the next load.
+			const embedItems = newEntries.map(e => ({
+				text: `${e.name}: ${e.description}`,
+				sourceId: e.id,
+				sourceType: 'lorebook' as const,
+			}));
+			ai.embeddings.embedMany(embedItems).catch(e =>
+				console.error('[Pipeline] Failed to embed new classifier lorebook entries:', e)
+			);
+		}
 	}
 
 	// ── Relationships ──
@@ -734,7 +844,18 @@ export class GenerationPipeline {
 				updatedEntries.set(update.entryId, updatePayload);
 			}
 		}
-		if (newEntries.length > 0) story.lorebookEntries = [...story.lorebookEntries, ...newEntries];
+		if (newEntries.length > 0) {
+			story.lorebookEntries = [...story.lorebookEntries, ...newEntries];
+			// Embed new lore-management entries so they're immediately queryable
+			const embedItems = newEntries.map(e => ({
+				text: `${e.name}: ${e.description}`,
+				sourceId: e.id,
+				sourceType: 'lorebook' as const,
+			}));
+			ai.embeddings.embedMany(embedItems).catch(e =>
+				console.error('[Pipeline] Failed to embed new lore management entries:', e)
+			);
+		}
 		if (updatedEntries.size > 0) {
 			story.lorebookEntries = story.lorebookEntries.map(e => {
 				const patch = updatedEntries.get(e.id);
@@ -892,6 +1013,34 @@ export class GenerationPipeline {
 		if (updatedEntries.size > 0) {
 			story.lorebookEntries = story.lorebookEntries.map(e => updatedEntries.get(e.id) ?? e);
 		}
+	}
+
+	// ── Independent background threshold checks ──
+
+	/**
+	 * Arc condensation check independent of chapter creation.
+	 * runAutoArcCondensation has its own "uncoveredChapters < 5" guard,
+	 * so calling this every turn is safe.
+	 */
+	private async runBackgroundArcCheck(): Promise<void> {
+		if (!story.currentStory) return;
+		const chapters = await getChapters(story.currentStory.id);
+		if (chapters.length === 0) return;
+		await this.runAutoArcCondensation(chapters);
+	}
+
+	/**
+	 * Lore management check independent of chapter creation.
+	 * Fires every LORE_MGMT_ENTRY_INTERVAL story entries so long-running stories
+	 * get lore curation even without frequent chapter creation.
+	 */
+	private async runBackgroundLoreCheck(): Promise<void> {
+		if (!story.currentStory) return;
+		const LORE_MGMT_ENTRY_INTERVAL = 25;
+		if (story.entries.length === 0 || story.entries.length % LORE_MGMT_ENTRY_INTERVAL !== 0) return;
+		const chapters = await getChapters(story.currentStory.id);
+		if (chapters.length === 0) return;
+		await this.runLoreManagement(chapters);
 	}
 
 	// ══════════════════════════════════════════════════════════════

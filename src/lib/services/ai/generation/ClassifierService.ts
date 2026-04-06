@@ -28,6 +28,7 @@ export class ClassifierService extends BaseAIService {
 		pov: string = 'second',
 		tense: string = 'present',
 		factionEntries: Entry[] = [],
+		storySoFar?: string,
 	): Promise<ClassificationResult> {
 		log('classify', { narrativeLen: narrative.length, charCount: existingCharacters.length, factionCount: factionEntries.length });
 
@@ -154,7 +155,8 @@ Respond with a JSON object using EXACTLY these field names:
 
 Use EMPTY arrays [] for categories with no changes. Never hallucinate elements not in the text.`;
 
-		const prompt = `RECENT CONTEXT:
+		const soFarBlock = storySoFar ? `STORY SO FAR:\n${storySoFar}\n\n` : '';
+		const prompt = `${soFarBlock}RECENT CONTEXT:
 ${recentContext}
 
 LATEST NARRATIVE:
