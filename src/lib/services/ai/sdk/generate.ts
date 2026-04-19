@@ -278,22 +278,27 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 						const data = JSON.parse(trimmed.slice(6));
 
 						if (useAnthropic) {
-							// Anthropic stream: content_block_delta events
-							if (data.type === 'content_block_delta' && data.delta?.text) {
+							// Anthropic stream: only emit text_delta. Skip input_json_delta
+							// (tool-arg fragments) and other non-text deltas to keep tool
+							// JSON out of the narrative buffer.
+							if (
+								data.type === 'content_block_delta' &&
+								data.delta?.type === 'text_delta' &&
+								typeof data.delta.text === 'string'
+							) {
 								fullContent += data.delta.text;
 								yield { content: data.delta.text, done: false };
 							}
-							if (data.type === 'message_stop') {
-								// stream complete
-							}
 						} else {
-							// OpenAI stream: choices[0].delta
+							// OpenAI stream: choices[0].delta. Only emit string content;
+							// drop tool_calls deltas — they belong on a separate channel
+							// and would corrupt the narrative if appended.
 							const delta = data.choices?.[0]?.delta;
-							if (delta?.content) {
+							if (typeof delta?.content === 'string' && delta.content) {
 								fullContent += delta.content;
 								yield { content: delta.content, done: false };
 							}
-							if (delta?.reasoning) {
+							if (typeof delta?.reasoning === 'string' && delta.reasoning) {
 								yield { content: '', reasoning: delta.reasoning, done: false };
 							}
 						}
@@ -529,9 +534,11 @@ export async function generateStructuredWithTools(options: GenerateWithToolsOpti
 				}
 			}
 		} else {
-			// OpenAI: message.content + message.tool_calls
+			// OpenAI: message.content + message.tool_calls.
+			// Coerce content to string — some OpenAI-compatible providers stuff
+			// non-string payloads (objects, nulls) when tool_calls are present.
 			const message = data.choices?.[0]?.message;
-			responseText = message?.content ?? '';
+			responseText = typeof message?.content === 'string' ? message.content : '';
 			if (message?.tool_calls) {
 				for (const tc of message.tool_calls) {
 					let args: Record<string, any> = {};

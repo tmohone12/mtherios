@@ -701,20 +701,13 @@ class StoryStore {
 	/**
 	 * Build the system prompt for orchestrator mode.
 	 * Same as buildSystemPrompt but uses a lightweight state snapshot
-	 * instead of the full ContextAssembler output, and appends tool instructions.
+	 * instead of the full ContextAssembler output. The narrator gets NO tool
+	 * instructions — the world-update is a separate post-stream call that
+	 * owns its own tool-bearing prompt. Telling the narrator about tools it
+	 * cannot call makes it write fake tool-call JSON into the prose.
 	 */
 	buildOrchestratorSystemPrompt(stateSnapshot: string): string {
-		// Reuse the standard prompt with the snapshot as the context block
-		const basePrompt = this.buildSystemPrompt(stateSnapshot);
-
-		// Append tool-usage instructions
-		const toolInstructions = `
-## Your Tools
-After generating your narrative response, you MUST call \`update_world_state\` to record any changes from this scene (characters, locations, items, time, conversations, relationships, story beats).
-Before narrating about lore-heavy topics, call \`query_lore\` to check your facts.
-When introducing new named entities (characters, locations, factions), call \`create_lore_entry\` to register them.
-`;
-		return basePrompt + toolInstructions;
+		return this.buildSystemPrompt(stateSnapshot);
 	}
 
 	/**
