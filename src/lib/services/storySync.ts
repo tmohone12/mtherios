@@ -148,10 +148,26 @@ function newId(): string {
 
 export async function importStoryFromJson(file: File): Promise<string> {
 	const text = await file.text();
-	const data: StoryExportData = JSON.parse(text);
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		throw new Error('Invalid JSON file — could not parse.');
+	}
 
+	const data = parsed as StoryExportData;
+
+	if (!data || typeof data !== 'object') {
+		throw new Error('Invalid story file — expected a JSON object.');
+	}
 	if (data.version !== 1) {
 		throw new Error(`Unsupported export version: ${data.version}`);
+	}
+	if (!data.story || typeof data.story.id !== 'string' || typeof data.story.title !== 'string') {
+		throw new Error('Invalid story file — missing or malformed story data.');
+	}
+	if (!Array.isArray(data.storyEntries)) {
+		throw new Error('Invalid story file — missing storyEntries array.');
 	}
 
 	// Generate new IDs

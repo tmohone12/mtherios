@@ -10,22 +10,62 @@
 import { createLogger } from '../core/config';
 import { getSetting } from '$lib/services/database';
 import { PROVIDERS } from '../sdk/providers/config';
+import { settings } from '$lib/stores/settings.svelte';
+import { story } from '$lib/stores/story.svelte';
+import { uuid } from '$lib/utils/uuid';
 import type { APIProfile, ProviderType, VisualDescriptors } from '$lib/types';
 
 const log = createLogger('ImageGen');
 
-// ── ASOIAF / Magali Villeneuve style guide ──
+// ── Style Presets ──
 
-const ASOIAF_STYLE = [
-	'highly detailed digital fantasy illustration in the style of Magali Villeneuve and A Song of Ice and Fire official art',
-	'rich oil painting textures, cinematic composition',
-	'dramatic chiaroscuro with volumetric god rays',
-	'deep crimsons, burnished golds, warm amber tones, and desaturated earth tones with selective color saturation on focal points',
-	'intricate costume details with medieval-historical accuracy mixed with fantasy elements',
-	'atmospheric perspective, painterly brushwork with visible texture in shadows',
-	'8k detail, dramatic rim lighting, romanticized historical aesthetic',
-	'metallic sheen on armor and fabric, subtle magical atmosphere',
-].join(', ');
+export const STYLE_PRESETS: Record<string, { label: string; prompt: string }> = {
+	asoiaf: {
+		label: 'ASOIAF / Magali Villeneuve',
+		prompt: [
+			'highly detailed digital fantasy illustration in the style of Magali Villeneuve and A Song of Ice and Fire official art',
+			'rich oil painting textures, cinematic composition',
+			'dramatic chiaroscuro with volumetric god rays',
+			'deep crimsons, burnished golds, warm amber tones, and desaturated earth tones with selective color saturation on focal points',
+			'intricate costume details with medieval-historical accuracy mixed with fantasy elements',
+			'atmospheric perspective, painterly brushwork with visible texture in shadows',
+			'8k detail, dramatic rim lighting, romanticized historical aesthetic',
+			'metallic sheen on armor and fabric, subtle magical atmosphere',
+		].join(', '),
+	},
+	watercolor: {
+		label: 'Watercolor Fantasy',
+		prompt: [
+			'ethereal watercolor fantasy illustration, soft flowing washes of color',
+			'delicate linework with loose expressive brushstrokes',
+			'dreamy atmospheric perspective, muted pastels with occasional vivid accents',
+			'botanical and natural motifs, storybook illustration quality',
+			'visible paper texture, gentle luminous highlights',
+		].join(', '),
+	},
+	dark: {
+		label: 'Dark & Gritty',
+		prompt: [
+			'dark fantasy illustration, heavy shadows and desaturated tones',
+			'grim medieval aesthetic, weathered textures and harsh lighting',
+			'muted color palette with cold blues, ashen grays, and blood reds',
+			'detailed armor corrosion, scarred landscapes, oppressive atmosphere',
+			'cinematic noir composition, Frank Frazetta meets Berserk',
+		].join(', '),
+	},
+	ghibli: {
+		label: 'Studio Ghibli',
+		prompt: [
+			'Studio Ghibli inspired fantasy illustration, warm and inviting',
+			'soft cel-shading with rich background detail',
+			'lush natural environments, whimsical architecture',
+			'gentle warm lighting, nostalgic color palette',
+			'expressive characters, Hayao Miyazaki aesthetic',
+		].join(', '),
+	},
+};
+
+const ASOIAF_STYLE = STYLE_PRESETS.asoiaf.prompt;
 
 const NEGATIVE_PROMPT = [
 	'cartoon', 'anime', 'chibi', 'low quality', 'blurry', 'watermark', 'text',
@@ -108,14 +148,35 @@ export class ImageGenerationService {
 	}
 
 	/**
+	 * Resolve the active style prompt from settings.
+	 */
+	getActiveStyle(): string {
+		const styleName = settings.uiSettings.imageStyle || 'asoiaf';
+		if (styleName === 'custom') return settings.uiSettings.imageCustomStyle || ASOIAF_STYLE;
+		return STYLE_PRESETS[styleName]?.prompt ?? ASOIAF_STYLE;
+	}
+
+	/**
+	 * Parse image size string (e.g. '1024x1024') into width/height.
+	 */
+	private parseSize(size: string): { width: number; height: number } {
+		const [w, h] = size.split('x').map(Number);
+		return { width: w || 1024, height: h || 1024 };
+	}
+
+	/**
 	 * Generate a scene image from a narrative description.
 	 */
 	async generateSceneImage(
 		narrative: string,
 		context?: SceneContext,
-		style = ASOIAF_STYLE,
+		style?: string,
+		entryId?: string,
 	): Promise<ImageGenerationResult> {
 		log('generateSceneImage', { narrativeLen: narrative.length });
+
+		const resolvedStyle = style ?? this.getActiveStyle();
+		const { width, height } = this.parseSize(settings.uiSettings.imageSize || '1024x1024');
 
 		try {
 			const profilesJson = await getSetting('apiProfiles');
@@ -130,56 +191,54 @@ export class ImageGenerationService {
 			if (!profile) return { image: null, error: 'No API profile found.' };
 
 			const scene = this.extractVisualScene(narrative, context);
-			const imagePrompt = `${scene}, ${style}`;
+			const imagePrompt = `${scene}, ${resolvedStyle}`;
 
 			const providerType = profile.providerType as ProviderType;
 			const providerConfig = PROVIDERS[providerType];
+			const modelOverride = settings.uiSettings.imageModel || '';
 
 			log('generateSceneImage', { provider: providerType, hasKey: !!profile.apiKey });
 
 			let image: GeneratedImage | null = null;
 
+			const resolveModel = (fallback: string) => modelOverride || providerConfig?.imageDefaults?.defaultModel || fallback;
+
 			// Provider-specific image generation
 			if (providerType === 'nanogpt' && profile.apiKey) {
-				const model = providerConfig?.imageDefaults?.defaultModel ?? 'flux-schnell';
 				image = await this.generateViaOpenAICompat(
 					'https://nano-gpt.com/api/v1/images/generations',
 					profile.apiKey,
 					imagePrompt,
-					model,
+					resolveModel('flux-schnell'),
 				);
 			} else if (providerType === 'openrouter' && profile.apiKey) {
-				const model = providerConfig?.imageDefaults?.defaultModel ?? 'google/gemini-2.5-flash-image';
 				image = await this.generateViaOpenAICompat(
 					'https://openrouter.ai/api/v1/images/generations',
 					profile.apiKey,
 					imagePrompt,
-					model,
+					resolveModel('google/gemini-2.5-flash-image'),
 				);
 			} else if (providerType === 'openai' && profile.apiKey) {
-				const model = providerConfig?.imageDefaults?.defaultModel ?? 'dall-e-3';
 				image = await this.generateViaOpenAICompat(
 					'https://api.openai.com/v1/images/generations',
 					profile.apiKey,
 					imagePrompt,
-					model,
+					resolveModel('dall-e-3'),
 				);
 			} else if ((providerType === 'google' || providerType === 'google-ai-studio') && profile.apiKey) {
-				const model = providerConfig?.imageDefaults?.defaultModel ?? 'gemini-2.0-flash';
 				image = await this.generateViaGemini(
 					profile.apiKey,
 					imagePrompt,
-					model,
+					resolveModel('gemini-2.0-flash'),
 				);
 			} else if (providerType === 'pollinations') {
 				image = await this.generateViaPollinations(imagePrompt);
 			} else if (providerType === 'chutes' && profile.apiKey) {
-				const model = providerConfig?.imageDefaults?.defaultModel ?? 'z-image-turbo';
 				image = await this.generateViaOpenAICompat(
 					'https://api.chutes.ai/v1/images/generations',
 					profile.apiKey,
 					imagePrompt,
-					model,
+					resolveModel('z-image-turbo'),
 				);
 			} else if (providerConfig?.capabilities.imageGeneration && profile.apiKey && profile.baseUrl) {
 				// Generic OpenAI-compatible fallback
@@ -189,7 +248,7 @@ export class ImageGenerationService {
 					endpoint,
 					profile.apiKey,
 					imagePrompt,
-					providerConfig.imageDefaults?.defaultModel ?? 'flux-schnell',
+					resolveModel('flux-schnell'),
 				);
 			} else {
 				// Fallback: Pollinations (free, no API key needed)
@@ -200,6 +259,24 @@ export class ImageGenerationService {
 			if (!image) {
 				return { image: null, error: `Image generation returned no result (${providerType}).` };
 			}
+
+			// Persist to IndexedDB if we have a story and entry context
+			if (entryId && story.currentStory) {
+				story.addImage({
+					id: uuid(),
+					storyId: story.currentStory.id,
+					entryId,
+					sourceText: narrative.slice(-200),
+					prompt: imagePrompt,
+					styleId: settings.uiSettings.imageStyle || 'asoiaf',
+					model: resolveModel('unknown'),
+					imageData: image.url,
+					width: image.width,
+					height: image.height,
+					status: 'complete',
+				}).catch(e => console.warn('[ImageGen] Failed to persist image:', e));
+			}
+
 			return { image };
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
@@ -293,11 +370,12 @@ export class ImageGenerationService {
 			if (part.inlineData?.mimeType?.startsWith('image/')) {
 				const mime = part.inlineData.mimeType;
 				const b64 = part.inlineData.data;
+				const { width: w, height: h } = this.parseSize(settings.uiSettings.imageSize || '1024x1024');
 				return {
 					url: `data:${mime};base64,${b64}`,
 					prompt,
-					width: 1024,
-					height: 1024,
+					width: w,
+					height: h,
 				};
 			}
 		}

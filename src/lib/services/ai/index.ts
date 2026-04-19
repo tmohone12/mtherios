@@ -6,7 +6,7 @@
  */
 
 export { ClassifierService } from './generation/ClassifierService';
-export { MemoryService, DEFAULT_MEMORY_CONFIG } from './generation/MemoryService';
+export { MemoryService } from './generation/MemoryService';
 export { SuggestionsService } from './generation/SuggestionsService';
 export { ActionChoicesService } from './generation/ActionChoicesService';
 export { StyleReviewerService } from './generation/StyleReviewerService';

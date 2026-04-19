@@ -1,10 +1,13 @@
 <script lang="ts">
-	import { Plus, X, Search, ChevronDown, Upload, Edit3, Trash2, Save } from 'lucide-svelte';
+	import { Plus, X, Search, Upload, Trash2, Wand2, Loader2 } from 'lucide-svelte';
 	import { getAllStories, getLorebookEntries, createLorebookEntry, updateLorebookEntry, deleteLorebookEntry } from '$lib/services/database';
 	import { uuid } from '$lib/utils/uuid';
+	import { ai } from '$lib/services/ai';
 	import LorebookImport from './LorebookImport.svelte';
 	import SeedImport from './SeedImport.svelte';
+	import EntryDetailModal from './EntryDetailModal.svelte';
 	import type { Story, Entry, EntryType } from '$lib/types';
+	import type { VaultAction } from '$lib/services/ai/sdk/schemas/vault';
 	import { onMount } from 'svelte';
 
 	let stories = $state<Story[]>([]);
@@ -13,19 +16,25 @@
 	let showCreate = $state(false);
 	let showImport = $state(false);
 	let showSeedImport = $state(false);
-	let editingId = $state<string | null>(null);
 	let searchQuery = $state('');
+	let typeFilter = $state<EntryType | 'all'>('all');
+	let sourceFilter = $state<'all' | 'user' | 'ai' | 'import'>('all');
+
+	// Detail modal
+	let detailEntry = $state<Entry | null>(null);
+
+	// Vault
+	let vaultQuery = $state('');
+	let vaultLoading = $state(false);
+	let vaultReasoning = $state('');
+	let vaultActions = $state<VaultAction[]>([]);
+	let vaultError = $state('');
 
 	// Create form
 	let newName = $state('');
 	let newType = $state<EntryType>('concept');
 	let newDescription = $state('');
 	let newKeywords = $state('');
-
-	// Edit form
-	let editName = $state('');
-	let editDescription = $state('');
-	let editKeywords = $state('');
 
 	const typeIcons: Record<string, string> = {
 		character: '👤', location: '📍', item: '🗡️',
@@ -47,13 +56,21 @@
 		entries = await getLorebookEntries(selectedStoryId);
 	}
 
-	const filtered = $derived(
-		searchQuery
-			? entries.filter(e =>
-				e.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-				e.description.toLowerCase().includes(searchQuery.toLowerCase()))
-			: entries
-	);
+	const filtered = $derived.by(() => {
+		let result = entries;
+		if (typeFilter !== 'all') result = result.filter(e => e.type === typeFilter);
+		if (sourceFilter !== 'all') result = result.filter(e => e.createdBy === sourceFilter);
+		if (searchQuery) {
+			const q = searchQuery.toLowerCase();
+			result = result.filter(e =>
+				e.name.toLowerCase().includes(q) ||
+				e.description.toLowerCase().includes(q) ||
+				e.injection.keywords.some(k => k.toLowerCase().includes(q)) ||
+				(e.aliases ?? []).some(a => a.toLowerCase().includes(q))
+			);
+		}
+		return result;
+	});
 
 	async function handleCreate() {
 		if (!selectedStoryId || !newName.trim()) return;
@@ -93,28 +110,97 @@
 		newName = ''; newType = 'concept'; newDescription = ''; newKeywords = '';
 	}
 
-	function startEdit(entry: Entry) {
-		editingId = entry.id;
-		editName = entry.name;
-		editDescription = entry.description;
-		editKeywords = entry.injection.keywords.join(', ');
+	function openDetail(entry: Entry) {
+		detailEntry = entry;
 	}
 
-	async function saveEdit() {
-		if (!editingId) return;
-		await updateLorebookEntry(editingId, {
-			name: editName,
-			description: editDescription,
-			injection: { mode: 'keyword', keywords: editKeywords.split(',').map(k => k.trim()).filter(Boolean), priority: 100 },
-			updatedAt: Date.now(),
-		});
-		entries = entries.map(e => e.id === editingId ? { ...e, name: editName, description: editDescription, injection: { ...e.injection, keywords: editKeywords.split(',').map(k => k.trim()).filter(Boolean) } } : e);
-		editingId = null;
+	function handleDetailSave(updated: Entry) {
+		entries = entries.map(e => e.id === updated.id ? updated : e);
+		detailEntry = null;
 	}
 
-	async function handleDelete(id: string) {
-		await deleteLorebookEntry(id);
+	function handleDetailDelete(id: string) {
 		entries = entries.filter(e => e.id !== id);
+		detailEntry = null;
+	}
+
+	async function handleDelete(id: string, e: Event) {
+		e.stopPropagation();
+		await deleteLorebookEntry(id);
+		entries = entries.filter(en => en.id !== id);
+	}
+
+	// ── Vault ──
+
+	async function handleVaultSubmit() {
+		if (!vaultQuery.trim() || vaultLoading) return;
+		vaultLoading = true;
+		vaultError = '';
+		vaultReasoning = '';
+		vaultActions = [];
+		try {
+			const result = await ai.vault.process(vaultQuery, entries);
+			vaultReasoning = result.reasoning ?? '';
+			vaultActions = result.actions;
+			if (result.actions.length === 0 && !result.reasoning) {
+				vaultReasoning = 'No changes needed.';
+			}
+		} catch (err) {
+			vaultError = err instanceof Error ? err.message : 'Vault request failed.';
+		} finally {
+			vaultLoading = false;
+		}
+	}
+
+	async function applyVaultAction(action: VaultAction) {
+		if (!selectedStoryId) return;
+		if (action.action === 'create' && action.name) {
+			const entry: Entry = {
+				id: uuid(),
+				storyId: selectedStoryId,
+				branchId: null,
+				name: action.name,
+				type: (action.type as EntryType) || 'concept',
+				description: action.description ?? '',
+				hiddenInfo: null,
+				aliases: [],
+				state: buildDefaultState((action.type as EntryType) || 'concept'),
+				adventureState: null,
+				creativeState: null,
+				injection: {
+					mode: 'keyword',
+					keywords: action.keywords ?? [action.name.toLowerCase()],
+					priority: 100,
+				},
+				firstMentioned: null,
+				lastMentioned: null,
+				mentionCount: 0,
+				createdBy: 'ai',
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				loreManagementBlacklisted: false,
+			};
+			await createLorebookEntry(entry);
+			entries = [...entries, entry];
+		} else if (action.action === 'update' && action.entryId) {
+			const updates: Partial<Entry> = { updatedAt: Date.now() };
+			if (action.description) updates.description = action.description;
+			if (action.keywords) updates.injection = { mode: 'keyword', keywords: action.keywords, priority: 100 };
+			await updateLorebookEntry(action.entryId, updates);
+			entries = entries.map(e => e.id === action.entryId ? { ...e, ...updates } : e);
+		} else if (action.action === 'delete' && action.entryId) {
+			await deleteLorebookEntry(action.entryId);
+			entries = entries.filter(e => e.id !== action.entryId);
+		}
+		// Remove applied action from list
+		vaultActions = vaultActions.filter(a => a !== action);
+	}
+
+	function dismissVault() {
+		vaultQuery = '';
+		vaultReasoning = '';
+		vaultActions = [];
+		vaultError = '';
 	}
 
 	function buildDefaultState(type: EntryType): Entry['state'] {
@@ -167,6 +253,77 @@
 			<input type="text" bind:value={searchQuery} placeholder="Search entries..."
 				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] py-2 pl-9 pr-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
 		</div>
+
+		<!-- Type filter -->
+		<div class="mt-2 flex flex-wrap gap-1">
+			<button class="rounded-md px-2 py-1 text-[10px] uppercase tracking-wider transition-colors
+				{typeFilter === 'all' ? 'bg-[rgba(212,168,83,0.15)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+				onclick={() => typeFilter = 'all'}>All</button>
+			{#each entryTypes as t}
+				<button class="flex items-center gap-0.5 rounded-md px-2 py-1 text-[10px] uppercase tracking-wider transition-colors
+					{typeFilter === t ? 'bg-[rgba(212,168,83,0.15)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+					onclick={() => typeFilter = t}>
+					<span class="text-xs">{typeIcons[t]}</span>{t}
+				</button>
+			{/each}
+		</div>
+
+		<!-- Source filter -->
+		<div class="mt-1.5 flex gap-1">
+			{#each [{ v: 'all', l: 'All' }, { v: 'user', l: 'User' }, { v: 'ai', l: 'AI' }, { v: 'import', l: 'Import' }] as f}
+				<button class="rounded-md px-2 py-0.5 text-[10px] tracking-wider transition-colors
+					{sourceFilter === f.v ? 'bg-[var(--bg-primary)] text-[var(--text-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+					onclick={() => sourceFilter = f.v as any}>{f.l}</button>
+			{/each}
+		</div>
+	</div>
+
+	<!-- Vault bar -->
+	<div class="border-b border-[var(--border-primary)] px-4 py-3">
+		<div class="flex gap-2">
+			<div class="relative flex-1">
+				<Wand2 class="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+				<input type="text" bind:value={vaultQuery}
+					placeholder="Ask the vault... &quot;Add a fire mage named Kael&quot;"
+					class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] py-2 pl-9 pr-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
+					onkeydown={(e) => { if (e.key === 'Enter') handleVaultSubmit(); }} />
+			</div>
+			<button onclick={handleVaultSubmit} disabled={vaultLoading || !vaultQuery.trim()}
+				class="rounded-lg bg-[rgba(212,168,83,0.12)] px-3 py-2 text-xs text-[var(--text-accent)] hover:bg-[rgba(212,168,83,0.2)] disabled:opacity-40">
+				{#if vaultLoading}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}Ask{/if}
+			</button>
+		</div>
+
+		{#if vaultError}
+			<div class="mt-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-400">{vaultError}</div>
+		{/if}
+
+		{#if vaultReasoning}
+			<div class="mt-2 rounded-lg bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-muted)] leading-relaxed">
+				{vaultReasoning}
+			</div>
+		{/if}
+
+		{#if vaultActions.length > 0}
+			<div class="mt-2 space-y-1.5">
+				{#each vaultActions as action}
+					<div class="flex items-center justify-between rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
+						<div class="flex-1">
+							<span class="mr-1.5 rounded bg-[var(--bg-primary)] px-1.5 py-0.5 text-[10px] uppercase text-[var(--text-muted)]">{action.action}</span>
+							<span class="text-xs text-[var(--text-primary)]">{action.name ?? action.entryId}</span>
+							{#if action.reason}
+								<span class="ml-1 text-[10px] text-[var(--text-muted)]">— {action.reason}</span>
+							{/if}
+						</div>
+						<div class="flex gap-1.5">
+							<button onclick={() => applyVaultAction(action)} class="rounded bg-emerald-500/20 px-2 py-1 text-[10px] font-medium text-emerald-400 hover:bg-emerald-500/30">Apply</button>
+							<button onclick={() => vaultActions = vaultActions.filter(a => a !== action)} class="rounded bg-[var(--bg-primary)] px-2 py-1 text-[10px] text-[var(--text-muted)]">Skip</button>
+						</div>
+					</div>
+				{/each}
+				<button onclick={dismissVault} class="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)]">Dismiss all</button>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Import section -->
@@ -217,49 +374,65 @@
 		{#if !selectedStoryId}
 			<p class="py-10 text-center text-sm text-[var(--text-muted)]">Create a story first to add lore entries.</p>
 		{:else if filtered.length === 0}
-			<p class="py-10 text-center text-sm text-[var(--text-muted)]">{searchQuery ? 'No matches.' : 'No entries yet. Add one above.'}</p>
+			<p class="py-10 text-center text-sm text-[var(--text-muted)]">{searchQuery || typeFilter !== 'all' ? 'No matches.' : 'No entries yet. Add one above.'}</p>
 		{:else}
 			<div class="space-y-2">
 				{#each filtered as entry}
-					{#if editingId === entry.id}
-						<!-- Editing -->
-						<div class="space-y-2 rounded-xl border border-[var(--color-gold-600)]/30 bg-[var(--bg-tertiary)] p-3">
-							<input type="text" bind:value={editName} class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-1.5 text-sm text-[var(--text-primary)] focus:outline-none" />
-							<textarea bind:value={editDescription} rows="3" class="w-full resize-none rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-1.5 text-sm text-[var(--text-primary)] focus:outline-none"></textarea>
-							<input type="text" bind:value={editKeywords} class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-1.5 font-mono text-xs text-[var(--text-primary)] focus:outline-none" />
-							<div class="flex gap-2">
-								<button onclick={saveEdit} class="flex-1 rounded-lg bg-[rgba(212,168,83,0.15)] py-1.5 text-xs text-[var(--text-accent)]">Save</button>
-								<button onclick={() => editingId = null} class="flex-1 rounded-lg bg-[var(--bg-primary)] py-1.5 text-xs text-[var(--text-muted)]">Cancel</button>
+					<div class="w-full text-left rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 transition-colors hover:border-[var(--color-gold-600)]/30 cursor-pointer"
+						onclick={() => openDetail(entry)}
+						role="button" tabindex="0"
+						onkeydown={(e) => { if (e.key === 'Enter') openDetail(entry); }}>
+						<div class="flex items-start justify-between">
+							<div class="flex items-center gap-2">
+								<span class="text-sm">{typeIcons[entry.type] ?? '📄'}</span>
+								<span class="font-story text-sm font-semibold text-[var(--text-primary)]">{entry.name}</span>
+								<span class="rounded-md bg-[var(--bg-primary)] px-1.5 py-0.5 text-[10px] capitalize text-[var(--text-muted)]">{entry.type}</span>
+								{#if entry.createdBy === 'ai'}
+									<span class="rounded-md bg-purple-500/10 px-1.5 py-0.5 text-[10px] text-purple-400">AI</span>
+								{/if}
+								{#if entry.loreManagementBlacklisted}
+									<span class="rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-400">Protected</span>
+								{/if}
 							</div>
+							<button onclick={(e) => handleDelete(entry.id, e)}
+								class="rounded p-1 text-[var(--text-muted)] hover:text-red-400"
+								title="Delete entry">
+								<Trash2 class="h-3.5 w-3.5" />
+							</button>
 						</div>
-					{:else}
-						<!-- Display -->
-						<div class="group rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
-							<div class="flex items-start justify-between">
-								<div class="flex items-center gap-2">
-									<span class="text-sm">{typeIcons[entry.type] ?? '📄'}</span>
-									<span class="font-story text-sm font-semibold text-[var(--text-primary)]">{entry.name}</span>
-									<span class="rounded-md bg-[var(--bg-primary)] px-1.5 py-0.5 text-[10px] capitalize text-[var(--text-muted)]">{entry.type}</span>
-								</div>
-								<div class="flex items-center gap-1 opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-									<button onclick={() => startEdit(entry)} class="rounded p-1 text-[var(--text-muted)] hover:text-[var(--text-accent)]"><Edit3 class="h-3.5 w-3.5" /></button>
-									<button onclick={() => handleDelete(entry.id)} class="rounded p-1 text-[var(--text-muted)] hover:text-red-400"><Trash2 class="h-3.5 w-3.5" /></button>
-								</div>
+						{#if entry.description}
+							<p class="mt-1.5 text-xs leading-relaxed text-[var(--text-muted)] line-clamp-2">{entry.description}</p>
+						{/if}
+						{#if entry.injection.keywords.length > 0}
+							<div class="mt-2 flex flex-wrap gap-1">
+								{#each entry.injection.keywords.slice(0, 5) as kw}
+									<span class="rounded bg-[var(--bg-primary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">{kw}</span>
+								{/each}
+								{#if entry.injection.keywords.length > 5}
+									<span class="text-[10px] text-[var(--text-muted)]">+{entry.injection.keywords.length - 5}</span>
+								{/if}
 							</div>
-							{#if entry.description}
-								<p class="mt-1.5 text-xs leading-relaxed text-[var(--text-muted)] line-clamp-2">{entry.description}</p>
-							{/if}
-							{#if entry.injection.keywords.length > 0}
-								<div class="mt-2 flex flex-wrap gap-1">
-									{#each entry.injection.keywords.slice(0, 5) as kw}
-										<span class="rounded bg-[var(--bg-primary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">{kw}</span>
-									{/each}
-								</div>
-							{/if}
-						</div>
-					{/if}
+						{/if}
+						{#if entry.injection.mode !== 'keyword'}
+							<div class="mt-1">
+								<span class="rounded px-1.5 py-0.5 text-[10px] {entry.injection.mode === 'always' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}">
+									{entry.injection.mode === 'always' ? 'Always active' : 'Archived'}
+								</span>
+							</div>
+						{/if}
+					</div>
 				{/each}
 			</div>
 		{/if}
 	</div>
 </div>
+
+<!-- Detail Modal -->
+{#if detailEntry}
+	<EntryDetailModal
+		entry={detailEntry}
+		onSave={handleDetailSave}
+		onDelete={handleDetailDelete}
+		onClose={() => detailEntry = null}
+	/>
+{/if}

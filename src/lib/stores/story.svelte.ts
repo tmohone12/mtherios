@@ -8,11 +8,12 @@ import {
 	getLorebookEntries, createStoryEntry, createCharacter, createLocation, createItem,
 	updateStory, updateCharacter, updateLocation, updateItem,
 	getEntryRelationships, getConversationMemory, getWorldEvents,
-	getChapters,
+	getChapters, getStoryBeats, getArcs,
+	getEmbeddedImages, createEmbeddedImage, deleteEmbeddedImage,
 } from '$lib/services/database';
 import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
-import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState } from '$lib/types';
+import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, EmbeddedImage } from '$lib/types';
 import type { ChatMessage } from '$lib/services/ai/sdk/generate';
 import { getModelContextWindow } from '$lib/services/ai/context/ContextAssembler';
 import { settings } from '$lib/stores/settings.svelte';
@@ -27,7 +28,9 @@ class StoryStore {
 	entryRelationships = $state<EntryRelationship[]>([]);
 	conversationMemories = $state<ConversationMemoryEntry[]>([]);
 	worldEvents = $state<WorldEvent[]>([]);
+	images = $state<EmbeddedImage[]>([]);
 	loading = $state(false);
+	private _entryLock: Promise<void> = Promise.resolve();
 	lastWorldSimResult = $state<import('$lib/services/ai/sdk/schemas/worldsim').WorldSimulationResult & { seasonEffect?: import('$lib/services/ai/generation/WorldSimulationService').SeasonEffect } | null>(null);
 	/** Micro-faction reactions pending injection into next narrator context */
 	pendingFactionReactions = $state<import('$lib/services/ai/sdk/schemas/microfaction').MicroFactionResult[]>([]);
@@ -53,7 +56,7 @@ class StoryStore {
 			const s = await getStory(storyId);
 			if (!s) throw new Error('Story not found');
 			this.currentStory = s;
-			const [entries, characters, locations, items, lorebookEntries, entryRelationships, conversationMemories, worldEvents] = await Promise.all([
+			const [entries, characters, locations, items, lorebookEntries, entryRelationships, conversationMemories, worldEvents, images] = await Promise.all([
 				getStoryEntries(storyId),
 				getCharacters(storyId),
 				getLocations(storyId),
@@ -62,6 +65,7 @@ class StoryStore {
 				getEntryRelationships(storyId),
 				getConversationMemory(storyId),
 				getWorldEvents(storyId),
+				getEmbeddedImages(storyId),
 			]);
 			this.entries = entries;
 			this.characters = characters;
@@ -71,24 +75,26 @@ class StoryStore {
 			this.entryRelationships = entryRelationships;
 			this.conversationMemories = conversationMemories;
 			this.worldEvents = worldEvents;
+			this.images = images;
 
 			// If story has chapters, set history floor so only recent entries are in chat.
 			// Older entries are summarized in chapters/arcs — sending them as raw history causes context rot.
 			const chapters = await getChapters(storyId);
 			if (chapters.length > 0) {
-				const lastChapter = chapters.sort((a, b) => b.number - a.number)[0];
+				const lastChapter = [...chapters].sort((a, b) => b.number - a.number)[0];
 				const endIdx = this.entries.findIndex(e => e.id === lastChapter.endEntryId);
 				if (endIdx >= 0) {
 					// Floor starts after the last chapter's end, keeping at most 10 entries of raw history
-					this.chatHistoryFloor = Math.max(0, this.entries.length - 10);
+					const POST_CHAPTER_HISTORY = 10;
+					this.chatHistoryFloor = Math.max(endIdx + 1, this.entries.length - POST_CHAPTER_HISTORY);
 				}
 			} else {
 				this.chatHistoryFloor = 0;
 			}
 
 			// Pre-embed lorebook + chapters in background (non-blocking)
-			this.preEmbedLorebook().catch(() => {});
-			this.preEmbedChapters().catch(() => {});
+			this.preEmbedLorebook().catch(e => console.warn('[Story] preEmbedLorebook failed:', e));
+			this.preEmbedChapters().catch(e => console.warn('[Story] preEmbedChapters failed:', e));
 		} finally {
 			this.loading = false;
 		}
@@ -127,22 +133,33 @@ class StoryStore {
 
 	async addEntry(type: StoryEntry['type'], content: string, reasoning?: string): Promise<StoryEntry> {
 		if (!this.currentStory) throw new Error('No story loaded');
-		const entry: StoryEntry = {
-			id: uuid(),
-			storyId: this.currentStory.id,
-			type,
-			content,
-			parentId: null,
-			position: this.entries.length,
-			createdAt: Date.now(),
-			metadata: null,
-			branchId: this.currentStory.currentBranchId ?? null,
-			reasoning,
-		};
-		await createStoryEntry(entry);
-		this.entries = [...this.entries, entry];
-		await updateStory(this.currentStory.id, { updatedAt: Date.now() });
-		return entry;
+
+		// Serialize entry creation to prevent position collision from concurrent calls
+		const previous = this._entryLock;
+		let releaseLock!: () => void;
+		this._entryLock = new Promise(r => { releaseLock = r; });
+		await previous;
+
+		try {
+			const entry: StoryEntry = {
+				id: uuid(),
+				storyId: this.currentStory.id,
+				type,
+				content,
+				parentId: null,
+				position: this.entries.length,
+				createdAt: Date.now(),
+				metadata: null,
+				branchId: this.currentStory.currentBranchId ?? null,
+				reasoning,
+			};
+			await createStoryEntry(entry);
+			this.entries = [...this.entries, entry];
+			await updateStory(this.currentStory.id, { updatedAt: Date.now() });
+			return entry;
+		} finally {
+			releaseLock();
+		}
 	}
 
 	async addCharacter(name: string, description?: string, relationship?: string): Promise<Character> {
@@ -454,6 +471,253 @@ class StoryStore {
 	}
 
 	/**
+	 * Build a state snapshot for the orchestrator path.
+	 * Includes arc history, recent chapter summaries, and current world state.
+	 */
+	async buildStateSnapshot(): Promise<string> {
+		const s = this.currentStory;
+		if (!s) return '';
+
+		const parts: string[] = [];
+
+		// ── Arc history (compressed long-term memory) ──
+		// Recent arcs get full detail; older arcs get a one-line summary to save tokens.
+		try {
+			const arcs = await getArcs(s.id);
+			if (arcs.length > 0) {
+				const FULL_ARC_COUNT = 5;
+				let arcBlock = '## Story History\n';
+
+				// Older arcs: one-liner each
+				if (arcs.length > FULL_ARC_COUNT) {
+					const older = arcs.slice(0, arcs.length - FULL_ARC_COUNT);
+					arcBlock += '\n### Earlier Arcs (condensed)\n';
+					for (const arc of older) {
+						arcBlock += `- **Arc ${arc.arcNumber}: ${arc.title}** (Ch.${arc.chapterRange}) — ${arc.summary.slice(0, 150)}...\n`;
+					}
+				}
+
+				// Recent arcs: full detail
+				const recent = arcs.slice(-FULL_ARC_COUNT);
+				arcBlock += '\n### Recent Arcs\n';
+				for (const arc of recent) {
+					arcBlock += `\n**Arc ${arc.arcNumber}: ${arc.title}** (Ch.${arc.chapterRange})\n`;
+					arcBlock += arc.summary + '\n';
+					if (arc.keyPlotPoints?.length) arcBlock += `Key events: ${arc.keyPlotPoints.join('; ')}\n`;
+					if (arc.characterArcs?.length) arcBlock += `Character development: ${arc.characterArcs.map(ca => `${ca.name}: ${ca.development}`).join('; ')}\n`;
+				}
+
+				const allThreads = arcs.flatMap(a => a.unresolvedThreads).filter(Boolean);
+				if (allThreads.length > 0) {
+					arcBlock += `\n**Open threads:** ${allThreads.join('; ')}\n`;
+				}
+				parts.push(arcBlock);
+			}
+		} catch { /* skip if unavailable */ }
+
+		// ── Recent chapters (uncovered by arcs) ──
+		try {
+			const chapters = await getChapters(s.id);
+			const arcs = await getArcs(s.id);
+			if (chapters.length > 0) {
+				const coveredIds = new Set(arcs.flatMap(a => a.chapterIds));
+				const uncovered = chapters
+					.filter(c => c.pinned || !coveredIds.has(c.id))
+					.sort((a, b) => a.number - b.number);
+
+				if (uncovered.length > 0) {
+					let chBlock = '## Recent Story\n';
+					for (const ch of uncovered) {
+						chBlock += `\n**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**\n${ch.summary}\n`;
+						if (ch.emotionalTone) chBlock += `[Tone: ${ch.emotionalTone}]\n`;
+						if (ch.plotThreads?.length) chBlock += `[Threads: ${ch.plotThreads.join(', ')}]\n`;
+						if (ch.characters?.length) chBlock += `[Characters: ${ch.characters.join(', ')}]\n`;
+						if (ch.locations?.length) chBlock += `[Locations: ${ch.locations.join(', ')}]\n`;
+					}
+					parts.push(chBlock);
+				}
+			}
+		} catch { /* skip if unavailable */ }
+
+		// ── World simulation (DM plot injection, rumors, faction moves) ──
+		const ws = this.lastWorldSimResult;
+		if (ws) {
+			let wsBlock = '';
+
+			if (ws.worldNarrative) {
+				wsBlock += `[WORLD STATE] ${ws.worldNarrative}\n`;
+			}
+
+			if (ws.plotInjection) {
+				const pi = ws.plotInjection;
+				const urgencyLabel = pi.urgency === 'immediate' ? 'WEAVE THIS INTO THE NEXT RESPONSE'
+					: pi.urgency === 'emerging' ? 'INTRODUCE THIS SOON'
+					: 'SUBTLY HINT AT THIS';
+				wsBlock += `\n[DM PLOT INJECTION — ${urgencyLabel}]\n`;
+				wsBlock += pi.prose + '\n';
+				if (pi.narratorDirective) wsBlock += `[How: ${pi.narratorDirective}]\n`;
+			}
+
+			if (ws.rumors && ws.rumors.length > 0) {
+				const currentLocName = (this.locations.find(l => l.current)?.name ?? '').toLowerCase();
+				const reachable = ws.rumors.filter(rumor => {
+					if (rumor.spreadRadius === 'continental' || rumor.spreadRadius === 'regional') return true;
+					if (rumor.spreadRadius === 'local') {
+						const origin = rumor.originRegion.toLowerCase();
+						return currentLocName.includes(origin) || origin.includes(currentLocName);
+					}
+					return false;
+				});
+				if (reachable.length > 0) {
+					wsBlock += '\n[RUMORS & WHISPERS — weave as NPC dialogue, tavern gossip, overheard conversation]\n';
+					for (const rumor of reachable) {
+						const tag = rumor.truthfulness >= 0.7 ? 'reliable'
+							: rumor.truthfulness >= 0.4 ? 'uncertain' : 'dubious';
+						wsBlock += `- (${tag}, via ${rumor.sourceType}) ${rumor.content}\n`;
+					}
+				}
+			}
+
+			if (ws.worldTension >= 7) {
+				wsBlock += `\n[WORLD TENSION: HIGH (${ws.worldTension}/10) — unease, nervous NPCs, doubled guards]\n`;
+			} else if (ws.worldTension >= 4) {
+				wsBlock += `\n[WORLD TENSION: MODERATE (${ws.worldTension}/10) — undercurrents of unrest, hushed talk]\n`;
+			}
+
+			if (ws.seasonEffect?.narrativeNote) {
+				wsBlock += `\n[SEASON] ${ws.seasonEffect.narrativeNote}\n`;
+			}
+
+			if (ws.plotSeeds && ws.plotSeeds.length > 0) {
+				wsBlock += '\n[FACTION PLOT SEEDS — plant subtly, do not force]\n';
+				for (const seed of ws.plotSeeds) wsBlock += `- ${seed}\n`;
+			}
+
+			if (wsBlock) parts.push(wsBlock);
+		}
+
+		// Micro-faction reactions
+		if (this.pendingFactionReactions.length > 0) {
+			const visible = this.pendingFactionReactions.filter(r => r.reaction.visible || r.reaction.rumor);
+			if (visible.length > 0) {
+				let frBlock = '[RECENT FACTION MOVES — weave naturally, not all at once]\n';
+				for (const r of visible) {
+					if (r.reaction.rumor) {
+						frBlock += `- (rumor) ${r.reaction.rumor}\n`;
+					} else if (r.reaction.visible) {
+						frBlock += `- ${r.factionName}: ${r.reaction.action}\n`;
+					}
+					if (r.reaction.consequence) {
+						frBlock += `  → ${r.reaction.consequence}\n`;
+					}
+				}
+				parts.push(frBlock);
+			}
+		}
+
+		// Recent world events (consequence system)
+		const recentEvents = this.worldEvents
+			.filter(e => e.appliedAt != null)
+			.sort((a, b) => (b.appliedAt ?? 0) - (a.appliedAt ?? 0))
+			.slice(0, 5);
+		if (recentEvents.length > 0) {
+			let evBlock = '**Recent World Events:**\n';
+			for (const event of recentEvents) {
+				evBlock += `- ${event.name}: ${event.description}\n`;
+				const applied = event.consequences.filter(c => c.status === 'applied');
+				for (const c of applied) {
+					evBlock += `  → ${c.description}\n`;
+				}
+			}
+			parts.push(evBlock);
+		}
+
+		// ── Current world state ──
+		const lines: string[] = ['## World State (current)\n'];
+
+		// Current location
+		const currentLoc = this.locations.find(l => l.current);
+		if (currentLoc) {
+			lines.push(`Location: ${currentLoc.name}${currentLoc.description ? ' — ' + currentLoc.description : ''}`);
+		}
+
+		// Present characters (max 6)
+		const present = this.characters
+			.filter(c => c.status === 'active' && c.relationship !== 'self')
+			.slice(0, 6);
+		if (present.length > 0) {
+			const charList = present.map(c => {
+				let label = c.name;
+				if (c.relationship) label += ` (${c.relationship})`;
+				return label;
+			}).join('; ');
+			lines.push(`Characters present: ${charList}`);
+		}
+
+		// Protagonist
+		const protag = this.protagonist;
+		if (protag) {
+			lines.push(`Protagonist: ${protag.name}${protag.description ? ' — ' + protag.description : ''}`);
+		}
+
+		// Equipped items
+		const equipped = this.items.filter(i => i.equipped);
+		if (equipped.length > 0) {
+			lines.push(`Inventory: ${equipped.map(i => i.name).join(', ')}`);
+		}
+
+		// Time tracker
+		const t = s.timeTracker;
+		if (t) {
+			const pad = (n: number) => String(n).padStart(2, '0');
+			lines.push(`Time: Day ${t.days}, ${pad(t.hours)}:${pad(t.minutes)}`);
+		}
+
+		// Recent story beats (last 2)
+		try {
+			const beats = await getStoryBeats(s.id);
+			const recent = beats.filter(b => b.status === 'active').slice(-2);
+			if (recent.length > 0) {
+				lines.push(`Recent events: ${recent.map(b => b.title).join('; ')}`);
+			}
+		} catch { /* skip if unavailable */ }
+
+		parts.push(lines.join('\n'));
+
+		const result = parts.join('\n\n');
+
+		// Optional snapshot cap from settings (0 = unlimited, context window is the limit)
+		const snapshotCap = settings.uiSettings.snapshotTokenCap || 0;
+		if (snapshotCap > 0) {
+			const maxChars = snapshotCap * 4;
+			if (result.length > maxChars) {
+				return result.slice(0, maxChars);
+			}
+		}
+
+		return result;
+	}
+
+	/**
+	 * Build the system prompt for orchestrator mode.
+	 * Same as buildSystemPrompt but uses a lightweight state snapshot
+	 * instead of the full ContextAssembler output, and appends tool instructions.
+	 */
+	buildOrchestratorSystemPrompt(stateSnapshot: string): string {
+		// Reuse the standard prompt with the snapshot as the context block
+		const basePrompt = this.buildSystemPrompt(stateSnapshot);
+
+		// Append tool-usage instructions
+		const toolInstructions = `
+## Your Tools
+After generating your narrative response, you MUST call \`update_world_state\` to record any changes from this scene (characters, locations, items, time, conversations, relationships, story beats).
+Before narrating about lore-heavy topics, call \`query_lore\` to check your facts.
+When introducing new named entities (characters, locations, factions), call \`create_lore_entry\` to register them.
+`;
+		return basePrompt + toolInstructions;
+	}
+
+	/**
 	 * Build conversation history as alternating user/assistant messages.
 	 * Groups consecutive same-type entries and maps:
 	 *   user_action → user message
@@ -486,8 +750,8 @@ class StoryStore {
 		// Hard cap on entries to avoid context rot (token budget is the real gate).
 		// chatHistoryFloor is advanced when chapters are created — older entries are
 		// summarized in chapters/arcs and no longer need to be in raw chat history.
-		const MAX_HISTORY_ENTRIES = 200;
-		const historyFloor = Math.max(this.chatHistoryFloor, this.entries.length - MAX_HISTORY_ENTRIES);
+		const maxHistoryEntries = settings.uiSettings.maxHistoryEntries || 200;
+		const historyFloor = Math.max(this.chatHistoryFloor, this.entries.length - maxHistoryEntries);
 
 		let tokensSoFar = 0;
 		const floor = Math.max(0, historyFloor);
@@ -548,9 +812,9 @@ class StoryStore {
 		}
 
 		// Cap final message count to prevent context rot
-		const MAX_MESSAGES = 40;
-		if (messages.length > MAX_MESSAGES) {
-			return messages.slice(-MAX_MESSAGES);
+		const maxMessages = settings.uiSettings.maxMessages || 40;
+		if (messages.length > maxMessages) {
+			return messages.slice(-maxMessages);
 		}
 
 		return messages;
@@ -664,72 +928,21 @@ class StoryStore {
 		this.currentStory = { ...this.currentStory, ...updates };
 	}
 
-	/**
-	 * Build a compact world-state snapshot for AI services (classifier, world sim).
-	 * Includes top relevant lorebook entries, latest chapter summary, arc threads, and faction standings.
-	 * Targets under ~1000 tokens.
-	 */
-	buildStateSnapshot(opts?: {
-		latestChapterSummary?: string;
-		unresolvedThreads?: string[];
-		lastUserAction?: string;
-	}): string {
-		const parts: string[] = [];
+	/** Save a generated image to the database and local state. */
+	async addImage(image: Omit<EmbeddedImage, 'createdAt'>): Promise<void> {
+		await createEmbeddedImage(image);
+		this.images = [...this.images, { ...image, createdAt: Date.now() }];
+	}
 
-		// Top 5-10 relevant lorebook entries — keyword match against last user action
-		const query = opts?.lastUserAction?.toLowerCase() ?? '';
-		const entries = this.lorebookEntries;
-		let relevantEntries: Entry[];
+	/** Remove a persisted image. */
+	async removeImage(id: string): Promise<void> {
+		await deleteEmbeddedImage(id);
+		this.images = this.images.filter(i => i.id !== id);
+	}
 
-		if (query && entries.length > 0) {
-			const scored = entries.map(e => {
-				const keywords = e.injection?.keywords ?? [];
-				const nameMatch = query.includes(e.name.toLowerCase()) ? 3 : 0;
-				const kwMatches = keywords.filter(k => query.includes(k.toLowerCase())).length * 2;
-				const descSnip = e.description.slice(0, 60).toLowerCase();
-				const descMatch = query.split(' ').filter(w => w.length > 3 && descSnip.includes(w)).length;
-				return { e, score: nameMatch + kwMatches + descMatch };
-			}).sort((a, b) => b.score - a.score);
-			const hasMatches = scored[0]?.score > 0;
-			relevantEntries = hasMatches
-				? scored.slice(0, 8).map(s => s.e)
-				: entries.slice(0, 5);
-		} else {
-			relevantEntries = entries.slice(0, 8);
-		}
-
-		if (relevantEntries.length > 0) {
-			const lines = relevantEntries.map(e =>
-				`- **${e.name}** (${e.type}): ${e.description.slice(0, 100)}`
-			);
-			parts.push(`## Lorebook\n${lines.join('\n')}`);
-		}
-
-		// Latest chapter summary
-		if (opts?.latestChapterSummary) {
-			parts.push(`## Latest Chapter\n${opts.latestChapterSummary.slice(0, 400)}`);
-		}
-
-		// Latest arc's unresolved threads
-		if (opts?.unresolvedThreads?.length) {
-			const threads = opts.unresolvedThreads.slice(0, 5).map(t => `- ${t}`).join('\n');
-			parts.push(`## Open Threads\n${threads}`);
-		}
-
-		// Active faction standings
-		const factions = entries.filter(e => e.type === 'faction');
-		if (factions.length > 0) {
-			const standings = factions.map(f => {
-				const state = f.state as FactionEntryState;
-				const standing = state?.playerStanding ?? 0;
-				const status = state?.status ?? 'unknown';
-				return `- ${f.name}: ${status} (standing: ${standing > 0 ? '+' : ''}${standing})`;
-			}).join('\n');
-			parts.push(`## Faction Standings\n${standings}`);
-		}
-
-		// Hard cap ~1000 tokens
-		return parts.join('\n\n').slice(0, 4000);
+	/** Get the persisted image for a specific entry, if any. */
+	getImageForEntry(entryId: string): EmbeddedImage | undefined {
+		return this.images.find(i => i.entryId === entryId && i.status === 'complete');
 	}
 
 	clear() {
@@ -742,6 +955,7 @@ class StoryStore {
 		this.entryRelationships = [];
 		this.conversationMemories = [];
 		this.worldEvents = [];
+		this.images = [];
 		this.lastWorldSimResult = null;
 		this.lastTierUsage = null;
 		this.lastContextTotal = 0;

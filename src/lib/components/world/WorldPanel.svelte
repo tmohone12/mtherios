@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Plus, X, Users, MapPin, Swords, Edit3, Trash2, Check, BookOpen, ChevronDown, ChevronRight, Brain, Zap, Eye, Settings2, Loader2 } from 'lucide-svelte';
 	import { uuid } from '$lib/utils/uuid';
-	import { getAllStories, getCharacters, getLocations, getItems, getChapters, getStoryEntries,
+	import { getAllStories, getCharacters, getLocations, getItems, getChapters, getStoryEntries, getArcs,
 		createCharacter, createLocation, createItem, createChapter,
 		updateCharacter, updateLocation, updateItem,
 		deleteCharacter, deleteLocation, deleteItem } from '$lib/services/database';
@@ -121,10 +121,13 @@
 			const tense = storyObj?.settings?.tense ?? 'present';
 
 			chapterStatus = 'Summarizing chapter...';
+			const existingArcs = await getArcs(selectedStoryId);
 			const summaryResult = await ai.memory.summarizeChapter(
 				entriesOutsideChapter,
 				existingChapters,
 				mode, pov, tense,
+				undefined,
+				existingArcs,
 			);
 
 			const chapter: Chapter = {

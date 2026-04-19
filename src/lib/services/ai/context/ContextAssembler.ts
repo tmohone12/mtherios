@@ -79,16 +79,6 @@ export interface AssembleParams {
 
 // ── Budget ratios (fraction of total context budget per tier) ──
 // These define the relative importance of each tier.
-// Total must equal 1.0.
-
-const TIER_RATIOS = {
-	scene: 0.10,
-	recent: 0.35,
-	world: 0.20,
-	procedural: 0.05,
-	retrieved: 0.30,
-};
-
 // ── Context window estimation ──
 // We reserve only for output generation. Everything else fills the model's context.
 // The model's context window is the only real limit.

@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { X, Check, ExternalLink, Eye, EyeOff, Globe, Server, Sparkles, Cpu, Zap, SlidersHorizontal, Wrench, Palette, ScrollText, ChevronDown } from 'lucide-svelte';
+	import { X, Check, ExternalLink, Eye, EyeOff, Globe, Server, Sparkles, Cpu, Zap, SlidersHorizontal, Wrench, Palette, ScrollText, ChevronDown, ImageIcon, Brain } from 'lucide-svelte';
 	import ServiceConfigPanel from './ServiceConfigPanel.svelte';
 	import PromptInspector from './PromptInspector.svelte';
 	import ContextWindow from '../story/ContextWindow.svelte';
 	import { settings, SERVICE_DEFINITIONS, SERVICE_PROFILES } from '$lib/stores/settings.svelte';
 	import { PROVIDERS, getProviderList } from '$lib/services/ai/sdk/providers/config';
+	import { STYLE_PRESETS } from '$lib/services/ai/image/ImageGenerationService';
 	import type { ProviderType, APIProfile } from '$lib/types';
 	import { uuid } from '$lib/utils/uuid';
 	import { fade } from 'svelte/transition';
@@ -17,7 +18,7 @@
 	let { open, onClose }: Props = $props();
 
 	// Tab navigation
-	type Tab = 'providers' | 'services' | 'interface' | 'inspector';
+	type Tab = 'providers' | 'services' | 'memory' | 'images' | 'interface' | 'inspector';
 	let activeTab = $state<Tab>('providers');
 
 	// Provider editing
@@ -146,6 +147,8 @@
 	const tabs: Array<{ id: Tab; label: string; icon: typeof Globe }> = [
 		{ id: 'providers', label: 'Providers & Models', icon: Globe },
 		{ id: 'services', label: 'AI Services', icon: Wrench },
+		{ id: 'memory', label: 'Memory', icon: Brain },
+		{ id: 'images', label: 'Image Generation', icon: ImageIcon },
 		{ id: 'interface', label: 'Interface', icon: Palette },
 		{ id: 'inspector', label: 'Inspector', icon: ScrollText },
 	];
@@ -415,6 +418,170 @@
 				{:else if activeTab === 'services'}
 				<ServiceConfigPanel onBack={() => activeTab = 'providers'} />
 
+				<!-- ═══ TAB: MEMORY ═══ -->
+				{:else if activeTab === 'memory'}
+				<div class="space-y-5">
+					<!-- Message History -->
+					<div class="space-y-3">
+						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Conversation History</h4>
+						<div class="space-y-2">
+							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Max Messages ({settings.uiSettings.maxMessages})</label>
+							<input type="range" value={settings.uiSettings.maxMessages} min="10" max="100" step="5"
+								oninput={(e) => { settings.uiSettings.maxMessages = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
+								class="w-full accent-[var(--color-gold-400)]" />
+							<p class="text-[10px] text-[var(--text-muted)]">Maximum conversation turns sent to the narrator. Lower = cheaper, higher = better short-term memory.</p>
+						</div>
+						<div class="space-y-2">
+							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Max History Entries ({settings.uiSettings.maxHistoryEntries})</label>
+							<input type="range" value={settings.uiSettings.maxHistoryEntries} min="50" max="500" step="25"
+								oninput={(e) => { settings.uiSettings.maxHistoryEntries = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
+								class="w-full accent-[var(--color-gold-400)]" />
+							<p class="text-[10px] text-[var(--text-muted)]">Hard cap on raw entries scanned for history. Token budget is the real gate.</p>
+						</div>
+					</div>
+
+					<!-- Chapter Settings -->
+					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
+						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Chapter Creation</h4>
+						<div class="space-y-2">
+							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Chapter Threshold ({settings.uiSettings.chapterThreshold} entries)</label>
+							<input type="range" value={settings.uiSettings.chapterThreshold} min="10" max="50" step="5"
+								oninput={(e) => { settings.uiSettings.chapterThreshold = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
+								class="w-full accent-[var(--color-gold-400)]" />
+							<p class="text-[10px] text-[var(--text-muted)]">Entries needed before chapter analysis triggers. Lower = more frequent chapters.</p>
+						</div>
+						<div class="space-y-2">
+							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Post-Chapter Buffer ({settings.uiSettings.postChapterBuffer})</label>
+							<input type="range" value={settings.uiSettings.postChapterBuffer} min="5" max="30" step="1"
+								oninput={(e) => { settings.uiSettings.postChapterBuffer = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
+								class="w-full accent-[var(--color-gold-400)]" />
+							<p class="text-[10px] text-[var(--text-muted)]">Raw entries kept in history after chapter creation. Rest is summarized.</p>
+						</div>
+						<div class="space-y-2">
+							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Previous Chapters in Summary ({settings.uiSettings.maxPrevChaptersInSummary})</label>
+							<input type="range" value={settings.uiSettings.maxPrevChaptersInSummary} min="2" max="10" step="1"
+								oninput={(e) => { settings.uiSettings.maxPrevChaptersInSummary = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
+								class="w-full accent-[var(--color-gold-400)]" />
+							<p class="text-[10px] text-[var(--text-muted)]">How many prior chapter summaries the AI sees when creating a new chapter. More = better continuity, more tokens.</p>
+						</div>
+					</div>
+
+					<!-- Arc Settings -->
+					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
+						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Arc Condensation</h4>
+						<div class="space-y-2">
+							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Chapters per Arc ({settings.uiSettings.chaptersPerArc})</label>
+							<input type="range" value={settings.uiSettings.chaptersPerArc} min="3" max="10" step="1"
+								oninput={(e) => { settings.uiSettings.chaptersPerArc = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
+								class="w-full accent-[var(--color-gold-400)]" />
+							<p class="text-[10px] text-[var(--text-muted)]">How many chapters get condensed into one arc summary. Lower = more arcs, higher = broader story arcs.</p>
+						</div>
+					</div>
+
+					<!-- Snapshot Budget -->
+					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
+						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Context Snapshot</h4>
+						<div class="space-y-2">
+							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Snapshot Token Cap ({settings.uiSettings.snapshotTokenCap === 0 ? 'Unlimited' : settings.uiSettings.snapshotTokenCap.toLocaleString()})</label>
+							<input type="range" value={settings.uiSettings.snapshotTokenCap} min="0" max="50000" step="2000"
+								oninput={(e) => { settings.uiSettings.snapshotTokenCap = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
+								class="w-full accent-[var(--color-gold-400)]" />
+							<p class="text-[10px] text-[var(--text-muted)]">Max tokens for the state snapshot (arcs + chapters + world state). 0 = unlimited — the model's context window is the only limit.</p>
+						</div>
+					</div>
+				</div>
+
+				<!-- ═══ TAB: IMAGE GENERATION ═══ -->
+				{:else if activeTab === 'images'}
+				<div class="space-y-5">
+					<!-- Image Generation Mode -->
+					<div class="space-y-2">
+						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Generation Mode</label>
+						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
+							Controls when images are generated. Inline generates automatically after each narrative. Agentic lets the AI decide.
+						</p>
+						<div class="grid grid-cols-3 gap-2">
+							{#each [
+								{ value: 'none', label: 'Off', desc: 'Disabled' },
+								{ value: 'inline', label: 'Inline', desc: 'Auto-generate' },
+								{ value: 'agentic', label: 'Agentic', desc: 'AI decides' },
+							] as mode}
+								<button class="rounded-lg border border-[var(--border-primary)] px-3 py-3 text-left transition-colors
+									{settings.uiSettings.imageGenerationMode === mode.value
+										? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
+										: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
+									onclick={() => { settings.uiSettings.imageGenerationMode = mode.value as any; settings.saveUISettings(); }}>
+									<div class="font-display text-sm tracking-wide">{mode.label}</div>
+									<div class="mt-0.5 text-[10px] opacity-70">{mode.desc}</div>
+								</button>
+							{/each}
+						</div>
+					</div>
+
+					<!-- Style Preset -->
+					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
+						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Art Style</label>
+						<div class="grid grid-cols-2 gap-2">
+							{#each Object.entries(STYLE_PRESETS) as [key, preset]}
+								<button class="rounded-lg border border-[var(--border-primary)] px-3 py-2.5 text-left transition-colors
+									{settings.uiSettings.imageStyle === key
+										? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
+										: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
+									onclick={() => { settings.uiSettings.imageStyle = key; settings.saveUISettings(); }}>
+									<div class="text-sm">{preset.label}</div>
+								</button>
+							{/each}
+							<button class="rounded-lg border border-[var(--border-primary)] px-3 py-2.5 text-left transition-colors
+								{settings.uiSettings.imageStyle === 'custom'
+									? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
+									: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
+								onclick={() => { settings.uiSettings.imageStyle = 'custom'; settings.saveUISettings(); }}>
+								<div class="text-sm">Custom</div>
+							</button>
+						</div>
+						{#if settings.uiSettings.imageStyle === 'custom'}
+							<textarea
+								class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
+								rows="3"
+								placeholder="Describe the art style for generated images..."
+								value={settings.uiSettings.imageCustomStyle ?? ''}
+								oninput={(e) => { settings.uiSettings.imageCustomStyle = (e.target as HTMLTextAreaElement).value; settings.saveUISettings(); }}
+							></textarea>
+						{/if}
+					</div>
+
+					<!-- Image Size -->
+					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
+						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Image Size</label>
+						<div class="grid grid-cols-3 gap-2">
+							{#each ['512x512', '1024x1024', '1024x1792'] as size}
+								<button class="rounded-lg border border-[var(--border-primary)] px-3 py-2.5 text-center transition-colors
+									{settings.uiSettings.imageSize === size
+										? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
+										: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
+									onclick={() => { settings.uiSettings.imageSize = size; settings.saveUISettings(); }}>
+									<div class="text-sm">{size}</div>
+								</button>
+							{/each}
+						</div>
+					</div>
+
+					<!-- Model Override -->
+					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
+						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Model Override</label>
+						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
+							Leave empty to use the provider's default image model.
+						</p>
+						<input
+							type="text"
+							class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
+							placeholder={settings.activeProvider?.imageDefaults?.defaultModel ?? 'Provider default'}
+							value={settings.uiSettings.imageModel ?? ''}
+							oninput={(e) => { settings.uiSettings.imageModel = (e.target as HTMLInputElement).value; settings.saveUISettings(); }}
+						/>
+					</div>
+				</div>
+
 				<!-- ═══ TAB: INTERFACE ═══ -->
 				{:else if activeTab === 'interface'}
 				<div class="space-y-5">
@@ -451,6 +618,32 @@
 								checked={settings.uiSettings.disableSuggestions}
 								onchange={(e) => { settings.uiSettings.disableSuggestions = (e.target as HTMLInputElement).checked; settings.saveUISettings(); }} />
 						</label>
+					</div>
+
+					<!-- Generation Mode -->
+					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
+						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Generation Mode</label>
+						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
+							Orchestrator uses tool calls for state tracking (faster, fewer tokens). Pipeline uses the classic multi-service approach.
+						</p>
+						<div class="grid grid-cols-2 gap-2">
+							<button class="rounded-lg border border-[var(--border-primary)] px-4 py-3 text-left transition-colors
+								{settings.uiSettings.generationMode === 'orchestrator'
+									? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
+									: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
+								onclick={() => { settings.uiSettings.generationMode = 'orchestrator'; settings.saveUISettings(); }}>
+								<div class="font-display text-sm tracking-wide">Orchestrator</div>
+								<div class="mt-0.5 text-[10px] opacity-70">Faster, fewer tokens</div>
+							</button>
+							<button class="rounded-lg border border-[var(--border-primary)] px-4 py-3 text-left transition-colors
+								{settings.uiSettings.generationMode === 'pipeline'
+									? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
+									: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
+								onclick={() => { settings.uiSettings.generationMode = 'pipeline'; settings.saveUISettings(); }}>
+								<div class="font-display text-sm tracking-wide">Pipeline</div>
+								<div class="mt-0.5 text-[10px] opacity-70">Classic, more AI calls</div>
+							</button>
+						</div>
 					</div>
 				</div>
 

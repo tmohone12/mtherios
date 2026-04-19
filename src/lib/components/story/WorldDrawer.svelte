@@ -97,6 +97,7 @@
 				story.storyMode,
 				story.pov,
 				story.tense,
+				arcs,
 			);
 
 			const firstCh = chaptersToCondense[0];

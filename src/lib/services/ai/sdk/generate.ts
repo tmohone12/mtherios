@@ -187,8 +187,8 @@ export async function getActiveModel(profileId?: string): Promise<string> {
 	const providerConfig = PROVIDERS[profile.providerType as ProviderType];
 	
 	// Use provider's narrative service default, or first fallback model
-	return providerConfig?.services?.narrative?.model 
-		?? providerConfig?.fallbackModels[0] 
+	return providerConfig?.services?.narrative?.model
+		?? providerConfig?.fallbackModels?.[0]
 		?? 'gpt-4o-mini';
 }
 
@@ -401,6 +401,186 @@ export async function generateNarrative(options: GenerateOptions): Promise<strin
 			prompt: options.prompt,
 			conversationHistory: options.messages,
 			response: responseText,
+			temperature,
+			maxTokens,
+			durationMs: Date.now() - startTime,
+			error,
+			tokenEstimate: Math.ceil((options.system.length + historyLength + options.prompt.length + responseText.length) / 4),
+		});
+	}
+}
+
+// ── Tool call types ──
+
+export interface ToolCall {
+	name: string;
+	arguments: Record<string, any>;
+}
+
+export interface GenerateWithToolsOptions extends GenerateOptions {
+	tools: any[];
+	/** Force a specific tool to be called */
+	forceTool?: string;
+}
+
+export interface ToolCallResult {
+	content: string;
+	toolCalls: ToolCall[];
+}
+
+/**
+ * Generate a response with tool call support (non-streaming).
+ * Used for the orchestrator's world-state update call.
+ */
+export async function generateStructuredWithTools(options: GenerateWithToolsOptions): Promise<ToolCallResult> {
+	const { profile, baseUrl } = await getActiveProfile(options.profileId);
+	const model = options.model || await getActiveModel(options.profileId);
+	const temperature = options.temperature ?? 0.2;
+	const maxTokens = options.maxTokens ?? 4096;
+	const startTime = Date.now();
+	const useAnthropic = isAnthropicProvider(profile);
+
+	const endpoint = useAnthropic
+		? `${baseUrl || '/api/anthropic'}/v1/messages`
+		: `${baseUrl}/chat/completions`;
+	const headers = useAnthropic ? buildAnthropicHeaders(profile) : buildAuthHeaders(profile);
+
+	let body: Record<string, any>;
+	let responseText = '';
+	let error: string | undefined;
+	const toolCalls: ToolCall[] = [];
+
+	if (useAnthropic) {
+		// Anthropic Messages API with tools
+		const messages: Array<{ role: string; content: string }> = [];
+		if (options.messages?.length) {
+			for (const msg of options.messages) messages.push({ role: msg.role, content: msg.content });
+		}
+		messages.push({ role: 'user', content: options.prompt });
+
+		// Convert tools to Anthropic format
+		const anthropicTools = options.tools.map((t: any) => ({
+			name: t.function?.name ?? t.name,
+			description: t.function?.description ?? t.description,
+			input_schema: t.function?.parameters ?? t.input_schema,
+		}));
+
+		body = {
+			model,
+			system: options.system,
+			messages: messages.length > 0 && messages[0].role !== 'user'
+				? [{ role: 'user', content: '(continue)' }, ...messages]
+				: messages,
+			max_tokens: maxTokens,
+			temperature,
+			tools: anthropicTools,
+			tool_choice: options.forceTool
+				? { type: 'tool', name: options.forceTool }
+				: { type: 'any' },
+		};
+	} else {
+		// OpenAI-compatible with tools
+		const oaiMessages: Array<{ role: string; content: string }> = [
+			{ role: 'system', content: options.system },
+		];
+		if (options.messages?.length) {
+			for (const msg of options.messages) oaiMessages.push({ role: msg.role, content: msg.content });
+		}
+		oaiMessages.push({ role: 'user', content: options.prompt });
+
+		body = {
+			model,
+			messages: oaiMessages,
+			temperature,
+			max_tokens: maxTokens,
+			tools: options.tools,
+			tool_choice: options.forceTool
+				? { type: 'function', function: { name: options.forceTool } }
+				: 'auto',
+		};
+	}
+
+	try {
+		const response = await fetch(endpoint, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify(body),
+			signal: options.signal,
+		});
+
+		if (!response.ok) {
+			const errorText = await response.text().catch(() => 'Unknown error');
+			error = `HTTP ${response.status}: ${errorText}`;
+			throw new Error(`AI request failed (${response.status}): ${errorText}`);
+		}
+
+		const data = await response.json();
+
+		if (useAnthropic) {
+			// Anthropic: content is an array of blocks (text and tool_use)
+			for (const block of data.content ?? []) {
+				if (block.type === 'text') {
+					responseText += block.text ?? '';
+				} else if (block.type === 'tool_use') {
+					toolCalls.push({
+						name: block.name,
+						arguments: block.input ?? {},
+					});
+				}
+			}
+		} else {
+			// OpenAI: message.content + message.tool_calls
+			const message = data.choices?.[0]?.message;
+			responseText = message?.content ?? '';
+			if (message?.tool_calls) {
+				for (const tc of message.tool_calls) {
+					let args: Record<string, any> = {};
+					try {
+						args = typeof tc.function.arguments === 'string'
+							? JSON.parse(tc.function.arguments)
+							: tc.function.arguments;
+					} catch {
+						console.error('[generateStructuredWithTools] Failed to parse tool call args:', tc.function.arguments);
+					}
+					toolCalls.push({
+						name: tc.function.name,
+						arguments: args,
+					});
+				}
+			}
+		}
+
+		// Fallback: if no tool calls found, try to parse JSON from response text
+		if (toolCalls.length === 0 && responseText.trim()) {
+			const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/) || responseText.match(/(\{[\s\S]*\})/);
+			if (jsonMatch) {
+				try {
+					const parsed = JSON.parse(jsonMatch[1]);
+					toolCalls.push({
+						name: 'update_world_state',
+						arguments: parsed,
+					});
+				} catch {
+					console.warn('[generateStructuredWithTools] Could not parse JSON fallback from response text');
+				}
+			}
+		}
+
+		return { content: responseText, toolCalls };
+	} catch (err) {
+		error = error || (err instanceof Error ? err.message : String(err));
+		throw err;
+	} finally {
+		const historyLength = options.messages?.reduce((sum, m) => sum + m.content.length, 0) ?? 0;
+		addLogEntry({
+			id: uuid(),
+			timestamp: Date.now(),
+			service: (options as any)._service || 'world-update',
+			model,
+			system: options.system,
+			prompt: options.prompt,
+			conversationHistory: options.messages,
+			response: responseText + (toolCalls.length > 0 ? `\n[Tool calls: ${toolCalls.map(t => t.name).join(', ')}]` : ''),
 			temperature,
 			maxTokens,
 			durationMs: Date.now() - startTime,

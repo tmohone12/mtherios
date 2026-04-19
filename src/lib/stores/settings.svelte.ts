@@ -106,6 +106,19 @@ class SettingsStore {
 		showScrollToTop: true,
 		showScrollToBottom: true,
 		imageGenerationMode: 'none',
+		imageStyle: 'asoiaf',
+		imageCustomStyle: '',
+		imageSize: '1024x1024',
+		imageModel: '',
+		generationMode: 'orchestrator',
+		// Memory settings
+		maxMessages: 40,
+		maxHistoryEntries: 200,
+		chapterThreshold: 20,
+		postChapterBuffer: 10,
+		maxPrevChaptersInSummary: 5,
+		chaptersPerArc: 5,
+		snapshotTokenCap: 0,
 	});
 
 	// ── Per-Service Configs ──
@@ -158,13 +171,13 @@ class SettingsStore {
 
 			// Profiles
 			if (all.apiProfiles) {
-				try { this.profiles = JSON.parse(all.apiProfiles); } catch { /* keep default */ }
+				try { this.profiles = JSON.parse(all.apiProfiles); } catch (e) { console.warn('[Settings] Failed to parse apiProfiles:', e); }
 			}
 			this.activeProfileId = all.activeProfileId ?? null;
 
 			// Narrative settings
 			if (all.narrativeSettings) {
-				try { Object.assign(this.narrativeSettings, JSON.parse(all.narrativeSettings)); } catch { /* keep default */ }
+				try { Object.assign(this.narrativeSettings, JSON.parse(all.narrativeSettings)); } catch (e) { console.warn('[Settings] Failed to parse narrativeSettings:', e); }
 			} else if (this.activeProvider?.services?.narrative) {
 				// Initialize from provider defaults
 				const defaults = this.activeProvider.services.narrative;
@@ -181,22 +194,22 @@ class SettingsStore {
 
 			// Service configs
 			if (all.serviceConfigs) {
-				try { this.serviceConfigs = JSON.parse(all.serviceConfigs); } catch { /* keep default */ }
+				try { this.serviceConfigs = JSON.parse(all.serviceConfigs); } catch (e) { console.warn('[Settings] Failed to parse serviceConfigs:', e); }
 			}
 
 			// Profile models
 			if (all.profileModels) {
-				try { this.profileModels = JSON.parse(all.profileModels); } catch { /* keep default */ }
+				try { this.profileModels = JSON.parse(all.profileModels); } catch (e) { console.warn('[Settings] Failed to parse profileModels:', e); }
 			}
 
 			// UI settings
 			if (all.uiSettings) {
-				try { Object.assign(this.uiSettings, JSON.parse(all.uiSettings)); } catch { /* keep default */ }
+				try { Object.assign(this.uiSettings, JSON.parse(all.uiSettings)); } catch (e) { console.warn('[Settings] Failed to parse uiSettings:', e); }
 			}
 
 			// System services
 			if (all.systemServicesSettings) {
-				try { Object.assign(this.systemServicesSettings, JSON.parse(all.systemServicesSettings)); } catch { /* keep default */ }
+				try { Object.assign(this.systemServicesSettings, JSON.parse(all.systemServicesSettings)); } catch (e) { console.warn('[Settings] Failed to parse systemServicesSettings:', e); }
 			}
 
 			// Context budget

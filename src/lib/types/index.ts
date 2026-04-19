@@ -791,6 +791,8 @@ export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
 // Mtherios: single theme, no theme registry needed
 export type ThemeId = 'mtherios'
 
+export type GenerationMode = 'orchestrator' | 'pipeline'
+
 export type FontSource = 'default' | 'system' | 'google'
 
 export interface UISettings {
@@ -810,6 +812,19 @@ export interface UISettings {
   showScrollToTop: boolean
   showScrollToBottom: boolean
   imageGenerationMode: 'none' | 'inline' | 'agentic'
+  imageStyle: string
+  imageCustomStyle?: string
+  imageSize: string
+  imageModel?: string
+  generationMode: GenerationMode
+  // Memory settings
+  maxMessages: number
+  maxHistoryEntries: number
+  chapterThreshold: number
+  postChapterBuffer: number
+  maxPrevChaptersInSummary: number
+  chaptersPerArc: number
+  snapshotTokenCap: number // 0 = unlimited (context window is the limit)
 }
 
 export interface UpdateSettings {

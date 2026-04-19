@@ -9,7 +9,7 @@
 import { BaseAIService } from '../BaseAIService';
 import { arcSummarySchema, type ArcSummary } from '../sdk/schemas/arc';
 import { createLogger } from '../core/config';
-import type { Chapter } from '$lib/types';
+import type { Chapter, Arc } from '$lib/types';
 
 const log = createLogger('ArcCondensation');
 
@@ -49,8 +49,9 @@ export class ArcCondensationService extends BaseAIService {
 		mode = 'adventure',
 		pov = 'second',
 		tense = 'present',
+		previousArcs?: Arc[],
 	): Promise<ArcSummary> {
-		log('condense', { chapters: chapters.length, arcNumber });
+		log('condense', { chapters: chapters.length, arcNumber, priorArcs: previousArcs?.length ?? 0 });
 
 		const chapterBlock = chapters.map(c => {
 			let block = `--- Chapter ${c.number}: ${c.title ?? 'Untitled'} ---\n${c.summary}\n`;
@@ -60,9 +61,28 @@ export class ArcCondensationService extends BaseAIService {
 			return block;
 		}).join('\n');
 
+		// Build prior arc context for continuity
+		let priorArcContext = '';
+		if (previousArcs && previousArcs.length > 0) {
+			const recentArcs = previousArcs.slice(-3); // Last 3 arcs for context
+			priorArcContext = `═══ PRIOR ARC SUMMARIES ═══
+(These arcs precede the chapters you're condensing. Carry forward unresolved threads and maintain consistency with established facts, agreements, and relationships.)
+
+${recentArcs.map(a => {
+	let block = `Arc ${a.arcNumber}: "${a.title}" (Ch.${a.chapterRange})\n${a.summary}`;
+	if (a.unresolvedThreads?.length) block += `\nUnresolved threads: ${a.unresolvedThreads.join('; ')}`;
+	if (a.characterArcs?.length) block += `\nCharacter arcs: ${a.characterArcs.map(ca => `${ca.name}: ${ca.development}`).join('; ')}`;
+	return block;
+}).join('\n\n')}
+
+`;
+		}
+
 		const system = `You are a narrative arc summarizer for a ${mode} interactive fiction story (${pov} person, ${tense} tense).
 
 You are condensing ${chapters.length} chapters into a single ARC SUMMARY. This arc summary replaces the individual chapter summaries in the narrator's memory, so it MUST preserve all critical continuity information.
+
+${priorArcContext}
 
 ═══ WHAT TO PRESERVE ═══
 

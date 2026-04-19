@@ -6,7 +6,6 @@ import {
 	relationshipExtractionSchema, conversationDetectionSchema,
 	classificationResultSchema, locationConnectionSchema,
 } from '../classifier';
-import { timelineFillEntrySchema, timelineFillResultSchema } from '../timeline';
 import { loreUpdateSchema, loreManagementResultSchema } from '../lorebook';
 import { styleReviewSchema } from '../style';
 import { chapterSummaryResultSchema, chapterAnalysisSchema, retrievalDecisionSchema } from '../memory';
@@ -276,28 +275,6 @@ describe('factionSignalSchema', () => {
 });
 
 // ════════════════════════════════════════════════════════════════
-// Timeline
-// ════════════════════════════════════════════════════════════════
-
-describe('timelineFillEntrySchema', () => {
-	it('accepts valid timeline entry', () => {
-		const data = { type: 'event', name: 'Battle', description: 'A great battle', keywords: ['war'] };
-		expect(timelineFillEntrySchema.parse(data)).toBeTruthy();
-	});
-
-	it('accepts all entity types', () => {
-		for (const type of ['character', 'location', 'item', 'faction', 'concept', 'event']) {
-			expect(timelineFillEntrySchema.parse({ type, name: 'X', description: 'Y', keywords: [] })).toBeTruthy();
-		}
-	});
-});
-
-describe('timelineFillResultSchema', () => {
-	it('accepts empty entries array', () => {
-		expect(timelineFillResultSchema.parse({ entries: [] }).entries).toEqual([]);
-	});
-});
-
 // ════════════════════════════════════════════════════════════════
 // Lorebook
 // ════════════════════════════════════════════════════════════════

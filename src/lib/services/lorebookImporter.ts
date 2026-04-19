@@ -242,6 +242,7 @@ export async function classifyEntriesWithLLM(
   _mode: StoryMode = 'adventure',
 ): Promise<ImportedEntry[]> {
   // TODO: wire to LorebookClassifierService when ported
+  console.warn('[LorebookImporter] classifyEntriesWithLLM is not yet implemented — entries returned unclassified');
   return entries;
 }
 

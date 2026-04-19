@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { story } from '$lib/stores/story.svelte';
 	import { app } from '$lib/stores/app.svelte';
+	import { settings } from '$lib/stores/settings.svelte';
 	import { ai } from '$lib/services/ai';
 	import type { PipelineResult } from '$lib/services/ai/pipeline/GenerationPipeline';
 	import ActionInput from './ActionInput.svelte';
@@ -99,7 +100,8 @@
 					: undefined,
 			};
 
-			const result = await ai.imageGen.generateSceneImage(recentNarration, sceneContext);
+			const lastEntry = story.entries[story.entries.length - 1];
+			const result = await ai.imageGen.generateSceneImage(recentNarration, sceneContext, undefined, lastEntry?.id);
 			if (result.image) {
 				sceneImageUrl = result.image.url;
 			} else {
@@ -144,24 +146,104 @@
 		scrollToBottom();
 		if (!fullText.trim()) return;
 
-		const result = await ai.pipeline.runPostGeneration(fullText, isAdventure);
+		const useOrchestrator = settings.uiSettings.generationMode === 'orchestrator';
 
-		// Update UI state from pipeline results
-		if (result.classificationResult) {
-			classificationResult = result.classificationResult;
-			loadingClassifier = false;
-		}
-		if (result.actionChoices.length > 0) {
-			actionChoices = result.actionChoices;
-		}
-		if (result.styleReview) {
-			styleReview = result.styleReview;
-		}
-		if (result.sceneImageUrl) {
-			sceneImageUrl = result.sceneImageUrl;
-		}
-		if (result.errors.length > 0) {
-			pipelineErrors = result.errors;
+		if (useOrchestrator) {
+			// Orchestrator path: world state already updated by ActionInput.
+			// Only run optional enrichment services.
+			const enrichmentErrors: string[] = [];
+
+			const jobs: Promise<void>[] = [];
+
+			// Action choices (adventure mode, 4+ entries)
+			const choicesConfig = settings.getServiceConfig('actionChoices');
+			if (choicesConfig.enabled && isAdventure && story.entries.length >= 4) {
+				jobs.push(
+					(async () => {
+						try {
+							const currentLoc = story.locations.find(l => l.current);
+							const result = await ai.actionChoices.generateChoices(
+								story.entries.slice(-5), story.protagonist, currentLoc, story.storyMode,
+							);
+							if (result.choices.length > 0) actionChoices = result.choices;
+						} catch (e) {
+							enrichmentErrors.push(`ActionChoices: ${e}`);
+						}
+					})()
+				);
+			}
+
+			// Style review
+			const styleConfig = settings.getServiceConfig('styleReviewer');
+			if (styleConfig.enabled) {
+				jobs.push(
+					(async () => {
+						try {
+							styleReview = await ai.styleReviewer.review(fullText, story.pov, story.tense, story.currentStory?.genre ?? '');
+						} catch (e) {
+							enrichmentErrors.push(`StyleReview: ${e}`);
+						}
+					})()
+				);
+			}
+
+			// Image generation
+			const imageMode = settings.uiSettings.imageGenerationMode ?? story.currentStory?.settings?.imageGenerationMode;
+			if (imageMode && imageMode !== 'none') {
+				jobs.push(
+					(async () => {
+						try {
+							const recentNarration = story.entries
+								.filter(e => e.type === 'narration')
+								.slice(-3)
+								.map(e => e.content)
+								.join('\n');
+							if (!recentNarration) return;
+							const currentLoc = story.locations.find(l => l.current);
+							const sceneContext = {
+								characters: story.characters
+									.filter(c => c.status === 'active')
+									.slice(0, 3)
+									.map(c => ({ name: c.name, visualDescriptors: c.visualDescriptors })),
+								currentLocation: currentLoc
+									? { name: currentLoc.name, description: currentLoc.description }
+									: undefined,
+							};
+							const latestEntry = story.entries[story.entries.length - 1];
+							const imgResult = await ai.imageGen.generateSceneImage(recentNarration, sceneContext, undefined, latestEntry?.id);
+							if (imgResult.image) sceneImageUrl = imgResult.image.url;
+						} catch (e) {
+							enrichmentErrors.push(`ImageGen: ${e}`);
+						}
+					})()
+				);
+			}
+
+			await Promise.allSettled(jobs);
+
+			if (enrichmentErrors.length > 0) {
+				pipelineErrors = enrichmentErrors;
+			}
+		} else {
+			// Pipeline path: full post-generation pipeline (existing behavior)
+			const result = await ai.pipeline.runPostGeneration(fullText, isAdventure);
+
+			if (result.classificationResult) {
+				classificationResult = result.classificationResult;
+				loadingClassifier = false;
+			}
+			if (result.actionChoices.length > 0) {
+				actionChoices = result.actionChoices;
+			}
+			if (result.styleReview) {
+				styleReview = result.styleReview;
+			}
+			if (result.sceneImageUrl) {
+				sceneImageUrl = result.sceneImageUrl;
+			}
+			if (result.errors.length > 0) {
+				pipelineErrors = result.errors;
+			}
 		}
 
 		scrollToBottom();
@@ -240,6 +322,21 @@
 							<div class="rounded-2xl rounded-bl-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
 								{@html formatNarrative(entry.content)}
 							</div>
+							{#if story.getImageForEntry(entry.id)}
+								{@const img = story.getImageForEntry(entry.id)}
+								{#if img}
+								<div class="relative mt-2 overflow-hidden rounded-xl border border-[var(--border-primary)]">
+									<img src={img.imageData} alt="Scene" class="w-full" loading="lazy" />
+									<button
+										onclick={() => story.removeImage(img.id)}
+										class="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg bg-black/50 text-white/80 backdrop-blur-sm hover:bg-black/70"
+										title="Remove image"
+									>
+										<X class="h-3.5 w-3.5" />
+									</button>
+								</div>
+								{/if}
+							{/if}
 						</div>
 					{:else if entry.type === 'system'}
 						{#if entry.content.startsWith('Roll:')}
@@ -453,6 +550,7 @@
 						onStreamStart={handleStreamStart}
 						onStreamChunk={handleStreamChunk}
 						onStreamEnd={handleStreamEnd}
+						onStreamClear={() => { streamingContent = ''; isStreaming = false; }}
 					/>
 				</div>
 			</div>
@@ -593,6 +691,13 @@
 	 * - "Quoted dialogue" → bright colored span
 	 * - {{dice:...}} → styled roll card
 	 */
+	function escapeHtml(str: string): string {
+		return str
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;');
+	}
+
 	function formatNarrative(text: string): string {
 		return text
 			.split('\n\n')
@@ -605,13 +710,13 @@
 					return renderDiceCard(trimmed);
 				}
 
-				// Normal paragraph with dialogue highlighting
-				let html = trimmed.replace(/\n/g, '<br/>');
+				// Escape HTML entities first to prevent XSS
+				let html = escapeHtml(trimmed).replace(/\n/g, '<br/>');
 				// Highlight "quoted dialogue" in bright color
 				html = html.replace(
-					/&quot;([^&]*?)&quot;|"([^"]*?)"/g,
-					(_, q1, q2) => {
-						const quote = q1 ?? q2;
+					/&quot;([^&]*?)&quot;|&ldquo;([^&]*?)&rdquo;|"([^"]*?)"/g,
+					(_, q1, q2, q3) => {
+						const quote = q1 ?? q2 ?? q3;
 						return `<span class="dialogue">&ldquo;${quote}&rdquo;</span>`;
 					}
 				);

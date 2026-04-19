@@ -23,6 +23,7 @@ import {
 	createStoryBeat, getStoryBeats,
 } from '$lib/services/database';
 import { LORE_MGMT_CHAPTER_INTERVAL } from '$lib/services/ai/lorebook/LoreManagementService';
+import { makeLoreEntry } from '$lib/services/ai/tools/helpers';
 import type { ClassificationResult, FactionSignal } from '$lib/services/ai/sdk/schemas/classifier';
 import type { ActionChoice } from '$lib/services/ai/sdk/schemas/actionchoices';
 import type { StyleReview } from '$lib/services/ai/sdk/schemas/style';
@@ -46,33 +47,15 @@ export interface PipelineResult {
 
 // ── Helpers ──
 
+/** Safe cast for entry state — validates it's an object before casting. Logs warning for invalid state. */
+function asEntryState<T extends Entry['state']>(state: unknown): T {
+	if (state && typeof state === 'object') return state as T;
+	console.warn('[Pipeline] Invalid entry state — expected object, got:', typeof state);
+	return { type: 'concept' } as T;
+}
+
 function clamp(val: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, val));
-}
-
-function makeDefaultEntryState(type: EntryType): any {
-	switch (type) {
-		case 'character': return { type, isPresent: false, lastSeenLocation: null, currentDisposition: null, relationship: { level: 0, status: 'neutral', history: [] }, knownFacts: [], revealedSecrets: [] };
-		case 'location': return { type, isCurrentLocation: false, visitCount: 0, changes: [], presentCharacters: [], presentItems: [] };
-		case 'item': return { type, inInventory: false, currentLocation: null, condition: null, uses: [] };
-		case 'faction': return { type, playerStanding: 0, status: 'unknown', knownMembers: [] };
-		case 'concept': return { type, revealed: false, comprehensionLevel: 'unknown', relatedEntries: [] };
-		case 'event': return { type, occurred: false, occurredAt: null, witnesses: [], consequences: [] };
-	}
-}
-
-function makeLoreEntry(storyId: string, name: string, type: EntryType, description: string, keywords: string[]): Entry {
-	const now = Date.now();
-	return {
-		id: uuid(), storyId, name, type, description,
-		hiddenInfo: null, aliases: [],
-		state: makeDefaultEntryState(type),
-		adventureState: null, creativeState: null,
-		injection: { mode: 'keyword', keywords, priority: 0 },
-		firstMentioned: null, lastMentioned: null, mentionCount: 0,
-		createdBy: 'ai', createdAt: now, updatedAt: now,
-		loreManagementBlacklisted: false, branchId: null,
-	};
 }
 
 // ── Time helpers ──
@@ -245,7 +228,7 @@ export class GenerationPipeline {
 
 		await Promise.allSettled(jobs);
 
-		story.preEmbedLorebook().catch(() => {});
+		story.preEmbedLorebook().catch(e => console.warn('[Pipeline] preEmbedLorebook failed:', e));
 
 		if (result.errors.length > 0) {
 			console.warn(`Pipeline completed with ${result.errors.length} error(s):`, result.errors);
@@ -265,7 +248,7 @@ export class GenerationPipeline {
 		let storySoFar: string | undefined;
 		if (story.currentStory) {
 			const chapters = await getChapters(story.currentStory.id);
-			const latestChapter = chapters.sort((a, b) => b.number - a.number)[0];
+			const latestChapter = [...chapters].sort((a, b) => b.number - a.number)[0];
 			const recentActions = story.entries
 				.filter(e => e.type === 'user_action')
 				.slice(-3)
@@ -546,8 +529,8 @@ export class GenerationPipeline {
 			if (locUpdate.terrain) { state.terrain = locUpdate.terrain; changed = true; }
 			if (changed) {
 				state.connections = conns;
-				await updateLorebookEntry(sourceEntry.id, { state: state as any, updatedAt: Date.now() });
-				updatedEntries.set(sourceEntry.id, { ...sourceEntry, state: state as any });
+				await updateLorebookEntry(sourceEntry.id, { state: asEntryState(state), updatedAt: Date.now() });
+				updatedEntries.set(sourceEntry.id, { ...sourceEntry, state: asEntryState(state) });
 			}
 		}
 		if (updatedEntries.size > 0) {
@@ -576,8 +559,8 @@ export class GenerationPipeline {
 			cState.conversationTopics = [...new Set([...(cState.conversationTopics ?? []), conv.topicSummary])];
 			cState.lastConversationAt = narrativeEntry.position;
 			if (conv.emotionalShift) cState.personalOpinion = conv.emotionalShift;
-			await updateLorebookEntry(npcEntry.id, { state: cState as any, updatedAt: Date.now() });
-			updatedEntries.set(npcEntry.id, { ...npcEntry, state: cState as any });
+			await updateLorebookEntry(npcEntry.id, { state: asEntryState(cState), updatedAt: Date.now() });
+			updatedEntries.set(npcEntry.id, { ...npcEntry, state: asEntryState(cState) });
 		}
 		if (updatedEntries.size > 0) {
 			story.lorebookEntries = story.lorebookEntries.map(e => updatedEntries.get(e.id) ?? e);
@@ -641,8 +624,8 @@ export class GenerationPipeline {
 			}
 			if (state.playerStanding <= -50) state.status = 'hostile';
 			else if (state.playerStanding >= 50) state.status = 'allied';
-			await updateLorebookEntry(entry.id, { state: state as any, updatedAt: Date.now() });
-			story.lorebookEntries = story.lorebookEntries.map(e => e.id === entry.id ? { ...e, state: state as any } : e);
+			await updateLorebookEntry(entry.id, { state: asEntryState(state), updatedAt: Date.now() });
+			story.lorebookEntries = story.lorebookEntries.map(e => e.id === entry.id ? { ...e, state: asEntryState(state) } : e);
 		}
 	}
 
@@ -692,8 +675,9 @@ export class GenerationPipeline {
 			lastChapterEndIndex = foundIdx + 1;
 		}
 		const entriesOutsideChapter = story.entries.slice(lastChapterEndIndex);
-		console.log('[Pipeline] Chapter check:', { totalEntries: story.entries.length, lastChapterEndIndex, entriesOutside: entriesOutsideChapter.length, threshold: 20 });
-		if (entriesOutsideChapter.length < 20) return;
+		const chapterThreshold = settings.uiSettings.chapterThreshold || 20;
+		console.log('[Pipeline] Chapter check:', { totalEntries: story.entries.length, lastChapterEndIndex, entriesOutside: entriesOutsideChapter.length, threshold: chapterThreshold });
+		if (entriesOutsideChapter.length < chapterThreshold) return;
 
 		// Only analyze first 50 entries for boundary detection — chapter covers oldest unchaptered content
 		const analysisWindow = entriesOutsideChapter.slice(0, 50);
@@ -732,7 +716,8 @@ export class GenerationPipeline {
 			})),
 		} : undefined;
 
-		const summaryResult = await ai.memory.summarizeChapter(chapterEntries, chapters, story.storyMode, story.pov, story.tense, enrichment);
+		const arcsForContext = await getArcs(story.currentStory!.id);
+		const summaryResult = await ai.memory.summarizeChapter(chapterEntries, chapters, story.storyMode, story.pov, story.tense, enrichment, arcsForContext);
 		const chapter: Chapter = {
 			id: uuid(), storyId: story.currentStory.id,
 			number: chapters.length + 1, title: summaryResult.title,
@@ -753,8 +738,8 @@ export class GenerationPipeline {
 
 		// Advance conversation history floor — chapter summary now carries the older context,
 		// so keep only the last 10 entries in raw chat history to prevent context rot.
-		const POST_CHAPTER_HISTORY = 10;
-		story.chatHistoryFloor = Math.max(story.chatHistoryFloor, story.entries.length - POST_CHAPTER_HISTORY);
+		const postChapterBuffer = settings.uiSettings.postChapterBuffer || 10;
+		story.chatHistoryFloor = Math.max(story.chatHistoryFloor, story.entries.length - postChapterBuffer);
 
 		// Embed chapter summary (background)
 		ai.embeddings.embed(`${chapter.title ?? 'Chapter ' + chapter.number}: ${chapter.summary}`, chapter.id, 'chapter')
@@ -779,10 +764,11 @@ export class GenerationPipeline {
 		const arcs = await getArcs(story.currentStory.id);
 		const coveredChapterIds = new Set(arcs.flatMap(a => a.chapterIds));
 		const uncoveredChapters = chapters.filter(c => !coveredChapterIds.has(c.id) && !c.pinned).sort((a, b) => a.number - b.number);
-		if (uncoveredChapters.length < 5) return;
+		const chaptersPerArc = settings.uiSettings.chaptersPerArc || 5;
+		if (uncoveredChapters.length < chaptersPerArc) return;
 
 		const arcNumber = arcs.length + 1;
-		const result = await ai.arcCondensation.condense(uncoveredChapters, arcNumber, story.storyMode, story.pov, story.tense);
+		const result = await ai.arcCondensation.condense(uncoveredChapters, arcNumber, story.storyMode, story.pov, story.tense, arcs);
 		const firstCh = uncoveredChapters[0];
 		const lastCh = uncoveredChapters[uncoveredChapters.length - 1];
 		const arc: Arc = {
@@ -929,8 +915,8 @@ export class GenerationPipeline {
 			}
 
 			state.lastActionChapter = currentChapterNum;
-			await updateLorebookEntry(factionEntry.id, { state: state as any, updatedAt: Date.now() });
-			updatedEntries.set(factionEntry.id, { ...factionEntry, state: state as any });
+			await updateLorebookEntry(factionEntry.id, { state: asEntryState(state), updatedAt: Date.now() });
+			updatedEntries.set(factionEntry.id, { ...factionEntry, state: asEntryState(state) });
 		}
 
 		if (updatedEntries.size > 0) {
@@ -998,16 +984,16 @@ export class GenerationPipeline {
 							const tr = { ...targetState.interFactionRelations };
 							tr[action.factionName] = clamp((tr[action.factionName] ?? 0) + relationDelta, -100, 100);
 							targetState.interFactionRelations = tr;
-							await updateLorebookEntry(targetEntry.id, { state: targetState as any, updatedAt: Date.now() });
-							updatedEntries.set(targetEntry.id, { ...targetEntry, state: targetState as any });
+							await updateLorebookEntry(targetEntry.id, { state: asEntryState(targetState), updatedAt: Date.now() });
+							updatedEntries.set(targetEntry.id, { ...targetEntry, state: asEntryState(targetState) });
 						}
 					}
 				}
 			}
 
 			state.lastActionChapter = currentChapterNum;
-			await updateLorebookEntry(factionEntry.id, { state: state as any, updatedAt: Date.now() });
-			updatedEntries.set(factionEntry.id, { ...factionEntry, state: state as any });
+			await updateLorebookEntry(factionEntry.id, { state: asEntryState(state), updatedAt: Date.now() });
+			updatedEntries.set(factionEntry.id, { ...factionEntry, state: asEntryState(state) });
 		}
 
 		if (updatedEntries.size > 0) {

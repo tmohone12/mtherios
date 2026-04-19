@@ -12,17 +12,9 @@ import {
 } from '../sdk/schemas/memory';
 import { createLogger } from '../core/config';
 import { countTokens } from '$lib/utils/tokens';
-import type { Chapter, StoryEntry } from '$lib/types';
+import type { Chapter, Arc, StoryEntry } from '$lib/types';
 
 const log = createLogger('Memory');
-
-export const DEFAULT_MEMORY_CONFIG = {
-	tokenThreshold: 16000,
-	chapterBuffer: 10,
-	autoSummarize: true,
-	enableRetrieval: true,
-	maxChaptersPerRetrieval: 5,
-};
 
 /** Max tokens for entry text sent to analysis/summarization LLMs */
 const MAX_INPUT_TOKENS = 16000;
@@ -42,8 +34,10 @@ export class MemoryService extends BaseAIService {
 			storyBeats?: Array<{ title: string; description: string; significance: string }>;
 			mood?: string;
 		},
+		previousArcs?: Arc[],
+		maxPrevChapters?: number,
 	): Promise<ChapterSummaryResult> {
-		log('summarizeChapter', { entryCount: entries.length, beats: enrichment?.storyBeats?.length ?? 0 });
+		log('summarizeChapter', { entryCount: entries.length, beats: enrichment?.storyBeats?.length ?? 0, priorArcs: previousArcs?.length ?? 0 });
 
 		// Truncate entries to fit within input budget
 		let entriesText = '';
@@ -57,10 +51,23 @@ export class MemoryService extends BaseAIService {
 		}
 
 		// Only include last N chapter summaries for context
-		const recentChapters = previousChapters?.slice(-MAX_PREV_CHAPTERS) ?? [];
+		const chapterCap = maxPrevChapters ?? MAX_PREV_CHAPTERS;
+		const recentChapters = previousChapters?.slice(-chapterCap) ?? [];
 		const prevContext = recentChapters.length
 			? `Previous chapters:\n${recentChapters.map(c => `Chapter ${c.number}: ${c.summary}`).join('\n\n')}`
 			: '';
+
+		// Long-term arc context for stories with condensed history
+		let arcContext = '';
+		if (previousArcs && previousArcs.length > 0) {
+			const recentArcs = previousArcs.slice(-3);
+			arcContext = `═══ LONG-TERM STORY CONTEXT ═══\n(Arc summaries covering earlier parts of the story. Use these to maintain consistency with established facts, agreements, and relationships.)\n\n`;
+			for (const arc of recentArcs) {
+				arcContext += `Arc ${arc.arcNumber}: "${arc.title}" (Ch.${arc.chapterRange})\n${arc.summary}\n`;
+				if (arc.unresolvedThreads?.length) arcContext += `Unresolved: ${arc.unresolvedThreads.join('; ')}\n`;
+				arcContext += '\n';
+			}
+		}
 
 		let beatsContext = '';
 		if (enrichment?.storyBeats?.length) {
@@ -76,18 +83,41 @@ export class MemoryService extends BaseAIService {
 
 Your summary must capture everything a future AI narrator needs to maintain story continuity without re-reading the original text.
 
-${prevContext ? `═══ PREVIOUS CHAPTERS ═══\n${prevContext}\n` : ''}${beatsContext}═══ WHAT TO CAPTURE ═══
+${arcContext}${prevContext ? `═══ PREVIOUS CHAPTERS ═══\n${prevContext}\n` : ''}${beatsContext}═══ WHAT TO CAPTURE (priority order) ═══
 
-- Plot events and decisions (chronological), character changes (introductions, deaths, relationship shifts)
-- Locations visited, items gained/lost, world facts learned
-- Unresolved threads and unanswered questions
-- Emotional tone shifts
+CRITICAL — Without these, future narration breaks:
+- Player DECISIONS and their consequences (chose to spare the guard → guard remembers later)
+- Agreements, promises, debts, and obligations — preserve the EXACT TERMS, not a summary (e.g., "swore to deliver the artifact to Lady Maren by the winter solstice in exchange for safe passage through the Thornwood" NOT "made a deal with Lady Maren")
+- Relationship changes with reasoning (Kael trusts player after rescue, not just "relationship improved")
+- Character deaths, departures, and status changes
+- Items acquired, lost, gifted, or destroyed — and WHY they matter
+- Secrets learned or revealed — WHO knows WHAT (information asymmetry is crucial)
+- Betrayals, lies told, and deceptions maintained — track both truth and what characters believe
+
+IMPORTANT — Needed for consistency:
+- Locations visited and their current state (was the bridge destroyed? is the tavern still standing?)
+- Time progression (how many days passed, what time of day)
+- Faction standing changes with cause (helped the Guild → standing +20)
+- World-state changes (war declared, plague spreading, magic failing)
+
+CONTEXT — Enriches future narration:
+- Emotional beats and tonal shifts
+- Unresolved mysteries and open questions
+- NPC attitudes and dispositions toward the player
+- Foreshadowing planted by the narrator
+
+═══ WHAT TO OMIT ═══
+
+- Scene descriptions of places already established
+- Combat blow-by-blow (keep only outcome + consequence)
+- Repeated dialogue (keep only new information exchanged)
+- Internal monologue that didn't lead to action
 
 ═══ SUMMARY STYLE ═══
 
 - Write in ${tense} tense, third person (regardless of story POV) — this is a reference summary, not narrative
 - Be thorough but focused: 300-500 words
-- Focus on WHAT CHANGED, not moment-by-moment play-by-play
+- Focus on WHAT CHANGED and WHAT MATTERS, not moment-by-moment play-by-play
 - The title should be evocative (2-5 words) capturing the chapter's essence
 
 ═══ OUTPUT FORMAT ═══
