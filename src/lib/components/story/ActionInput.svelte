@@ -2,7 +2,6 @@
 	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, Square, Loader2, Dices } from 'lucide-svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
-	import { ai } from '$lib/services/ai';
 	import { streamNarrative } from '$lib/services/ai/sdk/generate';
 	import { executeWorldUpdate } from '$lib/services/ai/tools/generate-with-tools';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
@@ -271,70 +270,21 @@
 
 		let fullResponse = '';
 
-		const useOrchestrator = settings.uiSettings.generationMode === 'orchestrator';
-
 		try {
-			let systemPrompt: string;
-			let conversationHistory: { role: 'user' | 'assistant'; content: string }[];
-			let userPrompt: string;
-			let stateSnapshot = '';
+			// ── Build orchestrator context: lightweight state snapshot ──
+			const stateSnapshot = await story.buildStateSnapshot();
+			const systemPrompt = story.buildOrchestratorSystemPrompt(stateSnapshot);
+			const allHistory = story.buildConversationMessages();
+			const conversationHistory = allHistory.length > 0 && allHistory[allHistory.length - 1].role === 'user'
+				? allHistory.slice(0, -1)
+				: allHistory;
+			const userPrompt = story.buildUserPrompt(content);
 
-			if (useOrchestrator) {
-				// ── Orchestrator path: snapshot with chapters, arcs, world sim ──
-				stateSnapshot = await story.buildStateSnapshot();
-				if (story.pendingFactionReactions.length > 0) {
-					story.pendingFactionReactions = [];
-				}
-				systemPrompt = story.buildOrchestratorSystemPrompt(stateSnapshot);
-				const allHistory = story.buildConversationMessages();
-				conversationHistory = allHistory.length > 0 && allHistory[allHistory.length - 1].role === 'user'
-					? allHistory.slice(0, -1)
-					: allHistory;
-				userPrompt = story.buildUserPrompt(content);
+			const estimateTokens = (t: string) => Math.ceil(t.length / 4);
+			const historyTokens = conversationHistory.reduce((s, m) => s + estimateTokens(m.content), 0);
+			story.lastTierUsage = { snapshot: estimateTokens(stateSnapshot) };
+			story.lastContextTotal = estimateTokens(systemPrompt) + historyTokens + estimateTokens(userPrompt);
 
-				// Context stats for the meter
-				const estimateTokens = (t: string) => Math.ceil(t.length / 4);
-				const historyTokens = conversationHistory.reduce((s, m) => s + estimateTokens(m.content), 0);
-				story.lastTierUsage = { snapshot: estimateTokens(stateSnapshot) };
-				story.lastContextTotal = estimateTokens(systemPrompt) + historyTokens + estimateTokens(userPrompt);
-			} else {
-				// ── Pipeline path: full context assembly (existing behavior) ──
-				const assembled = await ai.contextAssembler.assemble({
-					storyId: story.currentStory.id,
-					userAction: content,
-					entries: story.entries,
-					characters: story.characters,
-					locations: story.locations,
-					items: story.items,
-					lorebookEntries: story.lorebookEntries,
-					lastWorldSimResult: story.lastWorldSimResult,
-					pendingFactionReactions: story.pendingFactionReactions,
-					entryRelationships: story.entryRelationships,
-					worldEvents: story.worldEvents,
-					storyMode: story.storyMode,
-					pov: story.pov,
-					tense: story.tense,
-					maxChaptersPerRetrieval: story.currentStory.memoryConfig?.maxChaptersPerRetrieval,
-				});
-
-				if (story.pendingFactionReactions.length > 0) {
-					story.pendingFactionReactions = [];
-				}
-
-				systemPrompt = story.buildSystemPrompt(assembled.contextBlock);
-				const allHistory = story.buildConversationMessages();
-				conversationHistory = allHistory.length > 0 && allHistory[allHistory.length - 1].role === 'user'
-					? allHistory.slice(0, -1)
-					: allHistory;
-				userPrompt = story.buildUserPrompt(content);
-
-				story.lastTierUsage = assembled.tierUsage as unknown as Record<string, number>;
-				const estimateTokens = (t: string) => Math.ceil(t.length / 4);
-				const historyTokens = conversationHistory.reduce((s, m) => s + estimateTokens(m.content), 0);
-				story.lastContextTotal = estimateTokens(systemPrompt) + historyTokens + estimateTokens(userPrompt);
-			}
-
-			// ── Stream narrative (same for both paths) ──
 			onStreamStart?.();
 
 			const stream = streamNarrative({
@@ -369,12 +319,9 @@
 				onStreamClear?.();
 				await story.addEntry('narration', fullResponse);
 
-				// ── Orchestrator: run world update before signaling stream end ──
-				if (useOrchestrator) {
-					const errors = await executeWorldUpdate(fullResponse, stateSnapshot, abortController?.signal);
-					if (errors.length > 0) {
-						console.warn('[Orchestrator] World update errors:', errors);
-					}
+				const errors = await executeWorldUpdate(fullResponse, stateSnapshot, abortController?.signal);
+				if (errors.length > 0) {
+					console.warn('[Orchestrator] World update errors:', errors);
 				}
 
 				onStreamEnd?.(fullResponse);

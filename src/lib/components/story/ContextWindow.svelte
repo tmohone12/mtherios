@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { story } from '$lib/stores/story.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
-	import { getModelContextWindow } from '$lib/services/ai/context/ContextAssembler';
+	import { getModelContextWindow } from '$lib/services/ai/context/modelWindows';
 	import { Gauge } from 'lucide-svelte';
 
 	/** Effective budget: user-set value or auto (90% of model context) */

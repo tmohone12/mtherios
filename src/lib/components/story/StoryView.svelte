@@ -3,10 +3,8 @@
 	import { app } from '$lib/stores/app.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { ai } from '$lib/services/ai';
-	import type { PipelineResult } from '$lib/services/ai/pipeline/GenerationPipeline';
 	import ActionInput from './ActionInput.svelte';
 	import ActionChoiceCards from './ActionChoiceCards.svelte';
-	import WorldStateToast from './WorldStateToast.svelte';
 	import WorldDrawer from './WorldDrawer.svelte';
 	import { downloadStoryAsJson } from '$lib/services/storySync';
 	import { deleteStory } from '$lib/services/database';
@@ -14,7 +12,6 @@
 	import CompactionControls from './CompactionControls.svelte';
 	import { tick, onMount } from 'svelte';
 	import type { ActionChoice } from '$lib/services/ai/sdk/schemas/actionchoices';
-	import type { ClassificationResult } from '$lib/services/ai/sdk/schemas/classifier';
 	import type { StyleReview } from '$lib/services/ai/sdk/schemas/style';
 
 
@@ -24,13 +21,11 @@
 
 	// Service output states
 	let actionChoices = $state<ActionChoice[]>([]);
-	let classificationResult = $state<ClassificationResult | null>(null);
 	let styleReview = $state<StyleReview | null>(null);
 	let sceneImageUrl = $state<string | null>(null);
-	let loadingClassifier = $state(false);
 	let loadingImage = $state(false);
 	let imageError = $state<string | null>(null);
-	let pipelineErrors = $state<string[]>([]);
+	let enrichmentErrors = $state<string[]>([]);
 
 	// World drawer & floating menu
 	let drawerOpen = $state(false);
@@ -129,7 +124,6 @@
 		streamingContent = '';
 		isStreaming = true;
 		actionChoices = [];
-		classificationResult = null;
 		styleReview = null;
 		sceneImageUrl = null;
 		scrollToBottom();
@@ -146,104 +140,76 @@
 		scrollToBottom();
 		if (!fullText.trim()) return;
 
-		const useOrchestrator = settings.uiSettings.generationMode === 'orchestrator';
+		// Orchestrator already updated world state in ActionInput. Here we run
+		// only optional UI enrichment services in parallel.
+		const errors: string[] = [];
+		const jobs: Promise<void>[] = [];
 
-		if (useOrchestrator) {
-			// Orchestrator path: world state already updated by ActionInput.
-			// Only run optional enrichment services.
-			const enrichmentErrors: string[] = [];
+		const choicesConfig = settings.getServiceConfig('actionChoices');
+		if (choicesConfig.enabled && isAdventure && story.entries.length >= 4) {
+			jobs.push(
+				(async () => {
+					try {
+						const currentLoc = story.locations.find(l => l.current);
+						const result = await ai.actionChoices.generateChoices(
+							story.entries.slice(-5), story.protagonist, currentLoc, story.storyMode,
+						);
+						if (result.choices.length > 0) actionChoices = result.choices;
+					} catch (e) {
+						errors.push(`ActionChoices: ${e}`);
+					}
+				})()
+			);
+		}
 
-			const jobs: Promise<void>[] = [];
+		const styleConfig = settings.getServiceConfig('styleReviewer');
+		if (styleConfig.enabled) {
+			jobs.push(
+				(async () => {
+					try {
+						styleReview = await ai.styleReviewer.review(fullText, story.pov, story.tense, story.currentStory?.genre ?? '');
+					} catch (e) {
+						errors.push(`StyleReview: ${e}`);
+					}
+				})()
+			);
+		}
 
-			// Action choices (adventure mode, 4+ entries)
-			const choicesConfig = settings.getServiceConfig('actionChoices');
-			if (choicesConfig.enabled && isAdventure && story.entries.length >= 4) {
-				jobs.push(
-					(async () => {
-						try {
-							const currentLoc = story.locations.find(l => l.current);
-							const result = await ai.actionChoices.generateChoices(
-								story.entries.slice(-5), story.protagonist, currentLoc, story.storyMode,
-							);
-							if (result.choices.length > 0) actionChoices = result.choices;
-						} catch (e) {
-							enrichmentErrors.push(`ActionChoices: ${e}`);
-						}
-					})()
-				);
-			}
+		const imageMode = settings.uiSettings.imageGenerationMode ?? story.currentStory?.settings?.imageGenerationMode;
+		if (imageMode && imageMode !== 'none') {
+			jobs.push(
+				(async () => {
+					try {
+						const recentNarration = story.entries
+							.filter(e => e.type === 'narration')
+							.slice(-3)
+							.map(e => e.content)
+							.join('\n');
+						if (!recentNarration) return;
+						const currentLoc = story.locations.find(l => l.current);
+						const sceneContext = {
+							characters: story.characters
+								.filter(c => c.status === 'active')
+								.slice(0, 3)
+								.map(c => ({ name: c.name, visualDescriptors: c.visualDescriptors })),
+							currentLocation: currentLoc
+								? { name: currentLoc.name, description: currentLoc.description }
+								: undefined,
+						};
+						const latestEntry = story.entries[story.entries.length - 1];
+						const imgResult = await ai.imageGen.generateSceneImage(recentNarration, sceneContext, undefined, latestEntry?.id);
+						if (imgResult.image) sceneImageUrl = imgResult.image.url;
+					} catch (e) {
+						errors.push(`ImageGen: ${e}`);
+					}
+				})()
+			);
+		}
 
-			// Style review
-			const styleConfig = settings.getServiceConfig('styleReviewer');
-			if (styleConfig.enabled) {
-				jobs.push(
-					(async () => {
-						try {
-							styleReview = await ai.styleReviewer.review(fullText, story.pov, story.tense, story.currentStory?.genre ?? '');
-						} catch (e) {
-							enrichmentErrors.push(`StyleReview: ${e}`);
-						}
-					})()
-				);
-			}
+		await Promise.allSettled(jobs);
 
-			// Image generation
-			const imageMode = settings.uiSettings.imageGenerationMode ?? story.currentStory?.settings?.imageGenerationMode;
-			if (imageMode && imageMode !== 'none') {
-				jobs.push(
-					(async () => {
-						try {
-							const recentNarration = story.entries
-								.filter(e => e.type === 'narration')
-								.slice(-3)
-								.map(e => e.content)
-								.join('\n');
-							if (!recentNarration) return;
-							const currentLoc = story.locations.find(l => l.current);
-							const sceneContext = {
-								characters: story.characters
-									.filter(c => c.status === 'active')
-									.slice(0, 3)
-									.map(c => ({ name: c.name, visualDescriptors: c.visualDescriptors })),
-								currentLocation: currentLoc
-									? { name: currentLoc.name, description: currentLoc.description }
-									: undefined,
-							};
-							const latestEntry = story.entries[story.entries.length - 1];
-							const imgResult = await ai.imageGen.generateSceneImage(recentNarration, sceneContext, undefined, latestEntry?.id);
-							if (imgResult.image) sceneImageUrl = imgResult.image.url;
-						} catch (e) {
-							enrichmentErrors.push(`ImageGen: ${e}`);
-						}
-					})()
-				);
-			}
-
-			await Promise.allSettled(jobs);
-
-			if (enrichmentErrors.length > 0) {
-				pipelineErrors = enrichmentErrors;
-			}
-		} else {
-			// Pipeline path: full post-generation pipeline (existing behavior)
-			const result = await ai.pipeline.runPostGeneration(fullText, isAdventure);
-
-			if (result.classificationResult) {
-				classificationResult = result.classificationResult;
-				loadingClassifier = false;
-			}
-			if (result.actionChoices.length > 0) {
-				actionChoices = result.actionChoices;
-			}
-			if (result.styleReview) {
-				styleReview = result.styleReview;
-			}
-			if (result.sceneImageUrl) {
-				sceneImageUrl = result.sceneImageUrl;
-			}
-			if (result.errors.length > 0) {
-				pipelineErrors = result.errors;
-			}
+		if (errors.length > 0) {
+			enrichmentErrors = errors;
 		}
 
 		scrollToBottom();
@@ -408,25 +374,20 @@
 					</div>
 				{/if}
 
-				<!-- Pipeline Errors -->
-				{#if pipelineErrors.length > 0}
+				<!-- Enrichment Errors -->
+				{#if enrichmentErrors.length > 0}
 					<div class="flex items-start gap-2 rounded-xl border border-[var(--color-crimson-500)]/20 bg-[var(--color-crimson-900)]/10 px-3 py-2.5">
 						<AlertTriangle class="h-4 w-4 shrink-0 text-[var(--color-crimson-400)] mt-0.5" />
 						<div class="flex-1 text-xs text-[var(--color-crimson-400)]">
-							<span class="font-semibold">Pipeline {pipelineErrors.length === 1 ? 'error' : 'errors'}:</span>
-							{#each pipelineErrors as error}
+							<span class="font-semibold">Enrichment {enrichmentErrors.length === 1 ? 'error' : 'errors'}:</span>
+							{#each enrichmentErrors as error}
 								<div class="mt-0.5 text-[var(--color-crimson-400)]/80">{error}</div>
 							{/each}
 						</div>
-						<button onclick={() => pipelineErrors = []} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+						<button onclick={() => enrichmentErrors = []} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
 							<X class="h-3.5 w-3.5" />
 						</button>
 					</div>
-				{/if}
-
-				<!-- World State Toast -->
-				{#if classificationResult}
-					<WorldStateToast result={classificationResult} onDismiss={() => classificationResult = null} />
 				{/if}
 
 				<!-- Style Review Warning -->

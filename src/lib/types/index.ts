@@ -791,8 +791,6 @@ export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
 // Mtherios: single theme, no theme registry needed
 export type ThemeId = 'mtherios'
 
-export type GenerationMode = 'orchestrator' | 'pipeline'
-
 export type FontSource = 'default' | 'system' | 'google'
 
 export interface UISettings {
@@ -816,7 +814,6 @@ export interface UISettings {
   imageCustomStyle?: string
   imageSize: string
   imageModel?: string
-  generationMode: GenerationMode
   // Memory settings
   maxMessages: number
   maxHistoryEntries: number

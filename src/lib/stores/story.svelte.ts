@@ -15,7 +15,7 @@ import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
 import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, EmbeddedImage } from '$lib/types';
 import type { ChatMessage } from '$lib/services/ai/sdk/generate';
-import { getModelContextWindow } from '$lib/services/ai/context/ContextAssembler';
+import { getModelContextWindow } from '$lib/services/ai/context/modelWindows';
 import { settings } from '$lib/stores/settings.svelte';
 
 class StoryStore {
@@ -32,9 +32,7 @@ class StoryStore {
 	loading = $state(false);
 	private _entryLock: Promise<void> = Promise.resolve();
 	lastWorldSimResult = $state<import('$lib/services/ai/sdk/schemas/worldsim').WorldSimulationResult & { seasonEffect?: import('$lib/services/ai/generation/WorldSimulationService').SeasonEffect } | null>(null);
-	/** Micro-faction reactions pending injection into next narrator context */
-	pendingFactionReactions = $state<import('$lib/services/ai/sdk/schemas/microfaction').MicroFactionResult[]>([]);
-	/** Last known tier usage from ContextAssembler (updated each generation) */
+	/** Last known tier usage (updated each generation) */
 	lastTierUsage = $state<Record<string, number> | null>(null);
 	/** Last known total context tokens sent to API */
 	lastContextTotal = $state<number>(0);
@@ -323,7 +321,8 @@ class StoryStore {
 
 	/**
 	 * Build the system prompt for narrative generation.
-	 * Core narrator instructions + pre-assembled context from ContextAssembler.
+	 * Core narrator instructions + a context block (the orchestrator passes
+	 * a lightweight state snapshot here).
 	 */
 	buildSystemPrompt(contextBlock?: string): string {
 		const s = this.currentStory;
@@ -594,25 +593,6 @@ class StoryStore {
 			}
 
 			if (wsBlock) parts.push(wsBlock);
-		}
-
-		// Micro-faction reactions
-		if (this.pendingFactionReactions.length > 0) {
-			const visible = this.pendingFactionReactions.filter(r => r.reaction.visible || r.reaction.rumor);
-			if (visible.length > 0) {
-				let frBlock = '[RECENT FACTION MOVES — weave naturally, not all at once]\n';
-				for (const r of visible) {
-					if (r.reaction.rumor) {
-						frBlock += `- (rumor) ${r.reaction.rumor}\n`;
-					} else if (r.reaction.visible) {
-						frBlock += `- ${r.factionName}: ${r.reaction.action}\n`;
-					}
-					if (r.reaction.consequence) {
-						frBlock += `  → ${r.reaction.consequence}\n`;
-					}
-				}
-				parts.push(frBlock);
-			}
 		}
 
 		// Recent world events (consequence system)

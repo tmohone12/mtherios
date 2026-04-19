@@ -620,31 +620,6 @@
 						</label>
 					</div>
 
-					<!-- Generation Mode -->
-					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
-						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Generation Mode</label>
-						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
-							Orchestrator uses tool calls for state tracking (faster, fewer tokens). Pipeline uses the classic multi-service approach.
-						</p>
-						<div class="grid grid-cols-2 gap-2">
-							<button class="rounded-lg border border-[var(--border-primary)] px-4 py-3 text-left transition-colors
-								{settings.uiSettings.generationMode === 'orchestrator'
-									? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
-									: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
-								onclick={() => { settings.uiSettings.generationMode = 'orchestrator'; settings.saveUISettings(); }}>
-								<div class="font-display text-sm tracking-wide">Orchestrator</div>
-								<div class="mt-0.5 text-[10px] opacity-70">Faster, fewer tokens</div>
-							</button>
-							<button class="rounded-lg border border-[var(--border-primary)] px-4 py-3 text-left transition-colors
-								{settings.uiSettings.generationMode === 'pipeline'
-									? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
-									: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
-								onclick={() => { settings.uiSettings.generationMode = 'pipeline'; settings.saveUISettings(); }}>
-								<div class="font-display text-sm tracking-wide">Pipeline</div>
-								<div class="mt-0.5 text-[10px] opacity-70">Classic, more AI calls</div>
-							</button>
-						</div>
-					</div>
 				</div>
 
 				<!-- ═══ TAB: INSPECTOR ═══ -->

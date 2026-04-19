@@ -110,7 +110,6 @@ class SettingsStore {
 		imageCustomStyle: '',
 		imageSize: '1024x1024',
 		imageModel: '',
-		generationMode: 'orchestrator',
 		// Memory settings
 		maxMessages: 40,
 		maxHistoryEntries: 200,
