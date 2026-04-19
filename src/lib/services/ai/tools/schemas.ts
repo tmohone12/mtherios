@@ -68,6 +68,14 @@ export const worldStateStoryBeatSchema = z.object({
 	significance: z.enum(['minor', 'moderate', 'major', 'critical']).optional().default('minor'),
 });
 
+export const worldStateMeterChangeSchema = z.object({
+	name: z.string(),
+	delta: z.number(),
+	max: z.number().optional(),
+	visible: z.boolean().optional(),
+	reason: z.string().nullable().optional().default(null),
+});
+
 export const worldStateUpdateSchema = z.object({
 	characters: z.array(worldStateCharacterSchema).optional().default([]),
 	locations: z.array(worldStateLocationSchema).optional().default([]),
@@ -77,6 +85,7 @@ export const worldStateUpdateSchema = z.object({
 	conversations: z.array(worldStateConversationSchema).optional().default([]),
 	relationships: z.array(worldStateRelationshipSchema).optional().default([]),
 	story_beats: z.array(worldStateStoryBeatSchema).optional().default([]),
+	meter_changes: z.array(worldStateMeterChangeSchema).optional().default([]),
 });
 
 export type WorldStateUpdate = z.infer<typeof worldStateUpdateSchema>;
@@ -206,6 +215,21 @@ export const GM_TOOLS = [
 								significance: { type: 'string', enum: ['minor', 'moderate', 'major', 'critical'] },
 							},
 							required: ['title'],
+						},
+					},
+					meter_changes: {
+						type: 'array',
+						description: 'Adjust persistent meters (sanity, morality, reputation, hunger, suspicion, etc.). Create a meter the first time you reference it by passing a name and an initial delta. The current values are included in the state snapshot so you can reason about them.',
+						items: {
+							type: 'object',
+							properties: {
+								name: { type: 'string', description: 'Meter name (e.g. "sanity", "reputation:Lannisters", "hunger")' },
+								delta: { type: 'number', description: 'Signed change to apply to current value' },
+								max: { type: 'number', description: 'Optional max value (only set when first creating the meter — defaults to 100)' },
+								visible: { type: 'boolean', description: 'Whether the player sees this meter in the HUD (defaults to true)' },
+								reason: { type: 'string', description: 'Brief in-fiction reason for the change' },
+							},
+							required: ['name', 'delta'],
 						},
 					},
 				},

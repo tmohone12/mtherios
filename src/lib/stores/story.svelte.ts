@@ -653,6 +653,14 @@ class StoryStore {
 			lines.push(`Time: Day ${t.days}, ${pad(t.hours)}:${pad(t.minutes)}`);
 		}
 
+		// Meters (sanity, morality, reputation, etc.) — GM sees all, including hidden
+		if (s.meters && s.meters.length > 0) {
+			const meterLine = s.meters
+				.map(m => `${m.name}: ${m.value}/${m.max}${m.visible ? '' : ' [hidden from player]'}`)
+				.join('; ');
+			lines.push(`Meters: ${meterLine}`);
+		}
+
 		// Recent story beats (last 2)
 		try {
 			const beats = await getStoryBeats(s.id);
@@ -839,6 +847,52 @@ class StoryStore {
 		const value = headerPrompt?.trim() || null;
 		await updateStory(this.currentStory.id, { headerPrompt: value, updatedAt: Date.now() });
 		this.currentStory = { ...this.currentStory, headerPrompt: value };
+	}
+
+	/**
+	 * Apply a batch of meter changes from update_world_state.
+	 * Creates meters on first reference (defaults: max=100, value=max+delta clamped, visible=true).
+	 * Existing meters: clamp value into [0, max] after applying delta.
+	 */
+	async applyMeterChanges(changes: Array<{ name: string; delta: number; max?: number; visible?: boolean }>) {
+		if (!this.currentStory || changes.length === 0) return;
+		const meters = [...(this.currentStory.meters ?? [])];
+
+		for (const change of changes) {
+			if (!change.name) continue;
+			const idx = meters.findIndex(m => m.name.toLowerCase() === change.name.toLowerCase());
+			if (idx === -1) {
+				const max = change.max && change.max > 0 ? change.max : 100;
+				const initial = max + change.delta;
+				meters.push({
+					name: change.name,
+					value: Math.max(0, Math.min(max, initial)),
+					max,
+					visible: change.visible ?? true,
+				});
+			} else {
+				const m = meters[idx];
+				const max = change.max && change.max > 0 ? change.max : m.max;
+				meters[idx] = {
+					...m,
+					value: Math.max(0, Math.min(max, m.value + change.delta)),
+					max,
+					visible: change.visible ?? m.visible,
+				};
+			}
+		}
+
+		await updateStory(this.currentStory.id, { meters, updatedAt: Date.now() });
+		this.currentStory = { ...this.currentStory, meters };
+	}
+
+	async setMeterVisibility(name: string, visible: boolean) {
+		if (!this.currentStory?.meters) return;
+		const meters = this.currentStory.meters.map(m =>
+			m.name.toLowerCase() === name.toLowerCase() ? { ...m, visible } : m,
+		);
+		await updateStory(this.currentStory.id, { meters, updatedAt: Date.now() });
+		this.currentStory = { ...this.currentStory, meters };
 	}
 
 	/**

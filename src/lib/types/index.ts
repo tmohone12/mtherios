@@ -22,6 +22,19 @@ export interface TimeTracker {
   minutes: number
 }
 
+/**
+ * A persistent meter (sanity, morality, reputation, hunger, etc.).
+ * Created on first reference by the GM via update_world_state, mutated
+ * over time, and shown in the HUD when visible. The GM sees current
+ * values in the state snapshot so it can reason about them.
+ */
+export interface Meter {
+  name: string
+  value: number
+  max: number
+  visible: boolean
+}
+
 export interface Story {
   id: string
   title: string
@@ -42,6 +55,7 @@ export interface Story {
   lastWorldSimDay: number | null // Total in-world days when world sim last ran
   compactedLore: string | null // Button-controlled world state block injected after headerPrompt
   compactedLoreHistory: string[] | null // Version history for undo, max 10 entries
+  meters: Meter[] | null // Hidden/visible numeric tracks (sanity, morality, reputation...)
 }
 
 // Persistent retry state - lightweight version saved to database

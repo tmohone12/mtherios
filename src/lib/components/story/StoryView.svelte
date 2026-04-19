@@ -252,6 +252,25 @@
 		</button>
 	</div>
 
+	<!-- Meters HUD: visible meters tracked by the GM -->
+	{#if story.currentStory?.meters && story.currentStory.meters.some(m => m.visible)}
+		<div class="flex flex-wrap items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)]/60 px-4 py-2">
+			{#each story.currentStory.meters.filter(m => m.visible) as meter}
+				{@const pct = meter.max > 0 ? Math.round((meter.value / meter.max) * 100) : 0}
+				<div class="flex items-center gap-1.5 rounded-md bg-[var(--bg-tertiary)] px-2 py-1" title="{meter.name}: {meter.value}/{meter.max}">
+					<span class="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">{meter.name}</span>
+					<div class="h-1.5 w-16 overflow-hidden rounded-full bg-[var(--border-primary)]">
+						<div
+							class="h-full transition-all"
+							style="width: {pct}%; background: {pct < 25 ? 'var(--color-crimson-400)' : pct < 60 ? 'var(--color-gold-400)' : 'var(--color-emerald-400, #10b981)'}"
+						></div>
+					</div>
+					<span class="text-[10px] tabular-nums text-[var(--text-primary)]">{meter.value}</span>
+				</div>
+			{/each}
+		</div>
+	{/if}
+
 	<!-- Story entries -->
 	<div bind:this={scrollContainer} class="flex-1 overflow-y-auto pb-4">
 		{#if story.loading}

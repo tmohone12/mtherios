@@ -190,6 +190,9 @@
 			currentBgImage: null,
 			headerPrompt: null,
 			lastWorldSimDay: null,
+			compactedLore: null,
+			compactedLoreHistory: null,
+			meters: null,
 		};
 		await createStory(story);
 

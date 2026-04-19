@@ -199,6 +199,11 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 		});
 	}
 
+	// ── Meter changes ──
+	if (args.meter_changes.length > 0) {
+		await story.applyMeterChanges(args.meter_changes);
+	}
+
 	// ── Consequences (death → faction hostility) ──
 	await evaluateConsequences(args.characters);
 

@@ -49,6 +49,7 @@ Now call update_world_state with ALL changes from this scene. Include:
 - Any conversations that occurred (what NPCs learned, emotional shifts)
 - Any relationship changes between entities
 - Any significant story beats or plot events
+- Meter changes (sanity, morality, reputation, hunger, suspicion, etc.) — invent meters as the fiction calls for them, adjust existing ones with signed deltas. The current values are listed under "Meters:" in the snapshot above.
 
 Be thorough and accurate. Only include entities that actually changed or appeared in the scene.`;
 
