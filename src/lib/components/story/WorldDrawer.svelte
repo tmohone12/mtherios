@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download } from 'lucide-svelte';
+	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive } from 'lucide-svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { getChapters, getArcs, createArc } from '$lib/services/database';
 	import { ai } from '$lib/services/ai';
 	import { uuid } from '$lib/utils/uuid';
+	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
 	import type { Arc } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import type { Chapter } from '$lib/types';
@@ -198,6 +199,25 @@
 	let timelineFilter = $state<'all' | TimelineKind>('all');
 	let timelineCollapsed = $state(false);
 
+	// Wiki export
+	let exportingWiki = $state(false);
+
+	async function handleExportWiki() {
+		if (!story.currentStory || exportingWiki) return;
+		exportingWiki = true;
+		try {
+			const events = story.worldEvents.map((e) => ({
+				name: e.name,
+				description: e.description,
+				appliedAt: e.appliedAt,
+			}));
+			await downloadStoryAsWiki(story.currentStory.id, events);
+		} catch (e) {
+			console.error('[Wiki Export] failed:', e);
+		}
+		exportingWiki = false;
+	}
+
 	const timelineRows = $derived.by(() => {
 		const rows: TimelineRow[] = [];
 		for (const ch of chapters) {
@@ -243,9 +263,16 @@
 		<!-- Header -->
 		<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3">
 			<span class="font-display text-sm tracking-wide text-[var(--text-accent)]">World State</span>
-			<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
-				<X class="h-5 w-5" />
-			</button>
+			<div class="flex items-center gap-1">
+				<button onclick={handleExportWiki} disabled={exportingWiki || !story.currentStory}
+					class="rounded p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-amber-400 disabled:opacity-40"
+					title="Export wiki as Obsidian-compatible .zip">
+					{#if exportingWiki}<Loader2 class="h-4 w-4 animate-spin" />{:else}<FileArchive class="h-4 w-4" />{/if}
+				</button>
+				<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+					<X class="h-5 w-5" />
+				</button>
+			</div>
 		</div>
 
 		<div class="flex-1 overflow-y-auto px-4 py-4 space-y-6">
