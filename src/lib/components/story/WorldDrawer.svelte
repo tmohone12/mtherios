@@ -184,6 +184,53 @@
 	});
 
 	const currentLocation = $derived(story.locations.find(l => l.current) ?? null);
+
+	// ── Timeline: chronological log of chapters + world events + entry creations ──
+	type TimelineKind = 'chapter' | 'event' | 'entry';
+	interface TimelineRow {
+		when: number;
+		kind: TimelineKind;
+		title: string;
+		detail?: string;
+		entryType?: string;
+	}
+
+	let timelineFilter = $state<'all' | TimelineKind>('all');
+	let timelineCollapsed = $state(false);
+
+	const timelineRows = $derived.by(() => {
+		const rows: TimelineRow[] = [];
+		for (const ch of chapters) {
+			rows.push({
+				when: ch.createdAt,
+				kind: 'chapter',
+				title: ch.title || `Chapter ${ch.number}`,
+				detail: ch.summary,
+			});
+		}
+		for (const ev of story.worldEvents) {
+			rows.push({
+				when: ev.appliedAt ?? ev.triggerPosition ?? Date.now(),
+				kind: 'event',
+				title: ev.name,
+				detail: ev.description,
+			});
+		}
+		for (const e of story.lorebookEntries) {
+			if (!e.createdAt) continue;
+			rows.push({
+				when: e.createdAt,
+				kind: 'entry',
+				title: e.name,
+				entryType: e.type,
+				detail: (e.description ?? '').slice(0, 120),
+			});
+		}
+		rows.sort((a, b) => b.when - a.when); // newest first
+		return timelineFilter === 'all' ? rows : rows.filter(r => r.kind === timelineFilter);
+	});
+
+	const kindIcons: Record<TimelineKind, string> = { chapter: '📖', event: '⚡', entry: '✨' };
 </script>
 
 {#if open}
@@ -220,6 +267,55 @@
 						style="width: {contextPercent}%"
 					></div>
 				</div>
+			</div>
+			{/if}
+
+			<!-- Timeline -->
+			{#if timelineRows.length > 0 || true}
+			<div>
+				<button class="mb-2 flex w-full items-center justify-between gap-2"
+					onclick={() => timelineCollapsed = !timelineCollapsed}>
+					<div class="flex items-center gap-2">
+						<ScrollText class="h-4 w-4 text-amber-400" />
+						<span class="font-display text-xs tracking-wider uppercase text-amber-400">Timeline</span>
+						<span class="text-[10px] text-[var(--text-muted)]">{timelineRows.length}</span>
+					</div>
+					{#if timelineCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
+					{:else}<ChevronDown class="h-3.5 w-3.5 text-[var(--text-muted)]" />{/if}
+				</button>
+				{#if !timelineCollapsed}
+					<div class="mb-2 flex gap-1 text-[10px]">
+						{#each [{ v: 'all', l: 'All' }, { v: 'chapter', l: 'Chapters' }, { v: 'event', l: 'Events' }, { v: 'entry', l: 'Entries' }] as f}
+							<button class="rounded-md px-1.5 py-0.5 tracking-wider transition-colors
+								{timelineFilter === f.v ? 'bg-[var(--bg-primary)] text-[var(--text-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+								onclick={() => timelineFilter = f.v as any}>{f.l}</button>
+						{/each}
+					</div>
+					{#if timelineRows.length === 0}
+						<p class="text-xs text-[var(--text-muted)] italic">Nothing here yet.</p>
+					{:else}
+						<div class="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+							{#each timelineRows.slice(0, 80) as row}
+								<div class="rounded-lg bg-[var(--bg-tertiary)] px-2 py-1.5">
+									<div class="flex items-baseline gap-1.5 text-[10px]">
+										<span>{kindIcons[row.kind]}</span>
+										<span class="truncate font-semibold text-[var(--text-primary)] text-xs">{row.title}</span>
+										{#if row.entryType}
+											<span class="rounded bg-[var(--bg-primary)] px-1 py-0 text-[9px] text-[var(--text-muted)]">{row.entryType}</span>
+										{/if}
+										<span class="ml-auto shrink-0 text-[var(--text-muted)]">{new Date(row.when).toLocaleDateString()}</span>
+									</div>
+									{#if row.detail}
+										<p class="mt-0.5 line-clamp-2 text-[10px] leading-relaxed text-[var(--text-muted)]">{row.detail}</p>
+									{/if}
+								</div>
+							{/each}
+							{#if timelineRows.length > 80}
+								<p class="text-center text-[10px] text-[var(--text-muted)]">+{timelineRows.length - 80} older entries</p>
+							{/if}
+						</div>
+					{/if}
+				{/if}
 			</div>
 			{/if}
 
