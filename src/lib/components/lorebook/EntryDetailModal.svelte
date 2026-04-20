@@ -1,25 +1,33 @@
 <script lang="ts">
-	import { X, Save, Trash2, Shield, ShieldOff } from 'lucide-svelte';
+	import { X, Save, Trash2, Shield, ShieldOff, ArrowLeft, BookOpen } from 'lucide-svelte';
 	import { updateLorebookEntry, deleteLorebookEntry, getRelationshipsForEntry } from '$lib/services/database';
 	import type { Entry, EntryType, EntryInjectionMode, EntryRelationship, CharacterEntryState, FactionEntryState, LocationEntryState, ItemEntryState } from '$lib/types';
 	import { fade } from 'svelte/transition';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
+	import { renderWiki, findInboundMentions, parseWikiHref } from '$lib/utils/wikilinks';
 
 	interface Props {
 		entry: Entry;
+		/** Full set of lorebook entries — used to resolve cross-references in the Wiki tab. */
+		allEntries?: Entry[];
 		onSave: (updated: Entry) => void;
 		onDelete: (id: string) => void;
 		onClose: () => void;
+		/** Click on a wiki cross-reference link. Parent should swap detailEntry. */
+		onNavigate?: (entryId: string) => void;
+		/** Back button — enabled when the parent has a navigation stack. */
+		canGoBack?: boolean;
+		onBack?: () => void;
 	}
 
-	let { entry, onSave, onDelete, onClose }: Props = $props();
+	let { entry, allEntries = [], onSave, onDelete, onClose, onNavigate, canGoBack = false, onBack }: Props = $props();
 
-	type Tab = 'general' | 'state' | 'injection' | 'info';
-	let activeTab = $state<Tab>('general');
+	type Tab = 'wiki' | 'general' | 'state' | 'injection' | 'info';
+	let activeTab = $state<Tab>('wiki');
 	let confirmDelete = $state(false);
 	let relationships = $state<EntryRelationship[]>([]);
 
-	// Editable fields
+	// Editable fields — re-init whenever the entry prop changes (cross-ref nav).
 	let name = $state(entry.name);
 	let type = $state<EntryType>(entry.type);
 	let description = $state(entry.description);
@@ -41,12 +49,42 @@
 		faction: '🏴', concept: '💡', event: '📅',
 	};
 
-	// Load relationships on mount
-	onMount(() => {
-		if (entry.storyId && entry.id) {
-			getRelationshipsForEntry(entry.storyId, entry.id).then(r => relationships = r);
+	// Re-init editable state and reload relationships whenever entry changes
+	// (e.g. parent swaps it via cross-reference navigation).
+	$effect(() => {
+		const e = entry;
+		untrack(() => {
+			name = e.name;
+			type = e.type;
+			description = e.description;
+			hiddenInfo = e.hiddenInfo ?? '';
+			aliases = e.aliases?.join(', ') ?? '';
+			blacklisted = e.loreManagementBlacklisted ?? false;
+			injectionMode = e.injection.mode;
+			injectionPriority = e.injection.priority;
+			keywords = e.injection.keywords.join(', ');
+			entryState = JSON.parse(JSON.stringify(e.state));
+			confirmDelete = false;
+		});
+		if (e.storyId && e.id) {
+			getRelationshipsForEntry(e.storyId, e.id).then((r) => (relationships = r));
 		}
 	});
+
+	// Wiki tab derived data
+	const wikiDescription = $derived(renderWiki(description ?? '', allEntries, entry.id));
+	const wikiHidden = $derived(renderWiki(hiddenInfo ?? '', allEntries, entry.id));
+	const inboundMentions = $derived(findInboundMentions(entry, allEntries));
+
+	function handleWikiClick(e: MouseEvent) {
+		const target = e.target as HTMLElement;
+		const link = target.closest('a');
+		if (!link) return;
+		const id = parseWikiHref(link.getAttribute('href'));
+		if (!id) return;
+		e.preventDefault();
+		onNavigate?.(id);
+	}
 
 	async function handleSave() {
 		const updates: Partial<Entry> = {
@@ -84,8 +122,13 @@
 		<!-- Header -->
 		<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-5 py-3">
 			<div class="flex items-center gap-2">
+				{#if canGoBack}
+					<button onclick={onBack} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]" title="Back">
+						<ArrowLeft class="h-4 w-4" />
+					</button>
+				{/if}
 				<span class="text-lg">{typeIcons[type] ?? '📄'}</span>
-				<h3 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Edit Entry</h3>
+				<h3 class="font-display text-sm tracking-wide text-[var(--text-primary)] truncate max-w-[18rem]">{name || 'Untitled'}</h3>
 			</div>
 			<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
 				<X class="h-4 w-4" />
@@ -95,6 +138,7 @@
 		<!-- Tabs -->
 		<div class="flex border-b border-[var(--border-primary)]">
 			{#each [
+				{ id: 'wiki', label: 'Wiki' },
 				{ id: 'general', label: 'General' },
 				{ id: 'state', label: 'State' },
 				{ id: 'injection', label: 'Injection' },
@@ -111,7 +155,51 @@
 		<!-- Content -->
 		<div class="flex-1 overflow-y-auto px-5 py-4 space-y-4">
 
-			{#if activeTab === 'general'}
+			{#if activeTab === 'wiki'}
+				<!-- Read-only rendered view with cross-references -->
+				<div class="flex items-center gap-2 text-[var(--text-muted)]">
+					<BookOpen class="h-3.5 w-3.5" />
+					<span class="text-[10px] uppercase tracking-wider">{type}</span>
+					{#if entry.aliases?.length}
+						<span class="text-[10px]">· also known as {entry.aliases.join(', ')}</span>
+					{/if}
+				</div>
+
+				{#if wikiDescription.html}
+					<div class="wiki-prose text-sm text-[var(--text-primary)]" onclick={handleWikiClick} role="presentation">
+						{@html wikiDescription.html}
+					</div>
+				{:else}
+					<p class="text-sm italic text-[var(--text-muted)]">No description yet.</p>
+				{/if}
+
+				{#if wikiHidden.html}
+					<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2.5">
+						<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">GM Notes</div>
+						<div class="wiki-prose text-sm text-[var(--text-primary)]" onclick={handleWikiClick} role="presentation">
+							{@html wikiHidden.html}
+						</div>
+					</div>
+				{/if}
+
+				{#if inboundMentions.length > 0}
+					<div class="border-t border-[var(--border-primary)] pt-3">
+						<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1.5">Mentioned in ({inboundMentions.length})</div>
+						<div class="flex flex-wrap gap-1.5">
+							{#each inboundMentions as ref}
+								<button
+									class="flex items-center gap-1 rounded-md bg-[var(--bg-tertiary)] px-2 py-1 text-xs text-[var(--text-primary)] hover:bg-[rgba(212,168,83,0.12)]"
+									onclick={() => onNavigate?.(ref.id)}
+								>
+									<span>{typeIcons[ref.type] ?? '📄'}</span>
+									<span>{ref.name}</span>
+								</button>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
+			{:else if activeTab === 'general'}
 				<!-- Name -->
 				<div class="space-y-1">
 					<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Name</label>
@@ -412,3 +500,46 @@
 	</div>
 </div>
 {/if}
+
+<style>
+	/* Minimal prose styles for the rendered markdown in the Wiki tab. */
+	.wiki-prose :global(p) { margin: 0 0 0.6em; line-height: 1.55; }
+	.wiki-prose :global(p:last-child) { margin-bottom: 0; }
+	.wiki-prose :global(h1),
+	.wiki-prose :global(h2),
+	.wiki-prose :global(h3) {
+		font-family: var(--font-display, inherit);
+		font-weight: 600;
+		margin: 0.6em 0 0.3em;
+		color: var(--text-primary);
+	}
+	.wiki-prose :global(h1) { font-size: 1.05rem; }
+	.wiki-prose :global(h2) { font-size: 0.95rem; }
+	.wiki-prose :global(h3) { font-size: 0.85rem; }
+	.wiki-prose :global(ul),
+	.wiki-prose :global(ol) { margin: 0 0 0.6em; padding-left: 1.25em; }
+	.wiki-prose :global(li) { margin-bottom: 0.15em; }
+	.wiki-prose :global(a) {
+		color: var(--text-accent);
+		text-decoration: underline;
+		text-decoration-color: rgba(212, 168, 83, 0.4);
+		text-underline-offset: 2px;
+		cursor: pointer;
+	}
+	.wiki-prose :global(a:hover) { text-decoration-color: var(--color-gold-400); }
+	.wiki-prose :global(em) { color: var(--text-muted); }
+	.wiki-prose :global(strong) { color: var(--text-accent); font-weight: 600; }
+	.wiki-prose :global(code) {
+		background: var(--bg-primary);
+		padding: 0.1em 0.35em;
+		border-radius: 0.25rem;
+		font-size: 0.85em;
+	}
+	.wiki-prose :global(blockquote) {
+		border-left: 2px solid var(--color-gold-600);
+		padding-left: 0.7em;
+		color: var(--text-muted);
+		font-style: italic;
+		margin: 0 0 0.6em;
+	}
+</style>

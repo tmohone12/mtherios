@@ -110,18 +110,42 @@
 		newName = ''; newType = 'concept'; newDescription = ''; newKeywords = '';
 	}
 
+	// Cross-reference navigation stack: previously viewed entries while the
+	// detail modal is open. Cleared whenever the modal closes.
+	let detailNavStack = $state<Entry[]>([]);
+
 	function openDetail(entry: Entry) {
+		detailNavStack = [];
 		detailEntry = entry;
+	}
+
+	function closeDetail() {
+		detailEntry = null;
+		detailNavStack = [];
+	}
+
+	function navigateDetail(entryId: string) {
+		const target = entries.find((e) => e.id === entryId);
+		if (!target || !detailEntry) return;
+		detailNavStack = [...detailNavStack, detailEntry];
+		detailEntry = target;
+	}
+
+	function navigateBack() {
+		if (detailNavStack.length === 0) return;
+		const prev = detailNavStack[detailNavStack.length - 1];
+		detailNavStack = detailNavStack.slice(0, -1);
+		detailEntry = prev;
 	}
 
 	function handleDetailSave(updated: Entry) {
 		entries = entries.map(e => e.id === updated.id ? updated : e);
-		detailEntry = null;
+		closeDetail();
 	}
 
 	function handleDetailDelete(id: string) {
 		entries = entries.filter(e => e.id !== id);
-		detailEntry = null;
+		closeDetail();
 	}
 
 	async function handleDelete(id: string, e: Event) {
@@ -431,8 +455,12 @@
 {#if detailEntry}
 	<EntryDetailModal
 		entry={detailEntry}
+		allEntries={entries}
 		onSave={handleDetailSave}
 		onDelete={handleDetailDelete}
-		onClose={() => detailEntry = null}
+		onClose={closeDetail}
+		onNavigate={navigateDetail}
+		canGoBack={detailNavStack.length > 0}
+		onBack={navigateBack}
 	/>
 {/if}
