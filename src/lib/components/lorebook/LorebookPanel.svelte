@@ -1,13 +1,15 @@
 <script lang="ts">
-	import { Plus, X, Search, Upload, Trash2, Wand2, Loader2, List, LayoutList } from 'lucide-svelte';
-	import { getAllStories, getLorebookEntries, createLorebookEntry, updateLorebookEntry, deleteLorebookEntry } from '$lib/services/database';
+	import { Plus, X, Search, Upload, Trash2, Wand2, Loader2, List, LayoutList, Stethoscope } from 'lucide-svelte';
+	import { getAllStories, getLorebookEntries, createLorebookEntry, updateLorebookEntry, deleteLorebookEntry, getEntryRelationships, getChapters } from '$lib/services/database';
 	import { uuid } from '$lib/utils/uuid';
 	import { ai } from '$lib/services/ai';
 	import LorebookImport from './LorebookImport.svelte';
 	import SeedImport from './SeedImport.svelte';
 	import EntryDetailModal from './EntryDetailModal.svelte';
+	import WikiLintReport from './WikiLintReport.svelte';
 	import type { Story, Entry, EntryType } from '$lib/types';
 	import type { VaultAction } from '$lib/services/ai/sdk/schemas/vault';
+	import type { WikiLintResult } from '$lib/services/ai/sdk/schemas/wikiLint';
 	import { onMount } from 'svelte';
 
 	let stories = $state<Story[]>([]);
@@ -21,6 +23,12 @@
 	let sourceFilter = $state<'all' | 'user' | 'ai' | 'import'>('all');
 	let viewMode = $state<'list' | 'index'>('list');
 	let sortBy = $state<'name' | 'mentions' | 'updated'>('name');
+
+	// Wiki lint
+	let lintOpen = $state(false);
+	let lintLoading = $state(false);
+	let lintResult = $state<WikiLintResult | null>(null);
+	let lintError = $state<string | null>(null);
 
 	// Detail modal
 	let detailEntry = $state<Entry | null>(null);
@@ -100,6 +108,31 @@
 		for (const t of entryTypes) buckets[t].sort(compareEntries);
 		return buckets;
 	});
+
+	async function runWikiLint() {
+		if (!selectedStoryId || lintLoading) return;
+		lintOpen = true;
+		lintLoading = true;
+		lintResult = null;
+		lintError = null;
+		try {
+			const [relationships, chapters] = await Promise.all([
+				getEntryRelationships(selectedStoryId),
+				getChapters(selectedStoryId),
+			]);
+			lintResult = await ai.wikiLint.lint(entries, relationships, chapters);
+		} catch (e) {
+			lintError = e instanceof Error ? e.message : String(e);
+		} finally {
+			lintLoading = false;
+		}
+	}
+
+	function closeLint() {
+		lintOpen = false;
+		lintResult = null;
+		lintError = null;
+	}
 
 	async function handleCreate() {
 		if (!selectedStoryId || !newName.trim()) return;
@@ -274,6 +307,12 @@
 		<div class="flex items-center justify-between mb-3">
 			<h2 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Lorebook</h2>
 			<div class="flex gap-2">
+				<button onclick={runWikiLint} disabled={!selectedStoryId || entries.length === 0 || lintLoading}
+					class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:text-amber-400 hover:bg-amber-500/8 disabled:opacity-40"
+					title="Health-check the wiki for contradictions, orphans, missing entries">
+					{#if lintLoading}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Stethoscope class="h-3.5 w-3.5" />{/if}
+					Health
+				</button>
 				<button onclick={() => { showSeedImport = !showSeedImport; showImport = false; }}
 					class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:text-amber-400 hover:bg-[rgba(212,168,83,0.08)]"
 					title="Import faction seed packs">
@@ -551,4 +590,9 @@
 		canGoBack={detailNavStack.length > 0}
 		onBack={navigateBack}
 	/>
+{/if}
+
+<!-- Wiki Lint Report -->
+{#if lintOpen}
+	<WikiLintReport result={lintResult} loading={lintLoading} error={lintError} onClose={closeLint} />
 {/if}

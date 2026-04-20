@@ -25,6 +25,7 @@ export { ArcCondensationService } from './generation/ArcCondensationService';
 export { ProceduralMemoryService } from './memory/ProceduralMemoryService';
 export { CompactionService } from './memory/CompactionService';
 export { EmbeddingService } from './embeddings/EmbeddingService';
+export { WikiLintService } from './wiki/WikiLintService';
 
 // ── Singleton instances ──
 import { MemoryService } from './generation/MemoryService';
@@ -42,6 +43,7 @@ import { ArcCondensationService } from './generation/ArcCondensationService';
 import { ProceduralMemoryService } from './memory/ProceduralMemoryService';
 import { CompactionService } from './memory/CompactionService';
 import { EmbeddingService } from './embeddings/EmbeddingService';
+import { WikiLintService } from './wiki/WikiLintService';
 
 let _memory: MemoryService;
 let _suggestions: SuggestionsService;
@@ -58,6 +60,7 @@ let _arcCondensation: ArcCondensationService;
 let _proceduralMemory: ProceduralMemoryService;
 let _compaction: CompactionService;
 let _embeddings: EmbeddingService;
+let _wikiLint: WikiLintService;
 
 export const ai = {
 	get memory() { return _memory ??= new MemoryService(); },
@@ -75,4 +78,5 @@ export const ai = {
 	get proceduralMemory() { return _proceduralMemory ??= new ProceduralMemoryService(); },
 	get compaction() { return _compaction ??= new CompactionService(); },
 	get embeddings() { return _embeddings ??= new EmbeddingService(); },
+	get wikiLint() { return _wikiLint ??= new WikiLintService(); },
 };
