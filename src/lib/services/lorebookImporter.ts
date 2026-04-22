@@ -11,7 +11,6 @@ import type {
   EntryCreator,
   VaultLorebookEntry,
 } from '$lib/types'
-import type { StoryMode } from '$lib/types'
 import { createLogger } from './ai/core/config'
 
 const log = createLogger('LorebookImporter')
@@ -231,19 +230,6 @@ function inferEntryType(name: string, content: string): EntryType {
   }
 
   return maxType
-}
-
-/**
- * LLM-based entry type classification (stub — will be wired when AI services are fully ported).
- */
-export async function classifyEntriesWithLLM(
-  entries: ImportedEntry[],
-  _onProgress?: (classified: number, total: number) => void,
-  _mode: StoryMode = 'adventure',
-): Promise<ImportedEntry[]> {
-  // TODO: wire to LorebookClassifierService when ported
-  console.warn('[LorebookImporter] classifyEntriesWithLLM is not yet implemented — entries returned unclassified');
-  return entries;
 }
 
 function determineInjectionMode(entry: SillyTavernEntry): EntryInjectionMode {

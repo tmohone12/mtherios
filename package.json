@@ -31,7 +31,6 @@
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@tailwindcss/vite": "^4.2.1",
 		"@types/dompurify": "^3.0.5",
-		"ai": "^6.0.116",
 		"bits-ui": "^2.16.3",
 		"clsx": "^2.1.1",
 		"dexie": "^4.3.0",

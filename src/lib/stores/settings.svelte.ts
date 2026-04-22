@@ -25,13 +25,11 @@ export const SERVICE_DEFINITIONS: Record<string, { label: string; description: s
 	memory: { label: 'Memory', description: 'Chapter summarization & retrieval', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
 	styleReviewer: { label: 'Style Reviewer', description: 'Review narrative quality', profile: 'style', defaultTemp: 0.3, defaultMaxTokens: 4096 },
 	loreManagement: { label: 'Lore Management', description: 'Discover and curate lorebook entries automatically', profile: 'lorebook', defaultTemp: 0.3, defaultMaxTokens: 4096 },
-	agenticRetrieval: { label: 'Agentic Retrieval', description: 'Multi-step context retrieval', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 2048 },
 	interactiveVault: { label: 'Interactive Vault', description: 'Natural language lorebook management', profile: 'lorebook', defaultTemp: 0.5, defaultMaxTokens: 4096 },
 	imageGeneration: { label: 'Image Generation', description: 'Scene image generation', profile: 'image', defaultTemp: 0.7, defaultMaxTokens: 1024 },
 	worldSimulation: { label: 'World Simulation', description: 'Living world DM — plot injection, faction movements, rumors, world tension', profile: 'worldState', defaultTemp: 0.6, defaultMaxTokens: 8192 },
 	arcCondensation: { label: 'Arc Condensation', description: 'Condense chapters into arc summaries', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
 	proceduralMemory: { label: 'Procedural Memory', description: 'CASS-inspired narrative rule extraction and injection', profile: 'memoryContext', defaultTemp: 0.4, defaultMaxTokens: 4096 },
-	loreRAG: { label: 'Lore RAG', description: 'External world lore retrieval from vector database (Qdrant). Deep background knowledge without lorebook entries.', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 2048 },
 	wikiLint: { label: 'Wiki Lint', description: 'Health-check the lorebook for contradictions, stale claims, orphan entries, and missing entries.', profile: 'lorebook', defaultTemp: 0.2, defaultMaxTokens: 16384 },
 };
 
@@ -49,7 +47,7 @@ export const SERVICE_PROFILES: ServiceProfile[] = [
 	{ id: 'narrative', label: 'Narrative', description: 'Main story generation engine', icon: '✍️', serviceIds: ['narrative'] },
 	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, items + living world simulation', icon: '🌍', serviceIds: ['classifier', 'worldSimulation'] },
 	{ id: 'guidance', label: 'Player Guidance', description: 'Suggestions and branching action choices', icon: '🧭', serviceIds: ['suggestions', 'actionChoices'] },
-	{ id: 'memoryContext', label: 'Memory & Context', description: 'Chapter summaries, context retrieval, procedural memory, and external lore RAG', icon: '🧠', serviceIds: ['memory', 'agenticRetrieval', 'arcCondensation', 'proceduralMemory', 'loreRAG'] },
+	{ id: 'memoryContext', label: 'Memory & Context', description: 'Chapter summaries, arc condensation, and procedural memory', icon: '🧠', serviceIds: ['memory', 'arcCondensation', 'proceduralMemory'] },
 	{ id: 'lorebook', label: 'Lorebook', description: 'Discover, curate, and query lore entries', icon: '📜', serviceIds: ['loreManagement', 'interactiveVault'] },
 	{ id: 'style', label: 'Style Review', description: 'POV, tense, and prose quality checks', icon: '✨', serviceIds: ['styleReviewer'] },
 	{ id: 'image', label: 'Image Generation', description: 'Scene and character image generation', icon: '🎨', serviceIds: ['imageGeneration'] },
@@ -73,7 +71,6 @@ export interface ClassifierSettings {
 export interface SystemServicesSettings {
 	classifier: ClassifierSettings;
 	loreManagement: { maxIterations: number };
-	agenticRetrieval: { maxIterations: number };
 }
 
 class SettingsStore {
@@ -128,13 +125,11 @@ class SettingsStore {
 	serviceSpecificSettings = $state<{
 		contextWindow?: Record<string, number>;
 		lorebookLimits?: Record<string, number>;
-		agenticRetrieval?: Record<string, number>;
 	}>({});
 
 	systemServicesSettings = $state<SystemServicesSettings>({
 		classifier: { model: '', temperature: 0.5, maxTokens: 8192, chatHistoryTruncation: 100 },
 		loreManagement: { maxIterations: 5 },
-		agenticRetrieval: { maxIterations: 10 },
 	});
 
 	translationSettings = $state({

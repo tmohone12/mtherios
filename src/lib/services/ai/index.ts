@@ -16,7 +16,6 @@ export { ActionChoicesService } from './generation/ActionChoicesService';
 export { StyleReviewerService } from './generation/StyleReviewerService';
 export { EntryRetrievalService } from './retrieval/EntryRetrievalService';
 
-export { LoreRAGService } from './retrieval/LoreRAGService';
 export { LoreManagementService } from './lorebook/LoreManagementService';
 export { InteractiveVaultService } from './vault/InteractiveVaultService';
 export { ImageGenerationService } from './image/ImageGenerationService';
@@ -34,7 +33,6 @@ import { ActionChoicesService } from './generation/ActionChoicesService';
 import { StyleReviewerService } from './generation/StyleReviewerService';
 import { EntryRetrievalService } from './retrieval/EntryRetrievalService';
 
-import { LoreRAGService } from './retrieval/LoreRAGService';
 import { LoreManagementService } from './lorebook/LoreManagementService';
 import { InteractiveVaultService } from './vault/InteractiveVaultService';
 import { ImageGenerationService } from './image/ImageGenerationService';
@@ -51,7 +49,6 @@ let _actionChoices: ActionChoicesService;
 let _styleReviewer: StyleReviewerService;
 let _entryRetrieval: EntryRetrievalService;
 
-let _loreRAG: LoreRAGService;
 let _loreManagement: LoreManagementService;
 let _vault: InteractiveVaultService;
 let _imageGen: ImageGenerationService;
@@ -69,7 +66,6 @@ export const ai = {
 	get styleReviewer() { return _styleReviewer ??= new StyleReviewerService(); },
 	get entryRetrieval() { return _entryRetrieval ??= new EntryRetrievalService(); },
 
-	get loreRAG() { return _loreRAG ??= new LoreRAGService(); },
 	get loreManagement() { return _loreManagement ??= new LoreManagementService(); },
 	get vault() { return _vault ??= new InteractiveVaultService(); },
 	get imageGen() { return _imageGen ??= new ImageGenerationService(); },

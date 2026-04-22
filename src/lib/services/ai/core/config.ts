@@ -56,11 +56,6 @@ export const AI_CONFIG = {
     defaultChapterBuffer: 10,
   },
 
-  /** Classifier settings */
-  classifier: {
-    /** Default chat history truncation length */
-    defaultChatHistoryTruncation: 100,
-  },
 } as const
 
 /**
@@ -134,12 +129,3 @@ export function getLorebookConfig() {
   }
 }
 
-/**
- * Get agentic retrieval configuration from user settings with fallback to defaults.
- */
-export function getAgenticRetrievalConfig() {
-  const ar = settings.serviceSpecificSettings?.agenticRetrieval
-  return {
-    maxIterations: ar?.maxIterations ?? 10,
-  }
-}
