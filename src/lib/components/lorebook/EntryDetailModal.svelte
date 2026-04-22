@@ -5,6 +5,7 @@
 	import { fade } from 'svelte/transition';
 	import { onMount, untrack } from 'svelte';
 	import { renderWiki, findInboundMentions, parseWikiHref } from '$lib/utils/wikilinks';
+	import ReputationPanel from './ReputationPanel.svelte';
 
 	interface Props {
 		entry: Entry;
@@ -202,6 +203,8 @@
 						</div>
 					</div>
 				{/if}
+
+				<ReputationPanel {entry} />
 
 			{:else if activeTab === 'general'}
 				<!-- Name -->

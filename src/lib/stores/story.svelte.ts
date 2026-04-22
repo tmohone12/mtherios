@@ -11,11 +11,12 @@ import {
 	getChapters, getStoryBeats, getArcs,
 	getEmbeddedImages, createEmbeddedImage, deleteEmbeddedImage,
 	createAgreement, updateAgreement, getAgreements,
+	getFactionActions, getRumors,
 	createWorldEvent,
 } from '$lib/services/database';
 import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
-import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy } from '$lib/types';
+import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord } from '$lib/types';
 import type { ChatMessage } from '$lib/services/ai/sdk/generate';
 import { getModelContextWindow } from '$lib/services/ai/context/modelWindows';
 import { settings } from '$lib/stores/settings.svelte';
@@ -31,6 +32,8 @@ class StoryStore {
 	conversationMemories = $state<ConversationMemoryEntry[]>([]);
 	worldEvents = $state<WorldEvent[]>([]);
 	agreements = $state<Agreement[]>([]);
+	factionActions = $state<FactionActionRecord[]>([]);
+	rumors = $state<RumorRecord[]>([]);
 	images = $state<EmbeddedImage[]>([]);
 	loading = $state(false);
 	private _entryLock: Promise<void> = Promise.resolve();
@@ -57,7 +60,7 @@ class StoryStore {
 			const s = await getStory(storyId);
 			if (!s) throw new Error('Story not found');
 			this.currentStory = s;
-			const [entries, characters, locations, items, lorebookEntries, entryRelationships, conversationMemories, worldEvents, agreements, images] = await Promise.all([
+			const [entries, characters, locations, items, lorebookEntries, entryRelationships, conversationMemories, worldEvents, agreements, factionActions, rumors, images] = await Promise.all([
 				getStoryEntries(storyId),
 				getCharacters(storyId),
 				getLocations(storyId),
@@ -67,6 +70,8 @@ class StoryStore {
 				getConversationMemory(storyId),
 				getWorldEvents(storyId),
 				getAgreements(storyId),
+				getFactionActions(storyId),
+				getRumors(storyId),
 				getEmbeddedImages(storyId),
 			]);
 			this.entries = entries;
@@ -78,6 +83,8 @@ class StoryStore {
 			this.conversationMemories = conversationMemories;
 			this.worldEvents = worldEvents;
 			this.agreements = agreements;
+			this.factionActions = factionActions;
+			this.rumors = rumors;
 			this.images = images;
 
 			// If story has chapters, set history floor so only recent entries are in chat.
@@ -1153,6 +1160,8 @@ class StoryStore {
 		this.conversationMemories = [];
 		this.worldEvents = [];
 		this.agreements = [];
+		this.factionActions = [];
+		this.rumors = [];
 		this.images = [];
 		this.lastWorldSimResult = null;
 		this.lastTierUsage = null;
