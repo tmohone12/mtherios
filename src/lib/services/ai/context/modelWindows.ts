@@ -53,6 +53,14 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 	'zai-org/glm-5:thinking': 128000,
 	'stepfun-ai/step-3.5-flash:thinking': 128000,
 	'openai/gpt-oss-120b': 128000,
+	// Kimi (Moonshot)
+	'kimi-for-coding': 262144,
+	'kimi-latest': 131072,
+	'kimi-k2-0905-preview': 131072,
+	'kimi-k2-0711-preview': 131072,
+	'moonshot-v1-128k': 131072,
+	'moonshot-v1-32k': 32768,
+	'moonshot-v1-8k': 8192,
 };
 
 export function getModelContextWindow(model: string): number {
@@ -66,6 +74,8 @@ export function getModelContextWindow(model: string): number {
 	if (model.includes('claude')) return 200000;
 	if (model.includes('gpt-4o')) return 128000;
 	if (model.includes('grok')) return 131072;
+	if (model.includes('kimi-for-coding')) return 262144;
+	if (model.includes('kimi') || model.includes('moonshot')) return 131072;
 
 	return DEFAULT_MODEL_CONTEXT;
 }
