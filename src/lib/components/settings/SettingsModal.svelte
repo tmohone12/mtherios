@@ -29,6 +29,48 @@
 	let showApiKey = $state(false);
 	let testStatus = $state<'idle' | 'testing' | 'success' | 'error'>('idle');
 	let testMessage = $state('');
+	// Live model list fetched from /models for the provider being edited.
+	// Populated by testConnection on success, persisted by saveProfile.
+	let fetchedModelsForProfile = $state<string[]>([]);
+
+	/**
+	 * Fetch the live model list from an OpenAI-compatible /models endpoint.
+	 * Returns deduplicated, sorted model IDs. Handles the standard
+	 * { data: [{ id }] } shape plus a couple of common variants.
+	 */
+	async function fetchOpenAIModels(baseUrl: string, key: string): Promise<string[]> {
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		if (key) headers['Authorization'] = `Bearer ${key}`;
+		const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/models`, { headers });
+		if (!res.ok) {
+			const body = await res.text().catch(() => '');
+			throw new Error(`HTTP ${res.status}${body ? `: ${body.slice(0, 150)}` : ''}`);
+		}
+		const data = await res.json();
+		const list: unknown[] = Array.isArray(data?.data)
+			? data.data
+			: Array.isArray(data?.models)
+				? data.models
+				: Array.isArray(data)
+					? data
+					: [];
+		const ids = list
+			.map((m) => (typeof m === 'string' ? m : (m as any)?.id ?? (m as any)?.name))
+			.filter((id): id is string => typeof id === 'string' && id.length > 0);
+		return Array.from(new Set(ids)).sort((a, b) => a.localeCompare(b));
+	}
+
+	// Merged chip list: fetched (live, canonical) wins, fallback fills gaps.
+	const modelChips = $derived.by(() => {
+		const fb = settings.activeProvider?.fallbackModels ?? [];
+		const fetched = settings.activeProfile?.fetchedModels ?? [];
+		return Array.from(new Set([...fetched, ...fb]));
+	});
+
+	/** Merged list for the provider being edited — uses the locally-fetched list if present. */
+	function editModelChips(fallback: string[]): string[] {
+		return Array.from(new Set([...fetchedModelsForProfile, ...fallback]));
+	}
 
 	// Helpers
 	function getProfileByProvider(providerType: ProviderType): APIProfile | undefined {
@@ -44,6 +86,9 @@
 		showApiKey = false;
 		testStatus = 'idle';
 		testMessage = '';
+		// Preserve the profile's previously-fetched models so editing without
+		// re-testing doesn't blow them away on save.
+		fetchedModelsForProfile = existing?.fetchedModels ? [...existing.fetchedModels] : [];
 	}
 
 	async function saveProfile() {
@@ -56,6 +101,7 @@
 			existing.apiKey = apiKey;
 			if (customUrl) existing.baseUrl = customUrl;
 			else delete existing.baseUrl;
+			if (fetchedModelsForProfile.length > 0) existing.fetchedModels = [...fetchedModelsForProfile];
 			await settings.saveProfiles();
 			await settings.setActiveProfile(existing.id);
 		} else {
@@ -66,7 +112,7 @@
 				apiKey,
 				...(customUrl ? { baseUrl: customUrl } : {}),
 				customModels: [],
-				fetchedModels: [],
+				fetchedModels: [...fetchedModelsForProfile],
 				reasoningModels: [],
 				hiddenModels: [],
 				favoriteModels: [],
@@ -116,11 +162,18 @@
 				if (res.ok) { testStatus = 'success'; testMessage = 'Connected!'; }
 				else { const err = await res.text(); testStatus = 'error'; testMessage = `HTTP ${res.status}: ${err.slice(0, 150)}`; }
 			} else {
-				const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-				if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-				const res = await fetch(`${baseUrl}/models`, { headers });
-				if (res.ok) { testStatus = 'success'; testMessage = 'Connected!'; }
-				else { const err = await res.text(); testStatus = 'error'; testMessage = `HTTP ${res.status}: ${err.slice(0, 150)}`; }
+				// OpenAI-compatible: hit /models, parse the list, persist it.
+				try {
+					const ids = await fetchOpenAIModels(baseUrl, apiKey);
+					fetchedModelsForProfile = ids;
+					testStatus = 'success';
+					testMessage = ids.length > 0
+						? `Connected — fetched ${ids.length} model${ids.length === 1 ? '' : 's'}`
+						: 'Connected, but no models returned';
+				} catch (e) {
+					testStatus = 'error';
+					testMessage = e instanceof Error ? e.message : 'Connection failed';
+				}
 			}
 		} catch (e) {
 			testStatus = 'error';
@@ -247,14 +300,18 @@
 								onclick={() => settings.saveNarrativeSettings()}
 							>Save</button>
 						</div>
-						{#if settings.activeProvider?.fallbackModels?.length}
+						{#if modelChips.length > 0}
 							<div class="flex flex-wrap gap-1">
-								{#each settings.activeProvider.fallbackModels.slice(0, 6) as fm}
+								{#each modelChips.slice(0, 12) as fm}
 									<button
-										class="rounded border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]"
+										class="rounded border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]
+											{settings.narrativeSettings.model === fm ? 'border-[var(--color-gold-600)] text-[var(--text-accent)]' : ''}"
 										onclick={() => { settings.narrativeSettings.model = fm; settings.saveNarrativeSettings(); }}
 									>{fm}</button>
 								{/each}
+								{#if modelChips.length > 12}
+									<span class="px-1 text-[10px] text-[var(--text-muted)]">+{modelChips.length - 12} more</span>
+								{/if}
 							</div>
 						{/if}
 					</div>
@@ -373,15 +430,22 @@
 							<div class="space-y-1.5">
 								<label class="text-xs text-[var(--text-muted)]">Default Model</label>
 								<input type="text" bind:value={model}
-									placeholder={prov.fallbackModels[0] ?? 'model-name'}
+									placeholder={editModelChips(prov.fallbackModels)[0] ?? 'model-name'}
 									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none" />
-								{#if prov.fallbackModels.length > 1}
+								{#if editModelChips(prov.fallbackModels).length > 1}
 									<div class="flex flex-wrap gap-1">
-										{#each prov.fallbackModels.slice(0, 6) as fm}
-											<button class="rounded border border-[var(--border-primary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]"
+										{#each editModelChips(prov.fallbackModels).slice(0, 12) as fm}
+											<button class="rounded border border-[var(--border-primary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]
+												{model === fm ? 'border-[var(--color-gold-600)] text-[var(--text-accent)]' : ''}"
 												onclick={() => model = fm}>{fm}</button>
 										{/each}
+										{#if editModelChips(prov.fallbackModels).length > 12}
+											<span class="px-1 text-[10px] text-[var(--text-muted)]">+{editModelChips(prov.fallbackModels).length - 12} more</span>
+										{/if}
 									</div>
+								{/if}
+								{#if fetchedModelsForProfile.length > 0}
+									<p class="text-[10px] text-[var(--text-muted)] italic">Live list — {fetchedModelsForProfile.length} models from {customUrl || prov.baseUrl}/models</p>
 								{/if}
 							</div>
 
