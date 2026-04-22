@@ -7,7 +7,26 @@
 import JSZip from 'jszip';
 import { exportStory } from './storySync';
 import { toObsidianLinks } from '$lib/utils/wikilinks';
-import type { Entry, Chapter, Story, EntryType } from '$lib/types';
+import {
+	getAgreements,
+	getFactionActions,
+	getRumors,
+	getWorldEvents,
+} from './database';
+import type {
+	Entry,
+	Chapter,
+	Story,
+	EntryType,
+	Agreement,
+	AgreementCategory,
+	FactionActionRecord,
+	RumorRecord,
+	WorldEvent,
+	Meter,
+	CharacterEntryState,
+	FactionEntryState,
+} from '$lib/types';
 
 function slug(text: string, max = 60): string {
 	return text
@@ -77,7 +96,15 @@ function chapterFilename(chapter: Chapter): string {
 	return `${String(chapter.number).padStart(3, '0')}-${slug(chapter.title || `chapter-${chapter.number}`)}.md`;
 }
 
-function renderEntryMarkdown(entry: Entry, allEntries: Entry[]): string {
+function renderEntryMarkdown(
+	entry: Entry,
+	allEntries: Entry[],
+	agreements: Agreement[],
+	worldEvents: WorldEvent[],
+	rumors: RumorRecord[],
+	factionActions: FactionActionRecord[],
+	meters: Meter[],
+): string {
 	const fm = frontmatter({
 		name: entry.name,
 		type: entry.type,
@@ -96,6 +123,122 @@ function renderEntryMarkdown(entry: Entry, allEntries: Entry[]): string {
 	if (desc) {
 		parts.push(toObsidianLinks(desc, allEntries, entry.id), '');
 	}
+
+	// ── Type-specific enrichment from Entry.state ──
+	if (entry.type === 'character' && entry.state) {
+		const cs = entry.state as CharacterEntryState;
+		const bits: string[] = [];
+		if (cs.bio?.trim()) bits.push(`**Bio.** ${cs.bio.trim()}`);
+		if (Array.isArray(cs.motivations) && cs.motivations.length > 0) {
+			bits.push(`**Motivations.** ${cs.motivations.join('; ')}`);
+		} else if (typeof (cs as any).motivations === 'string' && (cs as any).motivations.trim()) {
+			bits.push(`**Motivations.** ${(cs as any).motivations.trim()}`);
+		}
+		if (cs.personality?.trim()) bits.push(`**Personality.** ${cs.personality.trim()}`);
+		if (cs.currentDisposition) bits.push(`**Disposition.** ${cs.currentDisposition}`);
+		if (cs.personalOpinion) bits.push(`**Opinion of player.** ${cs.personalOpinion}`);
+		if (bits.length > 0) parts.push('## Character', bits.map((b) => toObsidianLinks(b, allEntries, entry.id)).join('\n\n'), '');
+	}
+
+	if (entry.type === 'faction' && entry.state) {
+		const fs = entry.state as FactionEntryState;
+		const bits: string[] = [];
+		if (typeof fs.playerStanding === 'number') bits.push(`**Player standing.** ${fs.playerStanding}`);
+		if (fs.status) bits.push(`**Status.** ${fs.status}`);
+		if (fs.disposition) bits.push(`**Disposition.** ${fs.disposition}`);
+		if (Array.isArray(fs.territory) && fs.territory.length > 0) {
+			bits.push(`**Territory.** ${fs.territory.join(', ')}`);
+		}
+		if (fs.resources) {
+			const r = fs.resources;
+			const rs = Object.entries(r)
+				.filter(([, v]) => typeof v === 'number')
+				.map(([k, v]) => `${k}: ${v}`)
+				.join(' · ');
+			if (rs) bits.push(`**Resources.** ${rs}`);
+		}
+		if (Array.isArray(fs.goals) && fs.goals.length > 0) {
+			bits.push('**Goals.**');
+			for (const g of fs.goals) bits.push(`- [p${g.priority}] ${g.description} — ${g.progress}% (${g.type})`);
+		}
+		if (fs.interFactionRelations && Object.keys(fs.interFactionRelations).length > 0) {
+			bits.push('**Inter-faction relations.**');
+			for (const [name, standing] of Object.entries(fs.interFactionRelations)) {
+				bits.push(`- [[${name}]]: ${standing}`);
+			}
+		}
+		if (bits.length > 0) parts.push('## Faction', bits.join('\n'), '');
+	}
+
+	// ── Reputation section: agreements, recent events, rumors ──
+	const aliasLower = [entry.name, ...(entry.aliases ?? [])].filter(Boolean).map((s) => s.toLowerCase());
+	const nameLower = entry.name?.toLowerCase() ?? '';
+	const matchesEntity = (s: string) => {
+		const sl = s.toLowerCase();
+		return aliasLower.some((a) => sl.includes(a));
+	};
+
+	const relAgreements = agreements.filter((a) => a.parties.some(matchesEntity));
+	const relEvents = worldEvents
+		.filter((ev) => ev.sourceEntityId === entry.id || matchesEntity(ev.name) || matchesEntity(ev.description))
+		.sort((a, b) => (b.appliedAt ?? b.createdAt) - (a.appliedAt ?? a.createdAt))
+		.slice(0, 10);
+	const relRumors = rumors
+		.filter((r) => r.status !== 'stale' && r.status !== 'debunked')
+		.filter((r) => (r.relatedFaction && r.relatedFaction.toLowerCase() === nameLower) || matchesEntity(r.content))
+		.slice(0, 10);
+	const relMeters = meters.filter((m) => aliasLower.some((a) => m.name.toLowerCase().includes(a)));
+	const relFactionActions = entry.type === 'faction'
+		? factionActions.filter((fa) => fa.factionName.toLowerCase() === nameLower).slice(0, 10)
+		: [];
+
+	if (
+		relAgreements.length > 0 ||
+		relEvents.length > 0 ||
+		relRumors.length > 0 ||
+		relMeters.length > 0 ||
+		relFactionActions.length > 0
+	) {
+		parts.push('## Reputation');
+		if (relMeters.length > 0) {
+			parts.push('### Meters');
+			for (const m of relMeters) parts.push(`- ${m.name}: ${m.value}/${m.max}${m.visible ? '' : ' *(hidden)*'}`);
+		}
+		if (relAgreements.length > 0) {
+			parts.push('### Active agreements');
+			for (const a of relAgreements.filter((x) => x.status === 'active')) {
+				parts.push(`- **${a.category}** with ${a.parties.filter((p) => !matchesEntity(p)).map((p) => `[[${p}]]`).join(', ') || '—'}: ${a.terms}${a.secrecy !== 'public' ? ` *(${a.secrecy})*` : ''}`);
+			}
+			const resolved = relAgreements.filter((x) => x.status !== 'active');
+			if (resolved.length > 0) {
+				parts.push('', '### Past agreements');
+				for (const a of resolved) {
+					parts.push(`- ~~**${a.category}**~~ *(${a.status})* with ${a.parties.filter((p) => !matchesEntity(p)).map((p) => `[[${p}]]`).join(', ') || '—'}: ${a.terms}`);
+				}
+			}
+		}
+		if (relFactionActions.length > 0) {
+			parts.push('### Recent actions');
+			for (const fa of relFactionActions) {
+				parts.push(`- *(${fa.actionType}, urgency ${fa.urgency})* ${fa.action}${fa.motivation ? ` — *${fa.motivation}*` : ''}`);
+			}
+		}
+		if (relEvents.length > 0) {
+			parts.push('### Recent events');
+			for (const ev of relEvents) {
+				parts.push(`- **${ev.name}** *(${ev.severity})*: ${ev.description}`);
+			}
+		}
+		if (relRumors.length > 0) {
+			parts.push('### Rumors');
+			for (const r of relRumors) {
+				const band = r.truthfulness >= 0.7 ? 'reliable' : r.truthfulness >= 0.4 ? 'uncertain' : 'dubious';
+				parts.push(`- *(${band}, ${r.spreadRadius})* ${r.content}`);
+			}
+		}
+		parts.push('');
+	}
+
 	if (entry.hiddenInfo?.trim()) {
 		parts.push('## GM Notes', toObsidianLinks(entry.hiddenInfo.trim(), allEntries, entry.id), '');
 	}
@@ -161,28 +304,53 @@ function renderIndexMarkdown(entries: Entry[], chapters: Chapter[]): string {
 function renderLogMarkdown(
 	entries: Entry[],
 	chapters: Chapter[],
-	worldEvents: Array<{ name: string; description: string; appliedAt?: number | null }>,
+	worldEvents: WorldEvent[],
+	agreements: Agreement[],
+	factionActions: FactionActionRecord[],
 ): string {
 	type Row = { when: number; line: string };
 	const rows: Row[] = [];
+	const fmtDate = (t: number) => new Date(t).toISOString().slice(0, 10);
 
 	for (const ch of chapters) {
 		rows.push({
 			when: ch.createdAt,
-			line: `## [${new Date(ch.createdAt).toISOString().slice(0, 10)}] chapter | Chapter ${ch.number}: ${ch.title}\n${ch.summary ? firstSentence(ch.summary, 200) : ''}`,
+			line: `## [${fmtDate(ch.createdAt)}] chapter | Chapter ${ch.number}: ${ch.title}\n${ch.summary ? firstSentence(ch.summary, 200) : ''}`,
 		});
 	}
 	for (const ev of worldEvents) {
-		const when = ev.appliedAt ?? Date.now();
+		const when = ev.appliedAt ?? ev.createdAt ?? Date.now();
 		rows.push({
 			when,
-			line: `## [${new Date(when).toISOString().slice(0, 10)}] event | ${ev.name}\n${ev.description ?? ''}`,
+			line: `## [${fmtDate(when)}] event | [${ev.type} · ${ev.severity}] ${ev.name}\n${ev.description ?? ''}${
+				ev.consequences?.length
+					? '\n' + ev.consequences.map((c: any) => `  → ${c.description}`).join('\n')
+					: ''
+			}`,
+		});
+	}
+	for (const a of agreements) {
+		rows.push({
+			when: a.createdAt,
+			line: `## [${fmtDate(a.createdAt)}] agreement-created | [${a.category}] ${a.parties.join(' ↔ ')}\n${a.terms}`,
+		});
+		if (a.status !== 'active' && a.updatedAt !== a.createdAt) {
+			rows.push({
+				when: a.updatedAt,
+				line: `## [${fmtDate(a.updatedAt)}] agreement-${a.status} | [${a.category}] ${a.parties.join(' ↔ ')}`,
+			});
+		}
+	}
+	for (const fa of factionActions) {
+		rows.push({
+			when: fa.createdAt,
+			line: `## [${fmtDate(fa.createdAt)}] faction-action | ${fa.factionName} (${fa.actionType}, urgency ${fa.urgency})\n${fa.action}${fa.motivation ? ` — *${fa.motivation}*` : ''}`,
 		});
 	}
 	for (const e of entries) {
 		rows.push({
 			when: e.createdAt,
-			line: `## [${new Date(e.createdAt).toISOString().slice(0, 10)}] entry-created | ${e.type}: [[${e.name}]]`,
+			line: `## [${fmtDate(e.createdAt)}] entry-created | ${e.type}: [[${e.name}]]`,
 		});
 	}
 
@@ -192,7 +360,100 @@ function renderLogMarkdown(
 	return header + rows.map((r) => r.line).join('\n\n') + '\n';
 }
 
-function renderReadme(story: Story, entryCount: number, chapterCount: number): string {
+function agreementCategoryFolder(cat: AgreementCategory): string {
+	// Group pluralized for nicer Obsidian tree
+	return `${cat.replace(/-/g, '_')}s`;
+}
+
+function renderAgreementMarkdown(a: Agreement, allEntries: Entry[]): string {
+	const fm = frontmatter({
+		category: a.category,
+		status: a.status,
+		secrecy: a.secrecy,
+		parties: a.parties,
+		createdChapter: a.createdChapterNumber,
+		resolvedChapter: a.resolvedChapterNumber,
+		created: new Date(a.createdAt).toISOString(),
+		updated: new Date(a.updatedAt).toISOString(),
+	});
+	const parts: string[] = [fm];
+	parts.push(`# ${a.category}: ${a.parties.join(' ↔ ')}\n`);
+	parts.push(`*Status:* **${a.status}** · *Secrecy:* ${a.secrecy}\n`);
+	parts.push('## Parties', a.parties.map((p) => `- [[${p}]]`).join('\n'), '');
+	parts.push('## Terms', toObsidianLinks(a.terms, allEntries), '');
+	if (a.consequences.length > 0) {
+		parts.push('## Consequences');
+		for (const c of a.consequences) parts.push(`- ${toObsidianLinks(c, allEntries)}`);
+		parts.push('');
+	}
+	return parts.join('\n');
+}
+
+function renderAgreementsIndex(agreements: Agreement[]): string {
+	if (agreements.length === 0) return '';
+	const lines: string[] = ['# Agreements', ''];
+	lines.push(`*${agreements.length} recorded commitments*`, '');
+
+	const byStatus: Record<string, Agreement[]> = {};
+	for (const a of agreements) (byStatus[a.status] ??= []).push(a);
+	const order = ['active', 'broken', 'fulfilled', 'expired', 'contested'];
+	for (const status of order) {
+		const bucket = byStatus[status];
+		if (!bucket?.length) continue;
+		lines.push(`## ${status[0].toUpperCase()}${status.slice(1)} (${bucket.length})`, '');
+		for (const a of bucket) {
+			lines.push(`- **${a.category}** · ${a.parties.map((p) => `[[${p}]]`).join(' ↔ ')}: ${firstSentence(a.terms, 120)}`);
+		}
+		lines.push('');
+	}
+	return lines.join('\n') + '\n';
+}
+
+function renderMetersMarkdown(meters: Meter[]): string {
+	if (meters.length === 0) return '';
+	const lines: string[] = ['# Meters', ''];
+	lines.push(`*Per-story numeric tracks — ${meters.length} meter${meters.length === 1 ? '' : 's'}*`, '');
+	lines.push('| Meter | Value | Max | Visible |', '|---|---|---|---|');
+	for (const m of [...meters].sort((a, b) => a.name.localeCompare(b.name))) {
+		lines.push(`| ${m.name} | ${m.value} | ${m.max} | ${m.visible ? 'yes' : 'no'} |`);
+	}
+	return lines.join('\n') + '\n';
+}
+
+function renderRumorsMarkdown(rumors: RumorRecord[]): string {
+	if (rumors.length === 0) return '';
+	const active = rumors.filter((r) => r.status !== 'stale' && r.status !== 'debunked');
+	const stale = rumors.filter((r) => r.status === 'stale' || r.status === 'debunked');
+	const lines: string[] = ['# Rumors', ''];
+	lines.push(`*${active.length} active · ${stale.length} stale/debunked · ${rumors.length} total*`, '');
+
+	const truthBand = (t: number) => (t >= 0.7 ? 'reliable' : t >= 0.4 ? 'uncertain' : 'dubious');
+
+	if (active.length > 0) {
+		lines.push('## Active rumors', '');
+		lines.push('| Spread | Truth | Origin | Related | Content |', '|---|---|---|---|---|');
+		for (const r of active) {
+			lines.push(
+				`| ${r.spreadRadius} | ${truthBand(r.truthfulness)} (${r.truthfulness.toFixed(2)}) | ${r.originRegion} | ${r.relatedFaction ? `[[${r.relatedFaction}]]` : '—'} | ${r.content} |`,
+			);
+		}
+		lines.push('');
+	}
+	if (stale.length > 0) {
+		lines.push('## Old rumors', '');
+		for (const r of stale) lines.push(`- *(${r.status})* ${r.content}`);
+	}
+	return lines.join('\n') + '\n';
+}
+
+function renderReadme(
+	story: Story,
+	entryCount: number,
+	chapterCount: number,
+	agreementCount: number,
+	rumorCount: number,
+	meterCount: number,
+): string {
 	const fm = frontmatter({
 		title: story.title,
 		genre: story.genre,
@@ -207,6 +468,9 @@ ${story.description ?? ''}
 - **Genre:** ${story.genre ?? '—'}
 - **Wiki entries:** ${entryCount}
 - **Chapters:** ${chapterCount}
+- **Agreements:** ${agreementCount}
+- **Active rumors:** ${rumorCount}
+- **Meters tracked:** ${meterCount}
 - **Exported:** ${new Date().toLocaleString()}
 
 Open this folder as an Obsidian vault for the best browsing experience. Cross-references use \`[[Entry Name]]\` syntax.
@@ -214,34 +478,75 @@ Open this folder as an Obsidian vault for the best browsing experience. Cross-re
 ## Structure
 
 - \`index.md\` — categorized list of all entries.
-- \`log.md\` — chronological log of chapters, events, and entries.
-- \`wiki/<type>/<entry>.md\` — one file per lorebook entry.
+- \`log.md\` — chronological log of chapters, events, agreements, faction moves, and entries.
+- \`wiki/<type>/<entry>.md\` — one file per lorebook entry, enriched with reputation summary (standing, active agreements, recent events, rumors).
 - \`chapters/<n>-<title>.md\` — one file per chapter.
+- \`agreements/<category>/<id>-<slug>.md\` — one file per commitment (treaty, oath, marriage, bargain, etc.).
+- \`agreements/index.md\` — grouped listing of all agreements by status.
+- \`rumors.md\` — active and stale rumors.
+- \`meters.md\` — current meter values.
 `;
 }
 
-export async function downloadStoryAsWiki(storyId: string, worldEvents: Array<{ name: string; description: string; appliedAt?: number | null }> = []): Promise<void> {
+export async function downloadStoryAsWiki(storyId: string): Promise<void> {
 	const data = await exportStory(storyId);
+
+	// Fetch living-world data directly — these live in tables that the
+	// plain JSON exporter doesn't bundle (v1 schema; intentionally kept stable).
+	const [agreements, factionActions, rumors, worldEvents] = await Promise.all([
+		getAgreements(storyId),
+		getFactionActions(storyId),
+		getRumors(storyId),
+		getWorldEvents(storyId),
+	]);
+	const meters = data.story.meters ?? [];
+
 	const zip = new JSZip();
 
-	// README
-	zip.file('README.md', renderReadme(data.story, data.lorebookEntries.length, data.chapters.length));
+	zip.file(
+		'README.md',
+		renderReadme(
+			data.story,
+			data.lorebookEntries.length,
+			data.chapters.length,
+			agreements.length,
+			rumors.filter((r) => r.status !== 'stale' && r.status !== 'debunked').length,
+			meters.length,
+		),
+	);
 
-	// Index
 	zip.file('index.md', renderIndexMarkdown(data.lorebookEntries, data.chapters));
 
-	// Log
-	zip.file('log.md', renderLogMarkdown(data.lorebookEntries, data.chapters, worldEvents));
+	zip.file(
+		'log.md',
+		renderLogMarkdown(data.lorebookEntries, data.chapters, worldEvents, agreements, factionActions),
+	);
 
-	// Per-entry pages
+	// Per-entry pages — enriched with reputation data
 	for (const e of data.lorebookEntries) {
-		zip.file(entryRelPath(e), renderEntryMarkdown(e, data.lorebookEntries));
+		zip.file(
+			entryRelPath(e),
+			renderEntryMarkdown(e, data.lorebookEntries, agreements, worldEvents, rumors, factionActions, meters),
+		);
 	}
 
 	// Per-chapter pages
 	for (const ch of data.chapters) {
 		zip.file(`chapters/${chapterFilename(ch)}`, renderChapterMarkdown(ch, data.lorebookEntries));
 	}
+
+	// Agreements: index + one file per row grouped by category
+	if (agreements.length > 0) {
+		zip.file('agreements/index.md', renderAgreementsIndex(agreements));
+		for (const a of agreements) {
+			const folder = agreementCategoryFolder(a.category);
+			const fname = `${a.id.slice(0, 8)}-${slug(a.parties.join('-'))}.md`;
+			zip.file(`agreements/${folder}/${fname}`, renderAgreementMarkdown(a, data.lorebookEntries));
+		}
+	}
+
+	if (rumors.length > 0) zip.file('rumors.md', renderRumorsMarkdown(rumors));
+	if (meters.length > 0) zip.file('meters.md', renderMetersMarkdown(meters));
 
 	const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
 	const url = URL.createObjectURL(blob);

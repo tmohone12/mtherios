@@ -206,12 +206,7 @@
 		if (!story.currentStory || exportingWiki) return;
 		exportingWiki = true;
 		try {
-			const events = story.worldEvents.map((e) => ({
-				name: e.name,
-				description: e.description,
-				appliedAt: e.appliedAt,
-			}));
-			await downloadStoryAsWiki(story.currentStory.id, events);
+			await downloadStoryAsWiki(story.currentStory.id);
 		} catch (e) {
 			console.error('[Wiki Export] failed:', e);
 		}
