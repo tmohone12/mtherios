@@ -50,6 +50,7 @@ Now call update_world_state with ALL changes from this scene. Include:
 - Any relationship changes between entities
 - Any significant story beats or plot events
 - Meter changes (sanity, morality, reputation, hunger, suspicion, etc.) — invent meters as the fiction calls for them, adjust existing ones with signed deltas. The current values are listed under "Meters:" in the snapshot above.
+- Agreement changes — treaties, oaths, debts, promises, marriages, bonds, contracts, vassalage, and bargains with supernatural entities. Use action=create when a new commitment is sworn; action=break when someone violates it (this auto-emits a timeline event); action=fulfill when it's paid; action=update to revise terms. Active agreements are listed under "Active agreements:" in the snapshot with their ids.
 
 Be thorough and accurate. Only include entities that actually changed or appeared in the scene.`;
 

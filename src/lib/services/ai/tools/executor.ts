@@ -15,6 +15,7 @@ import {
 	createEntryRelationship, getRelationshipsForEntry, updateEntryRelationship,
 	createConversationMemory, createWorldEvent, updateWorldEvent, createStoryBeat,
 	updateStory, getChapters, getArcs,
+	bulkPutFactionActions, bulkPutRumors,
 } from '$lib/services/database';
 import {
 	parseTimeProgression, advanceTime, clamp,
@@ -27,7 +28,7 @@ import {
 import type {
 	Entry, EntryRelationship, WorldEvent, Consequence,
 	CharacterEntryState, LocationEntryState, LocationConnection,
-	FactionEntryState,
+	FactionEntryState, FactionActionRecord, RumorRecord,
 } from '$lib/types';
 
 // ── Main router ──
@@ -204,6 +205,21 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 		await story.applyMeterChanges(args.meter_changes);
 	}
 
+	// ── Agreement changes (treaties, oaths, bonds, bargains...) ──
+	if (args.agreements.length > 0) {
+		// Resolve current chapter number from the latest chapter, if any,
+		// so created/broken agreements are threaded into the timeline.
+		let currentChapterNumber: number | null = null;
+		try {
+			const { getChapters } = await import('$lib/services/database');
+			const chapters = await getChapters(story.currentStory.id);
+			if (chapters.length > 0) {
+				currentChapterNumber = Math.max(...chapters.map((c) => c.number));
+			}
+		} catch { /* non-fatal */ }
+		await story.applyAgreementChanges(args.agreements, currentChapterNumber);
+	}
+
 	// ── Consequences (death → faction hostility) ──
 	await evaluateConsequences(args.characters);
 
@@ -371,6 +387,51 @@ async function applyTimeProgression(progression: string): Promise<void> {
 					story.storyMode, story.pov, story.tense,
 				);
 				story.lastWorldSimResult = result;
+
+				// ── Persist WorldSim output so it feeds the timeline + export ──
+				const currentChapterNumber = chapters.length > 0
+					? Math.max(...chapters.map((c) => c.number))
+					: null;
+				const now = Date.now();
+
+				if (result.factionActions && result.factionActions.length > 0) {
+					const rows: FactionActionRecord[] = result.factionActions.map((fa: any) => ({
+						id: uuid(),
+						storyId: story.currentStory!.id,
+						factionName: fa.factionName ?? 'Unknown Faction',
+						action: fa.action ?? '',
+						actionType: fa.actionType ?? 'custom',
+						target: fa.target ?? null,
+						motivation: fa.motivation ?? null,
+						consequences: Array.isArray(fa.consequences) ? fa.consequences : [],
+						urgency: fa.urgency ?? 'medium',
+						affectedRegions: Array.isArray(fa.affectedRegions) ? fa.affectedRegions : [],
+						chapterNumber: currentChapterNumber,
+						status: 'active',
+						createdAt: now,
+					}));
+					try { await bulkPutFactionActions(rows); }
+					catch (e) { console.warn('[Executor] persist factionActions failed:', e); }
+				}
+
+				if (result.rumors && result.rumors.length > 0) {
+					const rows: RumorRecord[] = result.rumors.map((r: any) => ({
+						id: uuid(),
+						storyId: story.currentStory!.id,
+						content: r.content ?? '',
+						truthfulness: typeof r.truthfulness === 'number' ? r.truthfulness : 0.5,
+						originRegion: r.originRegion ?? 'unknown',
+						spreadRadius: r.spreadRadius ?? 'local',
+						sourceType: r.sourceType ?? 'gossip',
+						relatedFaction: r.relatedFaction ?? null,
+						chapterNumber: currentChapterNumber,
+						staleAfterChapters: typeof r.staleAfterChapters === 'number' ? r.staleAfterChapters : 5,
+						status: 'spreading',
+						createdAt: now,
+					}));
+					try { await bulkPutRumors(rows); }
+					catch (e) { console.warn('[Executor] persist rumors failed:', e); }
+				}
 
 				await updateStory(story.currentStory.id, { lastWorldSimDay: totalDays } as any);
 				story.currentStory = { ...story.currentStory, lastWorldSimDay: totalDays };

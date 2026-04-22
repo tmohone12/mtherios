@@ -10,10 +10,12 @@ import {
 	getEntryRelationships, getConversationMemory, getWorldEvents,
 	getChapters, getStoryBeats, getArcs,
 	getEmbeddedImages, createEmbeddedImage, deleteEmbeddedImage,
+	createAgreement, updateAgreement, getAgreements,
+	createWorldEvent,
 } from '$lib/services/database';
 import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
-import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, EmbeddedImage } from '$lib/types';
+import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy } from '$lib/types';
 import type { ChatMessage } from '$lib/services/ai/sdk/generate';
 import { getModelContextWindow } from '$lib/services/ai/context/modelWindows';
 import { settings } from '$lib/stores/settings.svelte';
@@ -28,6 +30,7 @@ class StoryStore {
 	entryRelationships = $state<EntryRelationship[]>([]);
 	conversationMemories = $state<ConversationMemoryEntry[]>([]);
 	worldEvents = $state<WorldEvent[]>([]);
+	agreements = $state<Agreement[]>([]);
 	images = $state<EmbeddedImage[]>([]);
 	loading = $state(false);
 	private _entryLock: Promise<void> = Promise.resolve();
@@ -54,7 +57,7 @@ class StoryStore {
 			const s = await getStory(storyId);
 			if (!s) throw new Error('Story not found');
 			this.currentStory = s;
-			const [entries, characters, locations, items, lorebookEntries, entryRelationships, conversationMemories, worldEvents, images] = await Promise.all([
+			const [entries, characters, locations, items, lorebookEntries, entryRelationships, conversationMemories, worldEvents, agreements, images] = await Promise.all([
 				getStoryEntries(storyId),
 				getCharacters(storyId),
 				getLocations(storyId),
@@ -63,6 +66,7 @@ class StoryStore {
 				getEntryRelationships(storyId),
 				getConversationMemory(storyId),
 				getWorldEvents(storyId),
+				getAgreements(storyId),
 				getEmbeddedImages(storyId),
 			]);
 			this.entries = entries;
@@ -73,6 +77,7 @@ class StoryStore {
 			this.entryRelationships = entryRelationships;
 			this.conversationMemories = conversationMemories;
 			this.worldEvents = worldEvents;
+			this.agreements = agreements;
 			this.images = images;
 
 			// If story has chapters, set history floor so only recent entries are in chat.
@@ -691,6 +696,18 @@ class StoryStore {
 			lines.push(`Meters: ${meterLine}`);
 		}
 
+		// Active agreements (treaties, oaths, bonds, bargains) — cap at 12 for budget
+		const active = this.agreements.filter(a => a.status === 'active');
+		if (active.length > 0) {
+			lines.push('Active agreements:');
+			for (const a of active.slice(0, 12)) {
+				const secrecyTag = a.secrecy === 'secret' ? ' [secret]' : a.secrecy === 'known' ? ' [known to some]' : '';
+				const terms = a.terms.length > 140 ? a.terms.slice(0, 137) + '…' : a.terms;
+				lines.push(`- (${a.category}${secrecyTag}) [id:${a.id.slice(0, 8)}] ${a.parties.join(' ↔ ')}: ${terms}`);
+			}
+			if (active.length > 12) lines.push(`  (+${active.length - 12} more active agreements)`);
+		}
+
 		// Recent story beats (last 2)
 		try {
 			const beats = await getStoryBeats(s.id);
@@ -926,6 +943,129 @@ class StoryStore {
 	}
 
 	/**
+	 * Apply a batch of agreement changes from update_world_state.
+	 *
+	 * Actions:
+	 *   create    — insert a new Agreement row with status=active
+	 *   update    — revise terms / parties / secrecy on an existing row
+	 *   break     — mark status=broken, set resolvedChapterNumber, emit a
+	 *               WorldEvent of type alliance_broken so the timeline picks it up
+	 *   fulfill   — mark status=fulfilled + resolvedChapterNumber
+	 *   expire    — mark status=expired + resolvedChapterNumber
+	 *
+	 * Identification for non-create actions: by id if supplied; otherwise
+	 * falls back to a parties+category match on active agreements.
+	 */
+	async applyAgreementChanges(
+		changes: Array<{
+			action: 'create' | 'update' | 'break' | 'fulfill' | 'expire';
+			id?: string | null;
+			parties?: string[];
+			category?: AgreementCategory;
+			terms?: string | null;
+			secrecy?: AgreementSecrecy;
+			consequences?: string[];
+			reason?: string | null;
+		}>,
+		currentChapterNumber: number | null = null,
+	) {
+		if (!this.currentStory || changes.length === 0) return;
+		const now = Date.now();
+
+		for (const change of changes) {
+			if (change.action === 'create') {
+				if (!change.terms || !change.category || !change.parties?.length) continue;
+				const agreement: Agreement = {
+					id: uuid(),
+					storyId: this.currentStory.id,
+					parties: change.parties,
+					category: change.category,
+					terms: change.terms,
+					status: 'active',
+					secrecy: change.secrecy ?? 'public',
+					createdChapterNumber: currentChapterNumber,
+					resolvedChapterNumber: null,
+					consequences: change.consequences ?? [],
+					metadata: change.reason ? { reason: change.reason } : null,
+					createdAt: now,
+					updatedAt: now,
+				};
+				await createAgreement(agreement);
+				this.agreements = [...this.agreements, agreement];
+				continue;
+			}
+
+			// Non-create: locate the target agreement.
+			const target = this.findAgreement(change.id ?? null, change.parties, change.category);
+			if (!target) continue;
+
+			const patch: Partial<Agreement> = { updatedAt: now };
+
+			if (change.action === 'update') {
+				if (change.terms != null) patch.terms = change.terms;
+				if (change.secrecy) patch.secrecy = change.secrecy;
+				if (change.parties?.length) patch.parties = change.parties;
+				if (change.consequences?.length) {
+					patch.consequences = [...target.consequences, ...change.consequences];
+				}
+			} else {
+				// break / fulfill / expire all move status + set resolvedChapterNumber.
+				const statusMap = { break: 'broken', fulfill: 'fulfilled', expire: 'expired' } as const;
+				patch.status = statusMap[change.action];
+				patch.resolvedChapterNumber = currentChapterNumber;
+				if (change.consequences?.length) {
+					patch.consequences = [...target.consequences, ...change.consequences];
+				}
+				// Broken agreements leave a trace in the timeline.
+				if (change.action === 'break') {
+					const lastEntry = this.entries[this.entries.length - 1];
+					if (lastEntry) {
+						const ev: WorldEvent = {
+							id: uuid(),
+							storyId: this.currentStory.id,
+							name: `${target.category} broken: ${target.parties.join(' & ')}`,
+							description: change.reason ?? `The ${target.category} between ${target.parties.join(' and ')} was broken.`,
+							triggerEntryId: lastEntry.id,
+							triggerPosition: lastEntry.position,
+							sourceEntityId: null,
+							type: 'alliance_broken',
+							severity: target.category === 'marriage' || target.category === 'treaty' ? 'major' : 'moderate',
+							consequences: [],
+							appliedAt: now,
+							createdAt: now,
+						};
+						await createWorldEvent(ev);
+						this.worldEvents = [...this.worldEvents, ev];
+					}
+				}
+			}
+
+			await updateAgreement(target.id, patch);
+			this.agreements = this.agreements.map((a) => (a.id === target.id ? { ...a, ...patch } : a));
+		}
+	}
+
+	/** Locate an agreement by id, or by parties+category fallback. */
+	private findAgreement(
+		id: string | null,
+		parties: string[] | undefined,
+		category: AgreementCategory | undefined,
+	): Agreement | null {
+		if (id) return this.agreements.find((a) => a.id === id) ?? null;
+		if (!parties?.length || !category) return null;
+		const partySet = new Set(parties.map((p) => p.toLowerCase()));
+		return (
+			this.agreements.find(
+				(a) =>
+					a.status === 'active' &&
+					a.category === category &&
+					a.parties.length === parties.length &&
+					a.parties.every((p) => partySet.has(p.toLowerCase())),
+			) ?? null
+		);
+	}
+
+	/**
 	 * Apply a new compacted lore block.
 	 * Pushes the previous value into history (capped at 10) before overwriting.
 	 */
@@ -1012,6 +1152,7 @@ class StoryStore {
 		this.entryRelationships = [];
 		this.conversationMemories = [];
 		this.worldEvents = [];
+		this.agreements = [];
 		this.images = [];
 		this.lastWorldSimResult = null;
 		this.lastTierUsage = null;

@@ -76,6 +76,22 @@ export const worldStateMeterChangeSchema = z.object({
 	reason: z.string().nullable().optional().default(null),
 });
 
+export const worldStateAgreementChangeSchema = z.object({
+	action: z.enum(['create', 'update', 'break', 'fulfill', 'expire']),
+	// Identify existing agreement: by id (preferred for update/break/fulfill) or
+	// by parties+category (fallback for retroactive updates when GM didn't track the id).
+	id: z.string().nullable().optional(),
+	parties: z.array(z.string()).optional().default([]),
+	category: z.enum([
+		'treaty', 'pact', 'alliance', 'oath', 'debt', 'promise',
+		'marriage', 'bond', 'contract', 'vassalage', 'bargain-with-entity',
+	]).optional(),
+	terms: z.string().nullable().optional(),
+	secrecy: z.enum(['public', 'known', 'secret']).optional().default('public'),
+	consequences: z.array(z.string()).optional().default([]),
+	reason: z.string().nullable().optional().default(null),
+});
+
 export const worldStateUpdateSchema = z.object({
 	characters: z.array(worldStateCharacterSchema).optional().default([]),
 	locations: z.array(worldStateLocationSchema).optional().default([]),
@@ -86,6 +102,7 @@ export const worldStateUpdateSchema = z.object({
 	relationships: z.array(worldStateRelationshipSchema).optional().default([]),
 	story_beats: z.array(worldStateStoryBeatSchema).optional().default([]),
 	meter_changes: z.array(worldStateMeterChangeSchema).optional().default([]),
+	agreements: z.array(worldStateAgreementChangeSchema).optional().default([]),
 });
 
 export type WorldStateUpdate = z.infer<typeof worldStateUpdateSchema>;
@@ -230,6 +247,24 @@ export const GM_TOOLS = [
 								reason: { type: 'string', description: 'Brief in-fiction reason for the change' },
 							},
 							required: ['name', 'delta'],
+						},
+					},
+					agreements: {
+						type: 'array',
+						description: 'Record or update binding commitments between parties: treaties, alliances, oaths, debts, promises, marriages, vassalage, contracts, or bargains with supernatural entities. Use action=create when a new commitment is made; action=break when someone violates it; action=fulfill when the debt/promise is paid; action=update to revise terms; action=expire when it lapses. Currently active agreements are listed in the state snapshot so you can reason about them.',
+						items: {
+							type: 'object',
+							properties: {
+								action: { type: 'string', enum: ['create', 'update', 'break', 'fulfill', 'expire'], description: 'What to do with this agreement' },
+								id: { type: 'string', description: 'Existing agreement id (required for update/break/fulfill/expire unless parties+category match uniquely)' },
+								parties: { type: 'array', items: { type: 'string' }, description: 'Named parties to the agreement — display names matching lorebook entries when possible' },
+								category: { type: 'string', enum: ['treaty', 'pact', 'alliance', 'oath', 'debt', 'promise', 'marriage', 'bond', 'contract', 'vassalage', 'bargain-with-entity'] },
+								terms: { type: 'string', description: 'Prose description of what was agreed' },
+								secrecy: { type: 'string', enum: ['public', 'known', 'secret'], description: 'Who in the world knows about it' },
+								consequences: { type: 'array', items: { type: 'string' }, description: 'Narrative consequences already in motion from this agreement' },
+								reason: { type: 'string', description: 'In-fiction reason for the change (e.g. "Lord Frey broke the guest right during the wedding")' },
+							},
+							required: ['action'],
 						},
 					},
 				},
