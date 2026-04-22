@@ -1231,3 +1231,92 @@ export interface Consequence {
   delay: number
   appliedAt: number | null
 }
+
+// ════════════════════════════════════════════════════════════════
+// Living-World Persistence — Agreements + WorldSim records
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * AgreementCategory covers everything from "formal treaty between houses"
+ * to "blood oath sworn to a god". One table, one enum — the category
+ * disambiguates, UI + export can group on it.
+ */
+export type AgreementCategory =
+  | 'treaty'    // formal agreement between factions
+  | 'pact'      // general deal
+  | 'alliance'  // mutual defense / cooperation
+  | 'oath'      // sworn personal vow
+  | 'debt'      // one party owes another
+  | 'promise'   // less binding than oath
+  | 'marriage'  // formal bond
+  | 'bond'      // vassalage, knighthood, apprenticeship — long-term role tie
+  | 'contract'  // written, often commercial
+  | 'vassalage' // explicit subordinate/liege relationship
+  | 'bargain-with-entity' // faustian / magical pact with a supernatural party
+
+export type AgreementStatus = 'active' | 'broken' | 'fulfilled' | 'expired' | 'contested'
+
+export type AgreementSecrecy = 'public' | 'known' | 'secret'
+
+/**
+ * Persistent record of a commitment between one or more parties.
+ *
+ * Parties are stored as display names (matching lorebook entry names or
+ * freeform strings) so the record survives entity renames/merges; the
+ * orchestrator resolves them by name on read.
+ */
+export interface Agreement {
+  id: string
+  storyId: string
+  parties: string[]
+  category: AgreementCategory
+  terms: string // prose — what was agreed
+  status: AgreementStatus
+  secrecy: AgreementSecrecy
+  createdChapterNumber: number | null // null if created before any chapter
+  resolvedChapterNumber: number | null // chapter in which it broke/fulfilled/expired
+  consequences: string[] // free-text narrative consequences
+  metadata: Record<string, unknown> | null
+  createdAt: number
+  updatedAt: number
+}
+
+/**
+ * Persisted version of the in-memory FactionAction emitted by WorldSim.
+ * Becomes queryable history instead of vanishing each turn.
+ */
+export interface FactionActionRecord {
+  id: string
+  storyId: string
+  factionName: string
+  action: string // one-line description of what the faction did
+  actionType: string // military | diplomatic | economic | intelligence | internal | ...
+  target: string | null // name of faction / character / region targeted
+  motivation: string | null
+  consequences: string[]
+  urgency: 'low' | 'medium' | 'high' | 'critical'
+  affectedRegions: string[]
+  chapterNumber: number | null
+  status: 'active' | 'resolved' | 'superseded'
+  createdAt: number
+}
+
+/**
+ * Persisted version of a Rumor emitted by WorldSim. Truthfulness is kept
+ * as a continuous 0..1 value so the UI/export can render it flexibly
+ * (reliable / uncertain / dubious bands).
+ */
+export interface RumorRecord {
+  id: string
+  storyId: string
+  content: string
+  truthfulness: number // 0..1
+  originRegion: string
+  spreadRadius: 'local' | 'regional' | 'continental'
+  sourceType: string // "overheard" | "official" | "trader-gossip" | ...
+  relatedFaction: string | null
+  chapterNumber: number | null
+  staleAfterChapters: number // how many chapters until the rumor goes stale
+  status: 'spreading' | 'mature' | 'stale' | 'debunked'
+  createdAt: number
+}

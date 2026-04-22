@@ -27,6 +27,9 @@ import type {
 	EntryRelationship,
 	ConversationMemoryEntry,
 	WorldEvent,
+	Agreement,
+	FactionActionRecord,
+	RumorRecord,
 } from '$lib/types';
 
 // ============================================================================
@@ -49,6 +52,9 @@ interface MtheriosDB extends Dexie {
 	entryRelationships: Table<EntryRelationship, string>;
 	conversationMemory: Table<ConversationMemoryEntry, string>;
 	worldEvents: Table<WorldEvent, string>;
+	agreements: Table<Agreement, string>;
+	factionActions: Table<FactionActionRecord, string>;
+	rumors: Table<RumorRecord, string>;
 	appSettings: Table<{ key: string; value: string }, string>;
 }
 
@@ -124,6 +130,29 @@ db.version(7).stores({
 	worldEvents: 'id, storyId, triggerPosition, type, [storyId+triggerPosition]',
 });
 
+// Version 8: Living-world persistence — agreements, faction-action log, rumor log
+db.version(8).stores({
+	stories: 'id, title, createdAt, updatedAt',
+	storyEntries: 'id, storyId, position, type, [storyId+position], [storyId+branchId+position]',
+	characters: 'id, storyId, name, [storyId+name]',
+	locations: 'id, storyId, name, [storyId+name]',
+	items: 'id, storyId, name, [storyId+name]',
+	storyBeats: 'id, storyId, type, status',
+	chapters: 'id, storyId, number, [storyId+number]',
+	lorebookEntries: 'id, storyId, name, type, [storyId+type]',
+	embeddedImages: 'id, storyId, entryId, status, [storyId+entryId]',
+	appSettings: 'key',
+	arcs: 'id, storyId, arcNumber, [storyId+arcNumber]',
+	proceduralRules: 'id, storyId, category, maturity, [storyId+category], [storyId+maturity]',
+	embeddingCache: 'id, sourceId, sourceType, [sourceType+sourceId]',
+	entryRelationships: 'id, storyId, sourceEntryId, targetEntryId, type, [storyId+sourceEntryId], [storyId+targetEntryId]',
+	conversationMemory: 'id, storyId, npcEntryId, storyPosition, [storyId+npcEntryId], [storyId+storyPosition]',
+	worldEvents: 'id, storyId, triggerPosition, type, [storyId+triggerPosition]',
+	agreements: 'id, storyId, status, category, createdChapterNumber, [storyId+status], [storyId+category]',
+	factionActions: 'id, storyId, factionName, chapterNumber, urgency, [storyId+chapterNumber]',
+	rumors: 'id, storyId, status, chapterNumber, relatedFaction, [storyId+status]',
+});
+
 // Debug function to check DB status
 export async function debugDatabaseStatus(): Promise<void> {
 	console.log('=== Database Debug Info ===');
@@ -164,7 +193,7 @@ export async function updateStory(id: string, updates: Partial<Story>): Promise<
 }
 
 export async function deleteStory(id: string): Promise<void> {
-	await db.transaction('rw', [db.stories, db.storyEntries, db.characters, db.locations, db.items, db.storyBeats, db.chapters, db.lorebookEntries, db.embeddedImages, db.arcs, db.proceduralRules, db.entryRelationships, db.conversationMemory, db.worldEvents], async () => {
+	await db.transaction('rw', [db.stories, db.storyEntries, db.characters, db.locations, db.items, db.storyBeats, db.chapters, db.lorebookEntries, db.embeddedImages, db.arcs, db.proceduralRules, db.entryRelationships, db.conversationMemory, db.worldEvents, db.agreements, db.factionActions, db.rumors], async () => {
 		await db.stories.delete(id);
 		await db.storyEntries.where('storyId').equals(id).delete();
 		await db.characters.where('storyId').equals(id).delete();
@@ -179,6 +208,9 @@ export async function deleteStory(id: string): Promise<void> {
 		await db.entryRelationships.where('storyId').equals(id).delete();
 		await db.conversationMemory.where('storyId').equals(id).delete();
 		await db.worldEvents.where('storyId').equals(id).delete();
+		await db.agreements.where('storyId').equals(id).delete();
+		await db.factionActions.where('storyId').equals(id).delete();
+		await db.rumors.where('storyId').equals(id).delete();
 	});
 }
 
@@ -520,6 +552,96 @@ export async function getWorldEvents(storyId: string): Promise<WorldEvent[]> {
 
 export async function updateWorldEvent(id: string, updates: Partial<WorldEvent>): Promise<void> {
 	await db.worldEvents.update(id, updates);
+}
+
+// ============================================================================
+// Agreements (v8 — living-world commitments)
+// ============================================================================
+
+export async function createAgreement(agreement: Agreement): Promise<void> {
+	await db.agreements.add(agreement);
+}
+
+export async function getAgreements(storyId: string): Promise<Agreement[]> {
+	return db.agreements.where('storyId').equals(storyId).toArray();
+}
+
+export async function getAgreementsByStatus(
+	storyId: string,
+	status: Agreement['status'],
+): Promise<Agreement[]> {
+	return db.agreements.where({ storyId, status }).toArray();
+}
+
+export async function updateAgreement(id: string, updates: Partial<Agreement>): Promise<void> {
+	await db.agreements.update(id, updates);
+}
+
+export async function deleteAgreement(id: string): Promise<void> {
+	await db.agreements.delete(id);
+}
+
+// ============================================================================
+// Faction Actions (v8 — persisted WorldSim output)
+// ============================================================================
+
+export async function createFactionAction(action: FactionActionRecord): Promise<void> {
+	await db.factionActions.add(action);
+}
+
+export async function bulkPutFactionActions(actions: FactionActionRecord[]): Promise<void> {
+	if (actions.length === 0) return;
+	await db.factionActions.bulkPut(actions);
+}
+
+export async function getFactionActions(storyId: string): Promise<FactionActionRecord[]> {
+	return db.factionActions.where('storyId').equals(storyId).toArray();
+}
+
+export async function getFactionActionsByFaction(
+	storyId: string,
+	factionName: string,
+): Promise<FactionActionRecord[]> {
+	return db.factionActions
+		.where('storyId')
+		.equals(storyId)
+		.and((a) => a.factionName === factionName)
+		.toArray();
+}
+
+export async function updateFactionAction(
+	id: string,
+	updates: Partial<FactionActionRecord>,
+): Promise<void> {
+	await db.factionActions.update(id, updates);
+}
+
+// ============================================================================
+// Rumors (v8 — persisted WorldSim output)
+// ============================================================================
+
+export async function createRumor(rumor: RumorRecord): Promise<void> {
+	await db.rumors.add(rumor);
+}
+
+export async function bulkPutRumors(rumors: RumorRecord[]): Promise<void> {
+	if (rumors.length === 0) return;
+	await db.rumors.bulkPut(rumors);
+}
+
+export async function getRumors(storyId: string): Promise<RumorRecord[]> {
+	return db.rumors.where('storyId').equals(storyId).toArray();
+}
+
+export async function getRumorsByStatus(
+	storyId: string,
+	status: RumorRecord['status'],
+): Promise<RumorRecord[]> {
+	return db.rumors.where({ storyId, status }).toArray();
+}
+
+export async function updateRumor(id: string, updates: Partial<RumorRecord>): Promise<void> {
+	await db.rumors.update(id, updates);
 }
 
 export { db };
