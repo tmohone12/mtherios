@@ -561,8 +561,8 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
 
   kimi: {
     name: 'Kimi Code',
-    description: 'Moonshot AI — coding-tuned endpoint, 262K context, reasoning effort support',
-    baseUrl: 'https://api.kimi.com/coding/v1',
+    description: 'Moonshot AI — coding-tuned endpoint, 262K context. Routes through Vite /api/kimi-code proxy (dev only — production needs its own proxy).',
+    baseUrl: '/api/kimi-code',
     requiresApiKey: true,
     capabilities: {
       textGeneration: true,
