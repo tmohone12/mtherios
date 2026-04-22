@@ -32,7 +32,7 @@ export const SERVICE_DEFINITIONS: Record<string, { label: string; description: s
 	arcCondensation: { label: 'Arc Condensation', description: 'Condense chapters into arc summaries', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
 	proceduralMemory: { label: 'Procedural Memory', description: 'CASS-inspired narrative rule extraction and injection', profile: 'memoryContext', defaultTemp: 0.4, defaultMaxTokens: 4096 },
 	loreRAG: { label: 'Lore RAG', description: 'External world lore retrieval from vector database (Qdrant). Deep background knowledge without lorebook entries.', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 2048 },
-	wikiLint: { label: 'Wiki Lint', description: 'Health-check the lorebook for contradictions, stale claims, orphan entries, and missing entries.', profile: 'lorebook', defaultTemp: 0.2, defaultMaxTokens: 4096 },
+	wikiLint: { label: 'Wiki Lint', description: 'Health-check the lorebook for contradictions, stale claims, orphan entries, and missing entries.', profile: 'lorebook', defaultTemp: 0.2, defaultMaxTokens: 16384 },
 };
 
 // ── Service Profile Groups ──

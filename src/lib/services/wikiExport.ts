@@ -61,7 +61,12 @@ const TYPE_LABELS: Record<EntryType, string> = {
 };
 
 function entryFilename(entry: Entry): string {
-	return `${slug(entry.name)}.md`;
+	// Include a short id suffix so two entries with case-only name differences
+	// ("The Wall" vs "the wall") don't collide in the flat filename namespace.
+	// Obsidian wikilinks resolve by display name, so the suffix is invisible
+	// when browsing the vault.
+	const suffix = entry.id ? `--${entry.id.slice(0, 8)}` : '';
+	return `${slug(entry.name)}${suffix}.md`;
 }
 
 function entryRelPath(entry: Entry): string {

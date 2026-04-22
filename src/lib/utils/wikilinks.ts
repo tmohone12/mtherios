@@ -8,6 +8,7 @@
  */
 
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import type { Entry } from '$lib/types';
 
 export const WIKI_HREF_PREFIX = '#wiki:';
@@ -86,11 +87,16 @@ export interface RenderedWiki {
 /**
  * Render markdown text with wikilinks. Returns HTML safe to drop into
  * `{@html ...}` plus the set of entry IDs referenced (for outbound display).
+ *
+ * The HTML is sanitized with DOMPurify to strip any <script>/<iframe>/
+ * onerror=... injected via user-authored entry descriptions (classifier
+ * output, SillyTavern imports, and manual edits are all untrusted).
  */
 export function renderWiki(text: string, entries: Entry[], excludeId?: string): RenderedWiki {
 	if (!text?.trim()) return { html: '', mentions: new Set() };
 	const { processed, mentions } = preprocessWikilinks(text, entries, excludeId);
-	const html = marked.parse(processed, { async: false }) as string;
+	const rawHtml = marked.parse(processed, { async: false }) as string;
+	const html = DOMPurify.sanitize(rawHtml, { ADD_ATTR: ['target'] });
 	return { html, mentions };
 }
 

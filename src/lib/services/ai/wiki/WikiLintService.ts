@@ -91,6 +91,18 @@ Respond ONLY with valid JSON matching the schema.`;
 Wiki:
 ${lines.join('\n')}`;
 
+		// Fail loud if the prompt is large enough that truncated output is likely.
+		// Rough chars→tokens ratio is ~4; we want ~70% headroom below the output
+		// budget to leave room for the structured JSON response.
+		const estInputTokens = Math.ceil((system.length + prompt.length) / 4);
+		const budget = this.serviceMaxTokens;
+		if (estInputTokens > budget * 3) {
+			throw new Error(
+				`Wiki lint prompt is too large (~${estInputTokens} input tokens vs ${budget} output budget). ` +
+					`Raise wikiLint.maxTokens in Settings, or narrow the lorebook (type filter / search) before running Health.`,
+			);
+		}
+
 		return this.generateStructured<WikiLintResult>(wikiLintResultSchema, system, prompt);
 	}
 }

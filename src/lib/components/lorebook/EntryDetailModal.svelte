@@ -27,6 +27,10 @@
 	let confirmDelete = $state(false);
 	let relationships = $state<EntryRelationship[]>([]);
 
+	// Legacy entries may be missing `injection` or have it partially populated.
+	// This default keeps the modal from crashing on first render.
+	const DEFAULT_INJECTION = { mode: 'keyword' as EntryInjectionMode, keywords: [] as string[], priority: 100 };
+
 	// Editable fields — re-init whenever the entry prop changes (cross-ref nav).
 	let name = $state(entry.name);
 	let type = $state<EntryType>(entry.type);
@@ -35,10 +39,10 @@
 	let aliases = $state(entry.aliases?.join(', ') ?? '');
 	let blacklisted = $state(entry.loreManagementBlacklisted ?? false);
 
-	// Injection
-	let injectionMode = $state<EntryInjectionMode>(entry.injection.mode);
-	let injectionPriority = $state(entry.injection.priority);
-	let keywords = $state(entry.injection.keywords.join(', '));
+	// Injection — guarded against legacy entries with missing fields.
+	let injectionMode = $state<EntryInjectionMode>(entry.injection?.mode ?? DEFAULT_INJECTION.mode);
+	let injectionPriority = $state(entry.injection?.priority ?? DEFAULT_INJECTION.priority);
+	let keywords = $state((entry.injection?.keywords ?? []).join(', '));
 
 	// State (deep copy)
 	let entryState = $state(JSON.parse(JSON.stringify(entry.state)));
@@ -60,9 +64,9 @@
 			hiddenInfo = e.hiddenInfo ?? '';
 			aliases = e.aliases?.join(', ') ?? '';
 			blacklisted = e.loreManagementBlacklisted ?? false;
-			injectionMode = e.injection.mode;
-			injectionPriority = e.injection.priority;
-			keywords = e.injection.keywords.join(', ');
+			injectionMode = e.injection?.mode ?? DEFAULT_INJECTION.mode;
+			injectionPriority = e.injection?.priority ?? DEFAULT_INJECTION.priority;
+			keywords = (e.injection?.keywords ?? []).join(', ');
 			entryState = JSON.parse(JSON.stringify(e.state));
 			confirmDelete = false;
 		});
