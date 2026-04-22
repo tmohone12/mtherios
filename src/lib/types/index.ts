@@ -763,6 +763,7 @@ export type ProviderType =
   | 'google-ai-studio' // OpenAI-compatible at generativelanguage.googleapis.com
   | 'google-vertex' // OpenAI-compatible at Vertex AI endpoint
   | 'anthropic-proxy' // Local proxy for Claude subscription users
+  | 'kimi' // Moonshot AI — Kimi K2 family, OpenAI-compatible
 
 // API Profile for saving OpenAI-compatible endpoint configurations
 export interface APIProfile {

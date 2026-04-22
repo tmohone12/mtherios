@@ -558,6 +558,27 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
     ],
     // No service defaults - user must configure models in Generation Settings
   },
+
+  kimi: {
+    name: 'Kimi (Moonshot)',
+    description: 'Moonshot AI — Kimi K2 family, long-context, strong tool use',
+    baseUrl: 'https://api.moonshot.ai/v1',
+    requiresApiKey: true,
+    capabilities: {
+      textGeneration: true,
+      imageGeneration: false,
+      structuredOutput: true,
+      reasoning: false,
+    },
+    fallbackModels: [
+      'kimi-k2-0905-preview',
+      'kimi-k2-0711-preview',
+      'moonshot-v1-128k',
+      'moonshot-v1-32k',
+      'moonshot-v1-8k',
+    ],
+    // No service defaults - user must configure models in Generation Settings
+  },
 }
 
 // ============================================================================
