@@ -16,7 +16,53 @@ import {
 } from '$lib/services/database';
 import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
-import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord } from '$lib/types';
+import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Chapter, StoryBeat } from '$lib/types';
+import type { WorldSimulationResult } from '$lib/services/ai/sdk/schemas/worldsim';
+import type { SeasonEffect } from '$lib/services/ai/generation/WorldSimulationService';
+
+/**
+ * Structured world-state snapshot assembled before narration.
+ * Replaces the old freeform string-based context block — each section
+ * helper of buildSystemPrompt can pull typed data directly.
+ */
+/** Display-only rumor shape — matches both stored RumorRecord and fresh WorldSim output. */
+export interface RumorDisplay {
+	content: string;
+	truthfulness: number;
+	spreadRadius: 'local' | 'regional' | 'continental';
+	sourceType: string;
+	originRegion: string;
+}
+
+export interface StateSnapshot {
+	arcs: Arc[];
+	chapters: Chapter[];
+	storyBeats: StoryBeat[];
+	currentLocation: Location | null;
+	presentCharacters: Character[];
+	equippedItems: Item[];
+	activeAgreements: Agreement[];
+	recentWorldEvents: WorldEvent[];
+	reachableRumors: RumorDisplay[];
+	factionActions: FactionActionRecord[];
+	worldSim: (WorldSimulationResult & { seasonEffect?: SeasonEffect }) | null;
+}
+
+function emptySnapshot(): StateSnapshot {
+	return {
+		arcs: [],
+		chapters: [],
+		storyBeats: [],
+		currentLocation: null,
+		presentCharacters: [],
+		equippedItems: [],
+		activeAgreements: [],
+		recentWorldEvents: [],
+		reachableRumors: [],
+		factionActions: [],
+		worldSim: null,
+	};
+}
 import type { ChatMessage } from '$lib/services/ai/sdk/generate';
 import { getModelContextWindow } from '$lib/services/ai/context/modelWindows';
 import { settings } from '$lib/stores/settings.svelte';
@@ -332,176 +378,50 @@ class StoryStore {
 	}
 
 	/**
-	 * Build the system prompt for narrative generation.
-	 * Core narrator instructions + a context block (the orchestrator passes
-	 * a lightweight state snapshot here).
+	 * Build the full narrator system prompt.
+	 *
+	 * Sections, in order:
+	 *   1. Header              — per-story preamble, role declaration, POV/tense
+	 *   2. Instructions        — tone, style, agency, world posture, response rules
+	 *   3. Tools               — what the world-update classifier will extract after narration
+	 *   4. Characters          — current scene: protagonist + NPCs + equipped items + location/time/meters
+	 *   5. Arcs                — condensed long-term story history
+	 *   6. Chapters            — recent chapter summaries not yet condensed into arcs
+	 *   7. Entry History       — brief preamble (actual turns flow as conversation messages)
+	 *   8. Living World        — agreements, rumors, faction moves, world sim signals
+	 *   9. Final Instructions  — closing directives + send-the-reply directive
+	 *
+	 * A caller that has pre-fetched a StateSnapshot (orchestrator path) passes
+	 * it in so sections 4/5/6/8 can be populated. Callers using this for token
+	 * estimation or previews can omit the argument.
 	 */
-	buildSystemPrompt(contextBlock?: string): string {
+	buildSystemPrompt(snapshot?: StateSnapshot): string {
 		const s = this.currentStory;
 		if (!s) return '';
 
 		const mode = s.mode ?? 'adventure';
-		const pov = s.settings?.pov ?? 'second';
-		const tense = s.settings?.tense ?? 'present';
-		const protagonist = this.protagonist;
-		const tenseWord = tense === 'past' ? 'past' : 'present';
-		const genre = s.genre ?? '';
+		const snap = snapshot ?? emptySnapshot();
 
-		let prompt = '';
+		const parts: string[] = [];
+		parts.push(this.#sectionHeader(s, mode));
+		parts.push(this.#sectionInstructions(s, mode));
+		if (mode === 'adventure') parts.push(this.#sectionTools());
+		const chars = this.#sectionCharacters(s, snap);
+		if (chars) parts.push(chars);
+		const arcs = this.#sectionArcs(snap);
+		if (arcs) parts.push(arcs);
+		const chapters = this.#sectionChapters(snap);
+		if (chapters) parts.push(chapters);
+		parts.push(this.#sectionEntryHistoryPreamble(mode));
+		const lw = this.#sectionLivingWorld(snap);
+		if (lw) parts.push(lw);
+		parts.push(this.#sectionFinalInstructions(mode));
 
-		// ── Per-story header prompt (preamble) ──
-		if (s.headerPrompt) {
-			prompt += s.headerPrompt + '\n\n';
-		}
+		let prompt = parts.filter(Boolean).join('\n\n');
 
-		// ── Compacted lore (button-controlled world state, highest attention weight) ──
-		if (s.compactedLore) {
-			prompt += `## World State\n\n${s.compactedLore}\n\n`;
-		}
-
-		// ── Core narrator instructions ──
+		// Resolve role tags (adventure mode only)
 		if (mode === 'adventure') {
-			const userName = protagonist?.name ?? 'the player';
-			const isThird = pov === 'third';
-			const personLabel = isThird ? 'third person' : 'second person (you/your)';
-
-			prompt += `You are the game master of an interactive text adventure. Write in ${tenseWord} tense, ${personLabel}.\n\n`;
-
-			// ── Role tags: who controls what ──
-			const desc = protagonist?.description ? ` — ${protagonist.description}` : '';
-			prompt += `## Roles\n\n`;
-
-			prompt += `**{{user}}** = ${userName}${desc}\n`;
-			prompt += `The player. You NEVER speak, act, think, or move for {{user}}.\n`;
-			prompt += `Lines starting with ">" are commands — interpret and narrate the result.\n\n`;
-
-			prompt += `**{{char}}** = All NPCs. You control them — dialogue, actions, reactions.\n`;
-			prompt += `Each has their own voice, agenda, and autonomy. They can refuse, lie, attack, or help.\n\n`;
-
-			prompt += `**{{world}}** = Environment, weather, time, physics, consequences.\n`;
-			prompt += `Sensory and immediate. The world remembers. Actions ripple.\n\n`;
-
-			// ── Tone, themes, and world posture ──
-			prompt += `## Role\n`;
-			prompt += `You control the entire world and every NPC. Never speak, think, or act for the player's character. Narrate strictly through the player character's senses: what they see, hear, smell, taste, feel on their skin, and intuit. Describe NPC actions, words, body language, glances, smells, and the things left unsaid.\n\n`;
-
-			prompt += `## Tone & Style\n`;
-			prompt += `Grim, grounded, morally complex. Rich sensory prose: cold steel, woodsmoke, blood, wet wool, horse sweat, cunt, cum, fear, and ambition. Mix short, brutal sentences with rolling, weighted ones. Irony and looming doom thread every scene.\n\n`;
-
-			prompt += `## Agency & Consequences\n`;
-			prompt += `No railroading. Every choice branches into steel, words, gold, threats, mercy, seduction, or cunning. Consequences ripple for years — rumors spread faster than ravens, reputations curdle, alliances rot, old favors and humiliations remembered in blood or flesh.\n\n`;
-
-			prompt += `## Ambitions & Theory of Mind\n`;
-			prompt += `Every NPC has their own ambitions, fears, secrets, and limited knowledge. Show these through what they do and say, never direct statements. A lord may hunger for a crown but only reveal it in a hungry glance or careful word. A servant may betray for coin but hide it behind trembling hands. NPCs do not know things they could not realistically know. They have blind spots, make mistakes, and act on incomplete information. Reveal their true motives slowly through consistent behavior and slips.\n\n`;
-
-			prompt += `## Sex & Deviancy\n`;
-			prompt += `Lust is power, politics, and human weakness. Portray sex raw and consequential: brothels thick with sweat and myrrh, incestuous hunger in noble blood, lords rutting servants or whores, rape as weapon or drunken impulse, bastards born of ambition or lust, forbidden fucks in shadowed alcoves and godswoods. Never fade to black. Never romanticize unless characters delude themselves. Sex forges alliances, creates heirs, breaks marriages, and stains reputations forever. Treat it with the same gravity as battle or betrayal.\n\n`;
-
-			prompt += `## Power & Politics\n`;
-			prompt += `Power is fragile and costly. Armies eat gold and men. Fear turns to hatred. One scandal or bastard can topple a house. Dragons are living weapons — willful, hungry, bankrupting kingdoms.\n\n`;
-
-			prompt += `## Magic (Valyrian Tradition)\n`;
-			prompt += `Magic is real and waking. Blood and trained mind are the keys. Ambient mana thickens near dragons and ancient places. As dragons grow, the world shifts from low-fantasy grit toward myth. Glass candles, dragon-bonding, firespeaking, blood wards, flesh-shaping, shadowbinding, dragonsteel — all possible but costly. Novices pay heavily. Masters reshape the world. Large workings draw notice from red priests, warlocks, and worse. Fire and ice magics collide in the bones of the age.\n\n`;
-
-			prompt += `## Sensitive Content\n`;
-			prompt += `War, betrayal, torture, rape, incest, ambition, grief, and child death — portray unflinchingly but with gravity. A dead child is a dead child. A sacked village has names and faces. A brutal fuck leaves bruises and consequences.\n\n`;
-
-			prompt += `## Narrator Rules\n`;
-			prompt += `- Begin each response with place, time, and atmosphere.\n`;
-			prompt += `- End on tension, consequence, or an unanswered question.\n`;
-			prompt += `- Track the rising tide of magic as the story advances.\n\n`;
-		} else {
-			prompt += `You are a skilled fiction writer. Write in ${tenseWord} tense, ${pov} person.\n\n`;
-			if (protagonist) prompt += `The main character is ${protagonist.name}. ${protagonist.description ?? ''}\n`;
-			prompt += `Write prose based on the author's directions.\n`;
-		}
-
-		// ── Genre & setting ──
-		if (genre) prompt += `\nGenre: ${genre}\n`;
-		if (s.description) prompt += `\nSetting: ${s.description}\n`;
-
-		if (mode === 'adventure') {
-			// ── Response rules ──
-			prompt += `\n## Response Length\n`;
-			prompt += `Match length to action weight: 1-2 sentences for routine, a paragraph for exploration, up to 3 for combat/drama. Conversation: let NPCs respond, then pause for {{user}}.\n`;
-		} else {
-			// ── Literary craft (creative writing mode) ──
-			prompt += `\n## Craft\n`;
-			prompt += `Show, never tell. Render scenes through specific sensory details, character actions, and environmental cues — not declarative statements. Ground abstract emotions in concrete experience: the quality of light, texture of air, the weight of silence. Trust readers to perceive depths without over-explanation.\n\n`;
-			prompt += `Vary sentence rhythm deliberately. Short sentences for punch. Longer, flowing constructions to build atmosphere. Fragments for emphasis. Control tension through sentence length, paragraph breaks, and scene cuts.\n\n`;
-			prompt += `Choose the exact word, not its cousin — "trudged" vs "walked" vs "strode" each paint different worlds. Write fresh, unexpected imagery that illuminates rather than decorates. Embed subtext beneath dialogue and action; characters rarely say exactly what they mean.\n\n`;
-			prompt += `Dialogue must sound like real speech: distinct voices, natural hesitations, interruptions, the music of how each character talks. No character should be interchangeable with another.\n\n`;
-
-			// ── Genre-adaptive sophistication (creative writing only) ──
-			if (genre) {
-				const g = genre.toLowerCase();
-				if (g.includes('literary') || g.includes('drama')) {
-					prompt += `This is literary fiction. Favor dense imagery, psychological complexity, and layered meaning. Let structure and prose style carry thematic weight.\n\n`;
-				} else if (g.includes('horror') || g.includes('thriller') || g.includes('mystery')) {
-					prompt += `Build dread through implication, not declaration. Let the unseen carry more weight than the shown. Pacing is everything — draw out tension, then cut.\n\n`;
-				} else if (g.includes('comedy') || g.includes('humor') || g.includes('satire')) {
-					prompt += `Humor lives in timing, specificity, and the gap between expectation and reality. Never signal that something is funny — just be funny.\n\n`;
-				} else if (g.includes('romance')) {
-					prompt += `Tension lives in proximity, longing, and the unsaid. Physical chemistry is shown through involuntary reactions — breath catching, awareness of warmth, the charged distance between bodies.\n\n`;
-				}
-			}
-
-			prompt += `AVOID:\n`;
-			prompt += `- Purple prose that sacrifices clarity for flourish\n`;
-			prompt += `- Naming emotions directly ("she felt sad") instead of showing their physical manifestations\n`;
-			prompt += `- Clichéd phrases that deaden impact ("a chill ran down their spine", "time seemed to stop")\n`;
-			prompt += `- Over-explaining what readers can infer from context\n`;
-			prompt += `- Inconsistent voice or sudden unearned style shifts\n`;
-
-			prompt += `\n## Structure\n`;
-			prompt += `- Write 2-4 paragraphs per response\n`;
-			prompt += `- End at a moment that invites the next action\n`;
-			prompt += `- Stay consistent with established world facts\n`;
-		}
-
-		// ── Dice rolls (adventure mode) ──
-		if (mode === 'adventure') {
-			prompt += `\n## Dice Rolls\n`;
-			prompt += `When the outcome is genuinely uncertain, output a roll marker at the END of your response:\n\n`;
-			prompt += `{{roll:DICE:DC:ABILITY:DESCRIPTION}}\n\n`;
-			prompt += `DICE = D&D notation (1d20, 1d20+3). DC = standard difficulty. ABILITY = STR/DEX/CON/INT/WIS/CHA.\n`;
-			prompt += `STOP writing after the marker. Most turns should have no roll.\n`;
-			prompt += `If {{user}} includes a roll result like "[Roll: 1d20+3 = 17 vs DC 14 — SUCCESS]", narrate the outcome accordingly.\n`;
-		}
-
-		// ── Assembled context (scene, chapters, arcs, lore, retrieved memory) ──
-		if (contextBlock) {
-			prompt += '\n' + contextBlock;
-		}
-
-		// ── Final directions (last thing the narrator reads before generating) ──
-		if (mode === 'adventure') {
-			prompt += `\n═══ FINAL DIRECTIONS ═══\n\n`;
-			prompt += `You are a TEXT ADVENTURE game master. Not a novelist. Not a storyteller. A reactive GM.\n\n`;
-			prompt += `AGENCY:\n`;
-			prompt += `- {{user}} controls their character. You control everything else.\n`;
-			prompt += `- NEVER write {{user}}'s dialogue, thoughts, decisions, or actions.\n`;
-			prompt += `- NEVER move {{user}} unless they said to move.\n`;
-			prompt += `- NEVER skip ahead. One action → one immediate result.\n`;
-			prompt += `- STOP when {{user}} needs to choose what to do next.\n\n`;
-			prompt += `FORMAT:\n`;
-			prompt += `- Write plain prose. No > action lines. No markdown headers. No meta-commentary.\n`;
-			prompt += `- Dialogue in "quotes". Actions in plain text.\n`;
-			prompt += `- Short for simple actions. Longer for complex scenes. Never padded.\n\n`;
-			prompt += `WORLD:\n`;
-			prompt += `- Describe what {{user}} can SEE, HEAR, SMELL, FEEL — not what they think or feel about it.\n`;
-			prompt += `- NPCs act on their own motivations. They can lie, refuse, attack, flee, or help.\n`;
-			prompt += `- NPCs remember past interactions. Reference what they know.\n`;
-			prompt += `- Consequences are real. The world does not reset.\n`;
-			prompt += `- Write with weight. Every choice has a cost. NPCs have their own agendas and survival instincts.\n`;
-			prompt += `- Don't pull punches. If the player walks into a trap, spring it. If an ally is outnumbered, they can die.\n`;
-			prompt += `- Favor gritty specificity over generic fantasy: the smell of a wound, the sound of rain on mail, the taste of stale bread.\n`;
-			prompt += `- Let silence and implication do work. Not every threat needs to be stated. A lord's pause before answering says more than a speech.\n`;
-		}
-
-		// ── Resolve role tags ──
-		if (mode === 'adventure') {
-			const userName = protagonist?.name ?? 'the player';
+			const userName = this.protagonist?.name ?? 'the player';
 			prompt = prompt
 				.replace(/\{\{user\}\}/g, userName)
 				.replace(/\{\{char\}\}/g, 'NPCs')
@@ -511,245 +431,468 @@ class StoryStore {
 		return prompt;
 	}
 
-	/**
-	 * Build a state snapshot for the orchestrator path.
-	 * Includes arc history, recent chapter summaries, and current world state.
-	 */
-	async buildStateSnapshot(): Promise<string> {
-		const s = this.currentStory;
-		if (!s) return '';
-
+	// ── Section 1: Header ───────────────────────────────────────────────────
+	#sectionHeader(s: Story, mode: string): string {
+		const pov = s.settings?.pov ?? 'second';
+		const tense = s.settings?.tense ?? 'present';
+		const tenseWord = tense === 'past' ? 'past' : 'present';
+		const protagonist = this.protagonist;
 		const parts: string[] = [];
 
-		// ── Arc history (compressed long-term memory) ──
-		// Recent arcs get full detail; older arcs get a one-line summary to save tokens.
-		try {
-			const arcs = await getArcs(s.id);
-			if (arcs.length > 0) {
-				const FULL_ARC_COUNT = 5;
-				let arcBlock = '## Story History\n';
+		if (s.headerPrompt) parts.push(s.headerPrompt);
+		if (s.compactedLore) parts.push(`## World State\n\n${s.compactedLore}`);
 
-				// Older arcs: one-liner each
-				if (arcs.length > FULL_ARC_COUNT) {
-					const older = arcs.slice(0, arcs.length - FULL_ARC_COUNT);
-					arcBlock += '\n### Earlier Arcs (condensed)\n';
-					for (const arc of older) {
-						arcBlock += `- **Arc ${arc.arcNumber}: ${arc.title}** (Ch.${arc.chapterRange}) — ${arc.summary.slice(0, 150)}...\n`;
-					}
-				}
+		if (mode === 'adventure') {
+			const isThird = pov === 'third';
+			const personLabel = isThird ? 'third person' : 'second person (you/your)';
+			parts.push(`You are the game master of an interactive text adventure. Write in ${tenseWord} tense, ${personLabel}.`);
 
-				// Recent arcs: full detail
-				const recent = arcs.slice(-FULL_ARC_COUNT);
-				arcBlock += '\n### Recent Arcs\n';
-				for (const arc of recent) {
-					arcBlock += `\n**Arc ${arc.arcNumber}: ${arc.title}** (Ch.${arc.chapterRange})\n`;
-					arcBlock += arc.summary + '\n';
-					if (arc.keyPlotPoints?.length) arcBlock += `Key events: ${arc.keyPlotPoints.join('; ')}\n`;
-					if (arc.characterArcs?.length) arcBlock += `Character development: ${arc.characterArcs.map(ca => `${ca.name}: ${ca.development}`).join('; ')}\n`;
-				}
+			const userName = protagonist?.name ?? 'the player';
+			const desc = protagonist?.description ? ` — ${protagonist.description}` : '';
+			const roles: string[] = [];
+			roles.push(`## Roles`);
+			roles.push(`**{{user}}** = ${userName}${desc}`);
+			roles.push(`The player. You NEVER speak, act, think, or move for {{user}}.`);
+			roles.push(`Lines starting with ">" are commands — interpret and narrate the result.`);
+			roles.push('');
+			roles.push(`**{{char}}** = All NPCs. You control them — dialogue, actions, reactions.`);
+			roles.push(`Each has their own voice, agenda, and autonomy. They can refuse, lie, attack, or help.`);
+			roles.push('');
+			roles.push(`**{{world}}** = Environment, weather, time, physics, consequences.`);
+			roles.push(`Sensory and immediate. The world remembers. Actions ripple.`);
+			parts.push(roles.join('\n'));
+		} else {
+			parts.push(`You are a skilled fiction writer. Write in ${tenseWord} tense, ${pov} person.`);
+			if (protagonist) parts.push(`The main character is ${protagonist.name}. ${protagonist.description ?? ''}`);
+			parts.push(`Write prose based on the author's directions.`);
+		}
 
-				const allThreads = arcs.flatMap(a => a.unresolvedThreads).filter(Boolean);
-				if (allThreads.length > 0) {
-					arcBlock += `\n**Open threads:** ${allThreads.join('; ')}\n`;
+		if (s.genre) parts.push(`Genre: ${s.genre}`);
+		if (s.description) parts.push(`Setting: ${s.description}`);
+
+		return parts.join('\n\n');
+	}
+
+	// ── Section 2: Instructions ─────────────────────────────────────────────
+	#sectionInstructions(s: Story, mode: string): string {
+		const parts: string[] = ['## Instructions'];
+
+		if (mode === 'adventure') {
+			parts.push(`### Role\nYou control the entire world and every NPC. Never speak, think, or act for the player's character. Narrate strictly through the player character's senses: what they see, hear, smell, taste, feel on their skin, and intuit. Describe NPC actions, words, body language, glances, smells, and the things left unsaid.`);
+			parts.push(`### Tone & Style\nGrim, grounded, morally complex. Rich sensory prose: cold steel, woodsmoke, blood, wet wool, horse sweat, cunt, cum, fear, and ambition. Mix short, brutal sentences with rolling, weighted ones. Irony and looming doom thread every scene.`);
+			parts.push(`### Agency & Consequences\nNo railroading. Every choice branches into steel, words, gold, threats, mercy, seduction, or cunning. Consequences ripple for years — rumors spread faster than ravens, reputations curdle, alliances rot, old favors and humiliations remembered in blood or flesh.`);
+			parts.push(`### Ambitions & Theory of Mind\nEvery NPC has their own ambitions, fears, secrets, and limited knowledge. Show these through what they do and say, never direct statements. A lord may hunger for a crown but only reveal it in a hungry glance or careful word. A servant may betray for coin but hide it behind trembling hands. NPCs do not know things they could not realistically know. They have blind spots, make mistakes, and act on incomplete information. Reveal their true motives slowly through consistent behavior and slips.`);
+			parts.push(`### Sex & Deviancy\nLust is power, politics, and human weakness. Portray sex raw and consequential: brothels thick with sweat and myrrh, incestuous hunger in noble blood, lords rutting servants or whores, rape as weapon or drunken impulse, bastards born of ambition or lust, forbidden fucks in shadowed alcoves and godswoods. Never fade to black. Never romanticize unless characters delude themselves. Sex forges alliances, creates heirs, breaks marriages, and stains reputations forever. Treat it with the same gravity as battle or betrayal.`);
+			parts.push(`### Power & Politics\nPower is fragile and costly. Armies eat gold and men. Fear turns to hatred. One scandal or bastard can topple a house. Dragons are living weapons — willful, hungry, bankrupting kingdoms.`);
+			parts.push(`### Magic (Valyrian Tradition)\nMagic is real and waking. Blood and trained mind are the keys. Ambient mana thickens near dragons and ancient places. As dragons grow, the world shifts from low-fantasy grit toward myth. Glass candles, dragon-bonding, firespeaking, blood wards, flesh-shaping, shadowbinding, dragonsteel — all possible but costly. Novices pay heavily. Masters reshape the world. Large workings draw notice from red priests, warlocks, and worse. Fire and ice magics collide in the bones of the age.`);
+			parts.push(`### Sensitive Content\nWar, betrayal, torture, rape, incest, ambition, grief, and child death — portray unflinchingly but with gravity. A dead child is a dead child. A sacked village has names and faces. A brutal fuck leaves bruises and consequences.`);
+			parts.push(`### Narrator Rules\n- Begin each response with place, time, and atmosphere.\n- End on tension, consequence, or an unanswered question.\n- Track the rising tide of magic as the story advances.`);
+			parts.push(`### Response Length\nMatch length to action weight: 1-2 sentences for routine, a paragraph for exploration, up to 3 for combat/drama. Conversation: let NPCs respond, then pause for {{user}}.`);
+			parts.push(`### Dice Rolls\nWhen the outcome is genuinely uncertain, output a roll marker at the END of your response:\n\n{{roll:DICE:DC:ABILITY:DESCRIPTION}}\n\nDICE = D&D notation (1d20, 1d20+3). DC = standard difficulty. ABILITY = STR/DEX/CON/INT/WIS/CHA.\nSTOP writing after the marker. Most turns should have no roll.\nIf {{user}} includes a roll result like "[Roll: 1d20+3 = 17 vs DC 14 — SUCCESS]", narrate the outcome accordingly.`);
+		} else {
+			parts.push(`### Craft\nShow, never tell. Render scenes through specific sensory details, character actions, and environmental cues — not declarative statements. Ground abstract emotions in concrete experience: the quality of light, texture of air, the weight of silence. Trust readers to perceive depths without over-explanation.\n\nVary sentence rhythm deliberately. Short sentences for punch. Longer, flowing constructions to build atmosphere. Fragments for emphasis. Control tension through sentence length, paragraph breaks, and scene cuts.\n\nChoose the exact word, not its cousin — "trudged" vs "walked" vs "strode" each paint different worlds. Write fresh, unexpected imagery that illuminates rather than decorates. Embed subtext beneath dialogue and action; characters rarely say exactly what they mean.\n\nDialogue must sound like real speech: distinct voices, natural hesitations, interruptions, the music of how each character talks. No character should be interchangeable with another.`);
+
+			if (s.genre) {
+				const g = s.genre.toLowerCase();
+				if (g.includes('literary') || g.includes('drama')) {
+					parts.push(`This is literary fiction. Favor dense imagery, psychological complexity, and layered meaning. Let structure and prose style carry thematic weight.`);
+				} else if (g.includes('horror') || g.includes('thriller') || g.includes('mystery')) {
+					parts.push(`Build dread through implication, not declaration. Let the unseen carry more weight than the shown. Pacing is everything — draw out tension, then cut.`);
+				} else if (g.includes('comedy') || g.includes('humor') || g.includes('satire')) {
+					parts.push(`Humor lives in timing, specificity, and the gap between expectation and reality. Never signal that something is funny — just be funny.`);
+				} else if (g.includes('romance')) {
+					parts.push(`Tension lives in proximity, longing, and the unsaid. Physical chemistry is shown through involuntary reactions — breath catching, awareness of warmth, the charged distance between bodies.`);
 				}
-				parts.push(arcBlock);
 			}
-		} catch { /* skip if unavailable */ }
 
-		// ── Recent chapters (uncovered by arcs) ──
-		try {
-			const chapters = await getChapters(s.id);
-			const arcs = await getArcs(s.id);
-			if (chapters.length > 0) {
-				const coveredIds = new Set(arcs.flatMap(a => a.chapterIds));
-				const uncovered = chapters
-					.filter(c => c.pinned || !coveredIds.has(c.id))
-					.sort((a, b) => a.number - b.number);
+			parts.push(`### Avoid\n- Purple prose that sacrifices clarity for flourish\n- Naming emotions directly ("she felt sad") instead of showing their physical manifestations\n- Clichéd phrases that deaden impact ("a chill ran down their spine", "time seemed to stop")\n- Over-explaining what readers can infer from context\n- Inconsistent voice or sudden unearned style shifts`);
+			parts.push(`### Structure\n- Write 2-4 paragraphs per response\n- End at a moment that invites the next action\n- Stay consistent with established world facts`);
+		}
 
-				if (uncovered.length > 0) {
-					let chBlock = '## Recent Story\n';
-					for (const ch of uncovered) {
-						chBlock += `\n**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**\n${ch.summary}\n`;
-						if (ch.emotionalTone) chBlock += `[Tone: ${ch.emotionalTone}]\n`;
-						if (ch.plotThreads?.length) chBlock += `[Threads: ${ch.plotThreads.join(', ')}]\n`;
-						if (ch.characters?.length) chBlock += `[Characters: ${ch.characters.join(', ')}]\n`;
-						if (ch.locations?.length) chBlock += `[Locations: ${ch.locations.join(', ')}]\n`;
-					}
-					parts.push(chBlock);
-				}
+		return parts.join('\n\n');
+	}
+
+	// ── Section 3: Tools ────────────────────────────────────────────────────
+	// Describes the post-stream world-update extraction, so the narrator writes
+	// prose whose world-state changes are explicit and extractable.
+	#sectionTools(): string {
+		return [
+			'## Tools',
+			'After you finish narrating, a separate world-update step reads your prose and extracts structured deltas. You do not call these tools yourself — the system does, based on what you wrote. Write narration that makes the deltas obvious: name characters and locations explicitly, state clear outcomes, let time advance visibly.',
+			'',
+			'- **update_world_state** — records characters (status, traits, relationships, presence), locations (current, connections), items (quantity, equipped, location), time passed, mood, NPC conversations and what they revealed/learned, relationship changes, story beats, meter changes (sanity, reputation, etc.), and new/broken/fulfilled agreements.',
+			'- **query_lore** — looks up existing lorebook entries when facts about a character, location, or faction need confirmation.',
+			'- **create_lore_entry** — registers a newly-introduced character, location, faction, item, concept, or event so it persists.',
+		].join('\n');
+	}
+
+	// ── Section 4: Characters ───────────────────────────────────────────────
+	#sectionCharacters(s: Story, snap: StateSnapshot): string {
+		const lines: string[] = ['## Characters'];
+
+		// Protagonist
+		const protag = this.protagonist;
+		if (protag) {
+			lines.push('', `### Protagonist`);
+			lines.push(`${protag.name}${protag.description ? ' — ' + protag.description : ''}`);
+			if (protag.traits?.length) lines.push(`Traits: ${protag.traits.join(', ')}`);
+		}
+
+		// Current scene (location, time, meters, equipped items)
+		const sceneLines: string[] = [];
+		const currentLoc = snap.currentLocation ?? this.locations.find(l => l.current) ?? null;
+		if (currentLoc) {
+			sceneLines.push(`Location: ${currentLoc.name}${currentLoc.description ? ' — ' + currentLoc.description : ''}`);
+		}
+		const t = s.timeTracker;
+		if (t) {
+			const pad = (n: number) => String(n).padStart(2, '0');
+			sceneLines.push(`Time: Day ${t.days}, ${pad(t.hours)}:${pad(t.minutes)}`);
+		}
+		const equipped = snap.equippedItems.length > 0 ? snap.equippedItems : this.items.filter(i => i.equipped);
+		if (equipped.length > 0) {
+			sceneLines.push(`Inventory: ${equipped.map(i => i.name).join(', ')}`);
+		}
+		if (s.meters && s.meters.length > 0) {
+			sceneLines.push(`Meters: ${s.meters.map(m => `${m.name}: ${m.value}/${m.max}${m.visible ? '' : ' [hidden from player]'}`).join('; ')}`);
+		}
+		if (sceneLines.length > 0) {
+			lines.push('', `### Current Scene`, ...sceneLines);
+		}
+
+		// Present NPCs
+		const present = snap.presentCharacters.length > 0
+			? snap.presentCharacters
+			: this.characters.filter(c => c.status === 'active' && c.relationship !== 'self').slice(0, 6);
+		if (present.length > 0) {
+			lines.push('', `### Present`);
+			for (const c of present) {
+				const rel = c.relationship ? ` (${c.relationship})` : '';
+				const desc = c.description ? ` — ${c.description}` : '';
+				lines.push(`- ${c.name}${rel}${desc}`);
 			}
-		} catch { /* skip if unavailable */ }
+		}
 
-		// ── World simulation (DM plot injection, rumors, faction moves) ──
-		const ws = this.lastWorldSimResult;
+		// Recent story beats (last 2) — characterizing context
+		const recentBeats = snap.storyBeats.filter(b => b.status === 'active').slice(-2);
+		if (recentBeats.length > 0) {
+			lines.push('', `### Recent Beats`, ...recentBeats.map(b => `- ${b.title}`));
+		}
+
+		return lines.length > 1 ? lines.join('\n') : '';
+	}
+
+	// ── Section 5: Arcs ─────────────────────────────────────────────────────
+	#sectionArcs(snap: StateSnapshot): string {
+		const arcs = snap.arcs;
+		if (arcs.length === 0) return '';
+
+		const FULL_ARC_COUNT = 5;
+		const out: string[] = ['## Arcs'];
+
+		if (arcs.length > FULL_ARC_COUNT) {
+			const older = arcs.slice(0, arcs.length - FULL_ARC_COUNT);
+			out.push('', `### Earlier (condensed)`);
+			for (const arc of older) {
+				out.push(`- **Arc ${arc.arcNumber}: ${arc.title}** (Ch.${arc.chapterRange}) — ${arc.summary.slice(0, 150)}...`);
+			}
+		}
+
+		const recent = arcs.slice(-FULL_ARC_COUNT);
+		out.push('', `### Recent`);
+		for (const arc of recent) {
+			out.push('', `**Arc ${arc.arcNumber}: ${arc.title}** (Ch.${arc.chapterRange})`);
+			out.push(arc.summary);
+			if (arc.keyPlotPoints?.length) out.push(`Key events: ${arc.keyPlotPoints.join('; ')}`);
+			if (arc.characterArcs?.length) out.push(`Character development: ${arc.characterArcs.map(ca => `${ca.name}: ${ca.development}`).join('; ')}`);
+		}
+
+		const allThreads = arcs.flatMap(a => a.unresolvedThreads).filter(Boolean);
+		if (allThreads.length > 0) {
+			out.push('', `**Open threads:** ${allThreads.join('; ')}`);
+		}
+
+		return out.join('\n');
+	}
+
+	// ── Section 6: Chapters ─────────────────────────────────────────────────
+	#sectionChapters(snap: StateSnapshot): string {
+		const chapters = snap.chapters;
+		if (chapters.length === 0) return '';
+
+		const coveredIds = new Set(snap.arcs.flatMap(a => a.chapterIds));
+		const uncovered = chapters
+			.filter(c => c.pinned || !coveredIds.has(c.id))
+			.sort((a, b) => a.number - b.number);
+		if (uncovered.length === 0) return '';
+
+		const out: string[] = ['## Chapters'];
+		for (const ch of uncovered) {
+			out.push('', `**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**`);
+			out.push(ch.summary);
+			if (ch.emotionalTone) out.push(`[Tone: ${ch.emotionalTone}]`);
+			if (ch.plotThreads?.length) out.push(`[Threads: ${ch.plotThreads.join(', ')}]`);
+			if (ch.characters?.length) out.push(`[Characters: ${ch.characters.join(', ')}]`);
+			if (ch.locations?.length) out.push(`[Locations: ${ch.locations.join(', ')}]`);
+		}
+		return out.join('\n');
+	}
+
+	// ── Section 7: Entry History preamble ───────────────────────────────────
+	#sectionEntryHistoryPreamble(mode: string): string {
+		if (mode !== 'adventure') {
+			return `## Entry History\nPrior prose follows as conversation turns. Continue from the most recent turn.`;
+		}
+		return `## Entry History\nThe most recent exchanges follow as conversation turns. Each {{user}} turn is their next action; each assistant turn is your prior narration. Continue seamlessly from the latest turn — do not recap what just happened.`;
+	}
+
+	// ── Section 8: Living World ─────────────────────────────────────────────
+	#sectionLivingWorld(snap: StateSnapshot): string {
+		const out: string[] = [];
+
+		// Active agreements — cap at 12 for budget
+		const active = snap.activeAgreements;
+		if (active.length > 0) {
+			out.push('### Active Agreements');
+			for (const a of active.slice(0, 12)) {
+				const secrecyTag = a.secrecy === 'secret' ? ' [secret]' : a.secrecy === 'known' ? ' [known to some]' : '';
+				const terms = a.terms.length > 140 ? a.terms.slice(0, 137) + '…' : a.terms;
+				out.push(`- (${a.category}${secrecyTag}) [id:${a.id.slice(0, 8)}] ${a.parties.join(' ↔ ')}: ${terms}`);
+			}
+			if (active.length > 12) out.push(`  (+${active.length - 12} more active agreements)`);
+		}
+
+		// Rumors (reachable from current location)
+		if (snap.reachableRumors.length > 0) {
+			if (out.length > 0) out.push('');
+			out.push('### Rumors & Whispers');
+			out.push('Weave these as NPC dialogue, tavern gossip, overheard conversation.');
+			for (const rumor of snap.reachableRumors) {
+				const tag = rumor.truthfulness >= 0.7 ? 'reliable'
+					: rumor.truthfulness >= 0.4 ? 'uncertain' : 'dubious';
+				out.push(`- (${tag}, via ${rumor.sourceType}) ${rumor.content}`);
+			}
+		}
+
+		// Faction actions — recent high-urgency
+		const urgentFactions = snap.factionActions
+			.filter(fa => fa.status === 'active' && (fa.urgency === 'critical' || fa.urgency === 'high'))
+			.slice(0, 6);
+		if (urgentFactions.length > 0) {
+			if (out.length > 0) out.push('');
+			out.push('### Faction Moves');
+			for (const fa of urgentFactions) {
+				const target = fa.target ? ` → ${fa.target}` : '';
+				out.push(`- (${fa.urgency}) ${fa.factionName}${target}: ${fa.action}`);
+			}
+		}
+
+		// Recent world events (consequence system)
+		if (snap.recentWorldEvents.length > 0) {
+			if (out.length > 0) out.push('');
+			out.push('### Recent World Events');
+			for (const event of snap.recentWorldEvents) {
+				out.push(`- ${event.name}: ${event.description}`);
+				const applied = event.consequences.filter(c => c.status === 'applied');
+				for (const c of applied) out.push(`  → ${c.description}`);
+			}
+		}
+
+		// World simulation signals (narrative, plot injection, tension, season, plot seeds)
+		const ws = snap.worldSim;
 		if (ws) {
-			let wsBlock = '';
-
-			if (ws.worldNarrative) {
-				wsBlock += `[WORLD STATE] ${ws.worldNarrative}\n`;
-			}
-
+			const wsLines: string[] = [];
+			if (ws.worldNarrative) wsLines.push(`[WORLD STATE] ${ws.worldNarrative}`);
 			if (ws.plotInjection) {
 				const pi = ws.plotInjection;
 				const urgencyLabel = pi.urgency === 'immediate' ? 'WEAVE THIS INTO THE NEXT RESPONSE'
 					: pi.urgency === 'emerging' ? 'INTRODUCE THIS SOON'
 					: 'SUBTLY HINT AT THIS';
-				wsBlock += `\n[DM PLOT INJECTION — ${urgencyLabel}]\n`;
-				wsBlock += pi.prose + '\n';
-				if (pi.narratorDirective) wsBlock += `[How: ${pi.narratorDirective}]\n`;
+				wsLines.push(`[DM PLOT INJECTION — ${urgencyLabel}]`);
+				wsLines.push(pi.prose);
+				if (pi.narratorDirective) wsLines.push(`[How: ${pi.narratorDirective}]`);
 			}
-
-			if (ws.rumors && ws.rumors.length > 0) {
-				const currentLocName = (this.locations.find(l => l.current)?.name ?? '').toLowerCase();
-				const reachable = ws.rumors.filter(rumor => {
-					if (rumor.spreadRadius === 'continental' || rumor.spreadRadius === 'regional') return true;
-					if (rumor.spreadRadius === 'local') {
-						const origin = rumor.originRegion.toLowerCase();
-						return currentLocName.includes(origin) || origin.includes(currentLocName);
-					}
-					return false;
-				});
-				if (reachable.length > 0) {
-					wsBlock += '\n[RUMORS & WHISPERS — weave as NPC dialogue, tavern gossip, overheard conversation]\n';
-					for (const rumor of reachable) {
-						const tag = rumor.truthfulness >= 0.7 ? 'reliable'
-							: rumor.truthfulness >= 0.4 ? 'uncertain' : 'dubious';
-						wsBlock += `- (${tag}, via ${rumor.sourceType}) ${rumor.content}\n`;
-					}
-				}
-			}
-
 			if (ws.worldTension >= 7) {
-				wsBlock += `\n[WORLD TENSION: HIGH (${ws.worldTension}/10) — unease, nervous NPCs, doubled guards]\n`;
+				wsLines.push(`[WORLD TENSION: HIGH (${ws.worldTension}/10) — unease, nervous NPCs, doubled guards]`);
 			} else if (ws.worldTension >= 4) {
-				wsBlock += `\n[WORLD TENSION: MODERATE (${ws.worldTension}/10) — undercurrents of unrest, hushed talk]\n`;
+				wsLines.push(`[WORLD TENSION: MODERATE (${ws.worldTension}/10) — undercurrents of unrest, hushed talk]`);
 			}
-
-			if (ws.seasonEffect?.narrativeNote) {
-				wsBlock += `\n[SEASON] ${ws.seasonEffect.narrativeNote}\n`;
-			}
-
+			if (ws.seasonEffect?.narrativeNote) wsLines.push(`[SEASON] ${ws.seasonEffect.narrativeNote}`);
 			if (ws.plotSeeds && ws.plotSeeds.length > 0) {
-				wsBlock += '\n[FACTION PLOT SEEDS — plant subtly, do not force]\n';
-				for (const seed of ws.plotSeeds) wsBlock += `- ${seed}\n`;
+				wsLines.push('[FACTION PLOT SEEDS — plant subtly, do not force]');
+				for (const seed of ws.plotSeeds) wsLines.push(`- ${seed}`);
 			}
-
-			if (wsBlock) parts.push(wsBlock);
+			if (wsLines.length > 0) {
+				if (out.length > 0) out.push('');
+				out.push('### World Pulse');
+				out.push(...wsLines);
+			}
 		}
 
-		// Recent world events (consequence system)
-		const recentEvents = this.worldEvents
+		if (out.length === 0) return '';
+		return ['## Living World', '', ...out].join('\n');
+	}
+
+	// ── Section 9: Final Instructions ───────────────────────────────────────
+	#sectionFinalInstructions(mode: string): string {
+		if (mode !== 'adventure') {
+			return `## Final Instructions\nContinue the prose from the most recent turn. Begin immediately, in the established voice. No preamble.`;
+		}
+		const lines: string[] = ['## Final Instructions', ''];
+		lines.push('═══ FINAL DIRECTIONS ═══');
+		lines.push('');
+		lines.push('You are a TEXT ADVENTURE game master. Not a novelist. Not a storyteller. A reactive GM.');
+		lines.push('');
+		lines.push('AGENCY:');
+		lines.push("- {{user}} controls their character. You control everything else.");
+		lines.push("- NEVER write {{user}}'s dialogue, thoughts, decisions, or actions.");
+		lines.push('- NEVER move {{user}} unless they said to move.');
+		lines.push('- NEVER skip ahead. One action → one immediate result.');
+		lines.push('- STOP when {{user}} needs to choose what to do next.');
+		lines.push('');
+		lines.push('FORMAT:');
+		lines.push('- Write plain prose. No > action lines. No markdown headers. No meta-commentary.');
+		lines.push('- Dialogue in "quotes". Actions in plain text.');
+		lines.push('- Short for simple actions. Longer for complex scenes. Never padded.');
+		lines.push('');
+		lines.push('WORLD:');
+		lines.push('- Describe what {{user}} can SEE, HEAR, SMELL, FEEL — not what they think or feel about it.');
+		lines.push('- NPCs act on their own motivations. They can lie, refuse, attack, flee, or help.');
+		lines.push('- NPCs remember past interactions. Reference what they know.');
+		lines.push('- Consequences are real. The world does not reset.');
+		lines.push('- Write with weight. Every choice has a cost. NPCs have their own agendas and survival instincts.');
+		lines.push("- Don't pull punches. If the player walks into a trap, spring it. If an ally is outnumbered, they can die.");
+		lines.push('- Favor gritty specificity over generic fantasy: the smell of a wound, the sound of rain on mail, the taste of stale bread.');
+		lines.push("- Let silence and implication do work. Not every threat needs to be stated. A lord's pause before answering says more than a speech.");
+		lines.push('');
+		lines.push('Now write the next turn of narration. Begin immediately, in-character, no preamble.');
+		return lines.join('\n');
+	}
+
+	/**
+	 * Build a structured state snapshot for the orchestrator path.
+	 * Pre-fetches arcs, chapters, story beats, agreements, world events, rumors, and
+	 * faction actions so buildSystemPrompt can populate the Characters / Arcs /
+	 * Chapters / Living World sections without re-querying.
+	 */
+	async buildStateSnapshot(): Promise<StateSnapshot> {
+		const s = this.currentStory;
+		if (!s) return emptySnapshot();
+
+		let arcs: Arc[] = [];
+		let chapters: Chapter[] = [];
+		let storyBeats: StoryBeat[] = [];
+		try { arcs = await getArcs(s.id); } catch { /* leave empty */ }
+		try { chapters = await getChapters(s.id); } catch { /* leave empty */ }
+		try { storyBeats = await getStoryBeats(s.id); } catch { /* leave empty */ }
+
+		const currentLocation = this.locations.find(l => l.current) ?? null;
+		const presentCharacters = this.characters
+			.filter(c => c.status === 'active' && c.relationship !== 'self')
+			.slice(0, 6);
+		const equippedItems = this.items.filter(i => i.equipped);
+
+		const activeAgreements = this.agreements.filter(a => a.status === 'active');
+
+		const recentWorldEvents = this.worldEvents
 			.filter(e => e.appliedAt != null)
 			.sort((a, b) => (b.appliedAt ?? 0) - (a.appliedAt ?? 0))
 			.slice(0, 5);
-		if (recentEvents.length > 0) {
-			let evBlock = '**Recent World Events:**\n';
-			for (const event of recentEvents) {
-				evBlock += `- ${event.name}: ${event.description}\n`;
-				const applied = event.consequences.filter(c => c.status === 'applied');
-				for (const c of applied) {
-					evBlock += `  → ${c.description}\n`;
-				}
+
+		// Rumors reachable from the current location — continental/regional always,
+		// local only if origin matches current location name.
+		const ws = this.lastWorldSimResult;
+		const currentLocName = (currentLocation?.name ?? '').toLowerCase();
+		const reachableRumors = (ws?.rumors ?? []).filter(rumor => {
+			if (rumor.spreadRadius === 'continental' || rumor.spreadRadius === 'regional') return true;
+			if (rumor.spreadRadius === 'local') {
+				const origin = rumor.originRegion.toLowerCase();
+				return currentLocName.includes(origin) || origin.includes(currentLocName);
 			}
-			parts.push(evBlock);
+			return false;
+		});
+
+		return {
+			arcs,
+			chapters,
+			storyBeats,
+			currentLocation,
+			presentCharacters,
+			equippedItems,
+			activeAgreements,
+			recentWorldEvents,
+			reachableRumors,
+			factionActions: this.factionActions,
+			worldSim: ws,
+		};
+	}
+
+	/**
+	 * Orchestrator entry point — pre-fetched snapshot drives sections 4/5/6/8.
+	 */
+	buildOrchestratorSystemPrompt(stateSnapshot: StateSnapshot): string {
+		return this.buildSystemPrompt(stateSnapshot);
+	}
+
+	/**
+	 * Flatten a StateSnapshot into the terse "current world state" text block
+	 * the post-stream classifier (executeWorldUpdate) expects. Format matches
+	 * what buildStateSnapshot used to emit before it became structured, so the
+	 * classifier's existing prompt keeps working unchanged.
+	 */
+	serializeSnapshotForClassifier(snap: StateSnapshot): string {
+		const s = this.currentStory;
+		if (!s) return '';
+		const lines: string[] = ['## World State (current)', ''];
+
+		if (snap.currentLocation) {
+			const l = snap.currentLocation;
+			lines.push(`Location: ${l.name}${l.description ? ' — ' + l.description : ''}`);
 		}
-
-		// ── Current world state ──
-		const lines: string[] = ['## World State (current)\n'];
-
-		// Current location
-		const currentLoc = this.locations.find(l => l.current);
-		if (currentLoc) {
-			lines.push(`Location: ${currentLoc.name}${currentLoc.description ? ' — ' + currentLoc.description : ''}`);
-		}
-
-		// Present characters (max 6)
-		const present = this.characters
-			.filter(c => c.status === 'active' && c.relationship !== 'self')
-			.slice(0, 6);
-		if (present.length > 0) {
-			const charList = present.map(c => {
+		if (snap.presentCharacters.length > 0) {
+			const charList = snap.presentCharacters.map(c => {
 				let label = c.name;
 				if (c.relationship) label += ` (${c.relationship})`;
 				return label;
 			}).join('; ');
 			lines.push(`Characters present: ${charList}`);
 		}
-
-		// Protagonist
 		const protag = this.protagonist;
 		if (protag) {
 			lines.push(`Protagonist: ${protag.name}${protag.description ? ' — ' + protag.description : ''}`);
 		}
-
-		// Equipped items
-		const equipped = this.items.filter(i => i.equipped);
-		if (equipped.length > 0) {
-			lines.push(`Inventory: ${equipped.map(i => i.name).join(', ')}`);
+		if (snap.equippedItems.length > 0) {
+			lines.push(`Inventory: ${snap.equippedItems.map(i => i.name).join(', ')}`);
 		}
-
-		// Time tracker
-		const t = s.timeTracker;
-		if (t) {
+		if (s.timeTracker) {
+			const t = s.timeTracker;
 			const pad = (n: number) => String(n).padStart(2, '0');
 			lines.push(`Time: Day ${t.days}, ${pad(t.hours)}:${pad(t.minutes)}`);
 		}
-
-		// Meters (sanity, morality, reputation, etc.) — GM sees all, including hidden
 		if (s.meters && s.meters.length > 0) {
-			const meterLine = s.meters
-				.map(m => `${m.name}: ${m.value}/${m.max}${m.visible ? '' : ' [hidden from player]'}`)
-				.join('; ');
-			lines.push(`Meters: ${meterLine}`);
+			lines.push(`Meters: ${s.meters.map(m => `${m.name}: ${m.value}/${m.max}${m.visible ? '' : ' [hidden from player]'}`).join('; ')}`);
 		}
-
-		// Active agreements (treaties, oaths, bonds, bargains) — cap at 12 for budget
-		const active = this.agreements.filter(a => a.status === 'active');
-		if (active.length > 0) {
+		if (snap.activeAgreements.length > 0) {
 			lines.push('Active agreements:');
-			for (const a of active.slice(0, 12)) {
+			for (const a of snap.activeAgreements.slice(0, 12)) {
 				const secrecyTag = a.secrecy === 'secret' ? ' [secret]' : a.secrecy === 'known' ? ' [known to some]' : '';
 				const terms = a.terms.length > 140 ? a.terms.slice(0, 137) + '…' : a.terms;
 				lines.push(`- (${a.category}${secrecyTag}) [id:${a.id.slice(0, 8)}] ${a.parties.join(' ↔ ')}: ${terms}`);
 			}
-			if (active.length > 12) lines.push(`  (+${active.length - 12} more active agreements)`);
+			if (snap.activeAgreements.length > 12) lines.push(`  (+${snap.activeAgreements.length - 12} more active agreements)`);
+		}
+		const recentBeats = snap.storyBeats.filter(b => b.status === 'active').slice(-2);
+		if (recentBeats.length > 0) {
+			lines.push(`Recent events: ${recentBeats.map(b => b.title).join('; ')}`);
 		}
 
-		// Recent story beats (last 2)
-		try {
-			const beats = await getStoryBeats(s.id);
-			const recent = beats.filter(b => b.status === 'active').slice(-2);
-			if (recent.length > 0) {
-				lines.push(`Recent events: ${recent.map(b => b.title).join('; ')}`);
-			}
-		} catch { /* skip if unavailable */ }
-
-		parts.push(lines.join('\n'));
-
-		const result = parts.join('\n\n');
-
-		// Optional snapshot cap from settings (0 = unlimited, context window is the limit)
+		const result = lines.join('\n');
 		const snapshotCap = settings.uiSettings.snapshotTokenCap || 0;
 		if (snapshotCap > 0) {
 			const maxChars = snapshotCap * 4;
-			if (result.length > maxChars) {
-				return result.slice(0, maxChars);
-			}
+			if (result.length > maxChars) return result.slice(0, maxChars);
 		}
-
 		return result;
-	}
-
-	/**
-	 * Build the system prompt for orchestrator mode.
-	 * Same as buildSystemPrompt but uses a lightweight state snapshot
-	 * instead of the full ContextAssembler output. The narrator gets NO tool
-	 * instructions — the world-update is a separate post-stream call that
-	 * owns its own tool-bearing prompt. Telling the narrator about tools it
-	 * cannot call makes it write fake tool-call JSON into the prose.
-	 */
-	buildOrchestratorSystemPrompt(stateSnapshot: string): string {
-		return this.buildSystemPrompt(stateSnapshot);
 	}
 
 	/**

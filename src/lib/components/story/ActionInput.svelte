@@ -271,9 +271,10 @@
 		let fullResponse = '';
 
 		try {
-			// ── Build orchestrator context: lightweight state snapshot ──
+			// ── Build orchestrator context: structured state snapshot + classifier-facing string ──
 			const stateSnapshot = await story.buildStateSnapshot();
 			const systemPrompt = story.buildOrchestratorSystemPrompt(stateSnapshot);
+			const snapshotText = story.serializeSnapshotForClassifier(stateSnapshot);
 			const allHistory = story.buildConversationMessages();
 			const conversationHistory = allHistory.length > 0 && allHistory[allHistory.length - 1].role === 'user'
 				? allHistory.slice(0, -1)
@@ -282,7 +283,7 @@
 
 			const estimateTokens = (t: string) => Math.ceil(t.length / 4);
 			const historyTokens = conversationHistory.reduce((s, m) => s + estimateTokens(m.content), 0);
-			story.lastTierUsage = { snapshot: estimateTokens(stateSnapshot) };
+			story.lastTierUsage = { snapshot: estimateTokens(snapshotText) };
 			story.lastContextTotal = estimateTokens(systemPrompt) + historyTokens + estimateTokens(userPrompt);
 
 			onStreamStart?.();
@@ -319,7 +320,7 @@
 				onStreamClear?.();
 				await story.addEntry('narration', fullResponse);
 
-				const errors = await executeWorldUpdate(fullResponse, stateSnapshot, abortController?.signal);
+				const errors = await executeWorldUpdate(fullResponse, snapshotText, abortController?.signal);
 				if (errors.length > 0) {
 					console.warn('[Orchestrator] World update errors:', errors);
 				}

@@ -1,17 +1,20 @@
 <script lang="ts">
-	import { Plus, Upload, Trash2, Download } from 'lucide-svelte';
+	import { Plus, Upload, Trash2, Download, FileArchive } from 'lucide-svelte';
 	import { app } from '$lib/stores/app.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { getAllStories, deleteStory } from '$lib/services/database';
 	import { downloadStoryAsJson, importStoryFromJson } from '$lib/services/storySync';
+	import { importStoryFromWiki } from '$lib/services/wikiImport';
 	import type { Story } from '$lib/types';
 	import { onMount } from 'svelte';
 
 	let stories = $state<Story[]>([]);
 	let confirmDelete = $state<string | null>(null);
 	let importing = $state(false);
+	let importingWiki = $state(false);
 	let exporting = $state(false);
 	let fileInput: HTMLInputElement;
+	let wikiInput: HTMLInputElement;
 
 	onMount(loadStories);
 
@@ -76,6 +79,26 @@
 			input.value = '';
 		}
 	}
+
+	async function handleImportWiki(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		importingWiki = true;
+		try {
+			const result = await importStoryFromWiki(file);
+			await loadStories();
+			console.log(
+				`[Wiki Import] Created story ${result.storyId} — ${result.counts.entries} entries, ${result.counts.chapters} chapters, ${result.counts.agreements} agreements, ${result.counts.rumors} rumors, ${result.counts.meters} meters.`,
+			);
+		} catch (err) {
+			console.error('Wiki import failed:', err);
+			alert(`Wiki import failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+		} finally {
+			importingWiki = false;
+			input.value = '';
+		}
+	}
 </script>
 
 <input
@@ -84,6 +107,13 @@
 	accept=".json"
 	class="hidden"
 	onchange={handleImport}
+/>
+<input
+	bind:this={wikiInput}
+	type="file"
+	accept=".zip"
+	class="hidden"
+	onchange={handleImportWiki}
 />
 
 <div class="flex h-full flex-col overflow-y-auto">
@@ -112,6 +142,11 @@
 					<Upload class="h-4 w-4" />
 					{importing ? 'Importing...' : 'Import Story'}
 				</button>
+				<button onclick={() => wikiInput.click()} disabled={importingWiki}
+					class="flex items-center gap-2 text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text-accent)]">
+					<FileArchive class="h-4 w-4" />
+					{importingWiki ? 'Importing wiki...' : 'Import Wiki'}
+				</button>
 			</div>
 		</div>
 	{:else}
@@ -123,6 +158,11 @@
 					<button onclick={() => fileInput.click()} disabled={importing}
 						class="flex items-center gap-2 rounded-lg bg-[rgba(212,168,83,0.06)] px-3 py-2 font-display text-xs tracking-wider uppercase text-[var(--text-muted)] transition-colors hover:bg-[rgba(212,168,83,0.12)] hover:text-[var(--text-accent)]">
 						<Upload class="h-3.5 w-3.5" /> {importing ? 'Importing...' : 'Import'}
+					</button>
+					<button onclick={() => wikiInput.click()} disabled={importingWiki}
+						class="flex items-center gap-2 rounded-lg bg-[rgba(212,168,83,0.06)] px-3 py-2 font-display text-xs tracking-wider uppercase text-[var(--text-muted)] transition-colors hover:bg-[rgba(212,168,83,0.12)] hover:text-[var(--text-accent)]"
+						title="Import story from a wiki .zip bundle">
+						<FileArchive class="h-3.5 w-3.5" /> {importingWiki ? 'Importing...' : 'Import Wiki'}
 					</button>
 					<button onclick={() => app.startNewStory()}
 						class="flex items-center gap-2 rounded-lg bg-[rgba(212,168,83,0.12)] px-4 py-2 font-display text-xs tracking-wider uppercase text-[var(--text-accent)] transition-colors hover:bg-[rgba(212,168,83,0.2)]">
