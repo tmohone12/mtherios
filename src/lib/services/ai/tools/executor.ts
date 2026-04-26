@@ -15,7 +15,7 @@ import {
 	createEntryRelationship, getRelationshipsForEntry, updateEntryRelationship,
 	createConversationMemory, createWorldEvent, updateWorldEvent, createStoryBeat,
 	updateStory, getChapters, getArcs,
-	bulkPutFactionActions, bulkPutRumors,
+	bulkPutFactionActions, bulkPutRumors, updateRumor,
 } from '$lib/services/database';
 import {
 	parseTimeProgression, advanceTime, clamp,
@@ -86,6 +86,17 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 			});
 		} else {
 			await story.addCharacter(char.name, char.description ?? undefined, char.relationship ?? undefined);
+			// Brand-new characters skip the status/traits processing in addCharacter,
+			// so a "newly-introduced and departed in the same turn" mention would
+			// otherwise be saved as status='active' regardless of args. Run them
+			// through the classification updater so 'departed' → 'inactive'
+			// normalization fires and traits get merged.
+			if ((char.status && char.status !== 'active') || (char.traits && char.traits.length > 0)) {
+				await story.updateCharacterFromClassification(char.name, {
+					status: char.status,
+					traits: char.traits,
+				});
+			}
 		}
 
 		// Auto-create lorebook entry
@@ -101,11 +112,18 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 		}
 	}
 
-	// Presence tracking — departed/deceased characters
-	const departedNames = args.characters
-		.filter(c => c.name && (c.status === 'departed' || c.status === 'deceased'))
+	// Presence clears — anyone alive-but-off-screen, departed, dead, or
+	// explicitly marked not-present. The schema's `present` flag was
+	// previously declared but never read.
+	const offstageNames = args.characters
+		.filter(c => c.name && (
+			c.status === 'departed' ||
+			c.status === 'deceased' ||
+			c.status === 'inactive' ||
+			c.present === false
+		))
 		.map(c => c.name);
-	if (departedNames.length > 0) await story.clearPresenceForCharacters(departedNames);
+	if (offstageNames.length > 0) await story.clearPresenceForCharacters(offstageNames);
 
 	// ── Locations ──
 	// Enforce single current location
@@ -140,11 +158,25 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 		}
 	}
 
-	// Update presence for active characters at current location
-	const currentLoc = args.locations.find(l => l.current);
-	if (currentLoc) {
-		const presentNames = args.characters.filter(c => c.name && c.status === 'active').map(c => c.name);
-		if (presentNames.length > 0) await story.updatePresence(presentNames, currentLoc.name);
+	// Update presence. We previously skipped this whenever the classifier didn't
+	// re-emit a `current: true` location — so a turn like "the merchant enters"
+	// that didn't restate the room left presence stale. Fall back to the live
+	// store's current location so presence still tracks.
+	const currentLocFromArgs = args.locations.find(l => l.current);
+	const currentLocName = currentLocFromArgs?.name
+		?? story.locations.find(l => l.current)?.name
+		?? null;
+	if (currentLocName) {
+		const presentNames = args.characters
+			.filter(c =>
+				c.name
+				&& c.present !== false
+				&& c.status !== 'deceased'
+				&& c.status !== 'departed'
+				&& c.status !== 'inactive',
+			)
+			.map(c => c.name);
+		if (presentNames.length > 0) await story.updatePresence(presentNames, currentLocName);
 	}
 
 	// ── Items ──
@@ -360,86 +392,165 @@ async function syncRelationships(
 
 // ── Time progression ──
 
+/**
+ * Advance the in-world clock by a parsed time delta. Time is the world's
+ * metronome — every subsystem that should evolve over in-world time hangs
+ * off `tickWorld`, called from here after the tracker is persisted.
+ */
 async function applyTimeProgression(progression: string): Promise<void> {
 	if (!story.currentStory) return;
 	const deltaMinutes = parseTimeProgression(progression);
-	if (deltaMinutes === 0) return;
+	if (deltaMinutes === 0) {
+		console.warn(`[Executor] time_delta="${progression}" parsed to 0 minutes — no time advanced.`);
+		return;
+	}
 
 	const newTracker = advanceTime(story.currentStory.timeTracker ?? null, deltaMinutes);
 	await updateStory(story.currentStory.id, { timeTracker: newTracker } as any);
 	story.currentStory = { ...story.currentStory, timeTracker: newTracker };
 
-	// World sim: fire every N in-world days
-	const totalDays = newTracker.years * 365 + newTracker.days;
-	const lastSimDay = story.currentStory.lastWorldSimDay ?? 0;
-	if (totalDays - lastSimDay >= WORLD_SIM_DAY_INTERVAL) {
-		const wsConfig = settings.getServiceConfig('worldSimulation');
-		if (wsConfig.enabled) {
-			try {
-				const chapters = await getChapters(story.currentStory.id);
-				const arcs = await getArcs(story.currentStory.id);
-				const factionEntries = story.lorebookEntries.filter(e => e.type === 'faction');
-				const characterEntries = story.lorebookEntries.filter(e => e.type === 'character');
+	await tickWorld(deltaMinutes);
+}
 
-				const result = await ai.worldSim.simulate(
-					chapters, arcs, story.entries, factionEntries, characterEntries,
-					story.entryRelationships, story.currentStory.timeTracker,
-					story.storyMode, story.pov, story.tense,
-				);
-				story.lastWorldSimResult = result;
+/**
+ * Fan-out called whenever the world clock advances. Owns all time-driven
+ * subsystems so we have one ordered place to add new ones.
+ *
+ * Today: rumor aging + world-sim cadence trigger.
+ * Future hooks (intentionally kept here): agreement deadline checks,
+ * faction goal progress, NPC schedule advancement.
+ */
+async function tickWorld(_deltaMinutes: number): Promise<void> {
+	if (!story.currentStory) return;
+	await ageRumors();
+	await maybeRunWorldSim();
+	// future: ageAgreements(_deltaMinutes); progressFactionGoals(_deltaMinutes); ...
+}
 
-				// ── Persist WorldSim output so it feeds the timeline + export ──
-				const currentChapterNumber = chapters.length > 0
-					? Math.max(...chapters.map((c) => c.number))
-					: null;
-				const now = Date.now();
+/**
+ * Advance rumor lifecycle based on chapter delta vs each rumor's
+ * `staleAfterChapters` lifetime.
+ *
+ * spreading → mature  at 50% of lifetime
+ * mature    → stale   at 100% of lifetime
+ *
+ * Rumors with no `chapterNumber` (created before any chapter existed)
+ * are left in their initial state.
+ */
+async function ageRumors(): Promise<void> {
+	if (!story.currentStory || story.rumors.length === 0) return;
+	const chapters = await getChapters(story.currentStory.id);
+	const currentChapter = chapters.length > 0 ? Math.max(...chapters.map((c) => c.number)) : 0;
 
-				if (result.factionActions && result.factionActions.length > 0) {
-					const rows: FactionActionRecord[] = result.factionActions.map((fa: any) => ({
-						id: uuid(),
-						storyId: story.currentStory!.id,
-						factionName: fa.factionName ?? 'Unknown Faction',
-						action: fa.action ?? '',
-						actionType: fa.actionType ?? 'custom',
-						target: fa.target ?? null,
-						motivation: fa.motivation ?? null,
-						consequences: Array.isArray(fa.consequences) ? fa.consequences : [],
-						urgency: fa.urgency ?? 'medium',
-						affectedRegions: Array.isArray(fa.affectedRegions) ? fa.affectedRegions : [],
-						chapterNumber: currentChapterNumber,
-						status: 'active',
-						createdAt: now,
-					}));
-					try { await bulkPutFactionActions(rows); }
-					catch (e) { console.warn('[Executor] persist factionActions failed:', e); }
-				}
-
-				if (result.rumors && result.rumors.length > 0) {
-					const rows: RumorRecord[] = result.rumors.map((r: any) => ({
-						id: uuid(),
-						storyId: story.currentStory!.id,
-						content: r.content ?? '',
-						truthfulness: typeof r.truthfulness === 'number' ? r.truthfulness : 0.5,
-						originRegion: r.originRegion ?? 'unknown',
-						spreadRadius: r.spreadRadius ?? 'local',
-						sourceType: r.sourceType ?? 'gossip',
-						relatedFaction: r.relatedFaction ?? null,
-						chapterNumber: currentChapterNumber,
-						staleAfterChapters: typeof r.staleAfterChapters === 'number' ? r.staleAfterChapters : 5,
-						status: 'spreading',
-						createdAt: now,
-					}));
-					try { await bulkPutRumors(rows); }
-					catch (e) { console.warn('[Executor] persist rumors failed:', e); }
-				}
-
-				await updateStory(story.currentStory.id, { lastWorldSimDay: totalDays } as any);
-				story.currentStory = { ...story.currentStory, lastWorldSimDay: totalDays };
-				console.log(`[Executor] World sim triggered at day ${totalDays}`);
-			} catch (e) {
-				console.error('[Executor] Time-based world sim failed:', e);
-			}
+	type Update = { id: string; status: RumorRecord['status'] };
+	const updates: Update[] = [];
+	for (const rumor of story.rumors) {
+		if (rumor.status === 'stale' || rumor.status === 'debunked') continue;
+		if (rumor.chapterNumber == null) continue;
+		const lifetime = rumor.staleAfterChapters > 0 ? rumor.staleAfterChapters : 5;
+		const age = currentChapter - rumor.chapterNumber;
+		if (age >= lifetime) {
+			updates.push({ id: rumor.id, status: 'stale' });
+		} else if (age >= lifetime / 2 && rumor.status === 'spreading') {
+			updates.push({ id: rumor.id, status: 'mature' });
 		}
+	}
+
+	if (updates.length === 0) return;
+	for (const u of updates) {
+		try { await updateRumor(u.id, { status: u.status }); }
+		catch (e) { console.warn(`[Executor] ageRumors update failed for ${u.id}:`, e); }
+	}
+	const byId = new Map(updates.map((u) => [u.id, u.status]));
+	story.rumors = story.rumors.map((r) =>
+		byId.has(r.id) ? { ...r, status: byId.get(r.id)! } : r,
+	);
+}
+
+/**
+ * Fire the world simulation if enough in-world days have passed since the
+ * last tick. Lifted out of `applyTimeProgression` so `tickWorld` can own
+ * all clock-driven side effects.
+ */
+async function maybeRunWorldSim(): Promise<void> {
+	if (!story.currentStory) return;
+	const tracker = story.currentStory.timeTracker;
+	if (!tracker) return;
+
+	const totalDays = tracker.years * 365 + tracker.days;
+	const lastSimDay = story.currentStory.lastWorldSimDay ?? 0;
+	if (totalDays - lastSimDay < WORLD_SIM_DAY_INTERVAL) return;
+
+	const wsConfig = settings.getServiceConfig('worldSimulation');
+	if (!wsConfig.enabled) return;
+
+	try {
+		const chapters = await getChapters(story.currentStory.id);
+		const arcs = await getArcs(story.currentStory.id);
+		const factionEntries = story.lorebookEntries.filter(e => e.type === 'faction');
+		const characterEntries = story.lorebookEntries.filter(e => e.type === 'character');
+
+		const result = await ai.worldSim.simulate(
+			chapters, arcs, story.entries, factionEntries, characterEntries,
+			story.entryRelationships, tracker,
+			story.storyMode, story.pov, story.tense,
+		);
+		story.lastWorldSimResult = result;
+
+		// ── Persist WorldSim output so it feeds the timeline + export ──
+		const currentChapterNumber = chapters.length > 0
+			? Math.max(...chapters.map((c) => c.number))
+			: null;
+		const now = Date.now();
+
+		if (result.factionActions && result.factionActions.length > 0) {
+			const rows: FactionActionRecord[] = result.factionActions.map((fa: any) => ({
+				id: uuid(),
+				storyId: story.currentStory!.id,
+				factionName: fa.factionName ?? 'Unknown Faction',
+				action: fa.action ?? '',
+				actionType: fa.actionType ?? 'custom',
+				target: fa.target ?? null,
+				motivation: fa.motivation ?? null,
+				consequences: Array.isArray(fa.consequences) ? fa.consequences : [],
+				urgency: fa.urgency ?? 'medium',
+				affectedRegions: Array.isArray(fa.affectedRegions) ? fa.affectedRegions : [],
+				chapterNumber: currentChapterNumber,
+				status: 'active',
+				createdAt: now,
+			}));
+			try {
+				await bulkPutFactionActions(rows);
+				story.factionActions = [...story.factionActions, ...rows];
+			} catch (e) { console.warn('[Executor] persist factionActions failed:', e); }
+		}
+
+		if (result.rumors && result.rumors.length > 0) {
+			const rows: RumorRecord[] = result.rumors.map((r: any) => ({
+				id: uuid(),
+				storyId: story.currentStory!.id,
+				content: r.content ?? '',
+				truthfulness: typeof r.truthfulness === 'number' ? r.truthfulness : 0.5,
+				originRegion: r.originRegion ?? 'unknown',
+				spreadRadius: r.spreadRadius ?? 'local',
+				sourceType: r.sourceType ?? 'gossip',
+				relatedFaction: r.relatedFaction ?? null,
+				chapterNumber: currentChapterNumber,
+				staleAfterChapters: typeof r.staleAfterChapters === 'number' ? r.staleAfterChapters : 5,
+				status: 'spreading',
+				createdAt: now,
+			}));
+			try {
+				await bulkPutRumors(rows);
+				story.rumors = [...story.rumors, ...rows];
+			} catch (e) { console.warn('[Executor] persist rumors failed:', e); }
+		}
+
+		await updateStory(story.currentStory.id, { lastWorldSimDay: totalDays } as any);
+		story.currentStory = { ...story.currentStory, lastWorldSimDay: totalDays };
+		console.log(`[Executor] World sim triggered at day ${totalDays}`);
+	} catch (e) {
+		console.error('[Executor] Time-based world sim failed:', e);
 	}
 }
 

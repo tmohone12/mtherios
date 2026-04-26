@@ -7,6 +7,7 @@ import {
 	getStory, getStoryEntries, getCharacters, getLocations, getItems,
 	getLorebookEntries, createStoryEntry, createCharacter, createLocation, createItem,
 	updateStory, updateCharacter, updateLocation, updateItem,
+	updateLorebookEntry,
 	getEntryRelationships, getConversationMemory, getWorldEvents,
 	getChapters, getStoryBeats, getArcs,
 	getEmbeddedImages, createEmbeddedImage, deleteEmbeddedImage,
@@ -245,12 +246,16 @@ class StoryStore {
 		if (updates.description && updates.description !== char.description) merged.description = updates.description;
 		if (updates.relationship && updates.relationship !== char.relationship) merged.relationship = updates.relationship;
 		if (updates.status && updates.status !== char.status) {
-			// "departed" is a transient classifier signal — persist as "active" (they're alive, just elsewhere)
-			// "unknown" means the classifier couldn't determine status — keep existing status unchanged
+			// Map classifier transient signals onto the persistent Character.status enum:
+			//   'departed'  → 'inactive'  (alive but off-screen — should NOT match "present" filters)
+			//   'unknown'   → preserve existing status
+			//   everything else → pass through
 			if (updates.status === 'unknown') {
-				// Do not update — preserve current status
+				// preserve existing status
+			} else if (updates.status === 'departed') {
+				merged.status = 'inactive';
 			} else {
-				merged.status = (updates.status === 'departed' ? 'active' : updates.status) as Character['status'];
+				merged.status = updates.status as Character['status'];
 			}
 		}
 		if (updates.traits && updates.traits.length > 0) {
@@ -264,8 +269,43 @@ class StoryStore {
 	}
 
 	/**
-	 * Update character presence — set lastSeenLocation for characters arriving/present,
-	 * clear it for characters who departed or died.
+	 * Sync presence onto the matching character lorebook Entry's state.
+	 * Without this the lorebook's CharacterEntryState.isPresent / lastSeenLocation
+	 * drift from the live Character.metadata.lastSeenLocation forever.
+	 */
+	private async syncLorebookPresence(charName: string, isPresent: boolean, locationName: string | null) {
+		// Match by canonical name OR alias — the classifier emits names as they
+		// appeared in prose ("Lord Stark") but the canonical entry might be
+		// "Eddard Stark" with "Lord Stark" listed in aliases. Without alias
+		// matching, the lookup silently misses and isPresent never updates.
+		const needle = charName.toLowerCase();
+		const target = this.lorebookEntries.find(e => {
+			if (e.type !== 'character') return false;
+			if (e.name?.toLowerCase() === needle) return true;
+			return (e.aliases ?? []).some(a => a?.toLowerCase() === needle);
+		});
+		if (!target) return;
+		const oldState = target.state as import('$lib/types').CharacterEntryState;
+		const newState: import('$lib/types').CharacterEntryState = {
+			...oldState,
+			type: 'character',
+			isPresent,
+			lastSeenLocation: locationName,
+		};
+		const now = Date.now();
+		try {
+			await updateLorebookEntry(target.id, { state: newState, updatedAt: now });
+			this.lorebookEntries = this.lorebookEntries.map(e =>
+				e.id === target.id ? { ...e, state: newState, updatedAt: now } : e,
+			);
+		} catch (e) {
+			console.warn(`[Story] syncLorebookPresence failed for ${charName}:`, e);
+		}
+	}
+
+	/**
+	 * Update character presence — set lastSeenLocation on the Character row AND
+	 * the matching lorebook Entry's state, so the two never drift.
 	 */
 	async updatePresence(characterNames: string[], locationName: string) {
 		for (const name of characterNames) {
@@ -276,11 +316,13 @@ class StoryStore {
 			this.characters = this.characters.map(c =>
 				c.id === char.id ? { ...c, metadata: meta } : c
 			);
+			await this.syncLorebookPresence(char.name, true, locationName);
 		}
 	}
 
 	/**
-	 * Clear presence for characters who departed or died — removes lastSeenLocation.
+	 * Clear presence for characters who departed or died — removes lastSeenLocation
+	 * from both the Character row and the lorebook Entry's state.
 	 */
 	async clearPresenceForCharacters(characterNames: string[]) {
 		for (const name of characterNames) {
@@ -292,6 +334,7 @@ class StoryStore {
 			this.characters = this.characters.map(c =>
 				c.id === char.id ? { ...c, metadata: meta } : c
 			);
+			await this.syncLorebookPresence(char.name, false, null);
 		}
 	}
 
@@ -304,10 +347,28 @@ class StoryStore {
 		this.characters = this.characters.map(c =>
 			c.id === characterId ? { ...c, metadata: meta } : c
 		);
+		await this.syncLorebookPresence(char.name, false, null);
 	}
 
 	async addOrUpdateLocation(name: string, description?: string | null, current?: boolean): Promise<void> {
 		if (!this.currentStory) return;
+
+		// ── Step 1: clear `current` on every other location FIRST, so we never
+		// have two rows with current=true at any persisted point in time. The
+		// previous version forgot to await these and read stale memory state.
+		if (current) {
+			const targetName = name.toLowerCase();
+			const stale = this.locations.filter(l => l.current && l.name.toLowerCase() !== targetName);
+			for (const loc of stale) {
+				await updateLocation(loc.id, { current: false });
+			}
+			if (stale.length > 0) {
+				const staleIds = new Set(stale.map(l => l.id));
+				this.locations = this.locations.map(l => staleIds.has(l.id) ? { ...l, current: false } : l);
+			}
+		}
+
+		// ── Step 2: upsert the target location ──
 		const existing = this.locations.find(l => l.name.toLowerCase() === name.toLowerCase());
 		if (existing) {
 			const merged: Partial<Location> = {};
@@ -332,18 +393,6 @@ class StoryStore {
 			};
 			await createLocation(loc);
 			this.locations = [...this.locations, loc];
-		}
-		// If a location is set to current, unset other current locations
-		if (current) {
-			for (const loc of this.locations) {
-				if (loc.current && loc.name.toLowerCase() !== name.toLowerCase()) {
-					await updateLocation(loc.id, { current: false });
-				}
-			}
-			this.locations = this.locations.map(l => ({
-				...l,
-				current: l.name.toLowerCase() === name.toLowerCase()
-			}));
 		}
 	}
 
@@ -513,16 +562,30 @@ class StoryStore {
 	}
 
 	// ── Section 3: Tools ────────────────────────────────────────────────────
-	// Describes the post-stream world-update extraction, so the narrator writes
-	// prose whose world-state changes are explicit and extractable.
+	// The narrator now calls tools INLINE during streaming — prose and
+	// state-update tool calls are emitted in the same response.
 	#sectionTools(): string {
 		return [
 			'## Tools',
-			'After you finish narrating, a separate world-update step reads your prose and extracts structured deltas. You do not call these tools yourself — the system does, based on what you wrote. Write narration that makes the deltas obvious: name characters and locations explicitly, state clear outcomes, let time advance visibly.',
+			'You have direct access to world-state tools. **At the end of every turn**, after writing your narration, call `update_world_state` with everything that changed in the scene. The state recorded there IS the canonical world — anything you do not record is forgotten.',
 			'',
-			'- **update_world_state** — records characters (status, traits, relationships, presence), locations (current, connections), items (quantity, equipped, location), time passed, mood, NPC conversations and what they revealed/learned, relationship changes, story beats, meter changes (sanity, reputation, etc.), and new/broken/fulfilled agreements.',
-			'- **query_lore** — looks up existing lorebook entries when facts about a character, location, or faction need confirmation.',
-			'- **create_lore_entry** — registers a newly-introduced character, location, faction, item, concept, or event so it persists.',
+			'### When to call which tool',
+			'- **update_world_state** — call ONCE at the end of each turn. Cover:',
+			'  - **Location** (paramount): if the player moved this turn, emit a location with `current: true`. Only one location may be current. The previous current location is unset automatically.',
+			'  - **Time** (paramount): emit a `time_delta` whenever any time passed ("a few minutes", "30 minutes", "3 hours", "2 days", "an hour and 15 minutes"). Numbers + units parse most reliably. The world simulation runs on this clock.',
+			'  - **Characters**: status (`active` for present, `inactive` for alive but off-screen, `departed` for "left this turn", `deceased` for died this turn) and `present: true/false`. New traits, relationships, descriptions when revealed.',
+			'  - **Items**: picked up, dropped, equipped, quantity changes.',
+			'  - **Conversations**: what NPCs revealed/learned, emotional shifts.',
+			'  - **Relationships**: changes between entities.',
+			'  - **Story beats**: significant plot events.',
+			'  - **Meter changes**: sanity, reputation, hunger, suspicion — invent meters as the fiction calls for them, adjust existing ones with signed deltas.',
+			'  - **Agreements**: treaties, oaths, debts, promises, marriages, bonds, contracts, vassalage, bargains-with-entities. action=create when sworn, break when violated, fulfill when paid, update to revise terms.',
+			'- **query_lore** — call BEFORE narrating when you need to verify facts about an existing character, location, or faction.',
+			'- **create_lore_entry** — call when introducing a brand-new entity that should persist (you can call this alongside `update_world_state`).',
+			'',
+			'### Tool-call format',
+			'- Write your prose first, then call the tool. Do not write tool JSON in the prose itself — call the actual tool.',
+			'- Be thorough but only include entities that actually changed or appeared in this scene.',
 		].join('\n');
 	}
 
@@ -832,6 +895,57 @@ class StoryStore {
 	 */
 	buildOrchestratorSystemPrompt(stateSnapshot: StateSnapshot): string {
 		return this.buildSystemPrompt(stateSnapshot);
+	}
+
+	/**
+	 * Same content as `buildSystemPrompt` but split into two halves so the
+	 * stable head can be sent with an Anthropic prompt-cache breakpoint:
+	 *
+	 *   stable  = Header + Instructions + Tools         (~80% of turns are identical)
+	 *   dynamic = Characters + Arcs + Chapters + Entry-History + Living-World + Final-Instructions
+	 *
+	 * Final Instructions stays in the `dynamic` block to preserve the
+	 * "narrator reads directives last" ordering. We give up caching on it,
+	 * but caching the front 60-70% of the prompt is the big cost win anyway.
+	 */
+	buildOrchestratorSystemBlocks(snapshot: StateSnapshot): { stable: string; dynamic: string } {
+		const s = this.currentStory;
+		if (!s) return { stable: '', dynamic: '' };
+
+		const mode = s.mode ?? 'adventure';
+
+		const stableParts: string[] = [];
+		stableParts.push(this.#sectionHeader(s, mode));
+		stableParts.push(this.#sectionInstructions(s, mode));
+		if (mode === 'adventure') stableParts.push(this.#sectionTools());
+
+		const dynamicParts: string[] = [];
+		const chars = this.#sectionCharacters(s, snapshot);
+		if (chars) dynamicParts.push(chars);
+		const arcs = this.#sectionArcs(snapshot);
+		if (arcs) dynamicParts.push(arcs);
+		const chapters = this.#sectionChapters(snapshot);
+		if (chapters) dynamicParts.push(chapters);
+		dynamicParts.push(this.#sectionEntryHistoryPreamble(mode));
+		const lw = this.#sectionLivingWorld(snapshot);
+		if (lw) dynamicParts.push(lw);
+		dynamicParts.push(this.#sectionFinalInstructions(mode));
+
+		let stable = stableParts.filter(Boolean).join('\n\n');
+		let dynamic = dynamicParts.filter(Boolean).join('\n\n');
+
+		// Resolve role tags in both halves
+		if (mode === 'adventure') {
+			const userName = this.protagonist?.name ?? 'the player';
+			const resolveTags = (text: string) => text
+				.replace(/\{\{user\}\}/g, userName)
+				.replace(/\{\{char\}\}/g, 'NPCs')
+				.replace(/\{\{world\}\}/g, 'the world');
+			stable = resolveTags(stable);
+			dynamic = resolveTags(dynamic);
+		}
+
+		return { stable, dynamic };
 	}
 
 	/**

@@ -42,15 +42,28 @@ Current world state:
 ${stateSnapshot}
 
 Now call update_world_state with ALL changes from this scene. Include:
-- Character status changes (who appeared, departed, died, and their descriptions/traits)
-- Location changes (where is the player now, new locations discovered)
+
+LOCATION (paramount — the system loses track if you skip this):
+- If the player moved this turn, you MUST emit a location entry with \`current: true\` for wherever they are now. The previous current location will be unset automatically.
+- If the player did NOT move, you may omit \`locations\` entirely OR re-emit the current location with \`current: true\` (either is fine).
+- Only ONE location may have \`current: true\`. New side-locations being discovered should be emitted with \`current: false\`.
+
+TIME (paramount — the world sim runs on in-world days):
+- You MUST emit a \`time_delta\` whenever any time passed in the scene, even a brief moment. Use natural prose ("a few minutes", "30 minutes", "3 hours", "2 days", "an hour and 15 minutes"). Numbers + units are most reliable.
+- If the scene is instantaneous (a single look, a single line of dialogue, an interrupted action) you may emit "moment" or omit the field.
+
+CHARACTERS:
+- Status: 'active' for present and engaged; 'inactive' for alive but off-screen; 'departed' for "left the scene this turn" (system will mark inactive); 'deceased' for died this turn.
+- \`present: true\` for characters in the immediate scene; \`present: false\` for characters who left this turn or aren't visible. The system uses this to track who's actually around.
+- Include descriptions/traits/relationships only when they changed or were newly revealed.
+
+OTHER STATE:
 - Item changes (picked up, used, dropped, equipped)
-- Time progression (how much time passed)
-- Any conversations that occurred (what NPCs learned, emotional shifts)
-- Any relationship changes between entities
-- Any significant story beats or plot events
-- Meter changes (sanity, morality, reputation, hunger, suspicion, etc.) — invent meters as the fiction calls for them, adjust existing ones with signed deltas. The current values are listed under "Meters:" in the snapshot above.
-- Agreement changes — treaties, oaths, debts, promises, marriages, bonds, contracts, vassalage, and bargains with supernatural entities. Use action=create when a new commitment is sworn; action=break when someone violates it (this auto-emits a timeline event); action=fulfill when it's paid; action=update to revise terms. Active agreements are listed under "Active agreements:" in the snapshot with their ids.
+- Conversations that occurred (what NPCs revealed/learned, emotional shifts)
+- Relationship changes between entities
+- Significant story beats or plot events
+- Meter changes (sanity, morality, reputation, hunger, suspicion, etc.) — invent meters as the fiction calls for them, adjust existing ones with signed deltas. Current values are listed under "Meters:" in the snapshot.
+- Agreement changes — treaties, oaths, debts, promises, marriages, bonds, contracts, vassalage, and bargains with supernatural entities. Use action=create when a new commitment is sworn; action=break when someone violates it (auto-emits a timeline event); action=fulfill when it's paid; action=update to revise terms. Active agreements are listed under "Active agreements:" in the snapshot with their ids.
 
 Be thorough and accurate. Only include entities that actually changed or appeared in the scene.`;
 
