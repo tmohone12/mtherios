@@ -3,19 +3,17 @@
  *
  * LLM-driven lore compaction service that synthesizes the evolving world state
  * into a compact, present-tense narrative block for injection into the system
- * prompt header (highest attention weight — above the 5 context tiers).
+ * prompt header (highest attention weight).
  *
  * Flow:
  *   1. Take last 30 story entries + world state entities
- *   2. Optionally query Qdrant for relevant canonical lore (LoreRAG)
- *   3. LLM synthesizes a 300-600 word World State block
- *   4. Return proposed lore + line-level diff for human review
- *   5. Human approves/rejects — never auto-applied
+ *   2. LLM synthesizes a 300-600 word World State block
+ *   3. Return proposed lore + line-level diff for human review
+ *   4. Human approves/rejects — never auto-applied
  */
 
 import { BaseAIService } from '../BaseAIService';
 import { createLogger } from '../core/config';
-import { LoreRAGService } from '../retrieval/LoreRAGService';
 import type {
 	StoryEntry,
 	Character,
@@ -37,7 +35,6 @@ export interface CompactionDiff {
 export interface CompactionResult {
 	proposedLore: string;
 	diff: CompactionDiff;
-	canonicalGrounding: string; // RAG context block used (for transparency)
 }
 
 export type CompactionMode = 'full' | 'incremental';
@@ -61,8 +58,6 @@ Rules:
 // ── Service ──
 
 export class CompactionService extends BaseAIService {
-	private readonly loreRAG = new LoreRAGService();
-
 	constructor() {
 		super('compaction');
 	}
@@ -89,31 +84,12 @@ export class CompactionService extends BaseAIService {
 	): Promise<CompactionResult> {
 		log('compact', { mode, entryCount: entries.length, hasCurrentLore: !!currentLore });
 
-		// ── Step 1: Build entity summary ──
 		const entitySummary = this.buildEntitySummary(characters, locations, items, lorebookEntries);
+		const prompt = this.buildCompactionPrompt(entries, currentLore, entitySummary, mode);
 
-		// ── Step 2: RAG — query Qdrant for canonical lore grounding ──
-		let canonicalGrounding = '';
-		try {
-			canonicalGrounding = await this.fetchCanonicalGrounding(characters, locations);
-		} catch (e) {
-			log('compact', `RAG query failed (non-fatal): ${e}`);
-		}
-
-		// ── Step 3: Build the prompt ──
-		const prompt = this.buildCompactionPrompt(
-			entries,
-			currentLore,
-			entitySummary,
-			canonicalGrounding,
-			mode,
-		);
-
-		// ── Step 4: Generate ──
 		const proposedLore = await this.generateText(SYSTEM_PROMPT, prompt);
 		const cleanedLore = proposedLore.trim();
 
-		// ── Step 5: Compute diff ──
 		const diff = this.computeDiff(currentLore ?? '', cleanedLore);
 
 		log('compact', {
@@ -123,40 +99,10 @@ export class CompactionService extends BaseAIService {
 			unchanged: diff.unchanged.length,
 		});
 
-		return { proposedLore: cleanedLore, diff, canonicalGrounding };
+		return { proposedLore: cleanedLore, diff };
 	}
 
 	// ── Private helpers ──
-
-	/**
-	 * Query Qdrant for canonical facts about characters and locations
-	 * mentioned in the current story entities.
-	 */
-	private async fetchCanonicalGrounding(
-		characters: Character[],
-		locations: Location[],
-	): Promise<string> {
-		// Build query from entity names (active characters + current location)
-		const activeChars = characters
-			.filter(c => c.status === 'active')
-			.slice(0, 8)
-			.map(c => c.name);
-		const currentLoc = locations.find(l => l.current);
-
-		const queryTerms = [
-			...activeChars,
-			...(currentLoc ? [currentLoc.name] : []),
-		].filter(Boolean);
-
-		if (queryTerms.length === 0) return '';
-
-		const queries = queryTerms.slice(0, 4); // cap at 4 to avoid rate limits
-		const result = await this.loreRAG.retrieveMulti(queries, {
-			maxTotalChunks: 6,
-		});
-
-		return result.contextBlock;
-	}
 
 	/**
 	 * Format entity data as a structured summary for the LLM.
@@ -230,10 +176,8 @@ export class CompactionService extends BaseAIService {
 		entries: StoryEntry[],
 		currentLore: string | null,
 		entitySummary: string,
-		canonicalGrounding: string,
 		mode: CompactionMode,
 	): string {
-		// Take last 30 entries
 		const recentEntries = entries.slice(-30);
 		const storyLog = recentEntries
 			.map(e => {
@@ -253,10 +197,6 @@ export class CompactionService extends BaseAIService {
 
 		if (entitySummary) {
 			prompt += `## Current World Entities\n${entitySummary}\n\n`;
-		}
-
-		if (canonicalGrounding) {
-			prompt += `## Canonical Lore Reference (from world database)\n${canonicalGrounding}\n\n`;
 		}
 
 		prompt += `## Recent Story (last ${recentEntries.length} entries)\n${storyLog}\n\n`;

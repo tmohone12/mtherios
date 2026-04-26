@@ -22,6 +22,19 @@ export interface TimeTracker {
   minutes: number
 }
 
+/**
+ * A persistent meter (sanity, morality, reputation, hunger, etc.).
+ * Created on first reference by the GM via update_world_state, mutated
+ * over time, and shown in the HUD when visible. The GM sees current
+ * values in the state snapshot so it can reason about them.
+ */
+export interface Meter {
+  name: string
+  value: number
+  max: number
+  visible: boolean
+}
+
 export interface Story {
   id: string
   title: string
@@ -42,6 +55,7 @@ export interface Story {
   lastWorldSimDay: number | null // Total in-world days when world sim last ran
   compactedLore: string | null // Button-controlled world state block injected after headerPrompt
   compactedLoreHistory: string[] | null // Version history for undo, max 10 entries
+  meters: Meter[] | null // Hidden/visible numeric tracks (sanity, morality, reputation...)
 }
 
 // Persistent retry state - lightweight version saved to database
@@ -749,6 +763,7 @@ export type ProviderType =
   | 'google-ai-studio' // OpenAI-compatible at generativelanguage.googleapis.com
   | 'google-vertex' // OpenAI-compatible at Vertex AI endpoint
   | 'anthropic-proxy' // Local proxy for Claude subscription users
+  | 'kimi' // Moonshot AI — Kimi K2 family, OpenAI-compatible
 
 // API Profile for saving OpenAI-compatible endpoint configurations
 export interface APIProfile {
@@ -791,8 +806,6 @@ export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
 // Mtherios: single theme, no theme registry needed
 export type ThemeId = 'mtherios'
 
-export type GenerationMode = 'orchestrator' | 'pipeline'
-
 export type FontSource = 'default' | 'system' | 'google'
 
 export interface UISettings {
@@ -816,7 +829,6 @@ export interface UISettings {
   imageCustomStyle?: string
   imageSize: string
   imageModel?: string
-  generationMode: GenerationMode
   // Memory settings
   maxMessages: number
   maxHistoryEntries: number
@@ -1218,4 +1230,93 @@ export interface Consequence {
   effectPayload: Record<string, unknown>
   delay: number
   appliedAt: number | null
+}
+
+// ════════════════════════════════════════════════════════════════
+// Living-World Persistence — Agreements + WorldSim records
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * AgreementCategory covers everything from "formal treaty between houses"
+ * to "blood oath sworn to a god". One table, one enum — the category
+ * disambiguates, UI + export can group on it.
+ */
+export type AgreementCategory =
+  | 'treaty'    // formal agreement between factions
+  | 'pact'      // general deal
+  | 'alliance'  // mutual defense / cooperation
+  | 'oath'      // sworn personal vow
+  | 'debt'      // one party owes another
+  | 'promise'   // less binding than oath
+  | 'marriage'  // formal bond
+  | 'bond'      // vassalage, knighthood, apprenticeship — long-term role tie
+  | 'contract'  // written, often commercial
+  | 'vassalage' // explicit subordinate/liege relationship
+  | 'bargain-with-entity' // faustian / magical pact with a supernatural party
+
+export type AgreementStatus = 'active' | 'broken' | 'fulfilled' | 'expired' | 'contested'
+
+export type AgreementSecrecy = 'public' | 'known' | 'secret'
+
+/**
+ * Persistent record of a commitment between one or more parties.
+ *
+ * Parties are stored as display names (matching lorebook entry names or
+ * freeform strings) so the record survives entity renames/merges; the
+ * orchestrator resolves them by name on read.
+ */
+export interface Agreement {
+  id: string
+  storyId: string
+  parties: string[]
+  category: AgreementCategory
+  terms: string // prose — what was agreed
+  status: AgreementStatus
+  secrecy: AgreementSecrecy
+  createdChapterNumber: number | null // null if created before any chapter
+  resolvedChapterNumber: number | null // chapter in which it broke/fulfilled/expired
+  consequences: string[] // free-text narrative consequences
+  metadata: Record<string, unknown> | null
+  createdAt: number
+  updatedAt: number
+}
+
+/**
+ * Persisted version of the in-memory FactionAction emitted by WorldSim.
+ * Becomes queryable history instead of vanishing each turn.
+ */
+export interface FactionActionRecord {
+  id: string
+  storyId: string
+  factionName: string
+  action: string // one-line description of what the faction did
+  actionType: string // military | diplomatic | economic | intelligence | internal | ...
+  target: string | null // name of faction / character / region targeted
+  motivation: string | null
+  consequences: string[]
+  urgency: 'low' | 'medium' | 'high' | 'critical'
+  affectedRegions: string[]
+  chapterNumber: number | null
+  status: 'active' | 'resolved' | 'superseded'
+  createdAt: number
+}
+
+/**
+ * Persisted version of a Rumor emitted by WorldSim. Truthfulness is kept
+ * as a continuous 0..1 value so the UI/export can render it flexibly
+ * (reliable / uncertain / dubious bands).
+ */
+export interface RumorRecord {
+  id: string
+  storyId: string
+  content: string
+  truthfulness: number // 0..1
+  originRegion: string
+  spreadRadius: 'local' | 'regional' | 'continental'
+  sourceType: string // "overheard" | "official" | "trader-gossip" | ...
+  relatedFaction: string | null
+  chapterNumber: number | null
+  staleAfterChapters: number // how many chapters until the rumor goes stale
+  status: 'spreading' | 'mature' | 'stale' | 'debunked'
+  createdAt: number
 }

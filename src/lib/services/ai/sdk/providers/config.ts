@@ -558,6 +558,24 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
     ],
     // No service defaults - user must configure models in Generation Settings
   },
+
+  kimi: {
+    name: 'Kimi Code',
+    description: 'Moonshot AI — coding-tuned endpoint, 262K context. Routes through Vite /api/kimi-code proxy (dev only — production needs its own proxy).',
+    baseUrl: '/api/kimi-code',
+    requiresApiKey: true,
+    capabilities: {
+      textGeneration: true,
+      imageGeneration: false,
+      structuredOutput: true,
+      reasoning: 'native',
+    },
+    fallbackModels: [
+      'kimi-for-coding',
+      'kimi-latest',
+    ],
+    // No service defaults - user must configure models in Generation Settings
+  },
 }
 
 // ============================================================================

@@ -26,6 +26,22 @@ export interface GenerateOptions {
 	signal?: AbortSignal;
 	/** Optional API profile ID — routes this request to a specific provider/key */
 	profileId?: string;
+	/**
+	 * Optional dynamic suffix appended to the system prompt. When present and the
+	 * provider is Anthropic, the request is sent as two text blocks with a
+	 * cache_control breakpoint between them, so the (stable) `system` half is
+	 * cached across turns. OpenAI-compatible providers don't support this and
+	 * receive the two halves concatenated.
+	 */
+	systemDynamic?: string;
+	/**
+	 * Tools the model is allowed to call inline during generation. When present,
+	 * `streamNarrative` will yield `StreamChunk`s with a `toolCall` field as
+	 * each tool block completes, in addition to the usual text deltas.
+	 */
+	tools?: any[];
+	/** If set, biases / forces the model to call this specific tool. */
+	forceTool?: string;
 }
 
 // ── API Log ──
@@ -62,6 +78,8 @@ function addLogEntry(entry: APILogEntry) {
 export interface StreamChunk {
 	content: string;
 	reasoning?: string;
+	/** Emitted when an inline tool call completes mid-stream. */
+	toolCall?: ToolCall;
 	done: boolean;
 }
 
@@ -111,6 +129,11 @@ function buildAnthropicHeaders(profile: APIProfile): Record<string, string> {
 /**
  * Convert OpenAI-style messages to Anthropic Messages API format.
  * Extracts system prompt, ensures alternating user/assistant.
+ *
+ * When `systemDynamic` is provided, the system prompt is sent as two
+ * `{type:'text'}` blocks with a `cache_control: { type: 'ephemeral' }`
+ * breakpoint between them. The stable half (the static narrator personality)
+ * is cached across turns; the dynamic half (per-turn world state) is not.
  */
 function toAnthropicBody(
 	systemPrompt: string,
@@ -119,6 +142,9 @@ function toAnthropicBody(
 	temperature: number,
 	maxTokens: number,
 	stream: boolean,
+	systemDynamic?: string,
+	tools?: any[],
+	forceTool?: string,
 ): Record<string, any> {
 	// Filter out system messages — Anthropic uses a separate system field
 	const nonSystemMessages = messages.filter(m => m.role !== 'system');
@@ -139,14 +165,38 @@ function toAnthropicBody(
 		}
 	}
 
-	return {
+	// Two-block form is only useful when BOTH halves have content. Anthropic
+	// rejects empty text blocks, and an empty stable block can't be cached
+	// anyway. Fall back to the single-string form if either is empty.
+	const useSplitSystem = !!(systemDynamic && systemDynamic.length > 0 && systemPrompt.length > 0);
+	const system = useSplitSystem
+		? [
+			{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+			{ type: 'text', text: systemDynamic },
+		]
+		: (systemDynamic ? `${systemPrompt}\n\n${systemDynamic}` : systemPrompt);
+
+	const body: Record<string, any> = {
 		model,
-		system: systemPrompt,
+		system,
 		messages: merged,
 		max_tokens: maxTokens,
 		temperature,
 		stream,
 	};
+
+	if (tools && tools.length > 0) {
+		body.tools = tools.map((t: any) => ({
+			name: t.function?.name ?? t.name,
+			description: t.function?.description ?? t.description,
+			input_schema: t.function?.parameters ?? t.input_schema,
+		}));
+		body.tool_choice = forceTool
+			? { type: 'tool', name: forceTool }
+			: { type: 'auto' };
+	}
+
+	return body;
 }
 
 async function getActiveProfile(overrideProfileId?: string): Promise<{ profile: APIProfile; baseUrl: string }> {
@@ -206,10 +256,15 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 	let error: string | undefined;
 	const useAnthropic = isAnthropicProvider(profile);
 
+	// Combined system prompt for OpenAI-compatible providers (no caching support)
+	const combinedSystem = options.systemDynamic
+		? `${options.system}\n\n${options.systemDynamic}`
+		: options.system;
+
 	// Build messages array
 	const messages: Array<{ role: string; content: string }> = [];
 	if (!useAnthropic) {
-		messages.push({ role: 'system', content: options.system });
+		messages.push({ role: 'system', content: combinedSystem });
 	}
 	if (options.messages?.length) {
 		for (const msg of options.messages) {
@@ -226,17 +281,26 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 
 	let body: Record<string, any>;
 	if (useAnthropic) {
-		body = toAnthropicBody(options.system, messages, model, temperature, maxTokens, true);
+		body = toAnthropicBody(
+			options.system, messages, model, temperature, maxTokens, true,
+			options.systemDynamic, options.tools, options.forceTool,
+		);
 	} else {
 		// OpenAI-compatible: system as a message role, then history, then user prompt
 		const oaiMessages: Array<{ role: string; content: string }> = [
-			{ role: 'system', content: options.system },
+			{ role: 'system', content: combinedSystem },
 		];
 		if (options.messages?.length) {
 			for (const msg of options.messages) oaiMessages.push({ role: msg.role, content: msg.content });
 		}
 		oaiMessages.push({ role: 'user', content: options.prompt });
 		body = { model, messages: oaiMessages, stream: true, temperature, max_tokens: maxTokens };
+		if (options.tools && options.tools.length > 0) {
+			body.tools = options.tools;
+			body.tool_choice = options.forceTool
+				? { type: 'function', function: { name: options.forceTool } }
+				: 'auto';
+		}
 	}
 
 	try {
@@ -259,6 +323,12 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 		const decoder = new TextDecoder();
 		let buffer = '';
 
+		// Per-block state for tool-call accumulation across SSE events.
+		// Anthropic: keyed by content_block index. OpenAI: keyed by tool_calls[i].index.
+		type ToolBlock = { name: string; jsonBuffer: string };
+		const anthropicToolBlocks = new Map<number, ToolBlock>();
+		const oaiToolCalls = new Map<number, ToolBlock>();
+
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
@@ -278,23 +348,82 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 						const data = JSON.parse(trimmed.slice(6));
 
 						if (useAnthropic) {
-							// Anthropic stream: content_block_delta events
-							if (data.type === 'content_block_delta' && data.delta?.text) {
-								fullContent += data.delta.text;
-								yield { content: data.delta.text, done: false };
+							// content_block_start — register a tool_use block.
+							if (data.type === 'content_block_start' && data.content_block?.type === 'tool_use') {
+								const idx = data.index ?? 0;
+								anthropicToolBlocks.set(idx, {
+									name: data.content_block.name ?? '',
+									jsonBuffer: '',
+								});
 							}
-							if (data.type === 'message_stop') {
-								// stream complete
+							// content_block_delta — text_delta goes to prose, input_json_delta to tool buffer.
+							else if (data.type === 'content_block_delta') {
+								if (data.delta?.type === 'text_delta' && typeof data.delta.text === 'string') {
+									fullContent += data.delta.text;
+									yield { content: data.delta.text, done: false };
+								} else if (data.delta?.type === 'input_json_delta' && typeof data.delta.partial_json === 'string') {
+									const idx = data.index ?? 0;
+									const block = anthropicToolBlocks.get(idx);
+									if (block) block.jsonBuffer += data.delta.partial_json;
+								}
+							}
+							// content_block_stop — if this block was a tool, parse + yield.
+							else if (data.type === 'content_block_stop') {
+								const idx = data.index ?? 0;
+								const block = anthropicToolBlocks.get(idx);
+								if (block) {
+									anthropicToolBlocks.delete(idx);
+									let args: Record<string, any> = {};
+									try {
+										args = block.jsonBuffer ? JSON.parse(block.jsonBuffer) : {};
+									} catch (e) {
+										console.warn('[streamNarrative] Failed to parse tool args:', block.jsonBuffer, e);
+									}
+									yield { content: '', toolCall: { name: block.name, arguments: args }, done: false };
+								}
 							}
 						} else {
-							// OpenAI stream: choices[0].delta
+							// OpenAI stream: choices[0].delta. Text into prose, tool_calls into tool buffers.
 							const delta = data.choices?.[0]?.delta;
-							if (delta?.content) {
+							const finishReason = data.choices?.[0]?.finish_reason;
+
+							if (typeof delta?.content === 'string' && delta.content) {
 								fullContent += delta.content;
 								yield { content: delta.content, done: false };
 							}
-							if (delta?.reasoning) {
+							if (typeof delta?.reasoning === 'string' && delta.reasoning) {
 								yield { content: '', reasoning: delta.reasoning, done: false };
+							}
+							if (Array.isArray(delta?.tool_calls)) {
+								for (const tc of delta.tool_calls) {
+									const idx = tc.index ?? 0;
+									let block = oaiToolCalls.get(idx);
+									if (!block) {
+										block = { name: tc.function?.name ?? '', jsonBuffer: '' };
+										oaiToolCalls.set(idx, block);
+									}
+									if (typeof tc.function?.name === 'string' && tc.function.name) {
+										block.name = tc.function.name;
+									}
+									if (typeof tc.function?.arguments === 'string') {
+										block.jsonBuffer += tc.function.arguments;
+									}
+								}
+							}
+
+							// On finish, flush all accumulated tool calls.
+							if (finishReason === 'tool_calls' || finishReason === 'stop') {
+								for (const block of oaiToolCalls.values()) {
+									if (!block.name) continue;
+									let args: Record<string, any> = {};
+									try {
+										args = block.jsonBuffer ? JSON.parse(block.jsonBuffer) : {};
+									} catch (e) {
+										console.warn('[streamNarrative] Failed to parse tool args:', block.jsonBuffer, e);
+									}
+									yield { content: '', toolCall: { name: block.name, arguments: args }, done: false };
+								}
+								oaiToolCalls.clear();
 							}
 						}
 					} catch {
@@ -312,12 +441,15 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 		throw err;
 	} finally {
 		const historyLength = options.messages?.reduce((sum, m) => sum + m.content.length, 0) ?? 0;
+		const fullSystem = options.systemDynamic
+			? `${options.system}\n\n${options.systemDynamic}`
+			: options.system;
 		addLogEntry({
 			id: uuid(),
 			timestamp: Date.now(),
 			service: (options as any)._service || 'narrative',
 			model,
-			system: options.system,
+			system: fullSystem,
 			prompt: options.prompt,
 			conversationHistory: options.messages,
 			response: fullContent,
@@ -325,7 +457,7 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 			maxTokens,
 			durationMs: Date.now() - startTime,
 			error,
-			tokenEstimate: Math.ceil((options.system.length + historyLength + options.prompt.length + fullContent.length) / 4),
+			tokenEstimate: Math.ceil((fullSystem.length + historyLength + options.prompt.length + fullContent.length) / 4),
 		});
 	}
 }
@@ -529,9 +661,11 @@ export async function generateStructuredWithTools(options: GenerateWithToolsOpti
 				}
 			}
 		} else {
-			// OpenAI: message.content + message.tool_calls
+			// OpenAI: message.content + message.tool_calls.
+			// Coerce content to string — some OpenAI-compatible providers stuff
+			// non-string payloads (objects, nulls) when tool_calls are present.
 			const message = data.choices?.[0]?.message;
-			responseText = message?.content ?? '';
+			responseText = typeof message?.content === 'string' ? message.content : '';
 			if (message?.tool_calls) {
 				for (const tc of message.tool_calls) {
 					let args: Record<string, any> = {};

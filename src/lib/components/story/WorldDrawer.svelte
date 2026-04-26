@@ -1,9 +1,11 @@
 <script lang="ts">
-	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download } from 'lucide-svelte';
+	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap } from 'lucide-svelte';
+	import { WORLD_SIM_DAY_INTERVAL } from '$lib/services/ai/tools/helpers';
 	import { story } from '$lib/stores/story.svelte';
 	import { getChapters, getArcs, createArc } from '$lib/services/database';
 	import { ai } from '$lib/services/ai';
 	import { uuid } from '$lib/utils/uuid';
+	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
 	import type { Arc } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import type { Chapter } from '$lib/types';
@@ -184,6 +186,110 @@
 	});
 
 	const currentLocation = $derived(story.locations.find(l => l.current) ?? null);
+
+	// ── Time + world-sim cadence ──
+	const currentTime = $derived.by(() => {
+		const t = story.currentStory?.timeTracker;
+		if (!t) return null;
+		const pad = (n: number) => String(n).padStart(2, '0');
+		return { years: t.years, days: t.days, hms: `${pad(t.hours)}:${pad(t.minutes)}` };
+	});
+	const daysUntilSim = $derived.by(() => {
+		const t = story.currentStory?.timeTracker;
+		if (!t) return null;
+		const totalDays = t.years * 365 + t.days;
+		const lastSim = story.currentStory?.lastWorldSimDay ?? 0;
+		const remaining = WORLD_SIM_DAY_INTERVAL - (totalDays - lastSim);
+		return remaining > 0 ? remaining : 0;
+	});
+
+	// ── Meters (player only sees visible meters) ──
+	const visibleMeters = $derived(
+		(story.currentStory?.meters ?? []).filter(m => m.visible),
+	);
+
+	// ── Living World ──
+	const activeAgreements = $derived(
+		story.agreements.filter(a => a.status === 'active'),
+	);
+	const activeRumors = $derived(
+		story.rumors.filter(r => r.status !== 'stale' && r.status !== 'debunked')
+			.slice(0, 12),
+	);
+	const recentFactionActions = $derived(
+		[...story.factionActions]
+			.sort((a, b) => b.createdAt - a.createdAt)
+			.slice(0, 8),
+	);
+	const recentWorldEvents = $derived(
+		[...story.worldEvents]
+			.filter(e => e.appliedAt != null)
+			.sort((a, b) => (b.appliedAt ?? 0) - (a.appliedAt ?? 0))
+			.slice(0, 5),
+	);
+
+	let livingWorldCollapsed = $state(false);
+
+	// ── Timeline: chronological log of chapters + world events + entry creations ──
+	type TimelineKind = 'chapter' | 'event' | 'entry';
+	interface TimelineRow {
+		when: number;
+		kind: TimelineKind;
+		title: string;
+		detail?: string;
+		entryType?: string;
+	}
+
+	let timelineFilter = $state<'all' | TimelineKind>('all');
+	let timelineCollapsed = $state(false);
+
+	// Wiki export
+	let exportingWiki = $state(false);
+
+	async function handleExportWiki() {
+		if (!story.currentStory || exportingWiki) return;
+		exportingWiki = true;
+		try {
+			await downloadStoryAsWiki(story.currentStory.id);
+		} catch (e) {
+			console.error('[Wiki Export] failed:', e);
+		}
+		exportingWiki = false;
+	}
+
+	const timelineRows = $derived.by(() => {
+		const rows: TimelineRow[] = [];
+		for (const ch of chapters) {
+			rows.push({
+				when: ch.createdAt,
+				kind: 'chapter',
+				title: ch.title || `Chapter ${ch.number}`,
+				detail: ch.summary,
+			});
+		}
+		for (const ev of story.worldEvents) {
+			rows.push({
+				when: ev.appliedAt ?? ev.triggerPosition ?? Date.now(),
+				kind: 'event',
+				title: ev.name,
+				detail: ev.description,
+			});
+		}
+		for (const e of story.lorebookEntries) {
+			if (!e.createdAt) continue;
+			rows.push({
+				when: e.createdAt,
+				kind: 'entry',
+				title: e.name,
+				entryType: e.type,
+				detail: (e.description ?? '').slice(0, 120),
+			});
+		}
+		rows.sort((a, b) => b.when - a.when); // newest first
+		return timelineFilter === 'all' ? rows : rows.filter(r => r.kind === timelineFilter);
+	});
+
+	const kindIcons: Record<TimelineKind, string> = { chapter: '📖', event: '⚡', entry: '✨' };
 </script>
 
 {#if open}
@@ -196,9 +302,16 @@
 		<!-- Header -->
 		<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3">
 			<span class="font-display text-sm tracking-wide text-[var(--text-accent)]">World State</span>
-			<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
-				<X class="h-5 w-5" />
-			</button>
+			<div class="flex items-center gap-1">
+				<button onclick={handleExportWiki} disabled={exportingWiki || !story.currentStory}
+					class="rounded p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-amber-400 disabled:opacity-40"
+					title="Export wiki as Obsidian-compatible .zip">
+					{#if exportingWiki}<Loader2 class="h-4 w-4 animate-spin" />{:else}<FileArchive class="h-4 w-4" />{/if}
+				</button>
+				<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+					<X class="h-5 w-5" />
+				</button>
+			</div>
 		</div>
 
 		<div class="flex-1 overflow-y-auto px-4 py-4 space-y-6">
@@ -220,6 +333,103 @@
 						style="width: {contextPercent}%"
 					></div>
 				</div>
+			</div>
+			{/if}
+
+			<!-- Time + World-sim Cadence -->
+			{#if currentTime}
+			<div>
+				<div class="mb-2 flex items-center justify-between">
+					<div class="flex items-center gap-1.5">
+						<Clock class="h-3.5 w-3.5 text-sky-400" />
+						<span class="font-display text-[10px] tracking-wider uppercase text-sky-400">In-World Time</span>
+					</div>
+					{#if daysUntilSim !== null}
+						<span class="text-[10px] tabular-nums text-[var(--text-muted)]" title="Days until next world simulation tick">
+							sim in {daysUntilSim}d
+						</span>
+					{/if}
+				</div>
+				<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2 flex items-baseline gap-2">
+					<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Day</span>
+					<span class="text-sm font-semibold tabular-nums text-[var(--text-primary)]">
+						{currentTime.years > 0 ? `${currentTime.years}·` : ''}{currentTime.days}
+					</span>
+					<span class="ml-auto text-sm tabular-nums text-[var(--text-primary)]">{currentTime.hms}</span>
+				</div>
+			</div>
+			{/if}
+
+			<!-- Meters (visible only) -->
+			{#if visibleMeters.length > 0}
+			<div>
+				<div class="mb-2 flex items-center gap-2">
+					<Activity class="h-4 w-4 text-pink-400" />
+					<span class="font-display text-xs tracking-wider uppercase text-pink-400">Meters ({visibleMeters.length})</span>
+				</div>
+				<div class="space-y-1.5">
+					{#each visibleMeters as m}
+						{@const pct = Math.max(0, Math.min(100, (m.value / Math.max(1, m.max)) * 100))}
+						<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5">
+							<div class="flex items-center justify-between text-xs">
+								<span class="capitalize text-[var(--text-primary)]">{m.name}</span>
+								<span class="tabular-nums text-[var(--text-muted)]">{m.value}/{m.max}</span>
+							</div>
+							<div class="mt-1 h-1 rounded-full bg-[var(--bg-primary)] overflow-hidden">
+								<div class="h-full rounded-full bg-pink-500 transition-all" style="width: {pct}%"></div>
+							</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+			{/if}
+
+			<!-- Timeline -->
+			{#if timelineRows.length > 0 || true}
+			<div>
+				<button class="mb-2 flex w-full items-center justify-between gap-2"
+					onclick={() => timelineCollapsed = !timelineCollapsed}>
+					<div class="flex items-center gap-2">
+						<ScrollText class="h-4 w-4 text-amber-400" />
+						<span class="font-display text-xs tracking-wider uppercase text-amber-400">Timeline</span>
+						<span class="text-[10px] text-[var(--text-muted)]">{timelineRows.length}</span>
+					</div>
+					{#if timelineCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
+					{:else}<ChevronDown class="h-3.5 w-3.5 text-[var(--text-muted)]" />{/if}
+				</button>
+				{#if !timelineCollapsed}
+					<div class="mb-2 flex gap-1 text-[10px]">
+						{#each [{ v: 'all', l: 'All' }, { v: 'chapter', l: 'Chapters' }, { v: 'event', l: 'Events' }, { v: 'entry', l: 'Entries' }] as f}
+							<button class="rounded-md px-1.5 py-0.5 tracking-wider transition-colors
+								{timelineFilter === f.v ? 'bg-[var(--bg-primary)] text-[var(--text-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+								onclick={() => timelineFilter = f.v as any}>{f.l}</button>
+						{/each}
+					</div>
+					{#if timelineRows.length === 0}
+						<p class="text-xs text-[var(--text-muted)] italic">Nothing here yet.</p>
+					{:else}
+						<div class="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+							{#each timelineRows.slice(0, 80) as row}
+								<div class="rounded-lg bg-[var(--bg-tertiary)] px-2 py-1.5">
+									<div class="flex items-baseline gap-1.5 text-[10px]">
+										<span>{kindIcons[row.kind]}</span>
+										<span class="truncate font-semibold text-[var(--text-primary)] text-xs">{row.title}</span>
+										{#if row.entryType}
+											<span class="rounded bg-[var(--bg-primary)] px-1 py-0 text-[9px] text-[var(--text-muted)]">{row.entryType}</span>
+										{/if}
+										<span class="ml-auto shrink-0 text-[var(--text-muted)]">{new Date(row.when).toLocaleDateString()}</span>
+									</div>
+									{#if row.detail}
+										<p class="mt-0.5 line-clamp-2 text-[10px] leading-relaxed text-[var(--text-muted)]">{row.detail}</p>
+									{/if}
+								</div>
+							{/each}
+							{#if timelineRows.length > 80}
+								<p class="text-center text-[10px] text-[var(--text-muted)]">+{timelineRows.length - 80} older entries</p>
+							{/if}
+						</div>
+					{/if}
+				{/if}
 			</div>
 			{/if}
 
@@ -352,6 +562,115 @@
 					</div>
 				{/if}
 			</div>
+
+			<!-- Living World — agreements, factions, rumors, world events -->
+			{#if activeAgreements.length > 0 || recentFactionActions.length > 0 || activeRumors.length > 0 || recentWorldEvents.length > 0}
+			<div>
+				<button class="mb-2 flex w-full items-center justify-between gap-2"
+					onclick={() => livingWorldCollapsed = !livingWorldCollapsed}>
+					<div class="flex items-center gap-2">
+						<Zap class="h-4 w-4 text-violet-400" />
+						<span class="font-display text-xs tracking-wider uppercase text-violet-400">Living World</span>
+						<span class="text-[10px] text-[var(--text-muted)]">
+							{activeAgreements.length + recentFactionActions.length + activeRumors.length + recentWorldEvents.length}
+						</span>
+					</div>
+					{#if livingWorldCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
+					{:else}<ChevronDown class="h-3.5 w-3.5 text-[var(--text-muted)]" />{/if}
+				</button>
+
+				{#if !livingWorldCollapsed}
+					{#if activeAgreements.length > 0}
+						<div class="mb-3">
+							<div class="mb-1 flex items-center gap-1.5">
+								<Scale class="h-3 w-3 text-violet-400/80" />
+								<span class="text-[9px] tracking-wider uppercase text-violet-400/80">Active Agreements ({activeAgreements.length})</span>
+							</div>
+							<div class="space-y-1">
+								{#each activeAgreements as a}
+									<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5">
+										<div class="flex items-baseline gap-1.5 text-[10px]">
+											<span class="rounded bg-violet-500/10 px-1 py-0.5 text-violet-400 capitalize">{a.category}</span>
+											<span class="text-[var(--text-primary)] truncate">{a.parties.join(' ↔ ')}</span>
+											{#if a.secrecy !== 'public'}
+												<span class="ml-auto rounded bg-rose-500/10 px-1 py-0 text-rose-400 italic">{a.secrecy}</span>
+											{/if}
+										</div>
+										<p class="mt-0.5 text-[10px] leading-relaxed text-[var(--text-muted)] line-clamp-2">{a.terms}</p>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					{#if recentFactionActions.length > 0}
+						<div class="mb-3">
+							<div class="mb-1 flex items-center gap-1.5">
+								<Flag class="h-3 w-3 text-orange-400/80" />
+								<span class="text-[9px] tracking-wider uppercase text-orange-400/80">Faction Moves ({recentFactionActions.length})</span>
+							</div>
+							<div class="space-y-1">
+								{#each recentFactionActions as fa}
+									<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5">
+										<div class="flex items-baseline gap-1.5 text-[10px]">
+											<span class="text-orange-400">{fa.factionName}</span>
+											<span class="rounded bg-[var(--bg-primary)] px-1 py-0 text-[var(--text-muted)] italic">{fa.actionType}</span>
+											<span class="ml-auto text-[var(--text-muted)] uppercase tracking-wider {fa.urgency === 'critical' ? 'text-rose-400' : fa.urgency === 'high' ? 'text-amber-400' : ''}">{fa.urgency}</span>
+										</div>
+										<p class="mt-0.5 text-[10px] leading-relaxed text-[var(--text-muted)] line-clamp-2">{fa.action}</p>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					{#if activeRumors.length > 0}
+						<div class="mb-3">
+							<div class="mb-1 flex items-center gap-1.5">
+								<Megaphone class="h-3 w-3 text-amber-400/80" />
+								<span class="text-[9px] tracking-wider uppercase text-amber-400/80">Rumors ({activeRumors.length})</span>
+							</div>
+							<div class="space-y-1">
+								{#each activeRumors as r}
+									{@const band = r.truthfulness >= 0.7 ? 'reliable' : r.truthfulness >= 0.4 ? 'uncertain' : 'dubious'}
+									{@const bandColor = band === 'reliable' ? 'text-emerald-400' : band === 'uncertain' ? 'text-amber-400' : 'text-rose-400'}
+									<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5">
+										<div class="flex items-baseline gap-1.5 text-[10px]">
+											<span class="rounded bg-[var(--bg-primary)] px-1 py-0 italic {bandColor}">{band}</span>
+											<span class="text-[var(--text-muted)]">{r.spreadRadius}</span>
+											{#if r.status === 'mature'}
+												<span class="ml-auto text-[var(--text-muted)] italic">mature</span>
+											{/if}
+										</div>
+										<p class="mt-0.5 text-[10px] leading-relaxed text-[var(--text-primary)] line-clamp-2">{r.content}</p>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					{#if recentWorldEvents.length > 0}
+						<div>
+							<div class="mb-1 flex items-center gap-1.5">
+								<Zap class="h-3 w-3 text-fuchsia-400/80" />
+								<span class="text-[9px] tracking-wider uppercase text-fuchsia-400/80">World Events ({recentWorldEvents.length})</span>
+							</div>
+							<div class="space-y-1">
+								{#each recentWorldEvents as ev}
+									<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5">
+										<div class="flex items-baseline gap-1.5 text-[10px]">
+											<span class="text-fuchsia-400 truncate">{ev.name}</span>
+											<span class="ml-auto rounded bg-[var(--bg-primary)] px-1 py-0 text-[var(--text-muted)] italic">{ev.severity}</span>
+										</div>
+										<p class="mt-0.5 text-[10px] leading-relaxed text-[var(--text-muted)] line-clamp-2">{ev.description}</p>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+				{/if}
+			</div>
+			{/if}
 
 			<!-- Lorebook -->
 			{#if story.lorebookEntries.length > 0}

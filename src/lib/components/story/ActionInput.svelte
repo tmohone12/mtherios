@@ -2,9 +2,11 @@
 	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, Square, Loader2, Dices } from 'lucide-svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
-	import { ai } from '$lib/services/ai';
-	import { streamNarrative } from '$lib/services/ai/sdk/generate';
+	import { streamNarrative, type ToolCall } from '$lib/services/ai/sdk/generate';
 	import { executeWorldUpdate } from '$lib/services/ai/tools/generate-with-tools';
+	import { executeToolCall } from '$lib/services/ai/tools/executor';
+	import { GM_TOOLS } from '$lib/services/ai/tools/schemas';
+	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
 
 	type ActionType = 'do' | 'say' | 'think' | 'story' | 'free';
@@ -192,7 +194,8 @@
 	 */
 	async function handleAIRollContinuation(
 		fullResponse: string,
-		systemPrompt: string,
+		systemStable: string,
+		systemDynamic: string,
 		conversationHistory: { role: 'user' | 'assistant'; content: string }[],
 	): Promise<string> {
 		const { preText, marker } = parseRollMarker(fullResponse);
@@ -220,7 +223,8 @@
 		];
 
 		const continuationStream = streamNarrative({
-			system: systemPrompt,
+			system: systemStable,
+			systemDynamic,
 			prompt: continuationPrompt,
 			messages: continuationMessages,
 			temperature: settings.narrativeSettings.temperature,
@@ -271,79 +275,38 @@
 
 		let fullResponse = '';
 
-		const useOrchestrator = settings.uiSettings.generationMode === 'orchestrator';
-
 		try {
-			let systemPrompt: string;
-			let conversationHistory: { role: 'user' | 'assistant'; content: string }[];
-			let userPrompt: string;
-			let stateSnapshot = '';
+			// ── Build orchestrator context: structured state snapshot + classifier-facing string ──
+			const stateSnapshot = await story.buildStateSnapshot();
+			const { stable: systemStable, dynamic: systemDynamic } = story.buildOrchestratorSystemBlocks(stateSnapshot);
+			const snapshotText = story.serializeSnapshotForClassifier(stateSnapshot);
+			const allHistory = story.buildConversationMessages();
+			const conversationHistory = allHistory.length > 0 && allHistory[allHistory.length - 1].role === 'user'
+				? allHistory.slice(0, -1)
+				: allHistory;
+			const userPrompt = story.buildUserPrompt(content);
 
-			if (useOrchestrator) {
-				// ── Orchestrator path: snapshot with chapters, arcs, world sim ──
-				stateSnapshot = await story.buildStateSnapshot();
-				if (story.pendingFactionReactions.length > 0) {
-					story.pendingFactionReactions = [];
-				}
-				systemPrompt = story.buildOrchestratorSystemPrompt(stateSnapshot);
-				const allHistory = story.buildConversationMessages();
-				conversationHistory = allHistory.length > 0 && allHistory[allHistory.length - 1].role === 'user'
-					? allHistory.slice(0, -1)
-					: allHistory;
-				userPrompt = story.buildUserPrompt(content);
+			const estimateTokens = (t: string) => Math.ceil(t.length / 4);
+			const historyTokens = conversationHistory.reduce((s, m) => s + estimateTokens(m.content), 0);
+			story.lastTierUsage = { snapshot: estimateTokens(snapshotText) };
+			story.lastContextTotal = estimateTokens(systemStable) + estimateTokens(systemDynamic) + historyTokens + estimateTokens(userPrompt);
 
-				// Context stats for the meter
-				const estimateTokens = (t: string) => Math.ceil(t.length / 4);
-				const historyTokens = conversationHistory.reduce((s, m) => s + estimateTokens(m.content), 0);
-				story.lastTierUsage = { snapshot: estimateTokens(stateSnapshot) };
-				story.lastContextTotal = estimateTokens(systemPrompt) + historyTokens + estimateTokens(userPrompt);
-			} else {
-				// ── Pipeline path: full context assembly (existing behavior) ──
-				const assembled = await ai.contextAssembler.assemble({
-					storyId: story.currentStory.id,
-					userAction: content,
-					entries: story.entries,
-					characters: story.characters,
-					locations: story.locations,
-					items: story.items,
-					lorebookEntries: story.lorebookEntries,
-					lastWorldSimResult: story.lastWorldSimResult,
-					pendingFactionReactions: story.pendingFactionReactions,
-					entryRelationships: story.entryRelationships,
-					worldEvents: story.worldEvents,
-					storyMode: story.storyMode,
-					pov: story.pov,
-					tense: story.tense,
-					maxChaptersPerRetrieval: story.currentStory.memoryConfig?.maxChaptersPerRetrieval,
-				});
-
-				if (story.pendingFactionReactions.length > 0) {
-					story.pendingFactionReactions = [];
-				}
-
-				systemPrompt = story.buildSystemPrompt(assembled.contextBlock);
-				const allHistory = story.buildConversationMessages();
-				conversationHistory = allHistory.length > 0 && allHistory[allHistory.length - 1].role === 'user'
-					? allHistory.slice(0, -1)
-					: allHistory;
-				userPrompt = story.buildUserPrompt(content);
-
-				story.lastTierUsage = assembled.tierUsage as unknown as Record<string, number>;
-				const estimateTokens = (t: string) => Math.ceil(t.length / 4);
-				const historyTokens = conversationHistory.reduce((s, m) => s + estimateTokens(m.content), 0);
-				story.lastContextTotal = estimateTokens(systemPrompt) + historyTokens + estimateTokens(userPrompt);
-			}
-
-			// ── Stream narrative (same for both paths) ──
 			onStreamStart?.();
 
+			// Inline tool calls: the narrator emits prose AND world-state updates in
+			// one streamed response. Falls back to the separate classifier call only
+			// when the model didn't call any tools (older models / cautious settings).
+			const inlineToolCalls: ToolCall[] = [];
+
 			const stream = streamNarrative({
-				system: systemPrompt,
+				system: systemStable,
+				systemDynamic,
 				prompt: userPrompt,
 				messages: conversationHistory,
 				temperature: settings.narrativeSettings.temperature,
 				maxTokens: settings.narrativeSettings.maxTokens,
 				signal: abortController.signal,
+				tools: isAdventure ? GM_TOOLS : undefined,
 				_service: 'narrative',
 			} as any);
 
@@ -353,28 +316,61 @@
 					fullResponse += chunk.content;
 					onStreamChunk?.(fullResponse);
 				}
+				if (chunk.toolCall) {
+					inlineToolCalls.push(chunk.toolCall);
+				}
 			}
 
 			// Check for AI-initiated dice roll markers and handle continuation
 			if (isAdventure && fullResponse.includes('{{roll:')) {
 				fullResponse = await handleAIRollContinuation(
 					fullResponse,
-					systemPrompt,
+					systemStable,
+					systemDynamic,
 					conversationHistory,
 				);
 			}
 
+			if (!fullResponse.trim() && inlineToolCalls.length > 0) {
+				// Tools without prose: fail closed. The model committed to deltas
+				// but produced nothing for the player to read. Discarding tools
+				// rather than silently mutating state with no visible feedback.
+				console.warn(
+					`[Orchestrator] Narrator returned ${inlineToolCalls.length} tool call(s) but empty prose — turn discarded.`,
+				);
+			}
 			if (fullResponse.trim()) {
 				// Clear streaming display before adding entry to prevent double display
 				onStreamClear?.();
 				await story.addEntry('narration', fullResponse);
 
-				// ── Orchestrator: run world update before signaling stream end ──
-				if (useOrchestrator) {
-					const errors = await executeWorldUpdate(fullResponse, stateSnapshot, abortController?.signal);
-					if (errors.length > 0) {
-						console.warn('[Orchestrator] World update errors:', errors);
+				const worldUpdateErrors: string[] = [];
+				if (inlineToolCalls.length > 0) {
+					// Inline path: dispatch each tool call the narrator emitted.
+					for (const tc of inlineToolCalls) {
+						try {
+							await executeToolCall(tc.name, tc.arguments);
+						} catch (e) {
+							const msg = `Tool ${tc.name}: ${e instanceof Error ? e.message : e}`;
+							worldUpdateErrors.push(msg);
+							console.error(`[Orchestrator] ${msg}`);
+						}
 					}
+					// Background jobs (chapters, arcs, lore management) still run.
+					try {
+						const bgErrors = await runBackgroundJobs();
+						worldUpdateErrors.push(...bgErrors);
+					} catch (e) {
+						worldUpdateErrors.push(`Background: ${e}`);
+					}
+				} else {
+					// Fallback path: separate classifier call extracts state from prose.
+					const errs = await executeWorldUpdate(fullResponse, snapshotText, abortController?.signal);
+					worldUpdateErrors.push(...errs);
+				}
+
+				if (worldUpdateErrors.length > 0) {
+					console.warn('[Orchestrator] World update errors:', worldUpdateErrors);
 				}
 
 				onStreamEnd?.(fullResponse);
