@@ -71,6 +71,8 @@ export const worldStateStoryBeatSchema = z.object({
 export const worldStateMeterChangeSchema = z.object({
 	name: z.string(),
 	delta: z.number(),
+	/** Starting value when the meter is created for the first time. Ignored on later updates. */
+	initial: z.number().optional(),
 	max: z.number().optional(),
 	visible: z.boolean().optional(),
 	reason: z.string().nullable().optional().default(null),
@@ -236,12 +238,13 @@ export const GM_TOOLS = [
 					},
 					meter_changes: {
 						type: 'array',
-						description: 'Adjust persistent meters (sanity, morality, reputation, hunger, suspicion, etc.). Create a meter the first time you reference it by passing a name and an initial delta. The current values are included in the state snapshot so you can reason about them.',
+						description: 'Adjust persistent meters (sanity, morality, reputation, hunger, suspicion, fatigue, etc.). The current values are included in the state snapshot so you can reason about them.',
 						items: {
 							type: 'object',
 							properties: {
 								name: { type: 'string', description: 'Meter name (e.g. "sanity", "reputation:Lannisters", "hunger")' },
-								delta: { type: 'number', description: 'Signed change to apply to current value' },
+								delta: { type: 'number', description: 'Signed change to apply. On the FIRST mention of a meter (creating it), this is added on top of `initial`.' },
+								initial: { type: 'number', description: 'Starting value used ONLY when this meter is being created. Use `max` (e.g. 100) for "high-is-good" meters that start full (sanity, health, reputation, morale). Use 0 for "low-is-bad" meters that start empty (hunger, fatigue, suspicion, debt, dread). Ignored on subsequent updates.' },
 								max: { type: 'number', description: 'Optional max value (only set when first creating the meter — defaults to 100)' },
 								visible: { type: 'boolean', description: 'Whether the player sees this meter in the HUD (defaults to true)' },
 								reason: { type: 'string', description: 'Brief in-fiction reason for the change' },

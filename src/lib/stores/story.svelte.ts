@@ -494,7 +494,7 @@ class StoryStore {
 		if (mode === 'adventure') {
 			const isThird = pov === 'third';
 			const personLabel = isThird ? 'third person' : 'second person (you/your)';
-			parts.push(`You are the game master of an interactive text adventure. Write in ${tenseWord} tense, ${personLabel}.`);
+			parts.push(`You are a DM (Dungeon Master) for a tabletop-style, text-adventure program. Write in ${tenseWord} tense, ${personLabel}. You have three function-calling tools: \`update_world_state\` (call ONCE at the end of every turn to record everything that changed in the scene — characters, location, time, items, meters, agreements, story beats), \`query_lore\` (call BEFORE narrating when you need to verify facts about an existing entity), and \`create_lore_entry\` (call when introducing a brand-new persistent entity). The **Tools** section below has the full rules for each.`);
 
 			const userName = protagonist?.name ?? 'the player';
 			const desc = protagonist?.description ? ` — ${protagonist.description}` : '';
@@ -578,7 +578,7 @@ class StoryStore {
 			'  - **Conversations**: what NPCs revealed/learned, emotional shifts.',
 			'  - **Relationships**: changes between entities.',
 			'  - **Story beats**: significant plot events.',
-			'  - **Meter changes**: sanity, reputation, hunger, suspicion — invent meters as the fiction calls for them, adjust existing ones with signed deltas.',
+			'  - **Meter changes**: sanity, reputation, hunger, suspicion, fatigue — invent meters as the fiction calls for them, adjust existing ones with signed deltas. When CREATING a meter for the first time, also pass `initial`: use `max` (default 100) for high-is-good meters that start full (sanity, health, reputation), and 0 for low-is-bad meters that start empty (hunger, fatigue, suspicion). The `delta` is applied on top of `initial`.',
 			'  - **Agreements**: treaties, oaths, debts, promises, marriages, bonds, contracts, vassalage, bargains-with-entities. action=create when sworn, break when violated, fulfill when paid, update to revise terms.',
 			'- **query_lore** — call BEFORE narrating when you need to verify facts about an existing character, location, or faction.',
 			'- **create_lore_entry** — call when introducing a brand-new entity that should persist (you can call this alongside `update_world_state`).',
@@ -1162,10 +1162,12 @@ class StoryStore {
 
 	/**
 	 * Apply a batch of meter changes from update_world_state.
-	 * Creates meters on first reference (defaults: max=100, value=max+delta clamped, visible=true).
-	 * Existing meters: clamp value into [0, max] after applying delta.
+	 * Creates meters on first reference using the model-provided `initial`
+	 * (defaults to 0 — low-is-bad meters like hunger/fatigue/suspicion are the
+	 * common case; sanity/health-style meters MUST set initial=max). Then
+	 * applies the delta on top, clamped into [0, max].
 	 */
-	async applyMeterChanges(changes: Array<{ name: string; delta: number; max?: number; visible?: boolean }>) {
+	async applyMeterChanges(changes: Array<{ name: string; delta: number; initial?: number; max?: number; visible?: boolean }>) {
 		if (!this.currentStory || changes.length === 0) return;
 		const meters = [...(this.currentStory.meters ?? [])];
 
@@ -1174,10 +1176,10 @@ class StoryStore {
 			const idx = meters.findIndex(m => m.name.toLowerCase() === change.name.toLowerCase());
 			if (idx === -1) {
 				const max = change.max && change.max > 0 ? change.max : 100;
-				const initial = max + change.delta;
+				const base = change.initial ?? 0;
 				meters.push({
 					name: change.name,
-					value: Math.max(0, Math.min(max, initial)),
+					value: Math.max(0, Math.min(max, base + change.delta)),
 					max,
 					visible: change.visible ?? true,
 				});
