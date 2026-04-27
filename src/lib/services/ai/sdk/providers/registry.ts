@@ -106,6 +106,15 @@ export function createProviderFromProfile(profile: APIProfile, presetId: string,
 				fetch,
 			});
 
+		case 'anthropic-proxy': {
+			const host = baseURL ?? PROVIDERS['anthropic-proxy'].baseUrl;
+			return createAnthropic({
+				apiKey: profile.apiKey || 'cc-bridge',
+				baseURL: `${host}/v1`,
+				fetch,
+			});
+		}
+
 		default:
 			// Fallback: treat any unknown provider as OpenAI-compatible
 			return createOpenAICompatible({

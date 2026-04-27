@@ -538,9 +538,9 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
 
   'anthropic-proxy': {
     name: 'Claude (Subscription Proxy)',
-    description: 'Use Claude via local proxy (for Claude Pro/Max subscribers)',
-    baseUrl: 'http://localhost:3456/v1',
-    requiresApiKey: false,
+    description: 'Use Claude via the cc-bridge running on Zo (routes through your Claude Code subscription). Paste the Bridge Token (BRIDGE_TOKEN env var on the cc-bridge service) as the API key. Override Base URL if you self-host the bridge elsewhere.',
+    baseUrl: 'https://cc-bridge-nullg.zocomputer.io',
+    requiresApiKey: true,
     capabilities: {
       textGeneration: true,
       imageGeneration: false,
@@ -549,12 +549,9 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
       reasoningExtraction: 'think-tag',
     },
     fallbackModels: [
-      'claude-opus-4-5-20251101',
-      'claude-haiku-4-5-20251001',
-      'claude-sonnet-4-5-20250929',
-      'claude-opus-4-1-20250805',
-      'claude-sonnet-4-20250514',
-      'claude-opus-4-20250514',
+      'claude-opus-4-7',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5',
     ],
     // No service defaults - user must configure models in Generation Settings
   },

@@ -91,10 +91,24 @@ function isOAuthToken(apiKey: string): boolean {
 }
 
 /**
- * Check if a profile targets the Anthropic native API.
+ * Check if a profile targets the Anthropic Messages API shape (native or
+ * the cc-bridge proxy). Both speak `/v1/messages` and accept `x-api-key`.
  */
 function isAnthropicProvider(profile: APIProfile): boolean {
-	return profile.providerType === 'anthropic';
+	return profile.providerType === 'anthropic' || profile.providerType === 'anthropic-proxy';
+}
+
+/**
+ * iOS Safari (incl. iPadOS) drops chunked-streamed fetch responses through
+ * Cloudflare after a few seconds with a generic "Load failed". For the
+ * cc-bridge proxy specifically we fall back to non-streaming on iOS.
+ */
+function isIOSSafari(): boolean {
+	if (typeof navigator === 'undefined') return false;
+	const ua = navigator.userAgent;
+	if (/iPad|iPhone|iPod/.test(ua)) return true;
+	// iPadOS 13+ reports as Mac; disambiguate via touch points.
+	return ua.includes('Mac') && (navigator as any).maxTouchPoints > 1;
 }
 
 /**
@@ -255,6 +269,10 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 	let fullContent = '';
 	let error: string | undefined;
 	const useAnthropic = isAnthropicProvider(profile);
+	// iOS Safari + cc-bridge: chunked SSE through Cloudflare dies after a few
+	// seconds with "Load failed". Send a non-streaming request and yield the
+	// full text as a single chunk at the end.
+	const useStream = !(isIOSSafari() && profile.providerType === 'anthropic-proxy');
 
 	// Combined system prompt for OpenAI-compatible providers (no caching support)
 	const combinedSystem = options.systemDynamic
@@ -282,7 +300,7 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 	let body: Record<string, any>;
 	if (useAnthropic) {
 		body = toAnthropicBody(
-			options.system, messages, model, temperature, maxTokens, true,
+			options.system, messages, model, temperature, maxTokens, useStream,
 			options.systemDynamic, options.tools, options.forceTool,
 		);
 	} else {
@@ -294,7 +312,7 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 			for (const msg of options.messages) oaiMessages.push({ role: msg.role, content: msg.content });
 		}
 		oaiMessages.push({ role: 'user', content: options.prompt });
-		body = { model, messages: oaiMessages, stream: true, temperature, max_tokens: maxTokens };
+		body = { model, messages: oaiMessages, stream: useStream, temperature, max_tokens: maxTokens };
 		if (options.tools && options.tools.length > 0) {
 			body.tools = options.tools;
 			body.tool_choice = options.forceTool
@@ -315,6 +333,48 @@ export async function* streamNarrative(options: GenerateOptions): AsyncGenerator
 			const errorText = await response.text().catch(() => 'Unknown error');
 			error = `HTTP ${response.status}: ${errorText}`;
 			throw new Error(`AI request failed (${response.status}): ${errorText}`);
+		}
+
+		// Non-streaming branch (iOS + cc-bridge). Parse the full JSON, yield
+		// text + tool calls as discrete chunks, then signal done.
+		if (!useStream) {
+			const data = await response.json();
+			if (useAnthropic) {
+				for (const block of data.content ?? []) {
+					if (block.type === 'text' && typeof block.text === 'string' && block.text) {
+						fullContent += block.text;
+						yield { content: block.text, done: false };
+					} else if (block.type === 'tool_use') {
+						yield {
+							content: '',
+							toolCall: { name: block.name, arguments: block.input ?? {} },
+							done: false,
+						};
+					}
+				}
+			} else {
+				const message = data.choices?.[0]?.message;
+				const content = typeof message?.content === 'string' ? message.content : '';
+				if (content) {
+					fullContent += content;
+					yield { content, done: false };
+				}
+				if (Array.isArray(message?.tool_calls)) {
+					for (const tc of message.tool_calls) {
+						let args: Record<string, any> = {};
+						try {
+							args = typeof tc.function?.arguments === 'string'
+								? JSON.parse(tc.function.arguments)
+								: (tc.function?.arguments ?? {});
+						} catch {
+							console.warn('[streamNarrative] Failed to parse tool args:', tc.function?.arguments);
+						}
+						yield { content: '', toolCall: { name: tc.function?.name ?? '', arguments: args }, done: false };
+					}
+				}
+			}
+			yield { content: '', done: true };
+			return;
 		}
 
 		const reader = response.body?.getReader();
