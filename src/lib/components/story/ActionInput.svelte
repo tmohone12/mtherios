@@ -276,9 +276,18 @@
 		let fullResponse = '';
 
 		try {
+			// ── Provider-aware path selection ──
+			// Inline tool calls only work reliably on Anthropic native. OpenAI-compat
+			// providers (OpenRouter, Kimi, etc.) — especially smaller open-source
+			// models — frequently emit tool calls without prose, dropping the turn.
+			// They also don't honor cache_control, so the larger tool-attached
+			// prompt is pure overhead. Fall back to the post-stream classifier.
+			const useInlineTools = isAdventure
+				&& settings.activeProfile?.providerType === 'anthropic';
+
 			// ── Build orchestrator context: structured state snapshot + classifier-facing string ──
 			const stateSnapshot = await story.buildStateSnapshot();
-			const { stable: systemStable, dynamic: systemDynamic } = story.buildOrchestratorSystemBlocks(stateSnapshot);
+			const { stable: systemStable, dynamic: systemDynamic } = story.buildOrchestratorSystemBlocks(stateSnapshot, { useInlineTools });
 			const snapshotText = story.serializeSnapshotForClassifier(stateSnapshot);
 			const allHistory = story.buildConversationMessages();
 			const conversationHistory = allHistory.length > 0 && allHistory[allHistory.length - 1].role === 'user'
@@ -306,7 +315,7 @@
 				temperature: settings.narrativeSettings.temperature,
 				maxTokens: settings.narrativeSettings.maxTokens,
 				signal: abortController.signal,
-				tools: isAdventure ? GM_TOOLS : undefined,
+				tools: useInlineTools ? GM_TOOLS : undefined,
 				_service: 'narrative',
 			} as any);
 
