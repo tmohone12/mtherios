@@ -22,6 +22,15 @@ export default defineConfig({
 				changeOrigin: true,
 				rewrite: (path) => path.replace(/^\/api\/kimi-code/, '/coding/v1'),
 			},
+			// Claude Code Bridge (cc-bridge) — local Anthropic-shaped proxy
+			// running on Zo at :8787 that routes through the Claude CLI
+			// subscription. This dev-server proxy strips /api/cc-bridge so
+			// the SDK can call /v1/messages directly.
+			'/api/cc-bridge': {
+				target: 'http://localhost:8787',
+				changeOrigin: true,
+				rewrite: (path) => path.replace(/^\/api\/cc-bridge/, ''),
+			},
 		},
 	},
 });

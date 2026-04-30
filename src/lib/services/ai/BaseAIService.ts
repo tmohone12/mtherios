@@ -5,7 +5,7 @@
  * from the settings store. Provides structured generation via JSON mode.
  */
 
-import { generateNarrative } from './sdk/generate';
+import { generateNarrative, stripThinkTags } from './sdk/generate';
 import { createLogger } from './core/config';
 import { settings } from '$lib/stores/settings.svelte';
 import type { z } from 'zod';
@@ -59,7 +59,9 @@ export abstract class BaseAIService {
 		prompt: string,
 	): Promise<T> {
 		const system = this.promptOverride || defaultSystem;
-		const jsonInstruction = '\n\nRespond ONLY with valid JSON matching the requested schema. No markdown, no code fences, no explanation.';
+		// Mention "json" explicitly — DeepSeek's JSON output mode requires the
+		// word to appear in the system or user prompt, otherwise the API errors.
+		const jsonInstruction = '\n\nRespond ONLY with valid json matching the requested schema. No markdown, no code fences, no explanation.';
 
 		const raw = await generateNarrative({
 			system: system + jsonInstruction,
@@ -68,11 +70,16 @@ export abstract class BaseAIService {
 			temperature: this.serviceTemperature,
 			maxTokens: this.serviceMaxTokens,
 			profileId: this.serviceProfileId || undefined,
+			// Strict JSON mode — providers that don't support it ignore the
+			// field; for deepseek-reasoner this is what makes the difference
+			// between getting valid JSON and getting empty content mid-thinking.
+			responseFormat: 'json_object',
 			_service: this.serviceId,
 		} as any);
 
-		// Strip markdown code fences if present
-		let cleaned = raw.trim();
+		// Strip leaked `<think>` blocks (some proxies put reasoning content
+		// directly into `message.content`) and any wrapping markdown code fence.
+		let cleaned = stripThinkTags(raw).trim();
 		if (cleaned.startsWith('```')) {
 			cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
 		}

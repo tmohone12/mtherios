@@ -108,6 +108,8 @@ class SettingsStore {
 		imageCustomStyle: '',
 		imageSize: '1024x1024',
 		imageModel: '',
+		imageProfileId: '',
+		imageCharacterPrompt: '',
 		// Memory settings
 		maxMessages: 40,
 		maxHistoryEntries: 200,

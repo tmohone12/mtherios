@@ -184,14 +184,22 @@ export class ImageGenerationService {
 			if (!profilesJson) return { image: null, error: 'No API profiles configured.' };
 			const profiles: APIProfile[] = JSON.parse(profilesJson);
 
-			// Use active profile, not just the first one
-			const profile = activeProfileId
-				? profiles.find(p => p.id === activeProfileId) ?? profiles[0]
-				: profiles[0];
+			// Image generation can use a dedicated profile separate from narrative.
+			// Falls back to the active narrative profile, then the first available.
+			// Each lookup must miss independently — collapsing this to a single
+			// `?? profiles[0]` would short-circuit past the active id whenever
+			// imageProfileId pointed to a deleted profile.
+			const profile =
+				profiles.find(p => p.id === settings.uiSettings.imageProfileId)
+				?? profiles.find(p => p.id === activeProfileId)
+				?? profiles[0];
 			if (!profile) return { image: null, error: 'No API profile found.' };
 
 			const scene = this.extractVisualScene(narrative, context);
-			const imagePrompt = `${scene}, ${resolvedStyle}`;
+			const characterPrompt = (settings.uiSettings.imageCharacterPrompt || '').trim();
+			const imagePrompt = characterPrompt
+				? `${characterPrompt}. ${scene}, ${resolvedStyle}`
+				: `${scene}, ${resolvedStyle}`;
 
 			const providerType = profile.providerType as ProviderType;
 			const providerConfig = PROVIDERS[providerType];

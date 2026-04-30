@@ -25,24 +25,28 @@
 	const canUndo = $derived(loreHistory.length > 0);
 	const wordCount = $derived(proposedLore ? proposedLore.split(/\s+/).filter(Boolean).length : 0);
 
+	type DiffLine = { text: string; kind: 'added' | 'unchanged' | 'removed' };
+
 	// All diff lines in order for display
-	const diffLines = $derived.by(() => {
-		if (!pendingDiff) return [];
+	const diffLines = $derived.by<DiffLine[]>(() => {
+		// Capture into a local so the narrowing survives the inner closures —
+		// without it, $derived.by's getter contract makes pendingDiff readable
+		// as null again inside .some().
+		const diff = pendingDiff;
+		if (!diff) return [];
 
-		const oldLines = (currentLore ?? '').split('\n').filter(l => l.trim());
 		const newLines = proposedLore.split('\n').filter(l => l.trim());
+		const addedSet = new Set(diff.added.map(a => a.trim()));
 
-		// Build ordered display: show new lore line by line, marking added vs unchanged
-		return newLines.map(line => {
-			const trimmed = line.trim();
-			if (pendingDiff.added.some(a => a.trim() === trimmed)) {
-				return { text: line, kind: 'added' as const };
-			}
-			return { text: line, kind: 'unchanged' as const };
-		}).concat(
-			// Append removed lines (they're not in newLines)
-			(pendingDiff.removed ?? []).map(line => ({ text: line, kind: 'removed' as const }))
-		);
+		const newAndUnchanged: DiffLine[] = newLines.map(line => ({
+			text: line,
+			kind: addedSet.has(line.trim()) ? 'added' : 'unchanged',
+		}));
+		const removed: DiffLine[] = (diff.removed ?? []).map(line => ({
+			text: line,
+			kind: 'removed',
+		}));
+		return [...newAndUnchanged, ...removed];
 	});
 
 	// ── Actions ──

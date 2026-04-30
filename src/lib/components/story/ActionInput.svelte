@@ -2,9 +2,10 @@
 	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, Square, Loader2, Dices } from 'lucide-svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
-	import { streamNarrative, type ToolCall } from '$lib/services/ai/sdk/generate';
+	import { streamNarrative, continueAfterTools, type ToolCall, type ToolRoundResult } from '$lib/services/ai/sdk/generate';
 	import { executeWorldUpdate } from '$lib/services/ai/tools/generate-with-tools';
 	import { executeToolCall } from '$lib/services/ai/tools/executor';
+	import { extractInlineToolCalls } from '$lib/services/ai/tools/inline-extractor';
 	import { GM_TOOLS } from '$lib/services/ai/tools/schemas';
 	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
@@ -297,6 +298,7 @@
 			// one streamed response. Falls back to the separate classifier call only
 			// when the model didn't call any tools (older models / cautious settings).
 			const inlineToolCalls: ToolCall[] = [];
+			let inlineReasoning = '';
 
 			const stream = streamNarrative({
 				system: systemStable,
@@ -319,6 +321,86 @@
 				if (chunk.toolCall) {
 					inlineToolCalls.push(chunk.toolCall);
 				}
+				if (chunk.reasoning) {
+					inlineReasoning += chunk.reasoning;
+				}
+			}
+
+			// cc-bridge fallback: if the model emitted tool calls as text inside
+			// the prose (Claude Code wire format), recover them and clean the
+			// visible narration.
+			if (inlineToolCalls.length === 0 && fullResponse) {
+				const { cleaned, toolCalls } = extractInlineToolCalls(fullResponse);
+				if (toolCalls.length > 0) {
+					fullResponse = cleaned;
+					inlineToolCalls.push(...toolCalls);
+					onStreamChunk?.(fullResponse);
+				}
+			}
+
+			// DeepSeek (and a few other OpenAI-compatible models) sometimes
+			// emit tool calls without any accompanying prose. Apply the tool
+			// calls, then continue the conversation per the DeepSeek/OpenAI
+			// multi-round protocol: append the assistant tool_calls + a tool
+			// result message for each one, and let the model produce the
+			// final narration in-context.
+			//
+			// https://api-docs.deepseek.com/guides/tool_calls
+			let toolCallsApplied = false;
+			if (!fullResponse.trim() && inlineToolCalls.length > 0) {
+				console.warn('[Orchestrator] tool-only response — applying tools and continuing per DeepSeek multi-round flow');
+				const toolResults: ToolRoundResult[] = [];
+				for (const tc of inlineToolCalls) {
+					let resultText = JSON.stringify({ ok: true });
+					try {
+						const out = await executeToolCall(tc.name, tc.arguments);
+						if (typeof out === 'string' && out) resultText = out;
+					} catch (e) {
+						console.error(`[Orchestrator] retry-apply ${tc.name} failed:`, e);
+						resultText = JSON.stringify({ error: e instanceof Error ? e.message : String(e) });
+					}
+					toolResults.push({ toolCallId: tc.id, toolName: tc.name, content: resultText });
+				}
+				toolCallsApplied = true;
+
+				// State changed; rebuild the snapshot so the model's final
+				// narration sees the freshly-applied world updates.
+				const retrySnapshot = await story.buildStateSnapshot();
+				const { stable: retryStable, dynamic: retryDynamic } = story.buildOrchestratorSystemBlocks(retrySnapshot);
+
+				try {
+					await continueAfterTools(
+						{
+							system: retryStable,
+							systemDynamic: retryDynamic,
+							prompt: userPrompt,
+							messages: conversationHistory,
+							temperature: settings.narrativeSettings.temperature,
+							maxTokens: settings.narrativeSettings.maxTokens,
+							signal: abortController.signal,
+							priorToolCalls: inlineToolCalls,
+							toolResults,
+							priorReasoningContent: inlineReasoning,
+							_service: 'narrative-continuation',
+						} as any,
+						(_delta, full) => {
+							fullResponse = full;
+							onStreamChunk?.(fullResponse);
+						},
+					);
+				} catch (e) {
+					console.error('[Orchestrator] continueAfterTools failed:', e);
+				}
+
+				// The continuation can still emit cc-bridge XML if it tried to
+				// re-call tools. Strip leaked tags before showing the player.
+				if (fullResponse) {
+					const { cleaned } = extractInlineToolCalls(fullResponse);
+					if (cleaned !== fullResponse) {
+						fullResponse = cleaned;
+						onStreamChunk?.(fullResponse);
+					}
+				}
 			}
 
 			// Check for AI-initiated dice roll markers and handle continuation
@@ -331,13 +413,18 @@
 				);
 			}
 
-			if (!fullResponse.trim() && inlineToolCalls.length > 0) {
-				// Tools without prose: fail closed. The model committed to deltas
-				// but produced nothing for the player to read. Discarding tools
-				// rather than silently mutating state with no visible feedback.
-				console.warn(
-					`[Orchestrator] Narrator returned ${inlineToolCalls.length} tool call(s) but empty prose — turn discarded.`,
-				);
+			if (!fullResponse.trim()) {
+				// Surface a visible system message instead of silently dropping
+				// the turn. Reaches here when the model returned nothing at all
+				// (provider hiccup, empty SSE stream) — the tool-only case is
+				// already handled by the retry above.
+				const reason = toolCallsApplied
+					? 'The model emitted tool calls but no narration, and the prose retry was also empty. Tool calls were applied; try sending another action to continue.'
+					: 'The model returned an empty response. This usually means a provider error or a tool-call leak — try again, or check the active model in Settings.';
+				console.warn('[Orchestrator]', reason);
+				onStreamClear?.();
+				await story.addEntry('system', reason);
+				onStreamEnd?.('');
 			}
 			if (fullResponse.trim()) {
 				// Clear streaming display before adding entry to prevent double display
@@ -346,14 +433,17 @@
 
 				const worldUpdateErrors: string[] = [];
 				if (inlineToolCalls.length > 0) {
-					// Inline path: dispatch each tool call the narrator emitted.
-					for (const tc of inlineToolCalls) {
-						try {
-							await executeToolCall(tc.name, tc.arguments);
-						} catch (e) {
-							const msg = `Tool ${tc.name}: ${e instanceof Error ? e.message : e}`;
-							worldUpdateErrors.push(msg);
-							console.error(`[Orchestrator] ${msg}`);
+					// Inline path: dispatch each tool call the narrator emitted —
+					// unless we already applied them in the prose-retry path above.
+					if (!toolCallsApplied) {
+						for (const tc of inlineToolCalls) {
+							try {
+								await executeToolCall(tc.name, tc.arguments);
+							} catch (e) {
+								const msg = `Tool ${tc.name}: ${e instanceof Error ? e.message : e}`;
+								worldUpdateErrors.push(msg);
+								console.error(`[Orchestrator] ${msg}`);
+							}
 						}
 					}
 					// Background jobs (chapters, arcs, lore management) still run.

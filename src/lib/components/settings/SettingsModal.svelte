@@ -135,20 +135,22 @@
 			const provider = PROVIDERS[editingProvider];
 			const testModel = model || provider.fallbackModels[0];
 			const baseUrl = customUrl || provider.baseUrl;
-			const isAnthropic = editingProvider === 'anthropic';
+			const isAnthropicShape = editingProvider === 'anthropic' || editingProvider === 'anthropic-proxy';
 			const isOAuth = apiKey.startsWith('sk-ant-oat-');
 
-			if (isAnthropic) {
+			if (isAnthropicShape) {
 				const anthropicUrl = baseUrl || '/api/anthropic';
 				const headers: Record<string, string> = {
 					'Content-Type': 'application/json',
 					'anthropic-version': '2023-06-01',
 				};
-				if (isOAuth) {
-					headers['Authorization'] = `Bearer ${apiKey}`;
-					headers['anthropic-beta'] = 'oauth-2025-04-01';
-				} else {
-					headers['x-api-key'] = apiKey;
+				if (apiKey) {
+					if (isOAuth) {
+						headers['Authorization'] = `Bearer ${apiKey}`;
+						headers['anthropic-beta'] = 'oauth-2025-04-01';
+					} else {
+						headers['x-api-key'] = apiKey;
+					}
 				}
 				const res = await fetch(`${anthropicUrl}/v1/messages`, {
 					method: 'POST',
@@ -196,6 +198,82 @@
 	};
 	const topProviders: ProviderType[] = ['anthropic', 'openrouter', 'nanogpt', 'openai'];
 	const otherProviders = getProviderList().filter(p => !topProviders.includes(p.value));
+
+	// ── Inline image-provider editor (Images tab) ──
+	let imgEditorOpen = $state(false);
+	let imgProviderType = $state<ProviderType>('google-ai-studio');
+	let imgApiKey = $state('');
+	let imgBaseUrl = $state('');
+	let imgShowKey = $state(false);
+	let imgSaving = $state(false);
+	let imgSaveError = $state('');
+
+	const imageCapableProviders = $derived(
+		(Object.keys(PROVIDERS) as ProviderType[])
+			.filter(k => PROVIDERS[k].capabilities.imageGeneration)
+			.map(k => ({ value: k, label: PROVIDERS[k].name }))
+	);
+
+	function openImgEditorForExisting() {
+		const id = settings.uiSettings.imageProfileId;
+		const existing = id ? settings.profiles.find(p => p.id === id) : undefined;
+		if (existing) {
+			imgProviderType = existing.providerType as ProviderType;
+			imgApiKey = existing.apiKey ?? '';
+			imgBaseUrl = existing.baseUrl ?? '';
+		} else {
+			imgProviderType = 'google-ai-studio';
+			imgApiKey = '';
+			imgBaseUrl = '';
+		}
+		imgSaveError = '';
+		imgEditorOpen = true;
+	}
+
+	async function saveImageProvider() {
+		imgSaving = true;
+		imgSaveError = '';
+		try {
+			const cfg = PROVIDERS[imgProviderType];
+			if (!cfg) throw new Error('Unknown provider type');
+			if (cfg.requiresApiKey && !imgApiKey) throw new Error('API key required');
+
+			const currentId = settings.uiSettings.imageProfileId;
+			const existing = currentId ? settings.profiles.find(p => p.id === currentId) : undefined;
+			// Reuse existing profile only if it's the same provider type AND
+			// is image-only (so we don't stomp the user's narrative profile).
+			const reuse = existing && existing.providerType === imgProviderType
+				&& settings.activeProfileId !== existing.id;
+
+			if (reuse && existing) {
+				existing.apiKey = imgApiKey;
+				if (imgBaseUrl) existing.baseUrl = imgBaseUrl; else delete existing.baseUrl;
+				await settings.saveProfiles();
+			} else {
+				const profile: APIProfile = {
+					id: uuid(),
+					name: `${cfg.name} (Image)`,
+					providerType: imgProviderType,
+					apiKey: imgApiKey,
+					...(imgBaseUrl ? { baseUrl: imgBaseUrl } : {}),
+					customModels: [],
+					fetchedModels: [],
+					reasoningModels: [],
+					hiddenModels: [],
+					favoriteModels: [],
+					createdAt: Date.now(),
+				};
+				await settings.addProfile(profile);
+				settings.uiSettings.imageProfileId = profile.id;
+				await settings.saveUISettings();
+			}
+			imgEditorOpen = false;
+		} catch (e) {
+			imgSaveError = e instanceof Error ? e.message : 'Save failed';
+		} finally {
+			imgSaving = false;
+		}
+	}
 
 	const tabs: Array<{ id: Tab; label: string; icon: typeof Globe }> = [
 		{ id: 'providers', label: 'Providers & Models', icon: Globe },
@@ -395,17 +473,19 @@
 								<div class="space-y-1.5">
 									<div class="flex items-center justify-between">
 										<label class="text-xs text-[var(--text-muted)]">
-											{editingProvider === 'anthropic' ? 'API Key or Setup Token' : 'API Key'}
+											{editingProvider === 'anthropic' ? 'API Key or Setup Token' : editingProvider === 'anthropic-proxy' ? 'Bridge Token' : 'API Key'}
 										</label>
 										{#if editingProvider === 'anthropic'}
 											<span class="text-[9px] text-purple-400">Supports sk-ant-oat-* setup tokens</span>
+										{:else if editingProvider === 'anthropic-proxy'}
+											<span class="text-[9px] text-purple-400">cc-bridge BRIDGE_TOKEN</span>
 										{/if}
 									</div>
 									<div class="relative">
 										<input
 											type={showApiKey ? 'text' : 'password'}
 											bind:value={apiKey}
-											placeholder={editingProvider === 'anthropic' ? 'sk-ant-... or sk-ant-oat-...' : 'sk-...'}
+											placeholder={editingProvider === 'anthropic' ? 'sk-ant-... or sk-ant-oat-...' : editingProvider === 'anthropic-proxy' ? 'Bridge token from cc-bridge service' : 'sk-...'}
 											class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 pr-8 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
 										/>
 										<button class="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
@@ -452,14 +532,14 @@
 							<!-- Actions -->
 							<div class="flex gap-2">
 								<button class="flex-1 rounded-lg border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-primary)] hover:border-[var(--color-gold-600)]"
-									onclick={testConnection} disabled={testStatus === 'testing' || !apiKey}>
+									onclick={testConnection} disabled={testStatus === 'testing' || (prov.requiresApiKey && !apiKey)}>
 									{#if testStatus === 'testing'}Testing...
 									{:else if testStatus === 'success'}Connected
 									{:else if testStatus === 'error'}Failed — Retry
 									{:else}Test{/if}
 								</button>
 								<button class="flex-1 rounded-lg bg-[var(--color-gold-400)]/20 px-3 py-2 text-xs font-semibold text-[var(--text-accent)] hover:bg-[var(--color-gold-400)]/30"
-									onclick={saveProfile} disabled={!apiKey}>
+									onclick={saveProfile} disabled={prov.requiresApiKey && !apiKey}>
 									Save Provider
 								</button>
 							</div>
@@ -558,8 +638,115 @@
 				<!-- ═══ TAB: IMAGE GENERATION ═══ -->
 				{:else if activeTab === 'images'}
 				<div class="space-y-5">
-					<!-- Image Generation Mode -->
+					<!-- Image Provider (separate from narrative) -->
 					<div class="space-y-2">
+						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Image Provider</label>
+						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
+							The provider used for image generation. Independent from the narrative provider — pick a configured profile, configure a dedicated one below, or leave on default to follow the active narrative profile.
+						</p>
+						<div class="flex gap-2">
+							<select
+								class="flex-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none"
+								value={settings.uiSettings.imageProfileId ?? ''}
+								onchange={(e) => { settings.uiSettings.imageProfileId = (e.target as HTMLSelectElement).value; settings.saveUISettings(); }}
+							>
+								<option value="">Use narrative provider (default)</option>
+								{#each settings.profiles as p}
+									{@const cfg = PROVIDERS[p.providerType as ProviderType]}
+									{@const supportsImages = cfg?.capabilities.imageGeneration}
+									<option value={p.id}>{p.name}{supportsImages ? '' : ' — no image support'}</option>
+								{/each}
+							</select>
+							<button
+								class="rounded-xl border border-[var(--border-primary)] px-4 py-3 text-xs text-[var(--text-primary)] hover:border-[var(--color-gold-600)]"
+								onclick={openImgEditorForExisting}
+							>
+								{settings.uiSettings.imageProfileId ? 'Edit Key' : 'Add Image Provider'}
+							</button>
+						</div>
+					</div>
+
+					<!-- Inline image-provider editor -->
+					{#if imgEditorOpen}
+						<div class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4 space-y-3">
+							<div class="flex items-center justify-between">
+								<h4 class="font-display text-sm font-semibold text-[var(--text-primary)]">Image Provider Setup</h4>
+								<button class="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]" onclick={() => imgEditorOpen = false}>Close</button>
+							</div>
+
+							<div class="space-y-1.5">
+								<label class="text-xs text-[var(--text-muted)]">Provider</label>
+								<select
+									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none"
+									bind:value={imgProviderType}
+								>
+									{#each imageCapableProviders as p}
+										<option value={p.value}>{p.label}</option>
+									{/each}
+								</select>
+								<p class="text-[10px] text-[var(--text-muted)]">For Gemini image, pick <span class="font-mono">Google AI Studio</span>.</p>
+							</div>
+
+							{#if PROVIDERS[imgProviderType]?.requiresApiKey}
+								<div class="space-y-1.5">
+									<label class="text-xs text-[var(--text-muted)]">API Key</label>
+									<div class="relative">
+										<input
+											type={imgShowKey ? 'text' : 'password'}
+											bind:value={imgApiKey}
+											placeholder="API key for the image provider"
+											class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 pr-8 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
+										/>
+										<button class="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" onclick={() => imgShowKey = !imgShowKey}>
+											{#if imgShowKey}<EyeOff class="h-3.5 w-3.5" />{:else}<Eye class="h-3.5 w-3.5" />{/if}
+										</button>
+									</div>
+								</div>
+							{/if}
+
+							{#if imgProviderType === 'openai-compatible' || imgProviderType === 'ollama' || imgProviderType === 'lmstudio'}
+								<div class="space-y-1.5">
+									<label class="text-xs text-[var(--text-muted)]">Base URL</label>
+									<input
+										type="text"
+										bind:value={imgBaseUrl}
+										placeholder={PROVIDERS[imgProviderType]?.baseUrl || 'https://your-api.com/v1'}
+										class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none"
+									/>
+								</div>
+							{/if}
+
+							{#if imgSaveError}
+								<div class="rounded-lg bg-red-500/10 p-2 text-xs text-red-400">{imgSaveError}</div>
+							{/if}
+
+							<button
+								class="w-full rounded-lg bg-[var(--color-gold-400)]/20 px-3 py-2 text-xs font-semibold text-[var(--text-accent)] hover:bg-[var(--color-gold-400)]/30 disabled:opacity-50"
+								onclick={saveImageProvider}
+								disabled={imgSaving || (PROVIDERS[imgProviderType]?.requiresApiKey && !imgApiKey)}
+							>
+								{imgSaving ? 'Saving...' : 'Save & Use for Images'}
+							</button>
+						</div>
+					{/if}
+
+					<!-- Character Consistency Prompt -->
+					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
+						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Character Prompt</label>
+						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
+							Persistent description of your character (appearance, clothing, distinguishing features). Prepended to every image prompt to keep visuals consistent across scenes.
+						</p>
+						<textarea
+							class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
+							rows="4"
+							placeholder="e.g. A tall woman in her late twenties, dark auburn hair braided over one shoulder, emerald eyes, wearing a worn leather cuirass over a forest-green tunic, a silver crescent pendant at her throat"
+							value={settings.uiSettings.imageCharacterPrompt ?? ''}
+							oninput={(e) => { settings.uiSettings.imageCharacterPrompt = (e.target as HTMLTextAreaElement).value; settings.saveUISettings(); }}
+						></textarea>
+					</div>
+
+					<!-- Image Generation Mode -->
+					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
 						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Generation Mode</label>
 						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
 							Controls when images are generated. Inline generates automatically after each narrative. Agentic lets the AI decide.

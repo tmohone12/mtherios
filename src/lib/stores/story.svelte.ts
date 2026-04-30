@@ -828,6 +828,8 @@ class StoryStore {
 		lines.push('- Favor gritty specificity over generic fantasy: the smell of a wound, the sound of rain on mail, the taste of stale bread.');
 		lines.push("- Let silence and implication do work. Not every threat needs to be stated. A lord's pause before answering says more than a speech.");
 		lines.push('');
+		lines.push('CRITICAL: ALWAYS write narration prose FIRST. Tool calls without narration are a bug — the player must see story text every turn. Write the scene, then call `update_world_state` once at the end.');
+		lines.push('');
 		lines.push('Now write the next turn of narration. Begin immediately, in-character, no preamble.');
 		return lines.join('\n');
 	}
@@ -1158,6 +1160,13 @@ class StoryStore {
 		const value = headerPrompt?.trim() || null;
 		await updateStory(this.currentStory.id, { headerPrompt: value, updatedAt: Date.now() });
 		this.currentStory = { ...this.currentStory, headerPrompt: value };
+	}
+
+	async updateDescription(description: string | null) {
+		if (!this.currentStory) return;
+		const value = description?.trim() || null;
+		await updateStory(this.currentStory.id, { description: value, updatedAt: Date.now() });
+		this.currentStory = { ...this.currentStory, description: value };
 	}
 
 	/**

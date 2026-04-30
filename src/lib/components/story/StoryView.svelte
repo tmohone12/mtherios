@@ -35,6 +35,7 @@
 	let headerEditorOpen = $state(false);
 	let headerDraft = $state('');
 	let titleDraft = $state('');
+	let descriptionDraft = $state('');
 
 	async function handleExport() {
 		if (!story.currentStory || exporting) return;
@@ -50,6 +51,7 @@
 	function openHeaderEditor() {
 		titleDraft = story.currentStory?.title ?? '';
 		headerDraft = story.currentStory?.headerPrompt ?? '';
+		descriptionDraft = story.currentStory?.description ?? '';
 		headerEditorOpen = true;
 	}
 
@@ -59,6 +61,9 @@
 			await story.updateTitle(newTitle);
 		}
 		await story.updateHeaderPrompt(headerDraft);
+		if (descriptionDraft !== (story.currentStory?.description ?? '')) {
+			await story.updateDescription(descriptionDraft);
+		}
 		headerEditorOpen = false;
 	}
 
@@ -125,7 +130,10 @@
 		isStreaming = true;
 		actionChoices = [];
 		styleReview = null;
-		sceneImageUrl = null;
+		// Don't clear sceneImageUrl here — leave the previous scene visible
+		// until the new image actually arrives (or image gen is disabled,
+		// in which case the user keeps their last scene). The user has an
+		// explicit dismiss button (×) on the image card if they want to clear.
 		scrollToBottom();
 	}
 
@@ -581,6 +589,23 @@
 
 				<div class="border-t border-[var(--border-primary)]"></div>
 
+				<!-- World Description -->
+				<div class="space-y-1.5">
+					<label for="story-description-input" class="text-xs font-medium text-[var(--text-muted)]">World Description</label>
+					<p class="text-[10px] text-[var(--text-muted)]/80 leading-relaxed">
+						The setting summary the AI sees as "Setting: …" in every prompt. Edit if it contains stale facts (dates, character states, anachronisms).
+					</p>
+					<textarea
+						id="story-description-input"
+						bind:value={descriptionDraft}
+						placeholder="A crumbling empire where ancient magic seeps through fractured ley lines..."
+						rows="4"
+						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+					></textarea>
+				</div>
+
+				<div class="border-t border-[var(--border-primary)]"></div>
+
 				<!-- AI Preamble -->
 				<p class="text-xs text-[var(--text-muted)] leading-relaxed">
 					This preamble is prepended to every AI prompt for this story. Use it to define tone, rules, content guidelines, or narrative constraints unique to this story.
@@ -593,7 +618,7 @@
 				></textarea>
 				<div class="flex items-center justify-between text-[10px] text-[var(--text-muted)]">
 					<span>{headerDraft.length > 0 ? `~${Math.ceil(headerDraft.length / 4)} tokens` : 'Empty — default behavior'}</span>
-					{#if headerDraft !== (story.currentStory?.headerPrompt ?? '') || titleDraft !== (story.currentStory?.title ?? '')}
+					{#if headerDraft !== (story.currentStory?.headerPrompt ?? '') || titleDraft !== (story.currentStory?.title ?? '') || descriptionDraft !== (story.currentStory?.description ?? '')}
 						<span class="text-purple-400">Unsaved changes</span>
 					{/if}
 				</div>

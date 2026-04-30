@@ -829,6 +829,8 @@ export interface UISettings {
   imageCustomStyle?: string
   imageSize: string
   imageModel?: string
+  imageProfileId?: string
+  imageCharacterPrompt?: string
   // Memory settings
   maxMessages: number
   maxHistoryEntries: number

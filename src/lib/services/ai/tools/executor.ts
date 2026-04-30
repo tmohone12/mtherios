@@ -405,9 +405,15 @@ async function applyTimeProgression(progression: string): Promise<void> {
 		return;
 	}
 
+	// Capture the story id at entry — `updateStory` is async, and if the user
+	// switches stories during the write we must not stamp the new story's
+	// `currentStory` with the old story's tracker. Same pattern as `maybeRunWorldSim`.
+	const storyId = story.currentStory.id;
 	const newTracker = advanceTime(story.currentStory.timeTracker ?? null, deltaMinutes);
-	await updateStory(story.currentStory.id, { timeTracker: newTracker } as any);
-	story.currentStory = { ...story.currentStory, timeTracker: newTracker };
+	await updateStory(storyId, { timeTracker: newTracker } as any);
+	if (story.currentStory && story.currentStory.id === storyId) {
+		story.currentStory = { ...story.currentStory, timeTracker: newTracker };
+	}
 
 	await tickWorld(deltaMinutes);
 }
@@ -484,6 +490,11 @@ async function maybeRunWorldSim(): Promise<void> {
 	const wsConfig = settings.getServiceConfig('worldSimulation');
 	if (!wsConfig.enabled) return;
 
+	// Capture the story id at entry — simulate() can take seconds, and the
+	// user may navigate away before it returns. We must not write back to a
+	// different story's record in the finally block.
+	const storyId = story.currentStory.id;
+
 	try {
 		const chapters = await getChapters(story.currentStory.id);
 		const arcs = await getArcs(story.currentStory.id);
@@ -546,11 +557,23 @@ async function maybeRunWorldSim(): Promise<void> {
 			} catch (e) { console.warn('[Executor] persist rumors failed:', e); }
 		}
 
-		await updateStory(story.currentStory.id, { lastWorldSimDay: totalDays } as any);
-		story.currentStory = { ...story.currentStory, lastWorldSimDay: totalDays };
 		console.log(`[Executor] World sim triggered at day ${totalDays}`);
 	} catch (e) {
 		console.error('[Executor] Time-based world sim failed:', e);
+	} finally {
+		// Reset cooldown using the LATEST tracker (handles time advancing during
+		// the slow simulate() call) and ALWAYS reset, even on failure, so a
+		// failing sim doesn't retry every turn. Skip the writeback if the user
+		// navigated to a different story while simulate() was running — we'd
+		// otherwise stamp an unrelated story's lastWorldSimDay.
+		if (story.currentStory && story.currentStory.id === storyId) {
+			const latest = story.currentStory.timeTracker;
+			const latestTotalDays = latest
+				? latest.years * 365 + latest.days
+				: totalDays;
+			await updateStory(storyId, { lastWorldSimDay: latestTotalDays } as any);
+			story.currentStory = { ...story.currentStory, lastWorldSimDay: latestTotalDays };
+		}
 	}
 }
 
