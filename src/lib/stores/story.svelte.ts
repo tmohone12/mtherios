@@ -134,20 +134,7 @@ class StoryStore {
 			this.rumors = rumors;
 			this.images = images;
 
-			// If story has chapters, set history floor so only recent entries are in chat.
-			// Older entries are summarized in chapters/arcs — sending them as raw history causes context rot.
-			const chapters = await getChapters(storyId);
-			if (chapters.length > 0) {
-				const lastChapter = [...chapters].sort((a, b) => b.number - a.number)[0];
-				const endIdx = this.entries.findIndex(e => e.id === lastChapter.endEntryId);
-				if (endIdx >= 0) {
-					// Floor starts after the last chapter's end, keeping at most 10 entries of raw history
-					const POST_CHAPTER_HISTORY = 10;
-					this.chatHistoryFloor = Math.max(endIdx + 1, this.entries.length - POST_CHAPTER_HISTORY);
-				}
-			} else {
-				this.chatHistoryFloor = 0;
-			}
+			this.chatHistoryFloor = 0;
 
 			// Pre-embed lorebook + chapters in background (non-blocking)
 			this.preEmbedLorebook().catch(e => console.warn('[Story] preEmbedLorebook failed:', e));
@@ -1041,10 +1028,7 @@ class StoryStore {
 				: Math.floor(contextWindow * 0.60);
 		}
 
-		// Hard cap on entries to avoid context rot (token budget is the real gate).
-		// chatHistoryFloor is advanced when chapters are created — older entries are
-		// summarized in chapters/arcs and no longer need to be in raw chat history.
-		const maxHistoryEntries = settings.uiSettings.maxHistoryEntries || 200;
+		const maxHistoryEntries = settings.uiSettings.maxHistoryEntries || 250;
 		const historyFloor = Math.max(this.chatHistoryFloor, this.entries.length - maxHistoryEntries);
 
 		let tokensSoFar = 0;
@@ -1105,8 +1089,7 @@ class StoryStore {
 			}
 		}
 
-		// Cap final message count to prevent context rot
-		const maxMessages = settings.uiSettings.maxMessages || 40;
+		const maxMessages = settings.uiSettings.maxMessages || 250;
 		if (messages.length > maxMessages) {
 			return messages.slice(-maxMessages);
 		}

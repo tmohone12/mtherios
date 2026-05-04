@@ -111,8 +111,8 @@ class SettingsStore {
 		imageProfileId: '',
 		imageCharacterPrompt: '',
 		// Memory settings
-		maxMessages: 40,
-		maxHistoryEntries: 200,
+		maxMessages: 250,
+		maxHistoryEntries: 50,
 		chapterThreshold: 20,
 		postChapterBuffer: 10,
 		maxPrevChaptersInSummary: 5,
@@ -202,6 +202,25 @@ class SettingsStore {
 			// UI settings
 			if (all.uiSettings) {
 				try { Object.assign(this.uiSettings, JSON.parse(all.uiSettings)); } catch (e) { console.warn('[Settings] Failed to parse uiSettings:', e); }
+			}
+
+			// One-time migration: the Max Messages slider used to cap at 100;
+			// users with conservative saved values (the old default was 40) get
+			// bumped up to the new default (250) so they actually benefit from
+			// the larger range. Guarded by a flag so users who later set a low
+			// value on purpose aren't reverted on the next load.
+			if (!all.uiSettingsMaxMessagesV2) {
+				if (this.uiSettings.maxMessages < 100) {
+					this.uiSettings.maxMessages = 250;
+					await this.saveUISettings();
+				}
+				await setSetting('uiSettingsMaxMessagesV2', '1');
+			}
+
+			if (!all.uiSettingsMaxHistoryEntriesV3) {
+				this.uiSettings.maxHistoryEntries = 50;
+				await this.saveUISettings();
+				await setSetting('uiSettingsMaxHistoryEntriesV3', '1');
 			}
 
 			// System services

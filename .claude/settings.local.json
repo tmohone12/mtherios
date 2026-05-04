@@ -38,7 +38,8 @@
       "Bash(curl -sS -m 10 http://localhost:5173/)",
       "Bash(curl -sS -m 10 -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)",
       "Bash(curl -sS -m 15 \"http://localhost:5173/.svelte-kit/generated/client/app.js\" -w \"\\\\n---STATUS:%{http_code}---\\\\n\")",
-      "Bash(curl -sS -m 15 \"http://localhost:5173/src/routes/+page.svelte\" -w \"\\\\n---STATUS:%{http_code}---\\\\n\")"
+      "Bash(curl -sS -m 15 \"http://localhost:5173/src/routes/+page.svelte\" -w \"\\\\n---STATUS:%{http_code}---\\\\n\")",
+      "Bash(gh auth *)"
     ]
   }
 }

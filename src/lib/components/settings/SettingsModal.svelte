@@ -570,7 +570,7 @@
 						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Conversation History</h4>
 						<div class="space-y-2">
 							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Max Messages ({settings.uiSettings.maxMessages})</label>
-							<input type="range" value={settings.uiSettings.maxMessages} min="10" max="100" step="5"
+							<input type="range" value={settings.uiSettings.maxMessages} min="10" max="500" step="10"
 								oninput={(e) => { settings.uiSettings.maxMessages = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
 								class="w-full accent-[var(--color-gold-400)]" />
 							<p class="text-[10px] text-[var(--text-muted)]">Maximum conversation turns sent to the narrator. Lower = cheaper, higher = better short-term memory.</p>

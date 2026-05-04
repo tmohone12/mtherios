@@ -153,10 +153,6 @@ async function runChapterCheck(): Promise<void> {
 	await createChapter(chapter);
 	console.log(`[Background] Chapter ${chapter.number} created: "${chapter.title}"`);
 
-	// Advance conversation history floor
-	const postChapterBuffer = settings.uiSettings.postChapterBuffer || 10;
-	story.chatHistoryFloor = Math.max(story.chatHistoryFloor, story.entries.length - postChapterBuffer);
-
 	// Embed chapter summary (background)
 	ai.embeddings.embed(`${chapter.title ?? 'Chapter ' + chapter.number}: ${chapter.summary}`, chapter.id, 'chapter')
 		.catch(e => console.error(`[Background] Failed to embed chapter ${chapter.number}:`, e));

@@ -152,8 +152,6 @@
 
 			await createChapter(chapter);
 			chapters = [...chapters, chapter];
-			// Advance history floor — chapter summary carries context, keep last 10 entries in chat
-			story.chatHistoryFloor = Math.max(story.chatHistoryFloor, story.entries.length - 10);
 			chapterStatus = `Chapter ${chapter.number}: "${chapter.title}" created!`;
 		} catch (e) {
 			console.error('Force chapter creation failed:', e);
@@ -197,8 +195,6 @@
 
 			await createChapter(chapter);
 			chapters = [...chapters, chapter];
-			// Advance history floor — chapter summary carries context, keep last 10 entries in chat
-			story.chatHistoryFloor = Math.max(story.chatHistoryFloor, story.entries.length - 10);
 			chapterStatus = `Manual chapter ${chapter.number}: "${chapter.title ?? 'Untitled'}" created!`;
 
 			// Reset form

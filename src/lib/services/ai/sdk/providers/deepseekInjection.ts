@@ -37,12 +37,13 @@ export function isDeepSeekProvider(profile: APIProfile, model: string | undefine
 /**
  * True when the resolved model is deepseek-reasoner (R1) or an alias.
  *
- * deepseek-reasoner does NOT reliably honor OpenAI-style function calling: the
- * official reasoning_model docs list "Function Calling" as unsupported, and in
- * practice the model returns prose without tool_calls when forced via
- * `tool_choice`. Callers that need structured output should detect this and
- * switch to JSON output mode (`response_format: { type: 'json_object' }`),
- * which the reasoner does support.
+ * Tool calling: deepseek-reasoner supports OpenAI-style function calling in
+ * thinking mode per https://api-docs.deepseek.com/guides/thinking_mode. The
+ * one round-trip constraint is that any subsequent turn following an
+ * assistant message with `tool_calls` MUST include the original
+ * `reasoning_content` on that message, or the API rejects with 400. The
+ * single-shot world-update path doesn't re-prompt, so it's unaffected;
+ * `continueAfterTools` handles the round-trip case.
  *
  * Detection covers:
  * - `deepseek-reasoner` (native DeepSeek API)

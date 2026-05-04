@@ -858,15 +858,16 @@ export async function generateStructuredWithTools(options: GenerateWithToolsOpti
 	const maxTokens = options.maxTokens ?? 4096;
 	const startTime = Date.now();
 	const useAnthropic = isAnthropicProvider(profile);
-	// DeepSeek's OpenAI-style function calling is unreliable for large/forced
-	// schemas: deepseek-reasoner doesn't support it at all (returns prose
-	// without tool_calls), and deepseek-chat/V3 routinely emits malformed or
-	// missing tool_calls when `tool_choice` is forced against a complex
-	// schema like `update_world_state`. Route all DeepSeek through JSON
-	// output mode when a tool is forced — far more reliable, and the
-	// post-call JSON parser already wraps the result back into a tool call.
+	// deepseek-chat/V3 routinely emits malformed or missing tool_calls when
+	// `tool_choice` is forced against a complex schema like
+	// `update_world_state`, so we still route it through JSON output mode.
+	// deepseek-reasoner now supports OpenAI-style tool calling in thinking
+	// mode (https://api-docs.deepseek.com/guides/thinking_mode) and is sent
+	// real tools. This is single-shot — no `reasoning_content` round-trip
+	// is needed because the caller doesn't re-prompt the assistant turn.
 	const useJsonModeForDeepSeek = !useAnthropic
 		&& isDeepSeekProvider(profile, model)
+		&& !isDeepSeekReasoner(profile, model)
 		&& !!options.forceTool;
 
 	const endpoint = useAnthropic
