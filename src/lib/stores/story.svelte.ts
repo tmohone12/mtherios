@@ -441,7 +441,10 @@ class StoryStore {
 		const parts: string[] = [];
 		parts.push(this.#sectionHeader(s, mode));
 		parts.push(this.#sectionInstructions(s, mode));
-		if (mode === 'adventure') parts.push(this.#sectionTools());
+		// Token-estimation / preview path: default to the no-inline-tools variant
+		// since that's the safe default (OpenRouter, OpenAI-compat). The orchestrator
+		// turn path uses buildOrchestratorSystemBlocks which sets this explicitly.
+		if (mode === 'adventure') parts.push(this.#sectionTools(false));
 		const chars = this.#sectionCharacters(s, snap);
 		if (chars) parts.push(chars);
 		const arcs = this.#sectionArcs(snap);
@@ -549,30 +552,45 @@ class StoryStore {
 	}
 
 	// ── Section 3: Tools ────────────────────────────────────────────────────
-	// The narrator now calls tools INLINE during streaming — prose and
-	// state-update tool calls are emitted in the same response.
-	#sectionTools(): string {
+	// Two variants depending on whether inline tool calls are wired:
+	//   - useInlineTools = true  → narrator calls tools directly (Anthropic native)
+	//   - useInlineTools = false → a separate post-stream classifier extracts
+	//       deltas from the prose (OpenAI-compat / OpenRouter / open-source models)
+	#sectionTools(useInlineTools: boolean): string {
+		if (useInlineTools) {
+			return [
+				'## Tools',
+				'You have direct access to world-state tools. **At the end of every turn**, after writing your narration, call `update_world_state` with everything that changed in the scene. The state recorded there IS the canonical world — anything you do not record is forgotten.',
+				'',
+				'### When to call which tool',
+				'- **update_world_state** — call ONCE at the end of each turn. Cover:',
+				'  - **Location** (paramount): if the player moved this turn, emit a location with `current: true`. Only one location may be current. The previous current location is unset automatically.',
+				'  - **Time** (paramount): emit a `time_delta` whenever any time passed ("a few minutes", "30 minutes", "3 hours", "2 days", "an hour and 15 minutes"). Numbers + units parse most reliably. The world simulation runs on this clock.',
+				'  - **Characters**: status (`active` for present, `inactive` for alive but off-screen, `departed` for "left this turn", `deceased` for died this turn) and `present: true/false`. New traits, relationships, descriptions when revealed.',
+				'  - **Items**: picked up, dropped, equipped, quantity changes.',
+				'  - **Conversations**: what NPCs revealed/learned, emotional shifts.',
+				'  - **Relationships**: changes between entities.',
+				'  - **Story beats**: significant plot events.',
+				'  - **Meter changes**: sanity, reputation, hunger, suspicion — invent meters as the fiction calls for them, adjust existing ones with signed deltas.',
+				'  - **Agreements**: treaties, oaths, debts, promises, marriages, bonds, contracts, vassalage, bargains-with-entities. action=create when sworn, break when violated, fulfill when paid, update to revise terms.',
+				'- **query_lore** — call BEFORE narrating when you need to verify facts about an existing character, location, or faction.',
+				'- **create_lore_entry** — call when introducing a brand-new entity that should persist (you can call this alongside `update_world_state`).',
+				'',
+				'### Tool-call format',
+				'- Write your prose first, then call the tool. Do not write tool JSON in the prose itself — call the actual tool.',
+				'- Be thorough but only include entities that actually changed or appeared in this scene.',
+			].join('\n');
+		}
+
+		// Fallback: model writes prose only; a separate classifier extracts deltas.
 		return [
-			'## Tools',
-			'You have direct access to world-state tools. **At the end of every turn**, after writing your narration, call `update_world_state` with everything that changed in the scene. The state recorded there IS the canonical world — anything you do not record is forgotten.',
+			'## State Tracking',
+			'After your narration, a separate world-update step reads your prose and extracts structured state changes (characters, locations, items, time passed, agreements, meters, etc.). You do **not** emit tool calls or JSON yourself — just write prose. To make the extraction accurate:',
 			'',
-			'### When to call which tool',
-			'- **update_world_state** — call ONCE at the end of each turn. Cover:',
-			'  - **Location** (paramount): if the player moved this turn, emit a location with `current: true`. Only one location may be current. The previous current location is unset automatically.',
-			'  - **Time** (paramount): emit a `time_delta` whenever any time passed ("a few minutes", "30 minutes", "3 hours", "2 days", "an hour and 15 minutes"). Numbers + units parse most reliably. The world simulation runs on this clock.',
-			'  - **Characters**: status (`active` for present, `inactive` for alive but off-screen, `departed` for "left this turn", `deceased` for died this turn) and `present: true/false`. New traits, relationships, descriptions when revealed.',
-			'  - **Items**: picked up, dropped, equipped, quantity changes.',
-			'  - **Conversations**: what NPCs revealed/learned, emotional shifts.',
-			'  - **Relationships**: changes between entities.',
-			'  - **Story beats**: significant plot events.',
-			'  - **Meter changes**: sanity, reputation, hunger, suspicion, fatigue — invent meters as the fiction calls for them, adjust existing ones with signed deltas. When CREATING a meter for the first time, also pass `initial`: use `max` (default 100) for high-is-good meters that start full (sanity, health, reputation), and 0 for low-is-bad meters that start empty (hunger, fatigue, suspicion). The `delta` is applied on top of `initial`.',
-			'  - **Agreements**: treaties, oaths, debts, promises, marriages, bonds, contracts, vassalage, bargains-with-entities. action=create when sworn, break when violated, fulfill when paid, update to revise terms.',
-			'- **query_lore** — call BEFORE narrating when you need to verify facts about an existing character, location, or faction.',
-			'- **create_lore_entry** — call when introducing a brand-new entity that should persist (you can call this alongside `update_world_state`).',
-			'',
-			'### Tool-call format',
-			'- Write your prose first, then call the tool. Do not write tool JSON in the prose itself — call the actual tool.',
-			'- Be thorough but only include entities that actually changed or appeared in this scene.',
+			'- **Name characters and locations explicitly** when they appear, change, or leave. Don\'t use vague pronouns when state changes.',
+			'- **State the passage of time clearly** in prose ("an hour later", "by morning", "after several days") so the world clock advances. The world simulation only ticks when in-world time passes.',
+			'- **Show outcomes plainly**: items picked up, NPCs departing, agreements sworn or broken, injuries inflicted. The clearer the prose, the cleaner the extraction.',
+			'- Any state you don\'t make obvious in prose may be missed by the extractor, and the world will not remember it.',
 		].join('\n');
 	}
 
@@ -897,7 +915,10 @@ class StoryStore {
 	 * "narrator reads directives last" ordering. We give up caching on it,
 	 * but caching the front 60-70% of the prompt is the big cost win anyway.
 	 */
-	buildOrchestratorSystemBlocks(snapshot: StateSnapshot): { stable: string; dynamic: string } {
+	buildOrchestratorSystemBlocks(
+		snapshot: StateSnapshot,
+		opts: { useInlineTools?: boolean } = {},
+	): { stable: string; dynamic: string } {
 		const s = this.currentStory;
 		if (!s) return { stable: '', dynamic: '' };
 
@@ -906,7 +927,7 @@ class StoryStore {
 		const stableParts: string[] = [];
 		stableParts.push(this.#sectionHeader(s, mode));
 		stableParts.push(this.#sectionInstructions(s, mode));
-		if (mode === 'adventure') stableParts.push(this.#sectionTools());
+		if (mode === 'adventure') stableParts.push(this.#sectionTools(opts.useInlineTools ?? false));
 
 		const dynamicParts: string[] = [];
 		const chars = this.#sectionCharacters(s, snapshot);
