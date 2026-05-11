@@ -25,7 +25,7 @@ export const SERVICE_DEFINITIONS: Record<string, { label: string; description: s
 	memory: { label: 'Memory', description: 'Chapter summarization & retrieval', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
 	styleReviewer: { label: 'Style Reviewer', description: 'Review narrative quality', profile: 'style', defaultTemp: 0.3, defaultMaxTokens: 4096 },
 	loreManagement: { label: 'Lore Management', description: 'Discover and curate lorebook entries automatically', profile: 'lorebook', defaultTemp: 0.3, defaultMaxTokens: 4096 },
-	interactiveVault: { label: 'Interactive Vault', description: 'Natural language lorebook management', profile: 'lorebook', defaultTemp: 0.5, defaultMaxTokens: 4096 },
+	entryRefinement: { label: 'Entry Refinement', description: 'Per-entry AI refinement from the lorebook entry modal', profile: 'lorebook', defaultTemp: 0.4, defaultMaxTokens: 4096 },
 	imageGeneration: { label: 'Image Generation', description: 'Scene image generation', profile: 'image', defaultTemp: 0.7, defaultMaxTokens: 1024 },
 	worldSimulation: { label: 'World Simulation', description: 'Living world DM — plot injection, faction movements, rumors, world tension', profile: 'worldState', defaultTemp: 0.6, defaultMaxTokens: 8192 },
 	arcCondensation: { label: 'Arc Condensation', description: 'Condense chapters into arc summaries', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
@@ -48,7 +48,7 @@ export const SERVICE_PROFILES: ServiceProfile[] = [
 	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, items + living world simulation', icon: '🌍', serviceIds: ['classifier', 'worldSimulation'] },
 	{ id: 'guidance', label: 'Player Guidance', description: 'Suggestions and branching action choices', icon: '🧭', serviceIds: ['suggestions', 'actionChoices'] },
 	{ id: 'memoryContext', label: 'Memory & Context', description: 'Chapter summaries, arc condensation, and procedural memory', icon: '🧠', serviceIds: ['memory', 'arcCondensation', 'proceduralMemory'] },
-	{ id: 'lorebook', label: 'Lorebook', description: 'Discover, curate, and query lore entries', icon: '📜', serviceIds: ['loreManagement', 'interactiveVault'] },
+	{ id: 'lorebook', label: 'Lorebook', description: 'Discover, curate, and query lore entries', icon: '📜', serviceIds: ['loreManagement', 'entryRefinement'] },
 	{ id: 'style', label: 'Style Review', description: 'POV, tense, and prose quality checks', icon: '✨', serviceIds: ['styleReviewer'] },
 	{ id: 'image', label: 'Image Generation', description: 'Scene and character image generation', icon: '🎨', serviceIds: ['imageGeneration'] },
 ];
