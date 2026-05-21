@@ -7,6 +7,7 @@
 import JSZip from 'jszip';
 import { exportStory } from './storySync';
 import { toObsidianLinks } from '$lib/utils/wikilinks';
+import { normalizeRelation } from './ai/tools/helpers';
 import {
 	getAgreements,
 	getFactionActions,
@@ -163,8 +164,11 @@ function renderEntryMarkdown(
 		}
 		if (fs.interFactionRelations && Object.keys(fs.interFactionRelations).length > 0) {
 			bits.push('**Inter-faction relations.**');
-			for (const [name, standing] of Object.entries(fs.interFactionRelations)) {
-				bits.push(`- [[${name}]]: ${standing}`);
+			for (const [name, raw] of Object.entries(fs.interFactionRelations)) {
+				const r = normalizeRelation(raw);
+				const sFmt = (n: number) => `${n > 0 ? '+' : ''}${n}`;
+				const affPart = r.affinity !== r.standing ? ` (af:${sFmt(r.affinity)})` : '';
+				bits.push(`- [[${name}]]: ${sFmt(r.standing)}${affPart}`);
 			}
 		}
 		if (bits.length > 0) parts.push('## Faction', bits.join('\n'), '');

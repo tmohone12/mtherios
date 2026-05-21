@@ -17,6 +17,7 @@ export const worldStateCharacterSchema = z.object({
 	relationship: z.string().nullable().optional().default(null),
 	traits: z.array(z.string()).optional().default([]),
 	present: z.boolean().optional().default(true),
+	pressures: z.array(z.string()).optional().default([]),
 });
 
 export const worldStateLocationConnectionSchema = z.object({
@@ -94,41 +95,98 @@ export const worldStateAgreementChangeSchema = z.object({
 	reason: z.string().nullable().optional().default(null),
 });
 
+export const worldStateFactionGoalSchema = z.object({
+	description: z.string(),
+	priority: z.number().min(1).max(10).optional().default(5),
+	progress: z.number().min(0).max(100).optional().default(0),
+	type: z.enum(['military', 'diplomatic', 'economic', 'intelligence', 'survival', 'expansion']).optional().default('diplomatic'),
+	deadline: z.string().nullable().optional(),
+});
+
+export const worldStateFactionResourcesSchema = z.object({
+	military: z.number().min(0).max(100).optional().default(50),
+	wealth: z.number().min(0).max(100).optional().default(50),
+	influence: z.number().min(0).max(100).optional().default(50),
+	information: z.number().min(0).max(100).optional().default(50),
+	morale: z.number().min(0).max(100).optional().default(50),
+});
+
+export const worldStateLorebookEntrySchema = z.object({
+	name: z.string(),
+	type: z.enum(['character', 'location', 'item', 'faction', 'concept', 'event']),
+	description: z.string(),
+	hidden_info: z.string().nullable().optional().default(null),
+	aliases: z.array(z.string()).optional().default([]),
+	keywords: z.array(z.string()).optional().default([]),
+	injection_mode: z.enum(['always', 'keyword', 'never']).optional().default('keyword'),
+	priority: z.number().optional().default(0),
+	state_overrides: z.record(z.string(), z.any()).optional().default({}),
+	known_members: z.array(z.string()).optional().default([]),
+	faction_goals: z.array(worldStateFactionGoalSchema).optional().default([]),
+	faction_resources: worldStateFactionResourcesSchema.nullable().optional().default(null),
+	faction_disposition: z.enum(['aggressive', 'defensive', 'scheming', 'neutral', 'desperate']).nullable().optional().default(null),
+	territory: z.array(z.string()).optional().default([]),
+});
+
 export const worldStateUpdateSchema = z.object({
 	characters: z.array(worldStateCharacterSchema).optional().default([]),
 	locations: z.array(worldStateLocationSchema).optional().default([]),
 	items: z.array(worldStateItemSchema).optional().default([]),
 	time_delta: z.string().nullable().optional(),
 	mood: z.string().nullable().optional(),
+	player_reputation: z.string().nullable().optional(),
 	conversations: z.array(worldStateConversationSchema).optional().default([]),
 	relationships: z.array(worldStateRelationshipSchema).optional().default([]),
 	story_beats: z.array(worldStateStoryBeatSchema).optional().default([]),
 	meter_changes: z.array(worldStateMeterChangeSchema).optional().default([]),
 	agreements: z.array(worldStateAgreementChangeSchema).optional().default([]),
+	lorebook_entries: z.array(worldStateLorebookEntrySchema).optional().default([]),
+});
+
+export const searchWikiSchema = z.object({
+	query: z.string().min(1),
+	types: z.array(z.enum(['character', 'location', 'item', 'faction', 'concept', 'event'])).optional().default([]),
+	limit: z.number().int().min(1).max(10).optional().default(5),
+	include_hidden: z.boolean().optional().default(true),
 });
 
 export type WorldStateUpdate = z.infer<typeof worldStateUpdateSchema>;
-
-export const queryLoreArgsSchema = z.object({
-	query: z.string(),
-	type_filter: z.enum(['character', 'location', 'item', 'faction', 'concept', 'event']).optional(),
-});
-
-export type QueryLoreArgs = z.infer<typeof queryLoreArgsSchema>;
-
-export const createLoreEntryArgsSchema = z.object({
-	name: z.string(),
-	type: z.enum(['character', 'location', 'item', 'faction', 'concept', 'event']),
-	description: z.string(),
-	keywords: z.array(z.string()).optional().default([]),
-	hidden_info: z.string().nullable().optional().default(null),
-});
-
-export type CreateLoreEntryArgs = z.infer<typeof createLoreEntryArgsSchema>;
+export type WorldStateLorebookEntry = z.infer<typeof worldStateLorebookEntrySchema>;
+export type SearchWikiArgs = z.infer<typeof searchWikiSchema>;
 
 // ── OpenAI Function-Calling Format ──
 
 export const GM_TOOLS = [
+	{
+		type: 'function' as const,
+		function: {
+			name: 'search_wiki',
+			description: 'Search the local lorebook/wiki for relevant entries before narrating. Use when needed facts are not already present in context.',
+			parameters: {
+				type: 'object',
+				properties: {
+					query: {
+						type: 'string',
+						description: 'Plain-language search query, usually names, aliases, factions, places, objects, or lore concepts.',
+					},
+					types: {
+						type: 'array',
+						items: { type: 'string', enum: ['character', 'location', 'item', 'faction', 'concept', 'event'] },
+						description: 'Optional entry types to restrict the search.',
+					},
+					limit: {
+						type: 'number',
+						description: 'Maximum results to return, 1-10. Default 5.',
+					},
+					include_hidden: {
+						type: 'boolean',
+						description: 'Whether to include narrator-only hidden_info in results. Default true.',
+					},
+				},
+				required: ['query'],
+			},
+		},
+	},
 	{
 		type: 'function' as const,
 		function: {
@@ -148,6 +206,11 @@ export const GM_TOOLS = [
 								relationship: { type: 'string' },
 								traits: { type: 'array', items: { type: 'string' } },
 								present: { type: 'boolean' },
+								pressures: {
+									type: 'array',
+									items: { type: 'string' },
+									description: "Circumstances tightening around this NPC that they will act on even when off-screen. Short sentences. Add when meaningfully introduced or when the situation shifts (new debt, a suitor circling, a brother killed, illness, a deadline). Examples: 'being courted by a wealthy older merchant who is abusive', 'father drowning in gambling debts', 'wants revenge for her slain brother', 'is running out of coin and time'.",
+								},
 							},
 							required: ['name'],
 						},
@@ -192,6 +255,10 @@ export const GM_TOOLS = [
 					},
 					time_delta: { type: 'string', description: "How much time passed, e.g. 'a few minutes', 'several hours', 'a day'" },
 					mood: { type: 'string', description: 'Scene mood: tense, calm, mysterious, joyful, etc.' },
+					player_reputation: {
+						type: 'string',
+						description: 'Optional full replacement for the compact Player Reputation prompt section. Use only when public reputation changed: titles, scandals, rumors, feared/loved status, legal standing, house/court gossip, or how strangers and factions speak of the player. Omit when unchanged.',
+					},
 					conversations: {
 						type: 'array',
 						description: 'NPC conversations that occurred — what was revealed, learned, emotional shifts',
@@ -270,6 +337,58 @@ export const GM_TOOLS = [
 							required: ['action'],
 						},
 					},
+					lorebook_entries: {
+						type: 'array',
+						description: 'Create rich lorebook entries for significant world elements introduced or deepened this turn. This is the ONLY way new lorebook entries are created — they are no longer auto-generated from characters/locations/items. Write full descriptions (2–5 sentences), include aliases and keywords for retrieval, and hidden_info for secrets the player does not know.',
+						items: {
+							type: 'object',
+							properties: {
+								name: { type: 'string', description: 'Canonical name of the entity' },
+								type: { type: 'string', enum: ['character', 'location', 'item', 'faction', 'concept', 'event'], description: 'Entry type' },
+								description: { type: 'string', description: 'Rich description based ONLY on what was established in the scene. 2–5 sentences.' },
+								hidden_info: { type: 'string', description: 'Information the protagonist does NOT know yet. Null if nothing is hidden.' },
+								aliases: { type: 'array', items: { type: 'string' }, description: 'Alternate names, titles, or epithets' },
+								keywords: { type: 'array', items: { type: 'string' }, description: '3–5 retrieval keywords (name, aliases, related terms) for context injection' },
+								injection_mode: { type: 'string', enum: ['always', 'keyword', 'never'], description: 'How this entry is injected into context. keyword = inject when keywords match recent text. always = inject every turn. never = archived.' },
+								priority: { type: 'number', description: 'Injection priority. Higher = earlier in context. 0 is default.' },
+								state_overrides: { type: 'object', description: 'Optional type-specific state overrides. For characters: { pressures: string[] }. For locations: { connections: [{ targetName, direction?, travelTimeMinutes? }] }. For factions: { playerStanding: number, status: string }.' },
+								known_members: {
+									type: 'array',
+									items: { type: 'string' },
+									description: 'Faction entries only: named characters who belong to, serve, lead, command, or publicly represent this faction.',
+								},
+								faction_goals: {
+									type: 'array',
+									description: 'Faction entries only: concrete goals this faction is pursuing.',
+									items: {
+										type: 'object',
+										properties: {
+											description: { type: 'string' },
+											priority: { type: 'number', minimum: 1, maximum: 10 },
+											progress: { type: 'number', minimum: 0, maximum: 100 },
+											type: { type: 'string', enum: ['military', 'diplomatic', 'economic', 'intelligence', 'survival', 'expansion'] },
+											deadline: { type: 'string' },
+										},
+										required: ['description'],
+									},
+								},
+								faction_resources: {
+									type: 'object',
+									description: 'Faction entries only: relative resource scores from 0 to 100.',
+									properties: {
+										military: { type: 'number', minimum: 0, maximum: 100 },
+										wealth: { type: 'number', minimum: 0, maximum: 100 },
+										influence: { type: 'number', minimum: 0, maximum: 100 },
+										information: { type: 'number', minimum: 0, maximum: 100 },
+										morale: { type: 'number', minimum: 0, maximum: 100 },
+									},
+								},
+								faction_disposition: { type: 'string', enum: ['aggressive', 'defensive', 'scheming', 'neutral', 'desperate'], description: 'Faction entries only: current operating posture.' },
+								territory: { type: 'array', items: { type: 'string' }, description: 'Faction entries only: regions, holdings, routes, or institutions controlled.' },
+							},
+							required: ['name', 'type', 'description'],
+						},
+					},
 				},
 			},
 		},
@@ -277,33 +396,11 @@ export const GM_TOOLS = [
 	{
 		type: 'function' as const,
 		function: {
-			name: 'query_lore',
-			description: 'Search the lorebook for relevant entries. Use BEFORE narrating when you need to check facts about characters, locations, factions, or world lore.',
+			name: 'refresh_plot_momentum',
+			description: 'Request a fresh plot momentum analysis mid-generation. Call this if the scene has shifted dramatically and the existing momentum guidance no longer applies. The service will re-read current state, factions, and history and return updated plot branches and strategy.',
 			parameters: {
 				type: 'object',
-				properties: {
-					query: { type: 'string', description: 'Semantic search query' },
-					type_filter: { type: 'string', enum: ['character', 'location', 'item', 'faction', 'concept', 'event'] },
-				},
-				required: ['query'],
-			},
-		},
-	},
-	{
-		type: 'function' as const,
-		function: {
-			name: 'create_lore_entry',
-			description: 'Create a new lorebook entry for a newly introduced entity (character, location, faction, etc.)',
-			parameters: {
-				type: 'object',
-				properties: {
-					name: { type: 'string' },
-					type: { type: 'string', enum: ['character', 'location', 'item', 'faction', 'concept', 'event'] },
-					description: { type: 'string' },
-					keywords: { type: 'array', items: { type: 'string' } },
-					hidden_info: { type: 'string', description: 'GM-only info the player shouldn\'t see yet' },
-				},
-				required: ['name', 'type', 'description'],
+				properties: {},
 			},
 		},
 	},

@@ -9,7 +9,7 @@
 	import EntryDetailModal from './EntryDetailModal.svelte';
 	import WikiLintReport from './WikiLintReport.svelte';
 	import type { Story, Entry, EntryType } from '$lib/types';
-	import type { WikiLintResult } from '$lib/services/ai/sdk/schemas/wikiLint';
+	import type { WikiLintResult, WikiMissingEntry, WikiTextFix } from '$lib/services/ai/sdk/schemas/wikiLint';
 	import { onMount } from 'svelte';
 
 	let stories = $state<Story[]>([]);
@@ -128,6 +128,90 @@
 		lintError = null;
 	}
 
+	function normalizeName(value: string): string {
+		return value.trim().toLowerCase();
+	}
+
+	function findEntryByName(name: string): Entry | undefined {
+		const key = normalizeName(name);
+		return entries.find(entry =>
+			normalizeName(entry.name) === key ||
+			(entry.aliases ?? []).some(alias => normalizeName(alias) === key)
+		);
+	}
+
+	function keywordsForMissing(entry: WikiMissingEntry): string[] {
+		return Array.from(new Set([
+			entry.suggestedName,
+			...entry.suggestedName.split(/\s+/),
+			entry.suggestedType,
+		].map(k => k.trim()).filter(k => k.length > 2))).slice(0, 8);
+	}
+
+	async function createMissingLintEntry(missing: WikiMissingEntry) {
+		if (!selectedStoryId) throw new Error('Select a story before creating wiki entries.');
+		if (findEntryByName(missing.suggestedName)) return;
+		const now = Date.now();
+		const entry: Entry = {
+			id: uuid(),
+			storyId: selectedStoryId,
+			branchId: null,
+			name: missing.suggestedName.trim(),
+			type: missing.suggestedType,
+			description: `${missing.reason}\n\nFirst flagged by wiki health check from: ${missing.mentionedIn}`,
+			hiddenInfo: null,
+			aliases: [],
+			state: buildDefaultState(missing.suggestedType),
+			adventureState: null,
+			creativeState: null,
+			injection: {
+				mode: 'keyword',
+				keywords: keywordsForMissing(missing),
+				priority: 60,
+			},
+			firstMentioned: null,
+			lastMentioned: null,
+			mentionCount: 0,
+			createdBy: 'ai',
+			createdAt: now,
+			updatedAt: now,
+			loreManagementBlacklisted: false,
+		};
+		await createLorebookEntry(entry);
+		entries = [...entries, entry];
+		if (story.currentStory?.id === selectedStoryId) {
+			story.lorebookEntries = [...story.lorebookEntries, entry];
+		}
+	}
+
+	async function applyLintTextFix(fix: WikiTextFix) {
+		const target = findEntryByName(fix.entryName);
+		if (!target) throw new Error(`Could not find wiki entry "${fix.entryName}".`);
+
+		const updates: Partial<Entry> = { updatedAt: Date.now() };
+		if (fix.field === 'name') {
+			if (target.name !== fix.originalText) {
+				throw new Error(`Name fix skipped: "${fix.originalText}" no longer matches ${target.name}.`);
+			}
+			updates.name = fix.correctedText;
+		} else {
+			const current = fix.field === 'description' ? target.description : (target.hiddenInfo ?? '');
+			if (!current.includes(fix.originalText)) {
+				throw new Error(`Text fix skipped: original text was not found in ${target.name}.`);
+			}
+			const replaced = current.replace(fix.originalText, fix.correctedText);
+			if (fix.field === 'description') updates.description = replaced;
+			else updates.hiddenInfo = replaced || null;
+		}
+
+		await updateLorebookEntry(target.id, updates);
+		const updated = { ...target, ...updates };
+		entries = entries.map(entry => entry.id === target.id ? updated : entry);
+		if (story.currentStory?.id === target.storyId) {
+			story.lorebookEntries = story.lorebookEntries.map(entry => entry.id === target.id ? updated : entry);
+		}
+	}
+
 	async function handleCreate() {
 		if (!selectedStoryId || !newName.trim()) return;
 		const now = Date.now();
@@ -243,7 +327,7 @@
 	<!-- Header -->
 	<div class="border-b border-[var(--border-primary)] px-4 py-4">
 		<div class="flex items-center justify-between mb-3">
-			<h2 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Lorebook</h2>
+			<h2 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Wiki</h2>
 			<div class="flex gap-2">
 				<button onclick={runWikiLint} disabled={!selectedStoryId || entries.length === 0 || lintLoading}
 					class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:text-amber-400 hover:bg-amber-500/8 disabled:opacity-40"
@@ -280,7 +364,7 @@
 		<!-- Search -->
 		<div class="relative">
 			<Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-			<input type="text" bind:value={searchQuery} placeholder="Search entries..."
+			<input type="text" bind:value={searchQuery} placeholder="Search wiki entries..."
 				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] py-2 pl-9 pr-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
 		</div>
 
@@ -376,7 +460,7 @@
 		{#if !selectedStoryId}
 			<p class="py-10 text-center text-sm text-[var(--text-muted)]">Create a story first to add lore entries.</p>
 		{:else if filtered.length === 0}
-			<p class="py-10 text-center text-sm text-[var(--text-muted)]">{searchQuery || typeFilter !== 'all' ? 'No matches.' : 'No entries yet. Add one above.'}</p>
+			<p class="py-10 text-center text-sm text-[var(--text-muted)]">{searchQuery || typeFilter !== 'all' ? 'No matches.' : 'No wiki entries yet. Add one above.'}</p>
 		{:else if viewMode === 'index'}
 			<div class="space-y-4">
 				{#each entryTypes as t}
@@ -492,5 +576,12 @@
 
 <!-- Wiki Lint Report -->
 {#if lintOpen}
-	<WikiLintReport result={lintResult} loading={lintLoading} error={lintError} onClose={closeLint} />
+	<WikiLintReport
+		result={lintResult}
+		loading={lintLoading}
+		error={lintError}
+		onClose={closeLint}
+		onCreateMissingEntry={createMissingLintEntry}
+		onApplyTextFix={applyLintTextFix}
+	/>
 {/if}

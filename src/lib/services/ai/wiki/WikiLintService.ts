@@ -37,6 +37,7 @@ Categories:
 - orphans: an entry has zero inbound mentions AND zero outbound relationships AND has not been mentioned in recent chapters
 - missingEntries: a name referenced in a chapter has no corresponding entry
 - gapSuggestions: a topic that's important but thinly developed (e.g. faction with members but no leader entry)
+- textFixes: exact replacements for typos, spelling errors, or stale wording. Only include these when the originalText appears verbatim in the listed field and the correction is safe.
 
 Respond ONLY with valid JSON matching the schema.`;
 
@@ -85,6 +86,7 @@ Respond ONLY with valid JSON matching the schema.`;
   "orphans": [{ "entryName": "...", "reason": "..." }],
   "missingEntries": [{ "suggestedName": "...", "suggestedType": "character|location|item|faction|concept|event", "mentionedIn": "...", "reason": "..." }],
   "gapSuggestions": [{ "topic": "...", "suggestion": "..." }],
+  "textFixes": [{ "entryName": "...", "field": "name|description|hiddenInfo", "originalText": "...", "correctedText": "...", "reason": "..." }],
   "summary": "One-paragraph health summary."
 }
 

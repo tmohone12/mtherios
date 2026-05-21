@@ -45,10 +45,10 @@ export interface ServiceProfile {
 
 export const SERVICE_PROFILES: ServiceProfile[] = [
 	{ id: 'narrative', label: 'Narrative', description: 'Main story generation engine', icon: '✍️', serviceIds: ['narrative'] },
-	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, items + living world simulation', icon: '🌍', serviceIds: ['classifier', 'worldSimulation'] },
+	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, items, living world simulation, and plot momentum', icon: '🌍', serviceIds: ['classifier', 'worldSimulation'] },
 	{ id: 'guidance', label: 'Player Guidance', description: 'Suggestions and branching action choices', icon: '🧭', serviceIds: ['suggestions', 'actionChoices'] },
 	{ id: 'memoryContext', label: 'Memory & Context', description: 'Chapter summaries, arc condensation, and procedural memory', icon: '🧠', serviceIds: ['memory', 'arcCondensation', 'proceduralMemory'] },
-	{ id: 'lorebook', label: 'Lorebook', description: 'Discover, curate, and query lore entries', icon: '📜', serviceIds: ['loreManagement', 'entryRefinement'] },
+	{ id: 'lorebook', label: 'Lorebook', description: 'Discover, curate, query, and lint lore entries', icon: '📜', serviceIds: ['loreManagement', 'entryRefinement', 'wikiLint'] },
 	{ id: 'style', label: 'Style Review', description: 'POV, tense, and prose quality checks', icon: '✨', serviceIds: ['styleReviewer'] },
 	{ id: 'image', label: 'Image Generation', description: 'Scene and character image generation', icon: '🎨', serviceIds: ['imageGeneration'] },
 ];
@@ -117,7 +117,13 @@ class SettingsStore {
 		postChapterBuffer: 10,
 		maxPrevChaptersInSummary: 5,
 		chaptersPerArc: 5,
+		retrievedChapterLimit: 3,
+		retrievedLoreEntryLimit: 8,
+		conversationMemoryLimit: 6,
+		proceduralMemoryLimit: 8,
+		backendMemoryTokenBudget: 1100,
 		snapshotTokenCap: 0,
+		serverAuthoritativeTurns: false,
 	});
 
 	// ── Per-Service Configs ──
@@ -153,6 +159,22 @@ class SettingsStore {
 
 	get activeProvider(): ProviderConfig | null {
 		const profile = this.activeProfile;
+		if (!profile) return null;
+		return PROVIDERS[profile.providerType as ProviderType] ?? null;
+	}
+
+	getProfile(profileId?: string | null): APIProfile | null {
+		if (!profileId) return this.activeProfile;
+		return this.profiles.find(p => p.id === profileId) ?? null;
+	}
+
+	getServiceProfile(serviceId: string): APIProfile | null {
+		const config = this.getServiceConfig(serviceId);
+		return this.getProfile(config.profileId);
+	}
+
+	getServiceProvider(serviceId: string): ProviderConfig | null {
+		const profile = this.getServiceProfile(serviceId);
 		if (!profile) return null;
 		return PROVIDERS[profile.providerType as ProviderType] ?? null;
 	}
@@ -200,26 +222,20 @@ class SettingsStore {
 			}
 
 			// UI settings
+			const hadSavedUiSettings = Boolean(all.uiSettings);
 			if (all.uiSettings) {
 				try { Object.assign(this.uiSettings, JSON.parse(all.uiSettings)); } catch (e) { console.warn('[Settings] Failed to parse uiSettings:', e); }
 			}
+			this.normalizeUiSettings();
 
-			// One-time migration: the Max Messages slider used to cap at 100;
-			// users with conservative saved values (the old default was 40) get
-			// bumped up to the new default (250) so they actually benefit from
-			// the larger range. Guarded by a flag so users who later set a low
-			// value on purpose aren't reverted on the next load.
+			// One-time flags kept for compatibility. Memory settings are now
+			// user-authoritative, so migrations must not rewrite saved values.
 			if (!all.uiSettingsMaxMessagesV2) {
-				if (this.uiSettings.maxMessages < 100) {
-					this.uiSettings.maxMessages = 250;
-					await this.saveUISettings();
-				}
 				await setSetting('uiSettingsMaxMessagesV2', '1');
 			}
 
 			if (!all.uiSettingsMaxHistoryEntriesV3) {
-				this.uiSettings.maxHistoryEntries = 50;
-				await this.saveUISettings();
+				if (!hadSavedUiSettings) await this.saveUISettings();
 				await setSetting('uiSettingsMaxHistoryEntriesV3', '1');
 			}
 
@@ -238,6 +254,26 @@ class SettingsStore {
 	}
 
 	// ── Persistence ──
+	private clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+		const number = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+		return Math.min(max, Math.max(min, Math.round(number)));
+	}
+
+	private normalizeUiSettings() {
+		this.uiSettings.maxMessages = this.clampNumber(this.uiSettings.maxMessages, 1, 1000, 250);
+		this.uiSettings.maxHistoryEntries = this.clampNumber(this.uiSettings.maxHistoryEntries, 1, 1000, 50);
+		this.uiSettings.chapterThreshold = this.clampNumber(this.uiSettings.chapterThreshold, 5, 200, 20);
+		this.uiSettings.postChapterBuffer = this.clampNumber(this.uiSettings.postChapterBuffer, 0, 100, 10);
+		this.uiSettings.maxPrevChaptersInSummary = this.clampNumber(this.uiSettings.maxPrevChaptersInSummary, 0, 50, 5);
+		this.uiSettings.chaptersPerArc = this.clampNumber(this.uiSettings.chaptersPerArc, 2, 50, 5);
+		this.uiSettings.retrievedChapterLimit = this.clampNumber(this.uiSettings.retrievedChapterLimit, 0, 12, 3);
+		this.uiSettings.retrievedLoreEntryLimit = this.clampNumber(this.uiSettings.retrievedLoreEntryLimit, 0, 24, 8);
+		this.uiSettings.conversationMemoryLimit = this.clampNumber(this.uiSettings.conversationMemoryLimit, 0, 24, 6);
+		this.uiSettings.proceduralMemoryLimit = this.clampNumber(this.uiSettings.proceduralMemoryLimit, 0, 24, 8);
+		this.uiSettings.backendMemoryTokenBudget = this.clampNumber(this.uiSettings.backendMemoryTokenBudget, 160, 2400, 1100);
+		this.uiSettings.snapshotTokenCap = this.clampNumber(this.uiSettings.snapshotTokenCap, 0, 50000, 0);
+	}
+
 	async saveProfiles() {
 		await setSetting('apiProfiles', JSON.stringify(this.profiles));
 		if (this.activeProfileId) await setSetting('activeProfileId', this.activeProfileId);
@@ -249,6 +285,7 @@ class SettingsStore {
 	}
 
 	async saveUISettings() {
+		this.normalizeUiSettings();
 		await setSetting('uiSettings', JSON.stringify(this.uiSettings));
 	}
 
@@ -269,13 +306,17 @@ class SettingsStore {
 		const def = SERVICE_DEFINITIONS[serviceId];
 		// Resolve model: per-service override → profile model → empty (provider default)
 		const profileModel = def ? (this.profileModels[def.profile] ?? '') : '';
+		const narrativeFallback = serviceId === 'narrative' && !existing?.profileId
+			? this.narrativeSettings.model
+			: '';
+		const fallbackModel = profileModel || narrativeFallback || '';
 		if (existing) {
-			return { ...existing, model: existing.model || profileModel, profileId: existing.profileId ?? '' };
+			return { ...existing, model: existing.model || fallbackModel, profileId: existing.profileId ?? '' };
 		}
 		return {
-			model: profileModel,
-			temperature: def?.defaultTemp ?? 0.5,
-			maxTokens: def?.defaultMaxTokens ?? 4096,
+			model: fallbackModel,
+			temperature: serviceId === 'narrative' ? this.narrativeSettings.temperature : (def?.defaultTemp ?? 0.5),
+			maxTokens: serviceId === 'narrative' ? this.narrativeSettings.maxTokens : (def?.defaultMaxTokens ?? 4096),
 			systemPromptOverride: '',
 			enabled: true,
 			profileId: '',

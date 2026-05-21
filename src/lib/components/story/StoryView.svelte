@@ -8,11 +8,11 @@
 	import WorldDrawer from './WorldDrawer.svelte';
 	import { downloadStoryAsJson } from '$lib/services/storySync';
 	import { deleteStory } from '$lib/services/database';
-	import { ArrowLeft, Loader2, Users, BookOpen, Image, AlertTriangle, Download, Trash2, MoreVertical, X, ScrollText } from 'lucide-svelte';
-	import CompactionControls from './CompactionControls.svelte';
+	import { ArrowLeft, Loader2, Users, BookOpen, Image, AlertTriangle, Download, Trash2, MoreVertical, X, ScrollText, UserRound, Scissors } from 'lucide-svelte';
 	import { tick, onMount } from 'svelte';
 	import type { ActionChoice } from '$lib/services/ai/sdk/schemas/actionchoices';
 	import type { StyleReview } from '$lib/services/ai/sdk/schemas/style';
+	import type { StoryEntry } from '$lib/types';
 
 
 	let scrollContainer = $state<HTMLDivElement | null>(null);
@@ -36,6 +36,14 @@
 	let headerDraft = $state('');
 	let titleDraft = $state('');
 	let descriptionDraft = $state('');
+	let editorTab = $state<'story' | 'character'>('story');
+	let characterNameDraft = $state('');
+	let characterDescriptionDraft = $state('');
+	let characterTraitsDraft = $state('');
+	let reputationDraft = $state('');
+	let confirmingEntryDeleteId = $state<string | null>(null);
+	let confirmingDeleteFromId = $state<string | null>(null);
+	let messageControlError = $state<string | null>(null);
 
 	async function handleExport() {
 		if (!story.currentStory || exporting) return;
@@ -52,6 +60,12 @@
 		titleDraft = story.currentStory?.title ?? '';
 		headerDraft = story.currentStory?.headerPrompt ?? '';
 		descriptionDraft = story.currentStory?.description ?? '';
+		const protag = story.protagonist;
+		characterNameDraft = protag?.name ?? '';
+		characterDescriptionDraft = protag?.description ?? '';
+		characterTraitsDraft = protag?.traits?.join(', ') ?? '';
+		reputationDraft = story.currentStory?.playerReputation ?? '';
+		editorTab = 'story';
 		headerEditorOpen = true;
 	}
 
@@ -64,6 +78,17 @@
 		if (descriptionDraft !== (story.currentStory?.description ?? '')) {
 			await story.updateDescription(descriptionDraft);
 		}
+		if (reputationDraft !== (story.currentStory?.playerReputation ?? '')) {
+			await story.updatePlayerReputation(reputationDraft);
+		}
+		const traits = characterTraitsDraft.split(/[,;\n]/).map(t => t.trim()).filter(Boolean);
+		if (characterNameDraft.trim()) {
+			await story.saveProtagonist({
+				name: characterNameDraft,
+				description: characterDescriptionDraft,
+				traits,
+			});
+		}
 		headerEditorOpen = false;
 	}
 
@@ -73,6 +98,41 @@
 		story.clear();
 		app.closeStory();
 		await deleteStory(storyId);
+	}
+
+	async function handleDeleteEntry(entry: StoryEntry) {
+		messageControlError = null;
+		confirmingDeleteFromId = null;
+		if (confirmingEntryDeleteId !== entry.id) {
+			confirmingEntryDeleteId = entry.id;
+			return;
+		}
+		try {
+			await story.deleteEntry(entry.id);
+			confirmingEntryDeleteId = null;
+		} catch (e) {
+			messageControlError = e instanceof Error ? e.message : 'Failed to delete message.';
+		}
+	}
+
+	async function handleDeleteFromEntry(entry: StoryEntry) {
+		messageControlError = null;
+		confirmingEntryDeleteId = null;
+		if (confirmingDeleteFromId !== entry.id) {
+			confirmingDeleteFromId = entry.id;
+			return;
+		}
+		try {
+			await story.deleteEntriesFromPosition(entry.position);
+			confirmingDeleteFromId = null;
+		} catch (e) {
+			messageControlError = e instanceof Error ? e.message : 'Failed to delete transcript range.';
+		}
+	}
+
+	function clearMessageConfirmations() {
+		confirmingEntryDeleteId = null;
+		confirmingDeleteFromId = null;
 	}
 
 	async function generateSceneImage() {
@@ -116,7 +176,7 @@
 	}
 
 	const isAdventure = $derived(story.storyMode === 'adventure');
-	const visibleEntries = $derived(story.entries.slice(-50));
+	const visibleEntries = $derived(story.entries);
 
 	async function scrollToBottom() {
 		await tick();
@@ -303,15 +363,54 @@
 			</div>
 		{:else}
 			<div class="mx-auto max-w-2xl space-y-4 px-4 pt-4">
-				{#each visibleEntries as entry}
+				{#if story.hasOlderEntries}
+					<div class="flex justify-center">
+						<button
+							onclick={() => story.loadOlderEntries()}
+							disabled={story.loadingOlderEntries}
+							class="rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-muted)] transition-colors hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)] disabled:opacity-50"
+						>
+							{story.loadingOlderEntries ? 'Loading older messages...' : `Load older messages (${story.entries.length}/${story.entryCount})`}
+						</button>
+					</div>
+				{/if}
+				{#if messageControlError}
+					<div class="flex items-start gap-2 rounded-xl border border-[var(--color-crimson-500)]/20 bg-[var(--color-crimson-900)]/10 px-3 py-2.5">
+						<AlertTriangle class="h-4 w-4 shrink-0 text-[var(--color-crimson-400)] mt-0.5" />
+						<div class="flex-1 text-xs text-[var(--color-crimson-400)]">{messageControlError}</div>
+						<button onclick={() => messageControlError = null} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]" title="Dismiss message control error" aria-label="Dismiss message control error">
+							<X class="h-3.5 w-3.5" />
+						</button>
+					</div>
+				{/if}
+				{#each visibleEntries as entry (entry.id)}
 					{#if entry.type === 'user_action'}
-						<div class="flex justify-end">
+						<div class="group flex flex-col items-end gap-1" role="group" onmouseleave={clearMessageConfirmations}>
 							<div class="max-w-[85%] rounded-2xl rounded-br-md bg-[rgba(212,168,83,0.12)] px-4 py-3">
 								<p class="text-sm leading-relaxed text-[var(--text-primary)]">{entry.content.replace(/^>\s*/, '')}</p>
 							</div>
+							<div class="flex gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+								<button
+									onclick={() => handleDeleteFromEntry(entry)}
+									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-amber-500/40 hover:text-amber-300 {confirmingDeleteFromId === entry.id ? 'border-amber-500/60 bg-amber-500/10 text-amber-300' : ''}"
+									title={confirmingDeleteFromId === entry.id ? 'Confirm delete from here' : 'Delete from here'}
+									aria-label={confirmingDeleteFromId === entry.id ? 'Confirm delete from here' : 'Delete from here'}
+								>
+									<Scissors class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+								</button>
+								<button
+									onclick={() => handleDeleteEntry(entry)}
+									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)] {confirmingEntryDeleteId === entry.id ? 'border-[var(--color-crimson-500)]/60 bg-[var(--color-crimson-900)]/20 text-[var(--color-crimson-400)]' : ''}"
+									title={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}
+									aria-label={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}
+								>
+									<Trash2 class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+								</button>
+							</div>
 						</div>
 					{:else if entry.type === 'narration'}
-						<div class="prose-mtherios">
+						<div class="group space-y-1" role="group" onmouseleave={clearMessageConfirmations}>
+							<div class="prose-mtherios">
 							<div class="rounded-2xl rounded-bl-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
 								{@html formatNarrative(entry.content)}
 							</div>
@@ -330,16 +429,49 @@
 								</div>
 								{/if}
 							{/if}
+							</div>
+							<div class="flex justify-end gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+								<button
+									onclick={() => handleDeleteFromEntry(entry)}
+									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-amber-500/40 hover:text-amber-300 {confirmingDeleteFromId === entry.id ? 'border-amber-500/60 bg-amber-500/10 text-amber-300' : ''}"
+									title={confirmingDeleteFromId === entry.id ? 'Confirm delete from here' : 'Delete from here'}
+									aria-label={confirmingDeleteFromId === entry.id ? 'Confirm delete from here' : 'Delete from here'}
+								>
+									<Scissors class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+								</button>
+								<button
+									onclick={() => handleDeleteEntry(entry)}
+									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)] {confirmingEntryDeleteId === entry.id ? 'border-[var(--color-crimson-500)]/60 bg-[var(--color-crimson-900)]/20 text-[var(--color-crimson-400)]' : ''}"
+									title={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}
+									aria-label={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}
+								>
+									<Trash2 class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+								</button>
+							</div>
 						</div>
 					{:else if entry.type === 'system'}
 						{#if entry.content.startsWith('Roll:')}
+							<div class="group space-y-1" role="group" onmouseleave={clearMessageConfirmations}>
 							<div class="dice-player-roll">
 								<span class="dice-card-icon">&#127922;</span>
 								<span>{entry.content.slice(5).trim()}</span>
 							</div>
+							<div class="flex justify-end gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+								<button onclick={() => handleDeleteEntry(entry)} class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)] {confirmingEntryDeleteId === entry.id ? 'border-[var(--color-crimson-500)]/60 bg-[var(--color-crimson-900)]/20 text-[var(--color-crimson-400)]' : ''}" title={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'} aria-label={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}>
+									<Trash2 class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+								</button>
+							</div>
+							</div>
 						{:else}
+							<div class="group space-y-1" role="group" onmouseleave={clearMessageConfirmations}>
 							<div class="rounded-lg bg-[var(--color-crimson-900)]/20 border border-[var(--color-crimson-500)]/20 px-4 py-3 text-center text-xs text-[var(--color-crimson-400)]">
 								{entry.content}
+							</div>
+							<div class="flex justify-end gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+								<button onclick={() => handleDeleteEntry(entry)} class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)] {confirmingEntryDeleteId === entry.id ? 'border-[var(--color-crimson-500)]/60 bg-[var(--color-crimson-900)]/20 text-[var(--color-crimson-400)]' : ''}" title={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'} aria-label={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}>
+									<Trash2 class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+								</button>
+							</div>
 							</div>
 						{/if}
 					{/if}
@@ -482,11 +614,6 @@
 										<span class="ml-auto h-1.5 w-1.5 rounded-full bg-purple-400"></span>
 									{/if}
 								</button>
-								<!-- Lore Compaction -->
-								<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-								<div onclick={() => fabOpen = false} class="contents">
-									<CompactionControls />
-								</div>
 								<button
 									onclick={() => { generateSceneImage(); fabOpen = false; }}
 									disabled={loadingImage}
@@ -566,15 +693,33 @@
 			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-5 py-4">
 				<div class="flex items-center gap-2.5">
 					<ScrollText class="h-4 w-4 text-purple-400" />
-					<h3 class="font-display text-sm font-semibold tracking-wide text-[var(--text-primary)]">Story Header</h3>
+					<h3 class="font-display text-sm font-semibold tracking-wide text-[var(--text-primary)]">Story Controls</h3>
 				</div>
 				<button onclick={() => headerEditorOpen = false} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
 					<X class="h-4 w-4" />
 				</button>
 			</div>
 
+			<div class="flex border-b border-[var(--border-primary)] px-5 pt-2">
+				<button
+					onclick={() => editorTab = 'story'}
+					class="flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors {editorTab === 'story' ? 'border-purple-400 text-purple-300' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+				>
+					<ScrollText class="h-3.5 w-3.5" />
+					<span>Story</span>
+				</button>
+				<button
+					onclick={() => editorTab = 'character'}
+					class="flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors {editorTab === 'character' ? 'border-purple-400 text-purple-300' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+				>
+					<UserRound class="h-3.5 w-3.5" />
+					<span>Character</span>
+				</button>
+			</div>
+
 			<!-- Content -->
 			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+				{#if editorTab === 'story'}
 				<!-- Title -->
 				<div class="space-y-1.5">
 					<label for="story-title-input" class="text-xs font-medium text-[var(--text-muted)]">Story Title</label>
@@ -622,11 +767,66 @@
 						<span class="text-purple-400">Unsaved changes</span>
 					{/if}
 				</div>
+				{:else}
+				<div class="space-y-1.5">
+					<label for="character-name-input" class="text-xs font-medium text-[var(--text-muted)]">Protagonist Name</label>
+					<input
+						id="character-name-input"
+						type="text"
+						bind:value={characterNameDraft}
+						placeholder="Who the player controls..."
+						class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+					/>
+				</div>
+
+				<div class="space-y-1.5">
+					<label for="character-description-input" class="text-xs font-medium text-[var(--text-muted)]">Description</label>
+					<textarea
+						id="character-description-input"
+						bind:value={characterDescriptionDraft}
+						placeholder="Age, appearance, background, current condition, role, and anything the narrator must keep current..."
+						rows="8"
+						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+					></textarea>
+				</div>
+
+				<div class="space-y-1.5">
+					<label for="character-traits-input" class="text-xs font-medium text-[var(--text-muted)]">Traits</label>
+					<textarea
+						id="character-traits-input"
+						bind:value={characterTraitsDraft}
+						placeholder="Comma or line separated traits..."
+						rows="3"
+						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+					></textarea>
+				</div>
+
+				<div class="space-y-1.5">
+					<label for="player-reputation-input" class="text-xs font-medium text-[var(--text-muted)]">Player Reputation</label>
+					<p class="text-[10px] text-[var(--text-muted)]/80 leading-relaxed">
+						Public-facing reputation the narrator sees as its own prompt section.
+					</p>
+					<textarea
+						id="player-reputation-input"
+						bind:value={reputationDraft}
+						placeholder="How the realm, smallfolk, noble courts, factions, enemies, and rumor networks currently speak of the player..."
+						rows="6"
+						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+					></textarea>
+				</div>
+
+				<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-muted)]">
+					This is the live protagonist record used in prompts. Update age, injuries, identity changes, titles, or appearance here when long play drifts.
+				</div>
+				{#if characterNameDraft !== (story.protagonist?.name ?? '') || characterDescriptionDraft !== (story.protagonist?.description ?? '') || characterTraitsDraft !== (story.protagonist?.traits?.join(', ') ?? '') || reputationDraft !== (story.currentStory?.playerReputation ?? '')}
+					<div class="text-right text-[10px] text-purple-400">Unsaved changes</div>
+				{/if}
+				{/if}
 			</div>
 
 			<!-- Footer -->
 			<div class="flex items-center justify-end gap-2 border-t border-[var(--border-primary)] px-5 py-3">
-				{#if headerDraft.trim()}
+				{#if editorTab === 'story' && headerDraft.trim()}
 					<button
 						onclick={() => { headerDraft = ''; }}
 						class="rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--color-crimson-400)] transition-colors"

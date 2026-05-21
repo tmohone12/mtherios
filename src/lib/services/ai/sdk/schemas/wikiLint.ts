@@ -45,13 +45,24 @@ export const wikiGapSuggestionSchema = z.object({
 	suggestion: z.string(),
 });
 
+export const wikiTextFixSchema = z.object({
+	entryName: z.string(),
+	field: z.enum(['name', 'description', 'hiddenInfo']),
+	originalText: z.string(),
+	correctedText: z.string(),
+	reason: z.string(),
+});
+
 export const wikiLintResultSchema = z.object({
 	contradictions: z.array(wikiContradictionSchema).optional().default([]),
 	staleClaims: z.array(wikiStaleClaimSchema).optional().default([]),
 	orphans: z.array(wikiOrphanSchema).optional().default([]),
 	missingEntries: z.array(wikiMissingEntrySchema).optional().default([]),
 	gapSuggestions: z.array(wikiGapSuggestionSchema).optional().default([]),
+	textFixes: z.array(wikiTextFixSchema).optional().default([]),
 	summary: z.string(),
 });
 
 export type WikiLintResult = z.infer<typeof wikiLintResultSchema>;
+export type WikiMissingEntry = z.infer<typeof wikiMissingEntrySchema>;
+export type WikiTextFix = z.infer<typeof wikiTextFixSchema>;

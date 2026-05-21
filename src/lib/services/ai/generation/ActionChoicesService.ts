@@ -1,8 +1,12 @@
 /**
  * ActionChoicesService — Mtherios
- * 
+ *
  * Generates meaningful branching choices for the player at key decision points.
- * Different from suggestions — these represent significant narrative forks.
+ *
+ * DO NOT MERGE with SuggestionsService — distinct UX surfaces:
+ *   - ActionChoices: 2-4 narrative FORKS the player picks one of (modal/cards UI).
+ *   - Suggestions:   3-4 terse one-turn nudges (chip UI, copy-paste into input).
+ * Different schemas, different cadences, different stakes. They look similar; they're not.
  */
 
 import { BaseAIService } from '../BaseAIService';

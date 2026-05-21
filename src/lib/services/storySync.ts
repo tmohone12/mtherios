@@ -14,6 +14,14 @@ import {
 	getChapters,
 	getLorebookEntries,
 	getArcs,
+	getEntryRelationships,
+	getConversationMemory,
+	getWorldEvents,
+	getAgreements,
+	getFactionActions,
+	getRumors,
+	getSchemes,
+	getStoryThreads,
 	getSetting,
 	setSetting,
 	createStory,
@@ -36,6 +44,14 @@ import type {
 	Chapter,
 	Arc,
 	Entry,
+	EntryRelationship,
+	ConversationMemoryEntry,
+	WorldEvent,
+	Agreement,
+	FactionActionRecord,
+	RumorRecord,
+	Scheme,
+	StoryThread,
 } from '$lib/types';
 
 // ============================================================================
@@ -62,6 +78,14 @@ export interface StoryExportData {
 	chapters: Chapter[];
 	lorebookEntries: Entry[];
 	arcs: Arc[];
+	entryRelationships?: EntryRelationship[];
+	conversationMemory?: ConversationMemoryEntry[];
+	worldEvents?: WorldEvent[];
+	agreements?: Agreement[];
+	factionActions?: FactionActionRecord[];
+	rumors?: RumorRecord[];
+	schemes?: Scheme[];
+	storyThreads?: StoryThread[];
 	/** API profiles & service configs — lets the other device connect without re-setup. */
 	settings?: ExportedSettings;
 }
@@ -74,17 +98,41 @@ export async function exportStory(storyId: string): Promise<StoryExportData> {
 	const story = await getStory(storyId);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
 
-	const [storyEntries, characters, locations, items, storyBeats, chapters, lorebookEntries, arcs] =
-		await Promise.all([
-			getStoryEntries(storyId),
-			getCharacters(storyId),
-			getLocations(storyId),
-			getItems(storyId),
-			getStoryBeats(storyId),
-			getChapters(storyId),
-			getLorebookEntries(storyId),
-			getArcs(storyId),
-		]);
+	const [
+		storyEntries,
+		characters,
+		locations,
+		items,
+		storyBeats,
+		chapters,
+		lorebookEntries,
+		arcs,
+		entryRelationships,
+		conversationMemory,
+		worldEvents,
+		agreements,
+		factionActions,
+		rumors,
+		schemes,
+		storyThreads,
+	] = await Promise.all([
+		getStoryEntries(storyId),
+		getCharacters(storyId),
+		getLocations(storyId),
+		getItems(storyId),
+		getStoryBeats(storyId),
+		getChapters(storyId),
+		getLorebookEntries(storyId),
+		getArcs(storyId),
+		getEntryRelationships(storyId),
+		getConversationMemory(storyId),
+		getWorldEvents(storyId),
+		getAgreements(storyId),
+		getFactionActions(storyId),
+		getRumors(storyId),
+		getSchemes(storyId),
+		getStoryThreads(storyId),
+	]);
 
 	// Bundle API settings so the receiving device can connect
 	const [apiProfiles, activeProfileId, narrativeModel, serviceConfigs] = await Promise.all([
@@ -111,6 +159,14 @@ export async function exportStory(storyId: string): Promise<StoryExportData> {
 		chapters,
 		lorebookEntries,
 		arcs,
+		entryRelationships,
+		conversationMemory,
+		worldEvents,
+		agreements,
+		factionActions,
+		rumors,
+		schemes,
+		storyThreads,
 		settings: Object.keys(settings).length > 0 ? settings : undefined,
 	};
 }

@@ -1,0 +1,21 @@
+services:
+  mtherios-db:
+    image: pgvector/pgvector:pg16
+    container_name: mtherios-factions-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mtherios
+      POSTGRES_USER: mtherios
+      POSTGRES_PASSWORD: mtherios
+    ports:
+      - "5432:5432"
+    volumes:
+      - mtherios_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mtherios -d mtherios"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  mtherios_pgdata:

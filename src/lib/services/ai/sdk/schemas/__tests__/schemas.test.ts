@@ -6,7 +6,7 @@ import { styleReviewSchema } from '../style';
 import { chapterSummaryResultSchema, chapterAnalysisSchema, retrievalDecisionSchema } from '../memory';
 import {
 	plotInjectionSchema, factionActionSchema, rumorSchema,
-	worldSimulationResultSchema, relationDeltaSchema,
+	worldSimulationResultSchema, relationDeltaSchema, plotMomentumSchema,
 } from '../worldsim';
 import { arcSummarySchema } from '../arc';
 import { extractedRuleSchema, reflectionResultSchema, ruleRelevanceSchema } from '../procedural';
@@ -271,6 +271,71 @@ describe('worldSimulationResultSchema', () => {
 
 	it('rejects worldTension outside 0-10', () => {
 		expect(() => worldSimulationResultSchema.parse({ worldTension: 11 })).toThrow();
+	});
+});
+
+describe('plotMomentumSchema', () => {
+	const validNextBeat = {
+		next_beat: {
+			critical_path: {
+				path_a: { type: 'political_overture', description: 'A raven arrives with a marriage offer.' },
+				path_b: { type: 'social_slight', description: 'A lord refuses to rise when the player enters.', friction: true },
+				path_c: { type: 'action_small_scale', description: 'A horse screams in the stable.', action: true },
+				path_d: { type: 'twist_from_secret', description: 'A maester reveals a hidden will.', twist_from_existing_secret: true },
+			},
+			next_turn_strategy: {
+				recommended_path: 'path_b',
+				rationale: 'The player has had two easy turns; friction raises temperature.',
+			},
+			revelation_budget: {
+				major_reveals_stewing: ['The heir is a bastard'],
+				notes: 'Hold the bastard reveal until the feast arc.',
+			},
+			faction_advisory: {
+				house_stark: { disposition: 'cautiously allied', likely_next_move: 'Send a raven warning.', notes: 'Honorable but stretched thin.' },
+			},
+			thread_awareness: {
+				existing_threads: ['Find the missing courier'],
+				imminent_threads: ['The feast approaches'],
+				branch_alignment: 'Path B advances the feast tension without forcing a reveal.',
+			},
+		},
+	};
+
+	it('accepts a valid plot momentum payload', () => {
+		const parsed = plotMomentumSchema.parse(validNextBeat);
+		expect(parsed.next_beat.critical_path.path_b.friction).toBe(true);
+		expect(parsed.next_beat.next_turn_strategy.recommended_path).toBe('path_b');
+		expect(parsed.next_beat.faction_advisory.house_stark.disposition).toBe('cautiously allied');
+	});
+
+	it('accepts minimal defaults for optional booleans', () => {
+		const minimal = {
+			next_beat: {
+				critical_path: {
+					path_a: { type: 'none', description: 'Nothing happens.' },
+					path_b: { type: 'none', description: 'Nothing happens.' },
+					path_c: { type: 'none', description: 'Nothing happens.' },
+					path_d: { type: 'none', description: 'Nothing happens.' },
+				},
+				next_turn_strategy: { recommended_path: 'path_a', rationale: 'Default.' },
+				revelation_budget: { major_reveals_stewing: [], notes: '' },
+				faction_advisory: {},
+				thread_awareness: { existing_threads: [], imminent_threads: [], branch_alignment: '' },
+			},
+		};
+		const parsed = plotMomentumSchema.parse(minimal);
+		expect(parsed.next_beat.critical_path.path_a.friction).toBe(false);
+	});
+
+	it('rejects invalid recommended_path', () => {
+		const bad = {
+			next_beat: {
+				...validNextBeat.next_beat,
+				next_turn_strategy: { recommended_path: 'path_e', rationale: 'bad' },
+			},
+		};
+		expect(() => plotMomentumSchema.parse(bad)).toThrow();
 	});
 });
 

@@ -1,8 +1,13 @@
 /**
  * SuggestionsService — Mtherios
- * 
+ *
  * Generates contextual action suggestions for the player
  * based on the current narrative state.
+ *
+ * DO NOT MERGE with ActionChoicesService — distinct UX surfaces:
+ *   - Suggestions:   3-4 terse one-turn nudges (chip UI, copy-paste into input).
+ *   - ActionChoices: 2-4 narrative FORKS the player picks one of (modal/cards UI).
+ * Different schemas, different cadences, different stakes. They look similar; they're not.
  */
 
 import { BaseAIService } from '../BaseAIService';

@@ -189,6 +189,7 @@
 			currentBranchId: null,
 			currentBgImage: null,
 			headerPrompt: null,
+			playerReputation: null,
 			lastWorldSimDay: null,
 			compactedLore: null,
 			compactedLoreHistory: null,

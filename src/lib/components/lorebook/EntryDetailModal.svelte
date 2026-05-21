@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { X, Save, Trash2, Shield, ShieldOff, ArrowLeft, BookOpen, Sparkles, Loader2 } from 'lucide-svelte';
 	import { updateLorebookEntry, deleteLorebookEntry, getRelationshipsForEntry } from '$lib/services/database';
-	import type { Entry, EntryType, EntryInjectionMode, EntryRelationship, CharacterEntryState, FactionEntryState, LocationEntryState, ItemEntryState } from '$lib/types';
+	import type { Entry, EntryType, EntryInjectionMode, EntryRelationship, CharacterEntryState, FactionEntryState, LocationEntryState, ItemEntryState, FactionGoal, FactionResources } from '$lib/types';
 	import { fade } from 'svelte/transition';
 	import { onMount, untrack } from 'svelte';
 	import { renderWiki, findInboundMentions, parseWikiHref } from '$lib/utils/wikilinks';
@@ -51,6 +51,10 @@
 
 	// State (deep copy)
 	let entryState = $state(JSON.parse(JSON.stringify(entry.state)));
+	let factionMembers = $state('');
+	let factionTerritory = $state('');
+	let factionGoalsText = $state('');
+	let factionResources = $state<FactionResources>({ military: 50, wealth: 50, influence: 50, information: 50, morale: 50 });
 
 	// ── Refine with AI ──
 	let refineOpen = $state(initialRefineOpen);
@@ -80,6 +84,7 @@
 			injectionPriority = e.injection?.priority ?? DEFAULT_INJECTION.priority;
 			keywords = (e.injection?.keywords ?? []).join(', ');
 			entryState = JSON.parse(JSON.stringify(e.state));
+			hydrateFactionDrafts(entryState);
 			confirmDelete = false;
 			// Reset refine UI on entry swap so previews don't bleed across entries.
 			refineInstruction = '';
@@ -107,7 +112,66 @@
 		onNavigate?.(id);
 	}
 
+	function toList(value: unknown): string[] {
+		if (Array.isArray(value)) return value.map(String).map(s => s.trim()).filter(Boolean);
+		if (typeof value === 'string') return value.split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+		return [];
+	}
+
+	function hydrateFactionDrafts(state: any) {
+		const factionState = state as Partial<FactionEntryState>;
+		factionMembers = toList(factionState.knownMembers).join(', ');
+		factionTerritory = toList(factionState.territory).join(', ');
+		factionGoalsText = (factionState.goals ?? [])
+			.map(g => `${g.description} | ${g.priority ?? 5} | ${g.progress ?? 0} | ${g.type ?? 'diplomatic'}${g.deadline ? ` | ${g.deadline}` : ''}`)
+			.join('\n');
+		factionResources = {
+			military: factionState.resources?.military ?? 50,
+			wealth: factionState.resources?.wealth ?? 50,
+			influence: factionState.resources?.influence ?? 50,
+			information: factionState.resources?.information ?? 50,
+			morale: factionState.resources?.morale ?? 50,
+		};
+	}
+
+	function parseFactionGoals(text: string): FactionGoal[] {
+		return text
+			.split('\n')
+			.map(line => line.trim())
+			.filter(Boolean)
+			.map(line => {
+				const [description, priority, progress, goalType, deadline] = line.split('|').map(part => part.trim());
+				const typeValue = ['military', 'diplomatic', 'economic', 'intelligence', 'survival', 'expansion'].includes(goalType)
+					? goalType as FactionGoal['type']
+					: 'diplomatic';
+				return {
+					description,
+					priority: Math.max(1, Math.min(10, Number(priority) || 5)),
+					progress: Math.max(0, Math.min(100, Number(progress) || 0)),
+					type: typeValue,
+					deadline: deadline || undefined,
+				};
+			});
+	}
+
+	function prepareStateForSave() {
+		const state = { ...entryState, type };
+		if (type === 'character') {
+			const cs = state as CharacterEntryState;
+			cs.motivations = toList(cs.motivations);
+		}
+		if (type === 'faction') {
+			const fs = state as FactionEntryState;
+			fs.knownMembers = toList(factionMembers);
+			fs.territory = toList(factionTerritory);
+			fs.goals = parseFactionGoals(factionGoalsText);
+			fs.resources = { ...factionResources };
+		}
+		return state;
+	}
+
 	async function handleSave() {
+		const preparedState = prepareStateForSave();
 		const updates: Partial<Entry> = {
 			name,
 			type,
@@ -120,7 +184,7 @@
 				keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
 				priority: injectionPriority,
 			},
-			state: { ...entryState, type },
+			state: preparedState,
 			updatedAt: Date.now(),
 		};
 		await updateLorebookEntry(entry.id, updates);
@@ -153,7 +217,7 @@
 					keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
 					priority: injectionPriority,
 				},
-				state: { ...entryState, type },
+				state: prepareStateForSave(),
 			};
 			refinePreview = await ai.entryRefinement.refine(liveEntry, refineInstruction);
 		} catch (e) {
@@ -490,9 +554,47 @@
 							</select>
 						</div>
 						<div class="space-y-1">
-							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Territory (comma-separated)</label>
-							<input type="text" bind:value={entryState.territory} placeholder="Regions this faction controls..."
+							<label for="faction-territory-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Territory (comma-separated)</label>
+							<input id="faction-territory-input" type="text" bind:value={factionTerritory} placeholder="Regions, holdings, routes..."
 								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+						</div>
+						<div class="space-y-1">
+							<label for="faction-members-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Known Members (comma-separated)</label>
+							<input id="faction-members-input" type="text" bind:value={factionMembers} placeholder="Character names or entry IDs..."
+								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+						</div>
+						<div class="grid grid-cols-2 gap-3">
+							<div class="space-y-1">
+								<label for="faction-military-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Military</label>
+								<input id="faction-military-input" type="range" bind:value={factionResources.military} min="0" max="100" step="5" class="w-full accent-[var(--color-gold-400)]" />
+								<div class="text-center text-xs text-[var(--text-muted)]">{factionResources.military}</div>
+							</div>
+							<div class="space-y-1">
+								<label for="faction-wealth-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Wealth</label>
+								<input id="faction-wealth-input" type="range" bind:value={factionResources.wealth} min="0" max="100" step="5" class="w-full accent-[var(--color-gold-400)]" />
+								<div class="text-center text-xs text-[var(--text-muted)]">{factionResources.wealth}</div>
+							</div>
+							<div class="space-y-1">
+								<label for="faction-influence-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Influence</label>
+								<input id="faction-influence-input" type="range" bind:value={factionResources.influence} min="0" max="100" step="5" class="w-full accent-[var(--color-gold-400)]" />
+								<div class="text-center text-xs text-[var(--text-muted)]">{factionResources.influence}</div>
+							</div>
+							<div class="space-y-1">
+								<label for="faction-information-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Information</label>
+								<input id="faction-information-input" type="range" bind:value={factionResources.information} min="0" max="100" step="5" class="w-full accent-[var(--color-gold-400)]" />
+								<div class="text-center text-xs text-[var(--text-muted)]">{factionResources.information}</div>
+							</div>
+							<div class="space-y-1">
+								<label for="faction-morale-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Morale</label>
+								<input id="faction-morale-input" type="range" bind:value={factionResources.morale} min="0" max="100" step="5" class="w-full accent-[var(--color-gold-400)]" />
+								<div class="text-center text-xs text-[var(--text-muted)]">{factionResources.morale}</div>
+							</div>
+						</div>
+						<div class="space-y-1">
+							<label for="faction-goals-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Goals</label>
+							<textarea id="faction-goals-input" bind:value={factionGoalsText} rows="4" placeholder="One per line: Secure the trade road | 8 | 20 | economic | before winter"
+								class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"></textarea>
+							<p class="text-[10px] text-[var(--text-muted)]">Format: description | priority 1-10 | progress 0-100 | type | deadline.</p>
 						</div>
 					</div>
 

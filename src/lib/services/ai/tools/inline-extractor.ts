@@ -9,11 +9,12 @@
 
 import type { ToolCall } from '../sdk/generate';
 
-const KNOWN_TOOLS = new Set(['update_world_state', 'query_lore', 'create_lore_entry']);
+const KNOWN_TOOLS = new Set(['update_world_state', 'search_wiki', 'refresh_plot_momentum']);
 
 const UPDATE_WORLD_STATE_KEYS = new Set([
-	'characters', 'locations', 'items', 'time_delta', 'mood',
+	'characters', 'locations', 'items', 'time_delta', 'mood', 'player_reputation',
 	'conversations', 'relationships', 'story_beats', 'meter_changes', 'agreements',
+	'lorebook_entries',
 ]);
 
 export interface ExtractionResult {
@@ -41,7 +42,15 @@ export function extractInlineToolCalls(prose: string): ExtractionResult {
 					const parsed = tryParseLooseJson(raw);
 					args[pm[1]] = parsed !== undefined ? parsed : raw;
 				}
-				toolCalls.push({ name, arguments: args });
+				// Canonicalize malformed names (e.g. GLM 5.1 emits "update" instead
+				// of "update_world_state") when the args clearly belong to a known tool.
+				const canonical = KNOWN_TOOLS.has(name)
+					? name
+					: looksLikeUpdateWorldState(args) ? 'update_world_state' : name;
+				if (canonical !== name) {
+					console.warn(`[inline-extractor] Renaming malformed inline tool call "${name}" → "${canonical}"`);
+				}
+				toolCalls.push({ name: canonical, arguments: args });
 			}
 			return '';
 		},
@@ -128,7 +137,16 @@ function balancedBraceSlice(s: string, from: number): string | null {
 // rather than the model writing JSON for flavor (e.g. inventory listings).
 const UPDATE_WORLD_STATE_SENTINELS = new Set([
 	'time_delta', 'meter_changes', 'story_beats', 'agreements', 'relationships',
+	'player_reputation',
+	'lorebook_entries',
 ]);
+
+function looksLikeUpdateWorldState(args: Record<string, any>): boolean {
+	const keys = Object.keys(args);
+	if (keys.some(k => UPDATE_WORLD_STATE_SENTINELS.has(k))) return true;
+	const knownKeyCount = keys.reduce((n, k) => n + (UPDATE_WORLD_STATE_KEYS.has(k) ? 1 : 0), 0);
+	return knownKeyCount >= 2;
+}
 
 function pushIfTool(obj: unknown, out: ToolCall[]): boolean {
 	if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
