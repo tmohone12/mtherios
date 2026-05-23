@@ -1,15 +1,15 @@
 <script lang="ts">
-	import { Plus, X, Search, Upload, Trash2, Wand2, Loader2, List, LayoutList, Stethoscope } from 'lucide-svelte';
+	import { Plus, X, Search, Upload, Trash2, Sparkles, Loader2, List, LayoutList, Stethoscope } from 'lucide-svelte';
 	import { getAllStories, getLorebookEntries, createLorebookEntry, updateLorebookEntry, deleteLorebookEntry, getEntryRelationships, getChapters } from '$lib/services/database';
 	import { uuid } from '$lib/utils/uuid';
 	import { ai } from '$lib/services/ai';
+	import { story } from '$lib/stores/story.svelte';
 	import LorebookImport from './LorebookImport.svelte';
 	import SeedImport from './SeedImport.svelte';
 	import EntryDetailModal from './EntryDetailModal.svelte';
 	import WikiLintReport from './WikiLintReport.svelte';
 	import type { Story, Entry, EntryType } from '$lib/types';
-	import type { VaultAction } from '$lib/services/ai/sdk/schemas/vault';
-	import type { WikiLintResult } from '$lib/services/ai/sdk/schemas/wikiLint';
+	import type { WikiLintResult, WikiMissingEntry, WikiTextFix } from '$lib/services/ai/sdk/schemas/wikiLint';
 	import { onMount } from 'svelte';
 
 	let stories = $state<Story[]>([]);
@@ -32,13 +32,7 @@
 
 	// Detail modal
 	let detailEntry = $state<Entry | null>(null);
-
-	// Vault
-	let vaultQuery = $state('');
-	let vaultLoading = $state(false);
-	let vaultReasoning = $state('');
-	let vaultActions = $state<VaultAction[]>([]);
-	let vaultError = $state('');
+	let detailInitialRefineOpen = $state(false);
 
 	// Create form
 	let newName = $state('');
@@ -134,6 +128,90 @@
 		lintError = null;
 	}
 
+	function normalizeName(value: string): string {
+		return value.trim().toLowerCase();
+	}
+
+	function findEntryByName(name: string): Entry | undefined {
+		const key = normalizeName(name);
+		return entries.find(entry =>
+			normalizeName(entry.name) === key ||
+			(entry.aliases ?? []).some(alias => normalizeName(alias) === key)
+		);
+	}
+
+	function keywordsForMissing(entry: WikiMissingEntry): string[] {
+		return Array.from(new Set([
+			entry.suggestedName,
+			...entry.suggestedName.split(/\s+/),
+			entry.suggestedType,
+		].map(k => k.trim()).filter(k => k.length > 2))).slice(0, 8);
+	}
+
+	async function createMissingLintEntry(missing: WikiMissingEntry) {
+		if (!selectedStoryId) throw new Error('Select a story before creating wiki entries.');
+		if (findEntryByName(missing.suggestedName)) return;
+		const now = Date.now();
+		const entry: Entry = {
+			id: uuid(),
+			storyId: selectedStoryId,
+			branchId: null,
+			name: missing.suggestedName.trim(),
+			type: missing.suggestedType,
+			description: `${missing.reason}\n\nFirst flagged by wiki health check from: ${missing.mentionedIn}`,
+			hiddenInfo: null,
+			aliases: [],
+			state: buildDefaultState(missing.suggestedType),
+			adventureState: null,
+			creativeState: null,
+			injection: {
+				mode: 'keyword',
+				keywords: keywordsForMissing(missing),
+				priority: 60,
+			},
+			firstMentioned: null,
+			lastMentioned: null,
+			mentionCount: 0,
+			createdBy: 'ai',
+			createdAt: now,
+			updatedAt: now,
+			loreManagementBlacklisted: false,
+		};
+		await createLorebookEntry(entry);
+		entries = [...entries, entry];
+		if (story.currentStory?.id === selectedStoryId) {
+			story.lorebookEntries = [...story.lorebookEntries, entry];
+		}
+	}
+
+	async function applyLintTextFix(fix: WikiTextFix) {
+		const target = findEntryByName(fix.entryName);
+		if (!target) throw new Error(`Could not find wiki entry "${fix.entryName}".`);
+
+		const updates: Partial<Entry> = { updatedAt: Date.now() };
+		if (fix.field === 'name') {
+			if (target.name !== fix.originalText) {
+				throw new Error(`Name fix skipped: "${fix.originalText}" no longer matches ${target.name}.`);
+			}
+			updates.name = fix.correctedText;
+		} else {
+			const current = fix.field === 'description' ? target.description : (target.hiddenInfo ?? '');
+			if (!current.includes(fix.originalText)) {
+				throw new Error(`Text fix skipped: original text was not found in ${target.name}.`);
+			}
+			const replaced = current.replace(fix.originalText, fix.correctedText);
+			if (fix.field === 'description') updates.description = replaced;
+			else updates.hiddenInfo = replaced || null;
+		}
+
+		await updateLorebookEntry(target.id, updates);
+		const updated = { ...target, ...updates };
+		entries = entries.map(entry => entry.id === target.id ? updated : entry);
+		if (story.currentStory?.id === target.storyId) {
+			story.lorebookEntries = story.lorebookEntries.map(entry => entry.id === target.id ? updated : entry);
+		}
+	}
+
 	async function handleCreate() {
 		if (!selectedStoryId || !newName.trim()) return;
 		const now = Date.now();
@@ -176,14 +254,16 @@
 	// detail modal is open. Cleared whenever the modal closes.
 	let detailNavStack = $state<Entry[]>([]);
 
-	function openDetail(entry: Entry) {
+	function openDetail(entry: Entry, refineOpen = false) {
 		detailNavStack = [];
+		detailInitialRefineOpen = refineOpen;
 		detailEntry = entry;
 	}
 
 	function closeDetail() {
 		detailEntry = null;
 		detailNavStack = [];
+		detailInitialRefineOpen = false;
 	}
 
 	function navigateDetail(entryId: string) {
@@ -202,11 +282,23 @@
 
 	function handleDetailSave(updated: Entry) {
 		entries = entries.map(e => e.id === updated.id ? updated : e);
+		// Sync the live story store too — without this, the narrator, executor,
+		// and #sectionCharacters keep reading the pre-edit version until the
+		// story is reloaded. Only sync when the panel is showing the active
+		// story; editing a different story's lorebook must not stomp the live one.
+		if (story.currentStory?.id === updated.storyId) {
+			story.lorebookEntries = story.lorebookEntries.map(e =>
+				e.id === updated.id ? updated : e,
+			);
+		}
 		closeDetail();
 	}
 
 	function handleDetailDelete(id: string) {
 		entries = entries.filter(e => e.id !== id);
+		if (story.currentStory && selectedStoryId === story.currentStory.id) {
+			story.lorebookEntries = story.lorebookEntries.filter(e => e.id !== id);
+		}
 		closeDetail();
 	}
 
@@ -214,79 +306,9 @@
 		e.stopPropagation();
 		await deleteLorebookEntry(id);
 		entries = entries.filter(en => en.id !== id);
-	}
-
-	// ── Vault ──
-
-	async function handleVaultSubmit() {
-		if (!vaultQuery.trim() || vaultLoading) return;
-		vaultLoading = true;
-		vaultError = '';
-		vaultReasoning = '';
-		vaultActions = [];
-		try {
-			const result = await ai.vault.process(vaultQuery, entries);
-			vaultReasoning = result.reasoning ?? '';
-			vaultActions = result.actions;
-			if (result.actions.length === 0 && !result.reasoning) {
-				vaultReasoning = 'No changes needed.';
-			}
-		} catch (err) {
-			vaultError = err instanceof Error ? err.message : 'Vault request failed.';
-		} finally {
-			vaultLoading = false;
+		if (story.currentStory && selectedStoryId === story.currentStory.id) {
+			story.lorebookEntries = story.lorebookEntries.filter(en => en.id !== id);
 		}
-	}
-
-	async function applyVaultAction(action: VaultAction) {
-		if (!selectedStoryId) return;
-		if (action.action === 'create' && action.name) {
-			const entry: Entry = {
-				id: uuid(),
-				storyId: selectedStoryId,
-				branchId: null,
-				name: action.name,
-				type: (action.type as EntryType) || 'concept',
-				description: action.description ?? '',
-				hiddenInfo: null,
-				aliases: [],
-				state: buildDefaultState((action.type as EntryType) || 'concept'),
-				adventureState: null,
-				creativeState: null,
-				injection: {
-					mode: 'keyword',
-					keywords: action.keywords ?? [action.name.toLowerCase()],
-					priority: 100,
-				},
-				firstMentioned: null,
-				lastMentioned: null,
-				mentionCount: 0,
-				createdBy: 'ai',
-				createdAt: Date.now(),
-				updatedAt: Date.now(),
-				loreManagementBlacklisted: false,
-			};
-			await createLorebookEntry(entry);
-			entries = [...entries, entry];
-		} else if (action.action === 'update' && action.entryId) {
-			const updates: Partial<Entry> = { updatedAt: Date.now() };
-			if (action.description) updates.description = action.description;
-			if (action.keywords) updates.injection = { mode: 'keyword', keywords: action.keywords, priority: 100 };
-			await updateLorebookEntry(action.entryId, updates);
-			entries = entries.map(e => e.id === action.entryId ? { ...e, ...updates } : e);
-		} else if (action.action === 'delete' && action.entryId) {
-			await deleteLorebookEntry(action.entryId);
-			entries = entries.filter(e => e.id !== action.entryId);
-		}
-		// Remove applied action from list
-		vaultActions = vaultActions.filter(a => a !== action);
-	}
-
-	function dismissVault() {
-		vaultQuery = '';
-		vaultReasoning = '';
-		vaultActions = [];
-		vaultError = '';
 	}
 
 	function buildDefaultState(type: EntryType): Entry['state'] {
@@ -305,7 +327,7 @@
 	<!-- Header -->
 	<div class="border-b border-[var(--border-primary)] px-4 py-4">
 		<div class="flex items-center justify-between mb-3">
-			<h2 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Lorebook</h2>
+			<h2 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Wiki</h2>
 			<div class="flex gap-2">
 				<button onclick={runWikiLint} disabled={!selectedStoryId || entries.length === 0 || lintLoading}
 					class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-[var(--text-muted)] hover:text-amber-400 hover:bg-amber-500/8 disabled:opacity-40"
@@ -342,7 +364,7 @@
 		<!-- Search -->
 		<div class="relative">
 			<Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-			<input type="text" bind:value={searchQuery} placeholder="Search entries..."
+			<input type="text" bind:value={searchQuery} placeholder="Search wiki entries..."
 				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] py-2 pl-9 pr-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
 		</div>
 
@@ -388,54 +410,6 @@
 				</button>
 			</div>
 		</div>
-	</div>
-
-	<!-- Vault bar -->
-	<div class="border-b border-[var(--border-primary)] px-4 py-3">
-		<div class="flex gap-2">
-			<div class="relative flex-1">
-				<Wand2 class="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
-				<input type="text" bind:value={vaultQuery}
-					placeholder="Ask the vault... &quot;Add a fire mage named Kael&quot;"
-					class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] py-2 pl-9 pr-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
-					onkeydown={(e) => { if (e.key === 'Enter') handleVaultSubmit(); }} />
-			</div>
-			<button onclick={handleVaultSubmit} disabled={vaultLoading || !vaultQuery.trim()}
-				class="rounded-lg bg-[rgba(212,168,83,0.12)] px-3 py-2 text-xs text-[var(--text-accent)] hover:bg-[rgba(212,168,83,0.2)] disabled:opacity-40">
-				{#if vaultLoading}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}Ask{/if}
-			</button>
-		</div>
-
-		{#if vaultError}
-			<div class="mt-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-400">{vaultError}</div>
-		{/if}
-
-		{#if vaultReasoning}
-			<div class="mt-2 rounded-lg bg-[var(--bg-primary)] px-3 py-2 text-xs text-[var(--text-muted)] leading-relaxed">
-				{vaultReasoning}
-			</div>
-		{/if}
-
-		{#if vaultActions.length > 0}
-			<div class="mt-2 space-y-1.5">
-				{#each vaultActions as action}
-					<div class="flex items-center justify-between rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
-						<div class="flex-1">
-							<span class="mr-1.5 rounded bg-[var(--bg-primary)] px-1.5 py-0.5 text-[10px] uppercase text-[var(--text-muted)]">{action.action}</span>
-							<span class="text-xs text-[var(--text-primary)]">{action.name ?? action.entryId}</span>
-							{#if action.reason}
-								<span class="ml-1 text-[10px] text-[var(--text-muted)]">— {action.reason}</span>
-							{/if}
-						</div>
-						<div class="flex gap-1.5">
-							<button onclick={() => applyVaultAction(action)} class="rounded bg-emerald-500/20 px-2 py-1 text-[10px] font-medium text-emerald-400 hover:bg-emerald-500/30">Apply</button>
-							<button onclick={() => vaultActions = vaultActions.filter(a => a !== action)} class="rounded bg-[var(--bg-primary)] px-2 py-1 text-[10px] text-[var(--text-muted)]">Skip</button>
-						</div>
-					</div>
-				{/each}
-				<button onclick={dismissVault} class="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)]">Dismiss all</button>
-			</div>
-		{/if}
 	</div>
 
 	<!-- Import section -->
@@ -486,7 +460,7 @@
 		{#if !selectedStoryId}
 			<p class="py-10 text-center text-sm text-[var(--text-muted)]">Create a story first to add lore entries.</p>
 		{:else if filtered.length === 0}
-			<p class="py-10 text-center text-sm text-[var(--text-muted)]">{searchQuery || typeFilter !== 'all' ? 'No matches.' : 'No entries yet. Add one above.'}</p>
+			<p class="py-10 text-center text-sm text-[var(--text-muted)]">{searchQuery || typeFilter !== 'all' ? 'No matches.' : 'No wiki entries yet. Add one above.'}</p>
 		{:else if viewMode === 'index'}
 			<div class="space-y-4">
 				{#each entryTypes as t}
@@ -545,11 +519,18 @@
 									<span class="rounded-md bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-400">Protected</span>
 								{/if}
 							</div>
-							<button onclick={(e) => handleDelete(entry.id, e)}
-								class="rounded p-1 text-[var(--text-muted)] hover:text-red-400"
-								title="Delete entry">
-								<Trash2 class="h-3.5 w-3.5" />
-							</button>
+							<div class="flex items-center gap-1">
+								<button onclick={(e) => { e.stopPropagation(); openDetail(entry, true); }}
+									class="rounded p-1 text-[var(--text-muted)] hover:text-amber-400"
+									title="Refine with AI">
+									<Sparkles class="h-3.5 w-3.5" />
+								</button>
+								<button onclick={(e) => handleDelete(entry.id, e)}
+									class="rounded p-1 text-[var(--text-muted)] hover:text-red-400"
+									title="Delete entry">
+									<Trash2 class="h-3.5 w-3.5" />
+								</button>
+							</div>
 						</div>
 						{#if entry.description}
 							<p class="mt-1.5 text-xs leading-relaxed text-[var(--text-muted)] line-clamp-2">{entry.description}</p>
@@ -589,10 +570,18 @@
 		onNavigate={navigateDetail}
 		canGoBack={detailNavStack.length > 0}
 		onBack={navigateBack}
+		initialRefineOpen={detailInitialRefineOpen}
 	/>
 {/if}
 
 <!-- Wiki Lint Report -->
 {#if lintOpen}
-	<WikiLintReport result={lintResult} loading={lintLoading} error={lintError} onClose={closeLint} />
+	<WikiLintReport
+		result={lintResult}
+		loading={lintLoading}
+		error={lintError}
+		onClose={closeLint}
+		onCreateMissingEntry={createMissingLintEntry}
+		onApplyTextFix={applyLintTextFix}
+	/>
 {/if}

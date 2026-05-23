@@ -74,6 +74,14 @@ export function createProviderFromProfile(profile: APIProfile, presetId: string,
 				fetch,
 			});
 
+		case 'google-agent-platform':
+			return createOpenAICompatible({
+				name: 'google-agent-platform',
+				apiKey: profile.apiKey || 'google-adc',
+				baseURL: baseURL ?? PROVIDERS['google-agent-platform'].baseUrl,
+				fetch,
+			});
+
 		case 'deepseek':
 			return createOpenAICompatible({
 				name: 'deepseek',

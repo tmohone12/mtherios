@@ -9,7 +9,7 @@
 import { BaseAIService } from '../BaseAIService';
 import { loreManagementResultSchema, type LoreManagementResult } from '../sdk/schemas/lorebook';
 import { createLogger } from '../core/config';
-import type { Entry, Chapter, Arc, CharacterEntryState } from '$lib/types';
+import type { Entry, Chapter, Arc, CharacterEntryState, FactionEntryState } from '$lib/types';
 
 const log = createLogger('LoreManagement');
 
@@ -72,6 +72,11 @@ export class LoreManagementService extends BaseAIService {
 				if (cs?.bio) line += ` [Bio exists]`;
 				if (cs?.motivations?.length) line += ` [Motivations: ${cs.motivations.join('; ')}]`;
 				if (cs?.personality) line += ` [Personality exists]`;
+			} else if (e.type === 'faction') {
+				const fs = e.state as FactionEntryState;
+				if (fs?.knownMembers?.length) line += ` [Members: ${fs.knownMembers.length}]`;
+				if (fs?.goals?.length) line += ` [Goals: ${fs.goals.map(g => g.description).join('; ')}]`;
+				if (fs?.resources) line += ` [Resources exist]`;
 			}
 			return line;
 		}).join('\n');
@@ -108,6 +113,14 @@ ${existingList || '(empty lorebook)'}
   - Include these ONLY for character type entries. Omit for other types.
   - On first enrichment, write fresh. On subsequent updates, revise based on new evidence.
 
+• For FACTION entries: keep operational state together when summaries confirm it:
+  - knownMembers: named characters who belong to, serve, lead, command, or publicly represent the faction
+  - goals: concrete faction objectives with priority 1-10, progress 0-100, type, and optional deadline
+  - resources: relative 0-100 scores for military, wealth, influence, information, and morale
+  - disposition: aggressive, defensive, scheming, neutral, or desperate
+  - territory: holdings, regions, routes, or institutions controlled
+  - Include only confirmed or strongly repeated information. Omit unknown scores rather than inventing them.
+
 • merge: Combine two entries that clearly refer to the SAME entity (e.g., "The Stranger" revealed to be "Lord Kael")
   - Provide: entryId of the entry to KEEP (the target), and name of the entry to merge INTO it
   - Only merge when confirmed across chapter summaries
@@ -131,7 +144,7 @@ ${existingList || '(empty lorebook)'}
 
 Respond with JSON:
 {
-  "updates": [{ "action": "create"|"update"|"merge"|"archive", "entryId": string|null, "name": string, "type": "character"|"location"|"item"|"faction"|"concept"|"event", "description": string, "keywords": string[], "reason": string, "bio": string|null, "motivations": string[]|null, "personality": string|null }],
+  "updates": [{ "action": "create"|"update"|"merge"|"archive", "entryId": string|null, "name": string, "type": "character"|"location"|"item"|"faction"|"concept"|"event", "description": string, "keywords": string[], "reason": string, "bio": string|null, "motivations": string[]|null, "personality": string|null, "knownMembers": string[]|null, "goals": array|null, "resources": object|null, "disposition": string|null, "territory": string[]|null }],
   "summary": string
 }
 

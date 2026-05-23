@@ -3,7 +3,7 @@
  * Global application state: current story, onboarding, navigation.
  */
 
-import { getSetting } from '$lib/services/database';
+import { deleteSetting, getSetting, setSetting } from '$lib/services/database';
 
 class AppStore {
 	onboardingComplete = $state(false);
@@ -39,14 +39,17 @@ class AppStore {
 		this.onboardingComplete = true;
 		this.currentStoryId = storyId;
 		this.showWizard = false;
+		setSetting('lastStoryId', storyId).catch(e => console.warn('[App] Failed to persist last story:', e));
 	}
 
 	openStory(storyId: string) {
 		this.currentStoryId = storyId;
+		setSetting('lastStoryId', storyId).catch(e => console.warn('[App] Failed to persist last story:', e));
 	}
 
 	closeStory() {
 		this.currentStoryId = null;
+		deleteSetting('lastStoryId').catch(e => console.warn('[App] Failed to clear last story:', e));
 	}
 }
 

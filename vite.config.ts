@@ -6,6 +6,7 @@ export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		host: '0.0.0.0',
+		allowedHosts: ['raijinai.taile6cbff.ts.net'],
 		proxy: {
 			'/api/anthropic': {
 				target: 'https://api.anthropic.com',

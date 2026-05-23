@@ -52,10 +52,33 @@ export interface Story {
   currentBranchId: string | null // Active branch (null = main branch for legacy stories)
   currentBgImage: string | null
   headerPrompt: string | null // Per-story preamble: tone, rules, and narrative guidelines
+  /** Compact public/social reputation note for the protagonist; injected as its own prompt section. */
+  playerReputation?: string | null
+  /** Backend canonical story id. When set, IndexedDB is an offline cache for this story. */
+  serverStoryId?: string | null
+  /** Last backend version applied to the local cache. */
+  serverVersion?: number | null
+  /** Sync mode/status for backend-backed memory. */
+  syncStatus?: 'local-only' | 'syncing' | 'synced' | 'conflict' | 'offline' | null
   lastWorldSimDay: number | null // Total in-world days when world sim last ran
-  compactedLore: string | null // Button-controlled world state block injected after headerPrompt
-  compactedLoreHistory: string[] | null // Version history for undo, max 10 entries
+  /** @deprecated CompactionService retired — `update_world_state` tool covers this. Field kept for back-compat with existing IndexedDB rows; not written by current code. */
+  compactedLore: string | null
+  /** @deprecated See compactedLore. */
+  compactedLoreHistory: string[] | null
   meters: Meter[] | null // Hidden/visible numeric tracks (sanity, morality, reputation...)
+}
+
+export interface SyncOutboxOp {
+  id: string
+  storyId: string
+  serverStoryId: string | null
+  type: 'create_entry' | 'delete_entry' | 'turn_command' | 'state_correction' | 'pin_memory' | 'merge_memory' | 'archive_memory' | 'import_bundle'
+  payload: Record<string, unknown>
+  localVersion: number
+  status: 'pending' | 'pushing' | 'applied' | 'rejected'
+  error: string | null
+  createdAt: number
+  updatedAt: number
 }
 
 // Persistent retry state - lightweight version saved to database
@@ -429,6 +452,23 @@ export interface Chapter {
   createdAt: number
 }
 
+// StoryThread — structured plot thread with lifecycle
+export interface StoryThread {
+  id: string
+  storyId: string
+  description: string
+  status: 'open' | 'imminent' | 'stalled' | 'closed' | 'abandoned'
+  significance: 'minor' | 'moderate' | 'major' | 'critical'
+  sourceArcId: string | null
+  sourceChapterId: string | null
+  createdAt: number
+  updatedAt: number
+  closedAt: number | null
+  closureReason: string | null
+  relatedFactionIds: string[]
+  relatedCharacterNames: string[]
+}
+
 // Arc — condensed summary of multiple chapters
 export interface Arc {
   id: string
@@ -438,7 +478,9 @@ export interface Arc {
   summary: string
   keyPlotPoints: string[]
   characterArcs: Array<{ name: string; development: string }>
-  unresolvedThreads: string[]
+  unresolvedThreads: string[] // DEPRECATED: migrate to threadIds
+  threadIds: string[]
+  resolvedThreadIds: string[]
   emotionalProgression: string
   chapterIds: string[] // IDs of chapters condensed into this arc
   chapterRange: string // e.g. "1-5"
@@ -565,6 +607,11 @@ export interface CharacterEntryState extends BaseEntryState {
   bio?: string | null
   motivations?: string[] | null
   personality?: string | null
+  // Active pressures — circumstances tightening around this NPC that they
+  // will act on even when the player isn't watching. Short sentences.
+  // Examples: "being courted by a wealthy older merchant", "father has gambling debts",
+  // "wants revenge for a slain brother", "running out of coin".
+  pressures?: string[]
 }
 
 export interface RelationshipChange {
@@ -605,6 +652,22 @@ export interface ItemEntryState extends BaseEntryState {
   uses: { action: string; result: string; entryId: string }[]
 }
 
+/**
+ * Inter-faction relation. `standing` is the fast-moving current temperature;
+ * `affinity` is the slower-moving "trust" — a brittle alliance has high
+ * standing but low affinity. `history` is a capped log of recent shifts that
+ * F5 (loop closure) reads back into the worldsim AI's context.
+ *
+ * Stored values may also still be plain `number` from pre-F4 stories — code
+ * that reads `interFactionRelations[name]` MUST normalize through `getRel()`
+ * (see WorldSimulationService / story.svelte.ts).
+ */
+export interface FactionRelation {
+  standing: number // -100..100, fast-moving
+  affinity: number // -100..100, slow-moving "trust"
+  history?: { event: string; delta: number; chapter: number }[] // capped at last 5
+}
+
 // Faction-specific state
 export interface FactionEntryState extends BaseEntryState {
   type: 'faction'
@@ -615,7 +678,11 @@ export interface FactionEntryState extends BaseEntryState {
   goals?: FactionGoal[]
   resources?: FactionResources
   disposition?: 'aggressive' | 'defensive' | 'scheming' | 'neutral' | 'desperate'
-  interFactionRelations?: Record<string, number> // factionName → standing (-100 to 100)
+  /**
+   * factionName → relation. Pre-F4 stories store a `number` (legacy standing-only).
+   * Post-F4 writes always emit `FactionRelation`. Use `normalizeRelation()` to read.
+   */
+  interFactionRelations?: Record<string, FactionRelation | number>
   territory?: string[] // Region/location names this faction controls
   lastActionChapter?: number // Chapter number when faction last acted (for cadence tracking)
 }
@@ -762,6 +829,7 @@ export type ProviderType =
   | 'mistral' // @ai-sdk/mistral
   | 'google-ai-studio' // OpenAI-compatible at generativelanguage.googleapis.com
   | 'google-vertex' // OpenAI-compatible at Vertex AI endpoint
+  | 'google-agent-platform' // OpenAI-compatible Gemini Enterprise Agent Platform via ADC proxy
   | 'anthropic-proxy' // Local proxy for Claude subscription users
   | 'kimi' // Moonshot AI — Kimi K2 family, OpenAI-compatible
 
@@ -838,7 +906,14 @@ export interface UISettings {
   postChapterBuffer: number
   maxPrevChaptersInSummary: number
   chaptersPerArc: number
+  retrievedChapterLimit: number
+  retrievedLoreEntryLimit: number
+  conversationMemoryLimit: number
+  proceduralMemoryLimit: number
+  backendMemoryTokenBudget: number
   snapshotTokenCap: number // 0 = unlimited (context window is the limit)
+  /** Route online turns through backend canon when the story is bound to a server story id. */
+  serverAuthoritativeTurns?: boolean
 }
 
 export interface UpdateSettings {
@@ -1301,6 +1376,53 @@ export interface FactionActionRecord {
   chapterNumber: number | null
   status: 'active' | 'resolved' | 'superseded'
   createdAt: number
+}
+
+/**
+ * A staged plan owned by an antagonist faction/NPC or by the player.
+ * Birthed by `update_world_state` story beats (antagonist schemes) or by
+ * the player declaring intent via /plan or the Declare Plan modal.
+ * Stages advance on the world clock (time conditions) or on player acts.
+ * When a stage matures, its `hook` is injected into the narrator system
+ * prompt — forcing weaker models to deliver the beat instead of vibing
+ * past it.
+ */
+export interface Scheme {
+  id: string
+  storyId: string
+
+  ownerType: 'faction' | 'character' | 'player'
+  ownerEntryId: string | null // null for player schemes
+  ownerName: string // display name for prompt injection
+
+  goal: string
+  trigger: string // what action birthed this scheme (free-text)
+  triggerChapter: number | null
+  triggerEntryId: string | null
+
+  stages: SchemeStage[]
+  currentStageIndex: number
+  pressure: number // 0..100 — scales narrative intensity
+
+  status: 'incubating' | 'active' | 'climaxing' | 'resolved' | 'foiled' | 'abandoned'
+  secrecy: 'secret' | 'rumored' | 'known' // does the player know about it?
+
+  /** In-world day when the current time-conditioned stage should advance. Null when not time-gated. */
+  nextTickAtDay: number | null
+
+  branchId: string | null // null = main branch
+  createdAt: number
+  updatedAt: number
+}
+
+export interface SchemeStage {
+  index: number
+  label: string // e.g. "gather allies", "forge the letter", "strike at feast"
+  hook: string // narrative beat to inject when stage activates
+  condition: 'time' | 'player-location' | 'player-act' | 'prerequisite'
+  conditionPayload: Record<string, unknown> // shape depends on condition
+  completed: boolean
+  completedAt: number | null
 }
 
 /**

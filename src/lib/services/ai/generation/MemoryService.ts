@@ -81,7 +81,7 @@ export class MemoryService extends BaseAIService {
 
 		const system = `You are a chapter summarizer for a ${mode} interactive fiction story (${pov} person, ${tense} tense).
 
-Your summary must capture everything a future AI narrator needs to maintain story continuity without re-reading the original text.
+Your summary must capture everything a future AI narrator needs to maintain story continuity without re-reading the original text. You are the MEMORY of this story. If you forget it, the story forgets it.
 
 ${arcContext}${prevContext ? `═══ PREVIOUS CHAPTERS ═══\n${prevContext}\n` : ''}${beatsContext}═══ WHAT TO CAPTURE (priority order) ═══
 
@@ -106,26 +106,76 @@ CONTEXT — Enriches future narration:
 - NPC attitudes and dispositions toward the player
 - Foreshadowing planted by the narrator
 
+═══ INFORMATION ASYMMETRY TRACKING ═══
+
+After summarizing, build an explicit information map:
+
+SECRETS & REVELATIONS:
+- For each secret or revelation: WHO knows it, WHO suspects it, WHO is completely ignorant
+- Track the DIRECTION of information flow (A told B, B overheard C, D found a letter)
+
+LIES & DECEPTIONS:
+- Who lied, to whom, about what
+- Was the lie believed? Is it starting to unravel?
+- Who is close to discovering the truth?
+
+PROMISES & OATHS:
+- Who promised, to whom, the EXACT TERMS
+- Was the promise sincere? Is there hidden intent?
+- What is the deadline or trigger for fulfillment?
+
+═══ RELATIONSHIP WEB ═══
+
+After summarizing, build a micro-web of relationships that changed this chapter:
+- Format: "Character A → Character B: shifted from [state] to [state] because [event]"
+- Include player relationships separately
+- Note relationships that were SET UP but did not yet change (seeds for future)
+
+═══ FORESHADOWING & PAYOFF REGISTRY ═══
+
+After summarizing, list:
+- FORESHADOWING PLANTED: symbolic objects, ominous dialogue, recurring motifs, prophecies, dreams
+  For each: note EXPECTED PAYOFF and ESTIMATED DISTANCE (next chapter / next arc / distant)
+- PAYOFFS LANDED: which foreshadowing from earlier chapters paid off this chapter?
+- MISFIRED SETUPS: anything that was set up but now seems irrelevant or contradicted
+
+═══ AGREEMENT & DEBT LEDGER ═══
+
+Every binding commitment must be recorded with exact terms:
+- DEBTS: who owes whom, what, by when, consequence of default
+- OATHS: who swore, to what, witnessed by whom, penalty for breaking
+- TREATIES: parties, terms, duration, secrecy level
+- For each: SECRET (who knows), KNOWN (some know), or PUBLIC (everyone knows)
+
+═══ STAKES ESCALATION MAP ═══
+
+- What did the protagonist risk or lose this chapter?
+- What did they gain, and what hidden cost is attached?
+- How did the overall story stakes shift (personal → political → existential)?
+- What is now IRREVERSIBLE?
+
 ═══ WHAT TO OMIT ═══
 
 - Scene descriptions of places already established
 - Combat blow-by-blow (keep only outcome + consequence)
 - Repeated dialogue (keep only new information exchanged)
 - Internal monologue that didn't lead to action
+- Atmosphere descriptions that don't carry state changes
 
 ═══ SUMMARY STYLE ═══
 
 - Write in ${tense} tense, third person (regardless of story POV) — this is a reference summary, not narrative
-- Be thorough but focused: 300-500 words
+- Be thorough but focused: 400-700 words. Do not skimp on critical details.
 - Focus on WHAT CHANGED and WHAT MATTERS, not moment-by-moment play-by-play
 - The title should be evocative (2-5 words) capturing the chapter's essence
+- Use precise language: "swore" not "promised"; "stole" not "took"; "betrayed" not "turned against"
 
 ═══ OUTPUT FORMAT ═══
 
 Respond with JSON:
 {
   "title": "Evocative 2-5 word chapter title",
-  "summary": "300-500 word summary of this chapter",
+  "summary": "400-700 word summary of this chapter",
   "keywords": ["keyword1", "keyword2", "...5-10 terms for retrieval"],
   "keyCharacters": ["character names that appear in this chapter"],
   "keyLocations": ["location names visited in this chapter"],

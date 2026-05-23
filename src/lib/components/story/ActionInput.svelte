@@ -1,12 +1,14 @@
 <script lang="ts">
-	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, Square, Loader2, Dices } from 'lucide-svelte';
+	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, Square, Loader2, Dices, Target, X } from 'lucide-svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { streamNarrative, continueAfterTools, type ToolCall, type ToolRoundResult } from '$lib/services/ai/sdk/generate';
+	import { ai } from '$lib/services/ai';
 	import { executeWorldUpdate } from '$lib/services/ai/tools/generate-with-tools';
-	import { executeToolCall } from '$lib/services/ai/tools/executor';
+	import { executeToolCall, runSchemeEvaluation } from '$lib/services/ai/tools/executor';
 	import { extractInlineToolCalls } from '$lib/services/ai/tools/inline-extractor';
-	import { GM_TOOLS } from '$lib/services/ai/tools/schemas';
+	import { GM_TOOLS, worldStateUpdateSchema, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
+	import { declarePlayerScheme } from '$lib/services/ai/scheme/SchemeService';
 	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
 
@@ -26,6 +28,12 @@
 	let isGenerating = $state(false);
 	let abortController = $state<AbortController | null>(null);
 
+	// ── Player scheme declaration (Declare Plan modal) ──
+	let showPlanModal = $state(false);
+	let planText = $state('');
+	let planSubmitting = $state(false);
+	let planError = $state<string | null>(null);
+
 	// Listen for injected text from suggestion/choice chips
 	$effect(() => {
 		function onInject(e: Event) {
@@ -38,6 +46,31 @@
 
 	const isCreativeMode = $derived(story.storyMode === 'creative-writing');
 	const isAdventure = $derived(story.storyMode === 'adventure');
+
+	function getNarrativeRequestConfig() {
+		const config = settings.getServiceConfig('narrative');
+		return {
+			model: config.model || undefined,
+			temperature: config.temperature,
+			maxTokens: config.maxTokens,
+			profileId: config.profileId || undefined,
+		};
+	}
+
+	function narrativeSupportsInlineTools(): boolean {
+		return settings.getServiceProfile('narrative')?.providerType === 'anthropic';
+	}
+
+	function shouldUseBackendTurn(): boolean {
+		const profile = settings.getServiceProfile('narrative');
+		const provider = settings.getServiceProvider('narrative');
+		const configured = Boolean(profile && provider && (!provider.requiresApiKey || profile.apiKey));
+		return Boolean(
+			settings.uiSettings.serverAuthoritativeTurns &&
+			story.currentStory?.serverStoryId &&
+			configured,
+		);
+	}
 
 	const actionConfig: Record<ActionType, {
 		icon: typeof Wand2;
@@ -222,14 +255,17 @@
 			...conversationHistory,
 			{ role: 'assistant' as const, content: preText },
 		];
+		const narrativeConfig = getNarrativeRequestConfig();
 
 		const continuationStream = streamNarrative({
 			system: systemStable,
 			systemDynamic,
 			prompt: continuationPrompt,
 			messages: continuationMessages,
-			temperature: settings.narrativeSettings.temperature,
-			maxTokens: settings.narrativeSettings.maxTokens,
+			model: narrativeConfig.model,
+			temperature: narrativeConfig.temperature,
+			maxTokens: narrativeConfig.maxTokens,
+			profileId: narrativeConfig.profileId,
 			signal: abortController?.signal,
 			_service: 'narrative',
 		} as any);
@@ -246,7 +282,7 @@
 	}
 
 	async function handleSubmit() {
-		if (!inputValue.trim() || isGenerating || !story.currentStory) return;
+		if (!inputValue.trim() || isGenerating || !story.currentStory || story.hydratingWorld) return;
 
 		const rawInput = inputValue.trim();
 
@@ -254,6 +290,15 @@
 		if (rawInput.match(/^\/roll\s/i)) {
 			inputValue = '';
 			await handlePlayerRoll(rawInput);
+			return;
+		}
+
+		// /plan <free text> — declare a player scheme inline (no narrator turn).
+		const planMatch = rawInput.match(/^\/plan\s+([\s\S]+)$/i);
+		if (planMatch) {
+			const text = planMatch[1].trim();
+			inputValue = '';
+			await submitPlayerPlan(text);
 			return;
 		}
 
@@ -266,6 +311,11 @@
 		}
 
 		inputValue = '';
+
+		if (shouldUseBackendTurn()) {
+			const handled = await submitBackendAuthoritativeTurn(content);
+			if (handled) return;
+		}
 
 		// Add user action entry
 		await story.addEntry('user_action', content);
@@ -283,11 +333,63 @@
 			// models — frequently emit tool calls without prose, dropping the turn.
 			// They also don't honor cache_control, so the larger tool-attached
 			// prompt is pure overhead. Fall back to the post-stream classifier.
+			const narrativeConfig = getNarrativeRequestConfig();
 			const useInlineTools = isAdventure
-				&& settings.activeProfile?.providerType === 'anthropic';
+				&& narrativeSupportsInlineTools();
 
 			// ── Build orchestrator context: structured state snapshot + classifier-facing string ──
-			const stateSnapshot = await story.buildStateSnapshot();
+			const stateSnapshot = await story.buildStateSnapshot(content);
+
+			// ── Generate plot momentum for this turn ──
+			if (isAdventure) {
+				try {
+					const factionEntries = story.lorebookEntries.filter(e => e.type === 'faction');
+					const characterEntries = story.lorebookEntries.filter(e => e.type === 'character');
+					const recentFactionActions = story.factionActions.slice(-5);
+					const worldEventList = story.worldEvents.slice(-6).map(e => ({ name: e.name, description: e.description }));
+					const schemeText = story.schemes.length > 0
+						? story.schemes.map(s => `- ${s.ownerName} (${s.status}): ${s.goal.slice(0, 120)}`).join('\n')
+						: '';
+					const locationName = stateSnapshot.currentLocation?.name ?? '';
+					const tracker = story.currentStory?.timeTracker ?? null;
+
+					const pmResult = await ai.worldSim.generateMomentum(
+						stateSnapshot.chapters,
+						stateSnapshot.arcs,
+						story.entries,
+						factionEntries,
+						characterEntries,
+						story.entryRelationships,
+						stateSnapshot.threads,
+						stateSnapshot.activeAgreements,
+						worldEventList,
+						locationName,
+						schemeText,
+						tracker,
+						story.storyMode,
+						story.pov,
+						story.tense,
+						recentFactionActions,
+						[], // relationChangeLog — computed in service or passed if available
+					);
+					// Store in lastWorldSimResult as a partial update so #sectionPlotMomentum picks it up
+					story.lastWorldSimResult = {
+						...(story.lastWorldSimResult ?? {
+							plotInjection: null,
+							worldNarrative: '',
+							factionActions: [],
+							rumors: [],
+							worldTension: 0,
+							plotSeeds: [],
+							threadUpdates: [],
+						}),
+						plotMomentum: pmResult,
+					};
+				} catch (e) {
+					console.warn('[PlotMomentum] generation failed, falling back to no momentum', e);
+				}
+			}
+
 			const { stable: systemStable, dynamic: systemDynamic } = story.buildOrchestratorSystemBlocks(stateSnapshot, { useInlineTools });
 			const snapshotText = story.serializeSnapshotForClassifier(stateSnapshot);
 			const allHistory = story.buildConversationMessages();
@@ -298,7 +400,15 @@
 
 			const estimateTokens = (t: string) => Math.ceil(t.length / 4);
 			const historyTokens = conversationHistory.reduce((s, m) => s + estimateTokens(m.content), 0);
-			story.lastTierUsage = { snapshot: estimateTokens(snapshotText) };
+			const promptUsage = story.lastPromptSectionUsage ?? {};
+			story.lastTierUsage = {
+				snapshot: estimateTokens(snapshotText),
+				scene: (promptUsage.characters ?? 0) + (promptUsage.playerReputation ?? 0),
+				recent: (promptUsage.arcs ?? 0) + (promptUsage.chapters ?? 0) + (promptUsage.chapterIntro ?? 0),
+				world: (promptUsage.factions ?? 0) + (promptUsage.livingWorld ?? 0) + (promptUsage.schemes ?? 0) + (promptUsage.plotMomentum ?? 0) + (promptUsage.plotLedger ?? 0),
+				procedural: promptUsage.proceduralMemory ?? 0,
+				retrieved: (promptUsage.lore ?? 0) + (promptUsage.episodicMemory ?? 0) + (promptUsage.conversationMemory ?? 0) + (promptUsage.backendMemory ?? 0),
+			};
 			story.lastContextTotal = estimateTokens(systemStable) + estimateTokens(systemDynamic) + historyTokens + estimateTokens(userPrompt);
 
 			onStreamStart?.();
@@ -314,8 +424,10 @@
 				systemDynamic,
 				prompt: userPrompt,
 				messages: conversationHistory,
-				temperature: settings.narrativeSettings.temperature,
-				maxTokens: settings.narrativeSettings.maxTokens,
+				model: narrativeConfig.model,
+				temperature: narrativeConfig.temperature,
+				maxTokens: narrativeConfig.maxTokens,
+				profileId: narrativeConfig.profileId,
 				signal: abortController.signal,
 				tools: useInlineTools ? GM_TOOLS : undefined,
 				_service: 'narrative',
@@ -374,7 +486,7 @@
 
 				// State changed; rebuild the snapshot so the model's final
 				// narration sees the freshly-applied world updates.
-				const retrySnapshot = await story.buildStateSnapshot();
+				const retrySnapshot = await story.buildStateSnapshot(content);
 				const { stable: retryStable, dynamic: retryDynamic } = story.buildOrchestratorSystemBlocks(retrySnapshot);
 
 				try {
@@ -384,8 +496,10 @@
 							systemDynamic: retryDynamic,
 							prompt: userPrompt,
 							messages: conversationHistory,
-							temperature: settings.narrativeSettings.temperature,
-							maxTokens: settings.narrativeSettings.maxTokens,
+							model: narrativeConfig.model,
+							temperature: narrativeConfig.temperature,
+							maxTokens: narrativeConfig.maxTokens,
+							profileId: narrativeConfig.profileId,
 							signal: abortController.signal,
 							priorToolCalls: inlineToolCalls,
 							toolResults,
@@ -444,16 +558,36 @@
 				if (inlineToolCalls.length > 0) {
 					// Inline path: dispatch each tool call the narrator emitted —
 					// unless we already applied them in the prose-retry path above.
+					let worldStateArgs: WorldStateUpdate | null = null;
 					if (!toolCallsApplied) {
 						for (const tc of inlineToolCalls) {
 							try {
 								await executeToolCall(tc.name, tc.arguments);
+								if (tc.name === 'update_world_state') {
+									const parsed = worldStateUpdateSchema.safeParse(tc.arguments);
+									if (parsed.success) worldStateArgs = parsed.data;
+								}
 							} catch (e) {
 								const msg = `Tool ${tc.name}: ${e instanceof Error ? e.message : e}`;
 								worldUpdateErrors.push(msg);
 								console.error(`[Orchestrator] ${msg}`);
 							}
 						}
+					} else {
+						// Re-parse from prior tool calls for scheme evaluation gating.
+						for (const tc of inlineToolCalls) {
+							if (tc.name === 'update_world_state') {
+								const parsed = worldStateUpdateSchema.safeParse(tc.arguments);
+								if (parsed.success) worldStateArgs = parsed.data;
+							}
+						}
+					}
+					// Reactive scheme evaluation — gated on story beats / deaths / agreement breaks.
+					try {
+						const schemeErrs = await runSchemeEvaluation(fullResponse, snapshotText, worldStateArgs, abortController?.signal);
+						worldUpdateErrors.push(...schemeErrs);
+					} catch (e) {
+						worldUpdateErrors.push(`Scheme: ${e}`);
 					}
 					// Background jobs (chapters, arcs, lore management) still run.
 					try {
@@ -464,6 +598,7 @@
 					}
 				} else {
 					// Fallback path: separate classifier call extracts state from prose.
+					// executeWorldUpdate runs scheme evaluation internally.
 					const errs = await executeWorldUpdate(fullResponse, snapshotText, abortController?.signal);
 					worldUpdateErrors.push(...errs);
 				}
@@ -486,9 +621,103 @@
 		}
 	}
 
+	async function submitBackendAuthoritativeTurn(content: string): Promise<boolean> {
+		if (!story.currentStory?.serverStoryId) return false;
+		const narrativeConfig = getNarrativeRequestConfig();
+		const profile = settings.getServiceProfile('narrative');
+		const provider = settings.getServiceProvider('narrative');
+		if (!profile || !provider || (provider.requiresApiKey && !profile.apiKey)) return false;
+
+		isGenerating = true;
+		abortController = new AbortController();
+		onStreamStart?.();
+		try {
+			const response = await story.submitBackendTurn({
+				clientTurnId: crypto.randomUUID(),
+				playerText: content,
+				providerProfile: profile,
+				generation: {
+					model: narrativeConfig.model,
+					temperature: narrativeConfig.temperature,
+					maxTokens: narrativeConfig.maxTokens,
+				},
+				clientContext: {
+					sceneEntityIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
+					presentNpcIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
+					locationId: story.locations.find((location) => location.current)?.id ?? null,
+					threadIds: [],
+				},
+			});
+			if (response.narration.trim()) {
+				onStreamChunk?.(response.narration);
+			}
+			onStreamClear?.();
+			try {
+				const backgroundErrors = await runBackgroundJobs();
+				if (backgroundErrors.length > 0) {
+					console.warn('[BackendTurn] Background job errors:', backgroundErrors);
+				}
+			} catch (e) {
+				console.warn('[BackendTurn] Background jobs failed:', e);
+			}
+			onStreamEnd?.(response.narration);
+			return true;
+		} catch (error) {
+			console.warn('[BackendTurn] Falling back to local narrator path:', error);
+			onStreamClear?.();
+			return false;
+		} finally {
+			isGenerating = false;
+			abortController = null;
+		}
+	}
+
 	function handleStop() {
 		abortController?.abort();
 		isGenerating = false;
+	}
+
+	async function submitPlayerPlan(text: string): Promise<void> {
+		if (!text.trim() || !story.currentStory) return;
+		planSubmitting = true;
+		planError = null;
+		try {
+			const { scheme, error } = await declarePlayerScheme(text);
+			if (error || !scheme) {
+				planError = error ?? 'Failed to declare plan.';
+				await story.addEntry('system', `Plan declaration failed: ${planError}`);
+				return;
+			}
+			const stageList = scheme.stages
+				.map((s, i) => `  ${i + 1}. ${s.label}`)
+				.join('\n');
+			await story.addEntry(
+				'system',
+				`Plan declared — "${scheme.goal}"\nStages:\n${stageList}`,
+			);
+			showPlanModal = false;
+			planText = '';
+		} catch (e) {
+			planError = e instanceof Error ? e.message : String(e);
+		} finally {
+			planSubmitting = false;
+		}
+	}
+
+	async function submitPlanFromModal() {
+		await submitPlayerPlan(planText);
+	}
+
+	function openPlanModal() {
+		planError = null;
+		showPlanModal = true;
+	}
+
+	function closePlanModal() {
+		if (planSubmitting) return;
+		showPlanModal = false;
+		planText = '';
+		planError = null;
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -503,6 +732,82 @@
 		}
 	}
 </script>
+
+{#if showPlanModal}
+	<div
+		class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+		onclick={closePlanModal}
+		onkeydown={(e) => e.key === 'Escape' && closePlanModal()}
+		role="presentation"
+	>
+		<div
+			class="w-full max-w-lg rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-2xl"
+			onclick={(e) => e.stopPropagation()}
+			onkeydown={(e) => e.stopPropagation()}
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="plan-modal-title"
+			tabindex="-1"
+		>
+			<div class="mb-3 flex items-start justify-between gap-3">
+				<div>
+					<h2 id="plan-modal-title" class="flex items-center gap-2 text-lg font-semibold text-[var(--text-primary)]">
+						<Target class="h-5 w-5 text-rose-400" />
+						Declare a Plan
+					</h2>
+					<p class="mt-1 text-xs text-[var(--text-muted)]">
+						Describe what you intend to do. The system breaks it into stages — obstacles
+						and opportunities the narrator will surface as you play. Plans are intent,
+						not guarantees.
+					</p>
+				</div>
+				<button
+					onclick={closePlanModal}
+					disabled={planSubmitting}
+					class="rounded-lg p-1 text-[var(--text-muted)] transition-all hover:bg-[var(--color-surface-600)]/30 hover:text-[var(--text-primary)] disabled:opacity-30"
+					aria-label="Close"
+				>
+					<X class="h-4 w-4" />
+				</button>
+			</div>
+
+			<textarea
+				bind:value={planText}
+				placeholder="e.g. I plan to poison Lord Frey at the wedding feast — but I'll need to find an alchemist first, and bribe a serving girl to switch the cups…"
+				rows="5"
+				disabled={planSubmitting}
+				class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-rose-500/60 focus:outline-none disabled:opacity-50"
+			></textarea>
+
+			{#if planError}
+				<p class="mt-2 text-xs text-red-400">{planError}</p>
+			{/if}
+
+			<div class="mt-4 flex items-center justify-end gap-2">
+				<button
+					onclick={closePlanModal}
+					disabled={planSubmitting}
+					class="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--text-muted)] transition-all hover:text-[var(--text-primary)] disabled:opacity-30"
+				>
+					Cancel
+				</button>
+				<button
+					onclick={submitPlanFromModal}
+					disabled={!planText.trim() || planSubmitting}
+					class="flex items-center gap-1.5 rounded-lg bg-rose-500/15 px-3 py-1.5 text-xs font-medium text-rose-400 transition-all hover:bg-rose-500/25 disabled:opacity-30"
+				>
+					{#if planSubmitting}
+						<Loader2 class="h-3.5 w-3.5 animate-spin" />
+						Structuring…
+					{:else}
+						<Target class="h-3.5 w-3.5" />
+						Declare
+					{/if}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
 
 <div class="space-y-2">
 	<!-- Action type selector (adventure mode only) -->
@@ -519,6 +824,26 @@
 					<span>{config.label}</span>
 				</button>
 			{/each}
+			<button
+				class="flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--text-muted)] transition-all hover:bg-rose-500/10 hover:text-rose-400"
+				onclick={openPlanModal}
+				title="Declare a scheme — break a goal into stages the narrator must surface"
+				disabled={isGenerating || planSubmitting}
+			>
+				<Target class="h-3.5 w-3.5" />
+				<span>Plan</span>
+			</button>
+		</div>
+	{/if}
+
+	{#if story.hydratingWorld}
+		<div class="flex items-center gap-2 px-1 text-[11px] text-[var(--text-muted)]">
+			<Loader2 class="h-3.5 w-3.5 animate-spin" />
+			<span>Loading memory and world state...</span>
+		</div>
+	{:else if story.worldHydrationError}
+		<div class="px-1 text-[11px] text-amber-300">
+			Memory load had trouble; transcript is available, but context may be thin.
 		</div>
 	{/if}
 
@@ -545,12 +870,12 @@
 		{:else}
 			<button
 				onclick={handleSubmit}
-				disabled={!inputValue.trim()}
+				disabled={!inputValue.trim() || story.hydratingWorld}
 				class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all active:scale-95 disabled:opacity-30
 					{isCreativeMode
 						? 'text-[var(--text-accent)] hover:bg-[rgba(212,168,83,0.1)]'
 						: actionConfig[actionType].buttonStyle}"
-				title="Send"
+				title={story.hydratingWorld ? 'Memory is still loading' : 'Send'}
 			>
 				<Send class="h-5 w-5" />
 			</button>

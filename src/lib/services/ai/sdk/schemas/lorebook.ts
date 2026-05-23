@@ -12,6 +12,24 @@ export const loreUpdateSchema = z.object({
 	bio: z.string().nullable().optional(),
 	motivations: z.array(z.string()).nullable().optional(),
 	personality: z.string().nullable().optional(),
+	// Faction enrichment (only for faction type entries)
+	knownMembers: z.array(z.string()).nullable().optional(),
+	goals: z.array(z.object({
+		description: z.string(),
+		priority: z.number().min(1).max(10).optional().default(5),
+		progress: z.number().min(0).max(100).optional().default(0),
+		type: z.enum(['military', 'diplomatic', 'economic', 'intelligence', 'survival', 'expansion']).optional().default('diplomatic'),
+		deadline: z.string().nullable().optional(),
+	})).nullable().optional(),
+	resources: z.object({
+		military: z.number().min(0).max(100).optional().default(50),
+		wealth: z.number().min(0).max(100).optional().default(50),
+		influence: z.number().min(0).max(100).optional().default(50),
+		information: z.number().min(0).max(100).optional().default(50),
+		morale: z.number().min(0).max(100).optional().default(50),
+	}).nullable().optional(),
+	disposition: z.enum(['aggressive', 'defensive', 'scheming', 'neutral', 'desperate']).nullable().optional(),
+	territory: z.array(z.string()).nullable().optional(),
 });
 
 export const loreManagementResultSchema = z.object({

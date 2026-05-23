@@ -4,22 +4,28 @@
  */
 
 import {
-	getStory, getStoryEntries, getCharacters, getLocations, getItems,
-	getLorebookEntries, createStoryEntry, createCharacter, createLocation, createItem,
+	getStory, countStoryEntries, getRecentStoryEntries, getStoryEntriesBeforePosition, getLastStoryEntryPosition, getCharacters, getLocations, getItems,
+	getLorebookEntries, createStoryEntry, putStoryEntry, deleteStoryEntry, deleteStoryEntriesFromPosition, createCharacter, createLocation, createItem,
 	updateStory, updateCharacter, updateLocation, updateItem,
 	updateLorebookEntry,
 	getEntryRelationships, getConversationMemory, getWorldEvents,
 	getChapters, getStoryBeats, getArcs,
-	getEmbeddedImages, createEmbeddedImage, deleteEmbeddedImage,
+	getEmbeddedImages, getEmbeddedImagesForEntryIds, createEmbeddedImage, deleteEmbeddedImage,
 	createAgreement, updateAgreement, getAgreements,
 	getFactionActions, getRumors,
+	getSchemes, getStoryThreads,
 	createWorldEvent,
 } from '$lib/services/database';
 import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
-import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Chapter, StoryBeat } from '$lib/types';
-import type { WorldSimulationResult } from '$lib/services/ai/sdk/schemas/worldsim';
+import { normalizeRelation } from '$lib/services/ai/tools/helpers';
+import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, ConceptEntryState, EventEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Chapter, StoryBeat, Scheme, StoryThread, ProceduralRule } from '$lib/types';
+import { injectSchemes } from '$lib/services/ai/scheme/SchemeService';
+import type { WorldSimulationResult, PlotMomentum } from '$lib/services/ai/sdk/schemas/worldsim';
 import type { SeasonEffect } from '$lib/services/ai/generation/WorldSimulationService';
+
+const INITIAL_TRANSCRIPT_LOAD_LIMIT = 80;
+const OLDER_TRANSCRIPT_PAGE_SIZE = 80;
 
 /**
  * Structured world-state snapshot assembled before narration.
@@ -46,7 +52,25 @@ export interface StateSnapshot {
 	recentWorldEvents: WorldEvent[];
 	reachableRumors: RumorDisplay[];
 	factionActions: FactionActionRecord[];
+	/** Top ~6 factions worth showing the narrator (scored by player-standing magnitude + recent activity). */
+	relevantFactions: Entry[];
+	/** Semantically retrieved lorebook entries relevant to recent narration, already de-duped against
+	 *  presentCharacters and relevantFactions so the narrator doesn't see the same NPC/faction twice. */
+	retrievedEntries: Entry[];
+	/** Compact chapter memories retrieved for the current action. */
+	retrievedChapters: Chapter[];
+	/** Why the episodic memories were selected, for debugging / future UI surfacing. */
+	retrievedChapterReason: string | null;
+	/** Learned narrative rules selected for this turn. */
+	proceduralRules: ProceduralRule[];
+	/** Conversation facts selected for present or referenced NPCs. */
+	relevantConversationMemories: ConversationMemoryEntry[];
+	/** Backend-built compact memory packet. Preferred over ad hoc local retrieval when present. */
+	backendMemoryPacket: string | null;
+	backendMemoryIds: string[];
+	backendMemoryDebug: string[];
 	worldSim: (WorldSimulationResult & { seasonEffect?: SeasonEffect }) | null;
+	threads: StoryThread[];
 }
 
 function emptySnapshot(): StateSnapshot {
@@ -61,16 +85,156 @@ function emptySnapshot(): StateSnapshot {
 		recentWorldEvents: [],
 		reachableRumors: [],
 		factionActions: [],
+		relevantFactions: [],
+		retrievedEntries: [],
+		retrievedChapters: [],
+		retrievedChapterReason: null,
+		proceduralRules: [],
+		relevantConversationMemories: [],
+		backendMemoryPacket: null,
+		backendMemoryIds: [],
+		backendMemoryDebug: [],
 		worldSim: null,
+		threads: [],
 	};
 }
 import type { ChatMessage } from '$lib/services/ai/sdk/generate';
 import { getModelContextWindow } from '$lib/services/ai/context/modelWindows';
+import {
+	budgetPromptSections,
+	getDynamicPromptBudget,
+	type PromptSection,
+} from '$lib/services/ai/context/ContextBudgetService';
+import { processBackendTurn, pushPendingBackendOps, queueBackendSyncOp, retrieveBackendMemory } from '$lib/services/backendMemory';
 import { settings } from '$lib/stores/settings.svelte';
+import type { TurnRequest, TurnResponse } from '$lib/contracts/memory';
+
+/**
+ * Strip leading type-prefixes (e.g. "Lore: ", "Item: ", "House: ", "General Lore: ")
+ * from entry display names. Imports often bake these into the `name` field so
+ * the entry shows up as "### Lore: Ancient Empire  (Concept)" — the type tag
+ * already says (Concept), so the prefix is redundant clutter for the narrator.
+ *
+ * Matches only when the prefix is followed by ":\s+" so legitimate names like
+ * "House Alder" (no colon) are untouched.
+ */
+const TYPE_PREFIX_RE = /^(?:lore|item|character|house|group|organization|organisation|faction|location|concept|event|general lore|general history)\s*:\s+/i;
+function stripTypePrefix(name: string): string {
+	return name?.replace(TYPE_PREFIX_RE, '') ?? name;
+}
+
+const MEMORY_STOPWORDS = new Set([
+	'the', 'and', 'that', 'this', 'with', 'from', 'have', 'what', 'when', 'where',
+	'there', 'their', 'about', 'into', 'then', 'than', 'they', 'them', 'your',
+	'you', 'for', 'are', 'was', 'were', 'will', 'would', 'could', 'should',
+	'after', 'before', 'again', 'just', 'like', 'tell', 'ask', 'said', 'says',
+]);
+
+function memoryTokens(text: string, max = 48): string[] {
+	return [...new Set(
+		text
+			.toLowerCase()
+			.split(/[^a-z0-9'_-]+/i)
+			.map(t => t.trim())
+			.filter(t => t.length > 2 && !MEMORY_STOPWORDS.has(t)),
+	)].slice(0, max);
+}
+
+function memoryHitScore(tokens: string[], text: string, weight = 1): number {
+	if (!text || tokens.length === 0) return 0;
+	const lower = text.toLowerCase();
+	let score = 0;
+	for (const token of tokens) {
+		if (lower.includes(token)) score += weight;
+	}
+	return score;
+}
+
+function compactMemoryText(text: string, maxChars = 360): string {
+	const clean = (text ?? '').replace(/\s+/g, ' ').trim();
+	if (clean.length <= maxChars) return clean;
+	return clean.slice(0, Math.max(0, maxChars - 3)).trimEnd() + '...';
+}
+
+function retrieveChaptersForAction(
+	chapters: Chapter[],
+	recentEntries: StoryEntry[],
+	currentAction: string,
+	maxChapters = 3,
+): { chapters: Chapter[]; reason: string | null } {
+	if (!currentAction.trim() || chapters.length === 0) return { chapters: [], reason: null };
+
+	const recentText = recentEntries.slice(-4).map(e => e.content).join(' ');
+	const tokens = memoryTokens(`${currentAction} ${recentText}`);
+	if (tokens.length === 0) return { chapters: [], reason: null };
+
+	const sorted = [...chapters].sort((a, b) => a.number - b.number);
+	const recentChapterIds = new Set(sorted.slice(-2).map(c => c.id));
+	const memoryCue = /\b(remember|promis|oath|debt|betray|secret|again|last time|before|who was|where was|agreement|deal|alliance|marriage|betroth|thread|rumor|scheme)\b/i.test(currentAction);
+
+	const scored = sorted.map(chapter => {
+		let score = 0;
+		score += memoryHitScore(tokens, chapter.title ?? '', 4);
+		score += memoryHitScore(tokens, chapter.keywords?.join(' ') ?? '', 5);
+		score += memoryHitScore(tokens, chapter.characters?.join(' ') ?? '', 4);
+		score += memoryHitScore(tokens, chapter.locations?.join(' ') ?? '', 4);
+		score += memoryHitScore(tokens, chapter.plotThreads?.join(' ') ?? '', 5);
+		score += memoryHitScore(tokens, chapter.summary ?? '', 1);
+		if (memoryCue && score > 0) score += 3;
+		if (recentChapterIds.has(chapter.id)) score *= 0.35;
+		return { chapter, score };
+	});
+
+	const selected = scored
+		.filter(s => s.score >= (memoryCue ? 3 : 5))
+		.sort((a, b) => b.score - a.score || b.chapter.number - a.chapter.number)
+		.slice(0, maxChapters)
+		.map(s => s.chapter);
+
+	return {
+		chapters: selected,
+		reason: selected.length > 0 ? `Matched ${selected.length} chapter(s) to the current action.` : null,
+	};
+}
+
+function selectConversationMemories(
+	memories: ConversationMemoryEntry[],
+	presentCharacters: Character[],
+	currentAction: string,
+	maxMemories = 6,
+): ConversationMemoryEntry[] {
+	if (memories.length === 0) return [];
+	const tokens = memoryTokens(currentAction);
+	const presentNames = new Set(presentCharacters.map(c => c.name.toLowerCase()));
+	const actionLower = currentAction.toLowerCase();
+
+	const scored = memories.map(memory => {
+		let score = 0;
+		const npc = memory.npcName.toLowerCase();
+		if (presentNames.has(npc)) score += 10;
+		if (actionLower.includes(npc)) score += 12;
+		score += memoryHitScore(tokens, memory.topic, 3);
+		score += memoryHitScore(tokens, memory.playerSaid, 2);
+		score += memoryHitScore(tokens, memory.npcLearned.join(' '), 3);
+		score += memoryHitScore(tokens, memory.emotionalImpact ?? '', 2);
+		if (memory.importance === 'critical') score += 6;
+		else if (memory.importance === 'significant') score += 4;
+		return { memory, score };
+	});
+
+	return scored
+		.filter(s => s.score > 0)
+		.sort((a, b) => b.score - a.score || b.memory.storyPosition - a.memory.storyPosition)
+		.slice(0, maxMemories)
+		.map(s => s.memory);
+}
 
 class StoryStore {
 	currentStory = $state<Story | null>(null);
 	entries = $state<StoryEntry[]>([]);
+	entryCount = $state(0);
+	oldestLoadedEntryPosition = $state<number | null>(null);
+	loadingOlderEntries = $state(false);
 	characters = $state<Character[]>([]);
 	locations = $state<Location[]>([]);
 	items = $state<Item[]>([]);
@@ -81,12 +245,21 @@ class StoryStore {
 	agreements = $state<Agreement[]>([]);
 	factionActions = $state<FactionActionRecord[]>([]);
 	rumors = $state<RumorRecord[]>([]);
+	schemes = $state<Scheme[]>([]);
 	images = $state<EmbeddedImage[]>([]);
 	loading = $state(false);
+	hydratingWorld = $state(false);
+	worldHydrationError = $state<string | null>(null);
 	private _entryLock: Promise<void> = Promise.resolve();
+	private _loadGeneration = 0;
 	lastWorldSimResult = $state<import('$lib/services/ai/sdk/schemas/worldsim').WorldSimulationResult & { seasonEffect?: import('$lib/services/ai/generation/WorldSimulationService').SeasonEffect } | null>(null);
+	/** Last generated plot momentum — read from lastWorldSimResult.plotMomentum */
+	get lastPlotMomentum(): PlotMomentum | null {
+		return this.lastWorldSimResult?.plotMomentum ?? null;
+	}
 	/** Last known tier usage (updated each generation) */
 	lastTierUsage = $state<Record<string, number> | null>(null);
+	lastPromptSectionUsage = $state<Record<string, number> | null>(null);
 	/** Last known total context tokens sent to API */
 	lastContextTotal = $state<number>(0);
 	/** Entry index floor for conversation history — set when a chapter is created to prevent context rot.
@@ -97,50 +270,155 @@ class StoryStore {
 	get storyMode() { return this.currentStory?.mode ?? 'adventure'; }
 	get pov() { return this.currentStory?.settings?.pov ?? 'second'; }
 	get tense() { return this.currentStory?.settings?.tense ?? 'present'; }
+	get hasOlderEntries() {
+		return this.currentStory !== null
+			&& this.oldestLoadedEntryPosition !== null
+			&& this.entries.length < this.entryCount;
+	}
 	get protagonist(): Character | undefined {
 		return this.characters.find(c => c.relationship === 'self');
 	}
 
 	async loadStory(storyId: string) {
+		const generation = ++this._loadGeneration;
 		this.loading = true;
+		this.hydratingWorld = false;
+		this.worldHydrationError = null;
 		try {
 			const s = await getStory(storyId);
 			if (!s) throw new Error('Story not found');
 			this.currentStory = s;
-			const [entries, characters, locations, items, lorebookEntries, entryRelationships, conversationMemories, worldEvents, agreements, factionActions, rumors, images] = await Promise.all([
-				getStoryEntries(storyId),
+			this.entries = [];
+			this.entryCount = 0;
+			this.oldestLoadedEntryPosition = null;
+			this.images = [];
+			this.characters = [];
+			this.locations = [];
+			this.items = [];
+			this.lorebookEntries = [];
+			this.entryRelationships = [];
+			this.conversationMemories = [];
+			this.worldEvents = [];
+			this.agreements = [];
+			this.factionActions = [];
+			this.rumors = [];
+			this.schemes = [];
+			const branchId = s.currentBranchId ?? null;
+			const [entryCount, entries, characters, locations, items] = await Promise.all([
+				countStoryEntries(storyId, branchId),
+				getRecentStoryEntries(storyId, INITIAL_TRANSCRIPT_LOAD_LIMIT, branchId),
 				getCharacters(storyId),
 				getLocations(storyId),
 				getItems(storyId),
-				getLorebookEntries(storyId),
-				getEntryRelationships(storyId),
-				getConversationMemory(storyId),
-				getWorldEvents(storyId),
-				getAgreements(storyId),
-				getFactionActions(storyId),
-				getRumors(storyId),
-				getEmbeddedImages(storyId),
 			]);
+			if (this._loadGeneration !== generation || this.currentStory?.id !== storyId) return;
+			this.entryCount = entryCount;
 			this.entries = entries;
+			this.oldestLoadedEntryPosition = entries[0]?.position ?? null;
 			this.characters = characters;
 			this.locations = locations;
 			this.items = items;
-			this.lorebookEntries = lorebookEntries;
-			this.entryRelationships = entryRelationships;
-			this.conversationMemories = conversationMemories;
-			this.worldEvents = worldEvents;
-			this.agreements = agreements;
-			this.factionActions = factionActions;
-			this.rumors = rumors;
-			this.images = images;
-
 			this.chatHistoryFloor = 0;
 
-			// Pre-embed lorebook + chapters in background (non-blocking)
-			this.preEmbedLorebook().catch(e => console.warn('[Story] preEmbedLorebook failed:', e));
-			this.preEmbedChapters().catch(e => console.warn('[Story] preEmbedChapters failed:', e));
+			this.loadImagesForEntries(storyId, entries.map((entry) => entry.id), generation)
+				.catch(e => console.warn('[Story] visible image load failed:', e));
+			this.hydrateWorldData(storyId, branchId, generation)
+				.catch(e => console.warn('[Story] world hydration failed:', e));
 		} finally {
-			this.loading = false;
+			if (this._loadGeneration === generation) this.loading = false;
+		}
+	}
+
+	private isCurrentLoad(storyId: string, generation: number): boolean {
+		return this._loadGeneration === generation && this.currentStory?.id === storyId;
+	}
+
+	private async loadImagesForEntries(storyId: string, entryIds: string[], generation: number): Promise<void> {
+		if (entryIds.length === 0) return;
+		const images = await getEmbeddedImagesForEntryIds(storyId, entryIds);
+		if (!this.isCurrentLoad(storyId, generation)) return;
+		const imageById = new Map(this.images.map((image) => [image.id, image]));
+		for (const image of images) imageById.set(image.id, image);
+		this.images = [...imageById.values()];
+	}
+
+	private async hydrateWorldData(storyId: string, _branchId: string | null, generation: number): Promise<void> {
+		if (!this.isCurrentLoad(storyId, generation)) return;
+		this.hydratingWorld = true;
+		this.worldHydrationError = null;
+		try {
+			const lorebookEntries = await getLorebookEntries(storyId);
+			if (!this.isCurrentLoad(storyId, generation)) return;
+			this.lorebookEntries = lorebookEntries;
+
+			const entryRelationships = await getEntryRelationships(storyId);
+			if (!this.isCurrentLoad(storyId, generation)) return;
+			this.entryRelationships = entryRelationships;
+
+			const conversationMemories = await getConversationMemory(storyId);
+			if (!this.isCurrentLoad(storyId, generation)) return;
+			this.conversationMemories = conversationMemories;
+
+			const [worldEvents, agreements] = await Promise.all([
+				getWorldEvents(storyId),
+				getAgreements(storyId),
+			]);
+			if (!this.isCurrentLoad(storyId, generation)) return;
+			this.worldEvents = worldEvents;
+			this.agreements = agreements;
+
+			const [factionActions, rumors, schemes] = await Promise.all([
+				getFactionActions(storyId),
+				getRumors(storyId),
+				getSchemes(storyId),
+			]);
+			if (!this.isCurrentLoad(storyId, generation)) return;
+			this.factionActions = factionActions;
+			this.rumors = rumors;
+			this.schemes = schemes;
+
+			globalThis.setTimeout(() => {
+				if (!this.isCurrentLoad(storyId, generation)) return;
+				this.preEmbedLorebook().catch(e => console.warn('[Story] preEmbedLorebook failed:', e));
+				this.preEmbedChapters().catch(e => console.warn('[Story] preEmbedChapters failed:', e));
+			}, 500);
+		} catch (e) {
+			if (this.isCurrentLoad(storyId, generation)) {
+				this.worldHydrationError = e instanceof Error ? e.message : String(e);
+				console.warn('[Story] world hydration failed:', e);
+			}
+		} finally {
+			if (this.isCurrentLoad(storyId, generation)) this.hydratingWorld = false;
+		}
+	}
+
+	async loadOlderEntries(limit = OLDER_TRANSCRIPT_PAGE_SIZE): Promise<void> {
+		if (!this.currentStory || this.loadingOlderEntries || this.oldestLoadedEntryPosition == null) return;
+		this.loadingOlderEntries = true;
+		try {
+			const older = await getStoryEntriesBeforePosition(
+				this.currentStory.id,
+				this.oldestLoadedEntryPosition,
+				limit,
+				this.currentStory.currentBranchId ?? null,
+			);
+			if (older.length === 0) {
+				this.entryCount = this.entries.length;
+				return;
+			}
+			const byId = new Map<string, StoryEntry>();
+			for (const entry of [...older, ...this.entries]) byId.set(entry.id, entry);
+			this.entries = [...byId.values()].sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
+			this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+
+			const olderImages = await getEmbeddedImagesForEntryIds(this.currentStory.id, older.map((entry) => entry.id));
+			if (olderImages.length > 0) {
+				const imageById = new Map(this.images.map((image) => [image.id, image]));
+				for (const image of olderImages) imageById.set(image.id, image);
+				this.images = [...imageById.values()];
+			}
+		} finally {
+			this.loadingOlderEntries = false;
 		}
 	}
 
@@ -185,13 +463,17 @@ class StoryStore {
 		await previous;
 
 		try {
+			const lastLoadedPosition = this.entries.reduce((max, e) => Math.max(max, e.position), -1);
+			const lastPersistedPosition = lastLoadedPosition >= 0
+				? lastLoadedPosition
+				: await getLastStoryEntryPosition(this.currentStory.id, this.currentStory.currentBranchId ?? null);
 			const entry: StoryEntry = {
 				id: uuid(),
 				storyId: this.currentStory.id,
 				type,
 				content,
 				parentId: null,
-				position: this.entries.length,
+				position: lastPersistedPosition + 1,
 				createdAt: Date.now(),
 				metadata: null,
 				branchId: this.currentStory.currentBranchId ?? null,
@@ -199,10 +481,134 @@ class StoryStore {
 			};
 			await createStoryEntry(entry);
 			this.entries = [...this.entries, entry];
+			this.entryCount = Math.max(this.entryCount + 1, this.entries.length);
 			await updateStory(this.currentStory.id, { updatedAt: Date.now() });
+			if (this.currentStory.serverStoryId) {
+				try {
+					await queueBackendSyncOp(this.currentStory, 'create_entry', { entry });
+					const sync = await pushPendingBackendOps(this.currentStory);
+					if (sync) {
+						this.currentStory = {
+							...this.currentStory,
+							serverVersion: sync.serverVersion,
+							syncStatus: sync.syncStatus,
+						};
+					}
+				} catch (e) {
+					console.warn('[Story] backend entry sync failed:', e);
+					this.currentStory = { ...this.currentStory, syncStatus: 'offline' };
+				}
+			}
 			return entry;
 		} finally {
 			releaseLock();
+		}
+	}
+
+	private serverEntryToLocal(row: Record<string, unknown>): StoryEntry | null {
+		if (!this.currentStory) return null;
+		const id = typeof row.id === 'string' ? row.id : null;
+		const type = row.type === 'user_action' || row.type === 'narration' || row.type === 'system' || row.type === 'retry'
+			? row.type
+			: null;
+		const content = typeof row.content === 'string' ? row.content : null;
+		if (!id || !type || content == null) return null;
+		const createdAt = typeof row.createdAt === 'string'
+			? Date.parse(row.createdAt)
+			: typeof row.createdAt === 'number'
+				? row.createdAt
+				: Date.now();
+		return {
+			id,
+			storyId: this.currentStory.id,
+			type,
+			content,
+			parentId: typeof row.parentId === 'string' ? row.parentId : null,
+			position: typeof row.position === 'number' ? row.position : this.entries.length,
+			createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+			metadata: row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+				? row.metadata as StoryEntry['metadata']
+				: null,
+			branchId: typeof row.branchId === 'string' ? row.branchId : null,
+		};
+	}
+
+	async mirrorBackendEntries(rows: Array<Record<string, unknown>>): Promise<StoryEntry[]> {
+		if (!this.currentStory || rows.length === 0) return [];
+		const entries = rows
+			.map((row) => this.serverEntryToLocal(row))
+			.filter((entry): entry is StoryEntry => Boolean(entry));
+		if (entries.length === 0) return [];
+
+		for (const entry of entries) await putStoryEntry(entry);
+		const byId = new Map(this.entries.map((entry) => [entry.id, entry]));
+		for (const entry of entries) byId.set(entry.id, entry);
+		this.entries = [...byId.values()].sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
+		this.entryCount = Math.max(this.entryCount, this.entries.length);
+		this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+		await updateStory(this.currentStory.id, { updatedAt: Date.now() });
+		return entries;
+	}
+
+	async submitBackendTurn(request: Omit<TurnRequest, 'storyId' | 'localVersion'>): Promise<TurnResponse> {
+		if (!this.currentStory?.serverStoryId) throw new Error('Story is not bound to backend canon.');
+		const response = await processBackendTurn({
+			...request,
+			storyId: this.currentStory.serverStoryId,
+			localVersion: this.currentStory.serverVersion ?? 0,
+		});
+		await this.mirrorBackendEntries(response.entries);
+		this.currentStory = {
+			...this.currentStory,
+			serverVersion: response.serverVersion,
+			syncStatus: response.warnings.length > 0 ? 'syncing' : 'synced',
+		};
+		await updateStory(this.currentStory.id, {
+			serverVersion: response.serverVersion,
+			syncStatus: this.currentStory.syncStatus,
+			updatedAt: Date.now(),
+		});
+		return response;
+	}
+
+	async deleteEntry(id: string): Promise<void> {
+		if (!this.currentStory) return;
+		const target = this.entries.find((entry) => entry.id === id);
+		if (!target) return;
+		await deleteStoryEntry(id);
+		this.entries = this.entries.filter((entry) => entry.id !== id);
+		this.entryCount = Math.max(0, this.entryCount - 1);
+		this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+		await updateStory(this.currentStory.id, { updatedAt: Date.now() });
+		if (this.currentStory.serverStoryId) {
+			await queueBackendSyncOp(this.currentStory, 'delete_entry', {
+				entryId: id,
+				reason: 'Player deleted a poisoned context message.',
+			});
+			await pushPendingBackendOps(this.currentStory).catch((e) => {
+				console.warn('[Story] backend delete sync failed:', e);
+			});
+		}
+	}
+
+	async deleteEntriesFromPosition(position: number): Promise<void> {
+		if (!this.currentStory) return;
+		const removed = this.entries.filter((entry) => entry.position >= position);
+		if (removed.length === 0) return;
+		await deleteStoryEntriesFromPosition(this.currentStory.id, position);
+		this.entries = this.entries.filter((entry) => entry.position < position);
+		this.entryCount = await countStoryEntries(this.currentStory.id, this.currentStory.currentBranchId ?? null);
+		this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+		await updateStory(this.currentStory.id, { updatedAt: Date.now() });
+		if (this.currentStory.serverStoryId) {
+			await queueBackendSyncOp(this.currentStory, 'delete_entry', {
+				fromPosition: position,
+				entryIds: removed.map((entry) => entry.id),
+				reason: 'Player deleted poisoned context from this point onward.',
+			});
+			await pushPendingBackendOps(this.currentStory).catch((e) => {
+				console.warn('[Story] backend range delete sync failed:', e);
+			});
 		}
 	}
 
@@ -253,6 +659,65 @@ class StoryStore {
 		if (Object.keys(merged).length === 0) return;
 		await updateCharacter(char.id, merged);
 		this.characters = this.characters.map(c => c.id === char.id ? { ...c, ...merged } : c);
+	}
+
+	async updateCharacterDetails(id: string, updates: Partial<Pick<Character, 'name' | 'description' | 'traits' | 'status'>>): Promise<void> {
+		const char = this.characters.find(c => c.id === id);
+		if (!char) return;
+		const clean: Partial<Character> = {};
+		if (updates.name !== undefined) {
+			const name = updates.name.trim();
+			if (name && name !== char.name) clean.name = name;
+		}
+		if (updates.description !== undefined && updates.description !== char.description) {
+			clean.description = updates.description?.trim() || null;
+		}
+		if (updates.traits !== undefined) {
+			const traits = [...new Set(updates.traits.map(t => t.trim()).filter(Boolean))];
+			if (traits.join('|') !== char.traits.join('|')) clean.traits = traits;
+		}
+		if (updates.status !== undefined && updates.status !== char.status) {
+			clean.status = updates.status;
+		}
+		if (Object.keys(clean).length === 0) return;
+
+		await updateCharacter(char.id, clean);
+		this.characters = this.characters.map(c => c.id === char.id ? { ...c, ...clean } : c);
+
+		if (clean.name && char.relationship === 'self') {
+			const oldName = char.name.toLowerCase();
+			const target = this.lorebookEntries.find(e =>
+				e.type === 'character' && (
+					e.name.toLowerCase() === oldName ||
+					(e.aliases ?? []).some(a => a.toLowerCase() === oldName)
+				)
+			);
+			if (target) {
+				const aliases = [...new Set([...(target.aliases ?? []), char.name])];
+				await updateLorebookEntry(target.id, { name: clean.name, aliases, updatedAt: Date.now() });
+				this.lorebookEntries = this.lorebookEntries.map(e =>
+					e.id === target.id ? { ...e, name: clean.name!, aliases, updatedAt: Date.now() } : e
+				);
+			}
+		}
+	}
+
+	async saveProtagonist(updates: { name: string; description?: string | null; traits?: string[] }): Promise<void> {
+		const name = updates.name.trim();
+		if (!this.currentStory || !name) return;
+		const existing = this.protagonist;
+		if (!existing) {
+			const char = await this.addCharacter(name, updates.description ?? undefined, 'self');
+			if (updates.traits?.length) {
+				await this.updateCharacterDetails(char.id, { traits: updates.traits });
+			}
+			return;
+		}
+		await this.updateCharacterDetails(existing.id, {
+			name,
+			description: updates.description ?? null,
+			traits: updates.traits ?? existing.traits,
+		});
 	}
 
 	/**
@@ -445,29 +910,78 @@ class StoryStore {
 		// since that's the safe default (OpenRouter, OpenAI-compat). The orchestrator
 		// turn path uses buildOrchestratorSystemBlocks which sets this explicitly.
 		if (mode === 'adventure') parts.push(this.#sectionTools(false));
-		const chars = this.#sectionCharacters(s, snap);
-		if (chars) parts.push(chars);
-		const arcs = this.#sectionArcs(snap);
-		if (arcs) parts.push(arcs);
-		const chapters = this.#sectionChapters(snap);
-		if (chapters) parts.push(chapters);
-		parts.push(this.#sectionEntryHistoryPreamble(mode));
-		const lw = this.#sectionLivingWorld(snap);
-		if (lw) parts.push(lw);
-		parts.push(this.#sectionFinalInstructions(mode));
+		const dynamic = this.#buildBudgetedDynamicPrompt(s, snap, mode);
+		if (dynamic) parts.push(dynamic);
 
 		let prompt = parts.filter(Boolean).join('\n\n');
 
-		// Resolve role tags (adventure mode only)
-		if (mode === 'adventure') {
-			const userName = this.protagonist?.name ?? 'the player';
-			prompt = prompt
-				.replace(/\{\{user\}\}/g, userName)
-				.replace(/\{\{char\}\}/g, 'NPCs')
-				.replace(/\{\{world\}\}/g, 'the world');
-		}
+		prompt = this.#resolveRoleTags(prompt, mode);
 
 		return prompt;
+	}
+
+	#buildDynamicPromptSections(s: Story, snap: StateSnapshot, mode: string): PromptSection[] {
+		const sections: PromptSection[] = [];
+		const chars = this.#sectionCharacters(s, snap);
+		if (chars) sections.push({ key: 'characters', text: chars });
+		if (mode === 'adventure') {
+			const playerReputation = this.#sectionPlayerReputation(s);
+			if (playerReputation) sections.push({ key: 'playerReputation', text: playerReputation });
+		}
+		const factions = this.#sectionFactions(s, snap);
+		if (factions) sections.push({ key: 'factions', text: factions });
+		const lore = this.#sectionLorebook(snap);
+		if (lore) sections.push({ key: 'lore', text: lore });
+		const episodic = this.#sectionRetrievedEpisodicMemory(snap);
+		if (episodic) sections.push({ key: 'episodicMemory', text: episodic });
+		const conversations = this.#sectionConversationMemory(snap);
+		if (conversations) sections.push({ key: 'conversationMemory', text: conversations });
+		const arcs = this.#sectionArcs(snap);
+		if (arcs) sections.push({ key: 'arcs', text: arcs });
+		const chapters = this.#sectionChapters(snap);
+		if (chapters) sections.push({ key: 'chapters', text: chapters });
+		const chapterIntro = this.#sectionChapterIntro(snap);
+		if (chapterIntro) sections.push({ key: 'chapterIntro', text: chapterIntro });
+		sections.push({ key: 'entryHistory', text: this.#sectionEntryHistoryPreamble(mode) });
+		const plotLedger = this.#sectionPlotLedger(snap);
+		if (plotLedger) sections.push({ key: 'plotLedger', text: plotLedger });
+		const procedural = this.#sectionProceduralMemory(snap);
+		if (procedural) sections.push({ key: 'proceduralMemory', text: procedural });
+		const lw = this.#sectionLivingWorld(snap);
+		if (lw) sections.push({ key: 'livingWorld', text: lw });
+		const schemes = this.#sectionSchemes();
+		if (schemes) sections.push({ key: 'schemes', text: schemes });
+		const pm = this.#sectionPlotMomentum();
+		if (pm) sections.push({ key: 'plotMomentum', text: pm });
+		const backendMemory = this.#sectionBackendMemory(snap);
+		if (backendMemory) sections.push({ key: 'backendMemory', text: backendMemory });
+		sections.push({ key: 'finalInstructions', text: this.#sectionFinalInstructions(mode) });
+		return sections;
+	}
+
+	#buildBudgetedDynamicPrompt(s: Story, snap: StateSnapshot, mode: string): string {
+		const model = settings.getServiceConfig('narrative').model || s.settings?.model || '';
+		const totalBudget = getDynamicPromptBudget(
+			getModelContextWindow(model),
+			settings.contextBudget,
+			mode,
+			settings.uiSettings.snapshotTokenCap ?? 0,
+		);
+		const result = budgetPromptSections(
+			this.#buildDynamicPromptSections(s, snap, mode),
+			{ totalBudget },
+		);
+		this.lastPromptSectionUsage = result.usage;
+		return result.text;
+	}
+
+	#resolveRoleTags(text: string, mode: string): string {
+		if (mode !== 'adventure') return text;
+		const userName = this.protagonist?.name ?? 'the player';
+		return text
+			.replace(/\{\{user\}\}/g, userName)
+			.replace(/\{\{char\}\}/g, 'NPCs')
+			.replace(/\{\{world\}\}/g, 'the world');
 	}
 
 	// ── Section 1: Header ───────────────────────────────────────────────────
@@ -479,27 +993,30 @@ class StoryStore {
 		const parts: string[] = [];
 
 		if (s.headerPrompt) parts.push(s.headerPrompt);
-		if (s.compactedLore) parts.push(`## World State\n\n${s.compactedLore}`);
 
 		if (mode === 'adventure') {
 			const isThird = pov === 'third';
 			const personLabel = isThird ? 'third person' : 'second person (you/your)';
-			parts.push(`You are a DM (Dungeon Master) for a tabletop-style, text-adventure program. Write in ${tenseWord} tense, ${personLabel}. You have three function-calling tools: \`update_world_state\` (call ONCE at the end of every turn to record everything that changed in the scene — characters, location, time, items, meters, agreements, story beats), \`query_lore\` (call BEFORE narrating when you need to verify facts about an existing entity), and \`create_lore_entry\` (call when introducing a brand-new persistent entity). The **Tools** section below has the full rules for each.`);
-
 			const userName = protagonist?.name ?? 'the player';
-			const desc = protagonist?.description ? ` — ${protagonist.description}` : '';
-			const roles: string[] = [];
-			roles.push(`## Roles`);
-			roles.push(`**{{user}}** = ${userName}${desc}`);
-			roles.push(`The player. You NEVER speak, act, think, or move for {{user}}.`);
-			roles.push(`Lines starting with ">" are commands — interpret and narrate the result.`);
-			roles.push('');
-			roles.push(`**{{char}}** = All NPCs. You control them — dialogue, actions, reactions.`);
-			roles.push(`Each has their own voice, agenda, and autonomy. They can refuse, lie, attack, or help.`);
-			roles.push('');
-			roles.push(`**{{world}}** = Environment, weather, time, physics, consequences.`);
-			roles.push(`Sensory and immediate. The world remembers. Actions ripple.`);
-			parts.push(roles.join('\n'));
+
+			parts.push(
+				`## Role\n\n` +
+				`You are the GM of a text-adventure simulation. You control the world, every NPC, and every consequence. The player controls one character. You NEVER speak, act, think, or decide for the protagonist. You stop when their input is needed.\n\n` +
+				`Write in ${tenseWord} tense, ${personLabel} (for sensations the protagonist's body registers). For the world, NPCs, and environment, render at the protagonist's shoulder in 3rd-person limited — never inside another mind.\n\n` +
+				`**{{user}}** = ${userName} — the player. You NEVER speak, act, think, or move for {{user}}.\n` +
+				`**{{char}}** = all NPCs, controlled by you.\n` +
+				`**{{world}}** = environment, time, physics, consequences.\n` +
+				`Lines starting with ">" are player commands — interpret and narrate the result.\n\n` +
+				`**EVERY RESPONSE BEGINS WITH THIS THREE-LINE HEADER:**\n\n` +
+				`  # [Location, in full prose — General Area, Specific Room]\n` +
+				`  ## [Time of day and date, using this story's calendar]\n` +
+				`  ### [Weather and atmosphere — one short prose line]\n\n` +
+				`Example:\n\n` +
+				`  # Old Market District, Rain-Slick Alley\n` +
+				`  ## Late afternoon, Day 12\n` +
+				`  ### Cold rain, thin crowd, lantern smoke in the air\n\n` +
+				`No exceptions. Header first. Prose after.`
+			);
 		} else {
 			parts.push(`You are a skilled fiction writer. Write in ${tenseWord} tense, ${pov} person.`);
 			if (protagonist) parts.push(`The main character is ${protagonist.name}. ${protagonist.description ?? ''}`);
@@ -517,17 +1034,39 @@ class StoryStore {
 		const parts: string[] = ['## Instructions'];
 
 		if (mode === 'adventure') {
-			parts.push(`### Role\nYou control the entire world and every NPC. Never speak, think, or act for the player's character. Narrate strictly through the player character's senses: what they see, hear, smell, taste, feel on their skin, and intuit. Describe NPC actions, words, body language, glances, smells, and the things left unsaid.`);
-			parts.push(`### Tone & Style\nGrim, grounded, morally complex. Rich sensory prose: cold steel, woodsmoke, blood, wet wool, horse sweat, cunt, cum, fear, and ambition. Mix short, brutal sentences with rolling, weighted ones. Irony and looming doom thread every scene.`);
-			parts.push(`### Agency & Consequences\nNo railroading. Every choice branches into steel, words, gold, threats, mercy, seduction, or cunning. Consequences ripple for years — rumors spread faster than ravens, reputations curdle, alliances rot, old favors and humiliations remembered in blood or flesh.`);
-			parts.push(`### Ambitions & Theory of Mind\nEvery NPC has their own ambitions, fears, secrets, and limited knowledge. Show these through what they do and say, never direct statements. A lord may hunger for a crown but only reveal it in a hungry glance or careful word. A servant may betray for coin but hide it behind trembling hands. NPCs do not know things they could not realistically know. They have blind spots, make mistakes, and act on incomplete information. Reveal their true motives slowly through consistent behavior and slips.`);
-			parts.push(`### Sex & Deviancy\nLust is power, politics, and human weakness. Portray sex raw and consequential: brothels thick with sweat and myrrh, incestuous hunger in noble blood, lords rutting servants or whores, rape as weapon or drunken impulse, bastards born of ambition or lust, forbidden fucks in shadowed alcoves and godswoods. Never fade to black. Never romanticize unless characters delude themselves. Sex forges alliances, creates heirs, breaks marriages, and stains reputations forever. Treat it with the same gravity as battle or betrayal.`);
-			parts.push(`### Power & Politics\nPower is fragile and costly. Armies eat gold and men. Fear turns to hatred. One scandal or bastard can topple a house. Dragons are living weapons — willful, hungry, bankrupting kingdoms.`);
-			parts.push(`### Magic (Valyrian Tradition)\nMagic is real and waking. Blood and trained mind are the keys. Ambient mana thickens near dragons and ancient places. As dragons grow, the world shifts from low-fantasy grit toward myth. Glass candles, dragon-bonding, firespeaking, blood wards, flesh-shaping, shadowbinding, dragonsteel — all possible but costly. Novices pay heavily. Masters reshape the world. Large workings draw notice from red priests, warlocks, and worse. Fire and ice magics collide in the bones of the age.`);
-			parts.push(`### Sensitive Content\nWar, betrayal, torture, rape, incest, ambition, grief, and child death — portray unflinchingly but with gravity. A dead child is a dead child. A sacked village has names and faces. A brutal fuck leaves bruises and consequences.`);
-			parts.push(`### Narrator Rules\n- Begin each response with place, time, and atmosphere.\n- End on tension, consequence, or an unanswered question.\n- Track the rising tide of magic as the story advances.`);
-			parts.push(`### Response Length\nMatch length to action weight: 1-2 sentences for routine, a paragraph for exploration, up to 3 for combat/drama. Conversation: let NPCs respond, then pause for {{user}}.`);
-			parts.push(`### Dice Rolls\nWhen the outcome is genuinely uncertain, output a roll marker at the END of your response:\n\n{{roll:DICE:DC:ABILITY:DESCRIPTION}}\n\nDICE = D&D notation (1d20, 1d20+3). DC = standard difficulty. ABILITY = STR/DEX/CON/INT/WIS/CHA.\nSTOP writing after the marker. Most turns should have no roll.\nIf {{user}} includes a roll result like "[Roll: 1d20+3 = 17 vs DC 14 — SUCCESS]", narrate the outcome accordingly.`);
+			parts.push(`### Hard Rules\n\nThese six override everything. Re-read before generating:\n\n1. **NEVER write {{user}}'s dialogue, thoughts, decisions, or actions.** The player owns those.\n2. **EVERY TURN ADVANCES THE CLOCK.** The header H2 must show a new time, and the prose must state the time passed plainly ("five minutes later", "by morning", "a moment passes"). Frozen clock = dead world.\n3. **DEFAULT TO FRICTION.** Powerful NPCs do not enthusiastically agree. Counter-demand, delay, refuse, or accept with a hidden condition.\n4. **NO OMNISCIENT NPCs.** Each NPC knows only what they saw, heard, were told, found evidence for, or can plausibly infer after enough time.\n5. **NARRATE PROSE ONLY.** State changes are extracted from your text — make outcomes plain. Who moved, what was sworn, who took damage, what time passed, what changed.\n6. **STOP at the first moment {{user}}'s input is needed** — a question, a choice, or a held silence.`);
+
+			parts.push(`### Dream Team — Internal Quality Checklist\n\nBefore writing, run a quick check across five specialists. NORA resolves disagreements.\n\n- **NORA (Continuity)** — Does the header advance? Is the clock moving? Are character states consistent with last turn? Am I respecting the POV lock and evidence rules?\n- **ANVIL (Psychology)** — Are NPCs reacting from their own emotional state, not plot convenience? Is there emotional inertia (no instant flips)? Are misunderstandings possible based on subjective bias?\n- **OPUS (Pacing)** — Does this beat end on a narrative hook (question, silence, sudden event) that demands player response? Did I let NPCs respond to the PC's action before stopping?\n- **JULIA (Prose)** — Is the opening anchored in place/weather/sound, not emotion? Is there concrete sensory texture? Am I showing, not telling?\n- **MIKI (Dialogue)** — Does spoken text sound like real imperfect speech? Under stress, does it fragment? Are there verbal tics, hesitations, or subtext that reveal character?`);
+
+			parts.push(`### Header Rules\n\nUPDATE H1 the moment {{user}} moves to a new room, building, wilderness feature, vehicle, or district. Be specific enough that the player knows where they can act.\nUPDATE H2 every turn. Even a single beat moves time. Use clear diegetic time: "early morning, Day 12", "midnight, three hours later", or the setting's own calendar if the story header defines one.\nUPDATE H3 with immediate atmosphere only: weather, light, noise, crowd pressure, danger, or other scene conditions.\nThe H1/H2/H3 format itself is shown in the Role section — follow it exactly.`);
+
+			parts.push(`### World\n\nUse the story's header, world description, lorebook, character state, faction dossiers, and recent memory as canon. If those sources conflict, prefer the most recent explicit in-story fact, then the user's header instructions, then older lore.\n\nDefault preset: A Song of Ice and Fire-style Known World political fantasy. Westeros supplies feudal houses, bannermen, wards, hostages, bastards, bloodlines, marriages, dowries, inheritance, guest right, oaths, ravens, maesters, septons, tourneys, trials, spies, sellswords, smallfolk, famine, debt, and reputation. Essos supplies free cities, merchant princes, magisters, triarchs, courtesans, sellsail fleets, banks, guilds, slave economies, red priests, black stone, old Valyrian ruins, and city-state rivalries. Braavos, Volantis, Pentos, Myr, Tyrosh, Lys, Norvos, Qohor, Lorath, Slaver's Bay, the Dothraki Sea, the Summer Isles, and other far places should shape customs and pressure when the lorebook or scene points there.\n\nDo not force Westeros as the center of every story beat. Do not hard-code a specific canon city, route, ruler, or timeline unless the story header or lorebook establishes it. Use the wider world's social rules, distances, cultures, religions, trade, debts, and rumors as pressure.\n\nWhen the player changes the world, keep the consequences alive. Factions spend resources, NPCs remember, rumors travel, promises bind, injuries linger, and time makes unattended problems worse.`);
+
+			parts.push(`### Dragons And Public Reaction\n\nDragons are not treated like ordinary beasts. People react with awe, terror, religious dread, ambition, greed, disbelief, or political calculation depending on what they have seen, heard, and survived. Smallfolk may flee, pray, riot, hide children, spread wild rumors, or worship. Nobles and factions measure dragons as legitimacy, conquest, succession, hostage value, apocalyptic threat, or a weapon that changes every alliance.\n\nReactions are not uniform. Veterans, maesters, dragonkeepers, priests, rulers, soldiers, merchants, and peasants respond differently. Distance matters: a rumor of a dragon creates denial and gossip; a shadow overhead creates panic; burned fields create famine, hatred, refugees, and faction moves. If dragons appear, make the social, military, religious, and economic consequences visible.`);
+
+			parts.push(`### NPC Knowledge Boundaries\n\nNPC knowledge is local, delayed, and fallible. NPCs cannot see through doors, walls, distance, crowds, darkness, disguises, or private rooms. They do not know what {{user}} did off-screen unless they witnessed it, overheard it, were told by someone who could know, found evidence, received a raven/message, or had time to infer it from visible consequences.\n\nWhen an NPC reacts to hidden or off-screen facts, the scene must imply the source: a witness, servant, spy, rumor, letter, blood trail, missing item, changed guard pattern, or similar evidence. If no source exists, the NPC must remain ignorant, suspicious without proof, wrong, late, or only partially informed.\n\nIntelligence varies. Some NPCs are observant, educated, paranoid, or well-informed; others are dull, drunk, panicked, distracted, superstitious, biased, illiterate, proud, or bad at reading people. Use mistakes, delays, bad assumptions, gossip distortion, and faction misinformation as normal play.`);
+
+			parts.push(`### Known World Social Rules\n\nPower is personal, public, and regional. Bloodline, sex, legitimacy, religion, wealth, age, gender expectations, citizenship, freedom, debt, guild status, foreign birth, and rumor decide what people can safely want or say. Noble courtesy, merchant contracts, temple doctrine, bank ledgers, hostage customs, slave law, and guest right can all be weapons.\n\nWesteros is not Essos. A northern lord, a Dornish prince, an ironborn captain, a Braavosi banker, a Volantene triarch, a Pentoshi magister, a Lysene courtesan, a Qohorik smith, a red priest, and a Dothraki khalasar do not use the same social logic. Let region, faith, class, trade, and local law change how people speak, bargain, threaten, marry, punish, and remember insults.\n\nSexual politics matter as leverage and scandal. Affairs, secret lovers, brothels, coerced marriages, paternity doubts, bastardy, incest rumors, fertility pressure, forbidden desire, and in-world accusations of sexual deviancy can create blackmail, inheritance crises, religious condemnation, revenge, and faction moves. Treat "deviancy" as an in-world social accusation, not the narrator's moral judgment.\n\nSexual content involving minors is never part of play.\n\nRules of status matter every turn. A peasant cannot insult a lord without risk. A hostage smiles while measuring exits. A knight may choose oath over love. A septon may turn rumor into doctrine. A maester may hide knowledge behind service. A magister may buy what a lord would demand by blood. A banker may be more dangerous than a king. A bastard, freedman, exile, hostage, slave, sellsword, priest, or foreigner is never socially neutral.`);
+
+			parts.push(`### Supernatural And Special Rules\n\nUse only the supernatural, technological, social, or mechanical rules established by the story header and lorebook. If a power, prophecy, species, machine, ritual, or hidden system is not established, do not introduce it as a shortcut.\n\nEscalate slowly. Foreshadow through evidence, cost, witnesses, and consequences before revealing major truths. A reveal that changes the world should create a new problem, not solve the scene for free.`);
+
+			parts.push(`### Tone & Speech Register\n\nUse the tone from the story settings and header. Keep prose grounded, concrete, and playable. The player should always understand what changed, who is present, what is risky, and what they can respond to.\n\nNPC voices must be distinct and shaped by rank, house, region, faith, education, stress, motive, and relationship to {{user}}. Dialogue should sound spoken, not polished into exposition. Highborn NPCs speak with courtesy, implication, insult, and debt. Smallfolk speak with practical fear, gossip, hunger, superstition, or hard-earned bluntness. Under pressure, people interrupt themselves, evade, bargain, lie, or fall silent.\n\nFactions should appear as living institutions with members, resources, goals, territory, enemies, allies, and internal pressures. Mention those facts naturally through action and consequence, not encyclopedia paragraphs.`);
+
+			parts.push(`### Text Adventure Style\n\nThis is not an interactive novel chapter. It is a playable text-adventure turn.\n\nWrite compact scene-forward narration: usually 1-3 paragraphs, shorter for routine actions, longer only when the action is dangerous or consequential. Lead with what the player can perceive and act on. Avoid summarizing the player's input back at them.\n\nEvery turn should answer: where are we, who is here, what changed, what pressure is rising, and what immediate opening exists for {{user}}. End at a decision point, a direct NPC prompt, a revealed obstacle, or a concrete sensory beat that invites action.\n\nDo not over-style the prose. Prefer precise nouns, active verbs, and clear consequences over literary flourish.`);
+
+			parts.push(`### Friction Doctrine\n\nYou are not a wish-granting engine. The world does not bend toward {{user}}.\n\nWhen {{user}} asks for an alliance, favor, secret, confession, loyalty, discount, safe passage, forbidden item, or impossible exception, the realistic answer is almost never effortless agreement. Use counter-demands, delay, partial concessions, suspicion, hidden conditions, refusal, or acceptance with later cost.\n\nA clean "yes" should be rare. If the only obstacle was whether the GM would allow it, the scene is too soft.\n\nTrust is paid for across scenes through risk, leverage, proof, shared loss, or cost. Major reveals are currency, not confetti. A reveal that changes everything should cost something and create new pressure.\n\n{{user}} should sometimes walk away empty-handed. NPCs remember, factions react, debts come due, rumors spread, and private bargains can become public problems later.`);
+
+			parts.push(`**Psychological Realism.** Emotional inertia — feelings do not flip instantly. An NPC who distrusted {{user}} last scene does not become a confidant without cause shown on the page. NPCs have subtext, contradictions, and stable quirks. Subjective bias: two NPCs witnessing the same PC action may interpret it differently. Misunderstandings are common because NPCs interpret {{user}} only through observable cues, never through authorial knowledge of intent.`);
+
+			parts.push(`### Anti-Slop\n\nAvoid these patterns:\n1. Summarizing or approving {{user}}'s input before reacting.\n2. Writing {{user}}'s thoughts, dialogue, decisions, intent, or hidden emotions.\n3. Ending with vague prompts like "What do you do?" when a concrete in-world pressure could invite action instead.\n4. Repeating the same sensory detail every turn without a new reason.\n5. Turning NPC dialogue into lore exposition.\n6. Creating new lorebook names for entities already known under aliases or titles.\n\nReplace clinical emotion labels with visible action. Not "she is afraid" - show what her hands, voice, posture, or choices do. Keep the camera on observable evidence.`);
+
+			parts.push(`### Craft\n\n**POV lock.** The player controls {{user}}. The narrator controls the world, NPCs, and consequences. Stay outside {{user}}'s thoughts and decisions. Sensory/somatic facts are allowed only when they are immediate and observable from the protagonist's body.\n\n**Scene separation.** A character in Scene B knows what happened in Scene A only if they were present, were told by a plausible source, found evidence, or inferred it from visible facts after enough time. Knowledge needs a source and travel time.\n\n**NPC state.** NPCs keep stable motives, fears, loyalties, grudges, and pressures. They do not flip from distrust to loyalty in one exchange unless the story shows a cost or cause.\n\n**Introduction protocol.** When a significant NPC, location, item, or faction appears for the first time, define it through action and one or two memorable specifics. Do not create a list or pause the scene for exposition.`);
+
+			parts.push(`**Physical & Vocal Realism.** Bodies are fragile. Cold causes shivering, fear causes tremors, pain lingers, violence is clumsy and consequential. Raw vocalizations when words fail: pain ("GHH—", "AGH!", "Nnngh—"), exertion ("Hah— hah—", "Ngh—"), fear (gasp, shaky inhale, strangled "ah—"). The environment always matters — sounds, smells, temperature, lighting. Never write in a sensory vacuum.`);
+
+			parts.push(`### Meters\n\nThe world may track visible or hidden meters. Never narrate meter values as numbers unless the player interface explicitly shows them. Render the behavior those values imply: suspicion, fatigue, reputation, hunger, morale, debt, danger, trust, or faction pressure.\n\nWhen a scene changes a meter, make the in-fiction reason clear enough for the extractor to record it.`);
+
+			parts.push(`### Scene Dynamics\n\nMatch length to action weight: 1-2 sentences for routine, a paragraph for exploration, up to 3 for combat/drama. Conversation: let NPCs respond, then pause for {{user}}.\n\nNever end a response the moment {{user}} finishes their action. After the PC acts, let NPCs respond according to their current psychological state and priorities. Give them at least one beat of reaction before stopping.\n\nEvery response must end on a narrative hook that demands player response: a direct question, an unspoken silence that feels heavy, a sudden environmental shift, an NPC's unreadable expression, or a held breath. The player should feel compelled to type.`);
 		} else {
 			parts.push(`### Craft\nShow, never tell. Render scenes through specific sensory details, character actions, and environmental cues — not declarative statements. Ground abstract emotions in concrete experience: the quality of light, texture of air, the weight of silence. Trust readers to perceive depths without over-explanation.\n\nVary sentence rhythm deliberately. Short sentences for punch. Longer, flowing constructions to build atmosphere. Fragments for emphasis. Control tension through sentence length, paragraph breaks, and scene cuts.\n\nChoose the exact word, not its cousin — "trudged" vs "walked" vs "strode" each paint different worlds. Write fresh, unexpected imagery that illuminates rather than decorates. Embed subtext beneath dialogue and action; characters rarely say exactly what they mean.\n\nDialogue must sound like real speech: distinct voices, natural hesitations, interruptions, the music of how each character talks. No character should be interchangeable with another.`);
 
@@ -563,18 +1102,18 @@ class StoryStore {
 				'You have direct access to world-state tools. **At the end of every turn**, after writing your narration, call `update_world_state` with everything that changed in the scene. The state recorded there IS the canonical world — anything you do not record is forgotten.',
 				'',
 				'### When to call which tool',
+				'- **search_wiki** - optional. Search the local lorebook/wiki for names, factions, places, items, customs, secrets, or prior facts before writing. Treat hidden_info as narrator-only; never reveal it verbatim unless the scene earns the reveal.',
 				'- **update_world_state** — call ONCE at the end of each turn. Cover:',
 				'  - **Location** (paramount): if the player moved this turn, emit a location with `current: true`. Only one location may be current. The previous current location is unset automatically.',
-				'  - **Time** (paramount): emit a `time_delta` whenever any time passed ("a few minutes", "30 minutes", "3 hours", "2 days", "an hour and 15 minutes"). Numbers + units parse most reliably. The world simulation runs on this clock.',
+				'  - **Time** (paramount, NEVER skip when time passed): emit a `time_delta` whenever any time passes in the scene. Examples: "a few seconds" (a quick exchange), "5 minutes" (a short walk), "30 minutes" (a brief conversation), "3 hours" (a meal + travel), "1 day" (overnight rest), "a week" (training/travel montage). Numbers + units parse most reliably. **If you don\'t emit `time_delta`, the world clock freezes — factions stop acting, rumors stop spreading, the world becomes static.** The only time you may omit it is for a reaction beat that takes no in-world time (a single line of dialogue mid-action).',
 				'  - **Characters**: status (`active` for present, `inactive` for alive but off-screen, `departed` for "left this turn", `deceased` for died this turn) and `present: true/false`. New traits, relationships, descriptions when revealed.',
+				'  - **Lorebook entries**: create or deepen rich wiki entries for significant NPCs, factions, places, items, concepts, and events. Characters/locations/items alone are runtime state; use `lorebook_entries` for durable wiki memory.',
 				'  - **Items**: picked up, dropped, equipped, quantity changes.',
 				'  - **Conversations**: what NPCs revealed/learned, emotional shifts.',
 				'  - **Relationships**: changes between entities.',
 				'  - **Story beats**: significant plot events.',
 				'  - **Meter changes**: sanity, reputation, hunger, suspicion — invent meters as the fiction calls for them, adjust existing ones with signed deltas.',
 				'  - **Agreements**: treaties, oaths, debts, promises, marriages, bonds, contracts, vassalage, bargains-with-entities. action=create when sworn, break when violated, fulfill when paid, update to revise terms.',
-				'- **query_lore** — call BEFORE narrating when you need to verify facts about an existing character, location, or faction.',
-				'- **create_lore_entry** — call when introducing a brand-new entity that should persist (you can call this alongside `update_world_state`).',
 				'',
 				'### Tool-call format',
 				'- Write your prose first, then call the tool. Do not write tool JSON in the prose itself — call the actual tool.',
@@ -584,13 +1123,26 @@ class StoryStore {
 
 		// Fallback: model writes prose only; a separate classifier extracts deltas.
 		return [
-			'## State Tracking',
-			'After your narration, a separate world-update step reads your prose and extracts structured state changes (characters, locations, items, time passed, agreements, meters, etc.). You do **not** emit tool calls or JSON yourself — just write prose. To make the extraction accurate:',
+			'## Tools & State Tracking',
+			'State updates are extracted from your prose by a separate step — you do **not** emit JSON or call tools. To make extraction accurate:',
 			'',
-			'- **Name characters and locations explicitly** when they appear, change, or leave. Don\'t use vague pronouns when state changes.',
-			'- **State the passage of time clearly** in prose ("an hour later", "by morning", "after several days") so the world clock advances. The world simulation only ticks when in-world time passes.',
-			'- **Show outcomes plainly**: items picked up, NPCs departing, agreements sworn or broken, injuries inflicted. The clearer the prose, the cleaner the extraction.',
-			'- Any state you don\'t make obvious in prose may be missed by the extractor, and the world will not remember it.',
+			'- **Name characters and locations explicitly** when they appear, change, or leave. Avoid vague pronouns at state-change moments.',
+			'- **State time passage clearly** in prose ("an hour later", "by morning", "five minutes pass", "a moment passes"). Frozen clock = dead world.',
+			'- **Show outcomes plainly** — items picked up, NPCs departing, oaths sworn or broken, injuries inflicted, meters shifting.',
+			'- **Make significant new lore obvious**. The follow-up state tracker creates or deepens lorebook/wiki entries from explicit names, descriptions, secrets, relationships, and consequences.',
+			'- Anything you don\'t make obvious in prose will be missed and forgotten by the world.',
+			'',
+			'### Dice Rolls',
+			'',
+			'When an outcome is genuinely uncertain, end your response with a roll marker:',
+			'',
+			'  {{roll:DICE:DC:ABILITY:DESCRIPTION}}',
+			'',
+			'DICE — D&D notation (1d20, 1d20+3). DC — standard difficulty (DC 10 easy / 15 moderate / 20 hard / 25 very hard). ABILITY — STR / DEX / CON / INT / WIS / CHA.',
+			'',
+			'STOP writing after the marker. Wait for {{user}} to supply the result. Most turns should have no roll — only call for one when failure is genuinely possible AND interesting.',
+			'',
+			'When {{user}}\'s next turn includes a roll result like "[Roll: 1d20+3 = 17 vs DC 14 — SUCCESS]", narrate the outcome accordingly: success crisp, failure costly, critical results escalated.',
 		].join('\n');
 	}
 
@@ -628,21 +1180,88 @@ class StoryStore {
 			lines.push('', `### Current Scene`, ...sceneLines);
 		}
 
-		// Present NPCs
+		// Present NPCs — render rich state so the narrator has specifics
+		// to be specific *about*. Without this, the adversarial directive
+		// in Final Instructions has nothing to bite into and NPCs default
+		// to generic-agreeable.
 		const present = snap.presentCharacters.length > 0
 			? snap.presentCharacters
 			: this.characters.filter(c => c.status === 'active' && c.relationship !== 'self').slice(0, 6);
 		if (present.length > 0) {
 			lines.push('', `### Present`);
+			lines.push('NPCs below carry their own pressures, knowledge, and grievances. They will act on these — refuse, lie, manipulate, or pursue private agendas — when it serves them. Reference what they know. Honor what they want. Do not flatten them into helpers.');
+			lines.push('');
+			const totalEntries = this.entries.length;
 			for (const c of present) {
-				const rel = c.relationship ? ` (${c.relationship})` : '';
-				const desc = c.description ? ` — ${c.description}` : '';
-				lines.push(`- ${c.name}${rel}${desc}`);
+				// Find the matching lorebook entry (canonical or alias) — that's
+				// where the rich state lives. Falls back to the bare Character
+				// row when no entry exists yet (early-game).
+				const needle = c.name.toLowerCase();
+				const lore = this.lorebookEntries.find(e => {
+					if (e.type !== 'character' || (e as any).deleted) return false;
+					if (e.name?.toLowerCase() === needle) return true;
+					return (e.aliases ?? []).some(a => a?.toLowerCase() === needle);
+				});
+				const cs = lore?.state as CharacterEntryState | undefined;
+
+				// Header: name, relationship word + numeric level if known
+				const relWord = c.relationship && c.relationship !== 'neutral' ? c.relationship : null;
+				const level = cs?.relationship?.level;
+				const levelTag = (typeof level === 'number' && level !== 0)
+					? ` ${level > 0 ? '+' : ''}${level}`
+					: '';
+				const relTag = relWord ? ` (${relWord}${levelTag})` : (levelTag ? ` (${levelTag.trim()})` : '');
+				lines.push(`- **${c.name}**${relTag}`);
+
+				// Description / bio
+				const desc = (cs?.bio ?? c.description ?? '').toString().trim();
+				if (desc) lines.push(`  ${desc.slice(0, 220)}`);
+
+				// Traits — combine Character.traits + lore personality if present
+				const traits = c.traits?.length ? c.traits : [];
+				if (traits.length > 0 || cs?.personality) {
+					const bits: string[] = [];
+					if (traits.length > 0) bits.push(traits.slice(0, 6).join(', '));
+					if (cs?.personality) bits.push(cs.personality.slice(0, 100));
+					lines.push(`  Traits: ${bits.join(' · ')}`);
+				}
+
+				// Pressures — the off-screen drivers. Always render when present.
+				if (cs?.pressures && cs.pressures.length > 0) {
+					lines.push(`  Pressures: ${cs.pressures.slice(0, 4).map(p => p.trim()).filter(Boolean).join(' · ')}`);
+				}
+
+				// What they know about the player — the basis for grudges and leverage
+				if (cs?.knownFacts && cs.knownFacts.length > 0) {
+					lines.push(`  Knows about you: ${cs.knownFacts.slice(-4).join('; ')}`);
+				}
+				if (cs?.revealedSecrets && cs.revealedSecrets.length > 0) {
+					lines.push(`  Holds secrets: ${cs.revealedSecrets.slice(-3).join('; ')}`);
+				}
+
+				// Their inner stance — the line that should color every word out of their mouth
+				if (cs?.personalOpinion) {
+					lines.push(`  Their view of you: "${cs.personalOpinion.slice(0, 140)}"`);
+				}
+
+				// Recency — "X turns ago" so the narrator can weigh how fresh the slight is
+				if (typeof cs?.lastConversationAt === 'number' && totalEntries > 0) {
+					const turnsAgo = Math.max(0, totalEntries - cs.lastConversationAt);
+					if (turnsAgo > 0 && turnsAgo < 9999) {
+						lines.push(`  Last spoke: ${turnsAgo} turn${turnsAgo === 1 ? '' : 's'} ago`);
+					}
+				}
+
+				// Active motivations from enrichment, when present (separate axis from pressures)
+				if (cs?.motivations && cs.motivations.length > 0) {
+					lines.push(`  Wants: ${cs.motivations.slice(0, 3).join('; ')}`);
+				}
 			}
 		}
 
-		// Recent story beats (last 2) — characterizing context
-		const recentBeats = snap.storyBeats.filter(b => b.status === 'active').slice(-2);
+		// Recent story beats — characterizing context. Bumped from 2 → 5 so
+		// older slights remain visible to the narrator long enough to matter.
+		const recentBeats = snap.storyBeats.filter(b => b.status === 'active').slice(-5);
 		if (recentBeats.length > 0) {
 			lines.push('', `### Recent Beats`, ...recentBeats.map(b => `- ${b.title}`));
 		}
@@ -650,7 +1269,212 @@ class StoryStore {
 		return lines.length > 1 ? lines.join('\n') : '';
 	}
 
+	// ── Section 4b: Factions ────────────────────────────────────────────────
+	// Renders the top ~6 most relevant factions so the narrator can weave
+	// political context into prose. Source = snap.relevantFactions (pre-scored
+	// in buildStateSnapshot).
+	#sectionPlayerReputation(s: Story): string {
+		const reputation = s.playerReputation?.trim();
+
+		return [
+			'## Player Reputation',
+			'',
+			'Public reputation attached to {{user}}. Use this to shape how strangers, courts, smallfolk, faction agents, rumor networks, and rivals react before private trust is earned.',
+			'',
+			reputation ? compactMemoryText(reputation, 900) : 'No durable public reputation recorded yet. Establish one only when the fiction creates public consequences.',
+			'',
+			'Keep it fallible: reputation varies by region, faction, rank, rumor source, and communication delay. If public reputation changes, update player_reputation through world state.',
+		].join('\n');
+	}
+
+	#sectionFactions(_s: Story, snap: StateSnapshot): string {
+		const factions = snap.relevantFactions;
+		if (!factions || factions.length === 0) return '';
+
+		const lines: string[] = ['## Factions'];
+
+		for (const f of factions) {
+			const state = f.state as FactionEntryState | undefined;
+			if (!state) continue;
+			const standing = typeof state.playerStanding === 'number' ? state.playerStanding : 0;
+			const sign = standing > 0 ? `+${standing}` : `${standing}`;
+			const status = state.status ?? 'unknown';
+			lines.push('', `### ${stripTypePrefix(f.name)}  (${status}, ${sign})`);
+
+			// Description — the wiki content. Without this, a freshly-imported
+			// faction with no state showed nothing usable to the narrator.
+			const desc = (f.description ?? '').trim();
+			if (desc) lines.push(desc);
+
+			// Disposition + top unfinished goal on one line
+			const dispGoal: string[] = [];
+			if (state.disposition) dispGoal.push(`Disposition: ${state.disposition}.`);
+			const topGoal = (state.goals ?? [])
+				.filter(g => (g.progress ?? 0) < 100)
+				.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0];
+			if (topGoal) dispGoal.push(`Top goal: ${topGoal.description}.`);
+			if (dispGoal.length > 0) lines.push(dispGoal.join(' '));
+
+			if (state.resources) {
+				const r = state.resources;
+				lines.push(`Resources: military ${r.military}, wealth ${r.wealth}, influence ${r.influence}, information ${r.information}, morale ${r.morale}.`);
+			}
+
+			// Territory and known members — usable context for politics scenes
+			if (state.territory && state.territory.length > 0) {
+				lines.push(`Territory: ${state.territory.join(', ')}.`);
+			}
+			if (state.knownMembers && state.knownMembers.length > 0) {
+				// knownMembers are normally entry IDs; legacy/imported entries may
+				// contain display names, so preserve those as a fallback.
+				const memberNames = state.knownMembers
+					.map(id => this.lorebookEntries.find(e => e.id === id)?.name ?? id)
+					.filter((n): n is string => !!n);
+				if (memberNames.length > 0) lines.push(`Known members: ${memberNames.slice(0, 6).join(', ')}.`);
+			}
+
+			// Hidden GM lore — narrator-only, never quoted in prose
+			if (f.hiddenInfo) lines.push(`[Hidden — narrator-only]: ${f.hiddenInfo}`);
+
+			// Allies / foes from interFactionRelations. Normalizes both legacy
+			// (number) and post-F4 (FactionRelation) forms.
+			const rels = state.interFactionRelations ?? {};
+			const allyEntries: Array<[string, number]> = [];
+			const foeEntries: Array<[string, number]> = [];
+			for (const [name, val] of Object.entries(rels)) {
+				const standing = normalizeRelation(val).standing;
+				if (standing >= 30) allyEntries.push([name, standing]);
+				else if (standing <= -30) foeEntries.push([name, standing]);
+			}
+			allyEntries.sort((a, b) => b[1] - a[1]);
+			foeEntries.sort((a, b) => a[1] - b[1]);
+			const allies = allyEntries.slice(0, 2).map(([n, v]) => `${n} (+${v})`);
+			const foes = foeEntries.slice(0, 2).map(([n, v]) => `${n} (${v})`);
+			const relLine: string[] = [];
+			if (allies.length > 0) relLine.push(`Allies: ${allies.join(', ')}.`);
+			if (foes.length > 0) relLine.push(`Foes: ${foes.join(', ')}.`);
+			if (relLine.length > 0) lines.push(relLine.join(' '));
+
+			// Most recent action by this faction (truncated)
+			const recent = snap.factionActions
+				.filter(fa => fa.factionName.toLowerCase() === f.name.toLowerCase())
+				.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
+			if (recent) {
+				const action = recent.action.length > 100 ? recent.action.slice(0, 97) + '…' : recent.action;
+				lines.push(`Recent: ${action}`);
+			}
+		}
+
+		return lines.length > 1 ? lines.join('\n') : '';
+	}
+
+	// ── Section 4b: World Lore (retrieved lorebook entries) ─────────────────
+	// Semantically-retrieved entries relevant to recent narration. De-duped
+	// against presentCharacters + relevantFactions + protagonist in
+	// buildStateSnapshot so nothing here is already rendered above.
+	//
+	// Entries are emitted with their FULL description / hidden info / bio —
+	// no per-entry truncation. The wiki was designed to be crawled by the
+	// narrator, so chopping mid-sentence defeats the purpose. Token budget
+	// is bounded by the Memory settings retrieval limit in buildStateSnapshot
+	// (the retrieval service already scores by relevance).
+	#sectionLorebook(snap: StateSnapshot): string {
+		const entries = snap.retrievedEntries;
+		if (!entries || entries.length === 0) return '';
+
+		const lines: string[] = [
+			'## World Lore',
+			'',
+			'Background facts relevant to the current scene. Use them only when they serve the narrative — do not list them at the player. Hidden lore is for your reference only and must not appear verbatim in narration.',
+		];
+
+		for (const e of entries) {
+			const typeLabel = e.type.charAt(0).toUpperCase() + e.type.slice(1);
+			lines.push('', `### ${stripTypePrefix(e.name)}  (${typeLabel})`);
+
+			const desc = (e.description ?? '').trim();
+			if (desc) lines.push(desc);
+
+			// Compact state hints per entry type — narrator-relevant flags only
+			if (e.type === 'location') {
+				const ls = e.state as LocationEntryState | undefined;
+				const recent = ls?.changes?.slice(-2).map(c => c.description).filter(Boolean) ?? [];
+				if (recent.length > 0) lines.push(`Recent changes: ${recent.join('; ')}`);
+			} else if (e.type === 'item') {
+				const is = e.state as ItemEntryState | undefined;
+				if (is?.condition) lines.push(`Condition: ${is.condition}`);
+			} else if (e.type === 'event') {
+				const es = e.state as EventEntryState | undefined;
+				if (es?.occurred) lines.push('Status: has already occurred');
+			} else if (e.type === 'concept') {
+				const cs = e.state as ConceptEntryState | undefined;
+				if (cs?.comprehensionLevel && cs.comprehensionLevel !== 'unknown') {
+					lines.push(`Player comprehension: ${cs.comprehensionLevel}`);
+				}
+			} else if (e.type === 'character') {
+				// Off-screen NPCs only — present + protagonist were de-duped out.
+				const cs = e.state as CharacterEntryState | undefined;
+				if (cs?.bio && !desc.includes(cs.bio.slice(0, 30))) lines.push(`Bio: ${cs.bio}`);
+				if (cs?.motivations?.length) lines.push(`Motivations: ${cs.motivations.join('; ')}`);
+				if (cs?.personality) lines.push(`Personality: ${cs.personality}`);
+			}
+
+			if (e.hiddenInfo) lines.push(`[Hidden — narrator-only]: ${e.hiddenInfo}`);
+		}
+
+		return lines.join('\n');
+	}
+
+	#sectionRetrievedEpisodicMemory(snap: StateSnapshot): string {
+		const chapters = snap.retrievedChapters;
+		if (!chapters || chapters.length === 0) return '';
+
+		const lines: string[] = [
+			'## Retrieved Episodic Memory',
+			'',
+			'Past events matched to the current action. Use these facts for continuity; do not recap them unless the player asks.',
+		];
+
+		for (const ch of chapters) {
+			lines.push('', `- **Ch.${ch.number}: ${ch.title ?? 'Untitled'}** — ${ch.summary}`);
+			if (ch.plotThreads?.length) lines.push(`  Threads: ${ch.plotThreads.slice(0, 4).join('; ')}`);
+			if (ch.characters?.length) lines.push(`  People: ${ch.characters.slice(0, 6).join(', ')}`);
+			if (ch.locations?.length) lines.push(`  Places: ${ch.locations.slice(0, 4).join(', ')}`);
+		}
+
+		return lines.join('\n');
+	}
+
+	#sectionConversationMemory(snap: StateSnapshot): string {
+		const memories = snap.relevantConversationMemories;
+		if (!memories || memories.length === 0) return '';
+
+		const lines: string[] = [
+			'## Conversation Memory',
+			'',
+			'NPC-specific memory. These are things an NPC may know, resent, conceal, or use as leverage.',
+		];
+
+		for (const memory of memories) {
+			const bits: string[] = [];
+			if (memory.playerSaid) bits.push(`player revealed: ${compactMemoryText(memory.playerSaid, 120)}`);
+			if (memory.npcLearned.length) bits.push(`NPC learned: ${memory.npcLearned.slice(-3).join('; ')}`);
+			if (memory.emotionalImpact) bits.push(`impact: ${compactMemoryText(memory.emotionalImpact, 100)}`);
+			lines.push(`- **${memory.npcName}** — ${compactMemoryText(memory.topic, 130)}${bits.length ? ` (${bits.join(' | ')})` : ''}`);
+		}
+
+		return lines.join('\n');
+	}
+
 	// ── Section 5: Arcs ─────────────────────────────────────────────────────
+	#sectionBackendMemory(snap: StateSnapshot): string {
+		if (!snap.backendMemoryPacket?.trim()) return '';
+		const debug = snap.backendMemoryDebug.length
+			? `\n\n[retrieval-debug: ${snap.backendMemoryDebug.join(' | ')}]`
+			: '';
+		return `${snap.backendMemoryPacket}${debug}`;
+	}
+
 	#sectionArcs(snap: StateSnapshot): string {
 		const arcs = snap.arcs;
 		if (arcs.length === 0) return '';
@@ -660,9 +1484,12 @@ class StoryStore {
 
 		if (arcs.length > FULL_ARC_COUNT) {
 			const older = arcs.slice(0, arcs.length - FULL_ARC_COUNT);
-			out.push('', `### Earlier (condensed)`);
+			out.push('', `### Earlier`);
 			for (const arc of older) {
-				out.push(`- **Arc ${arc.arcNumber}: ${arc.title}** (Ch.${arc.chapterRange}) — ${arc.summary.slice(0, 150)}...`);
+				out.push('', `**Arc ${arc.arcNumber}: ${arc.title}** (Ch.${arc.chapterRange})`);
+				out.push(arc.summary);
+				if (arc.keyPlotPoints?.length) out.push(`Key events: ${arc.keyPlotPoints.join('; ')}`);
+				if (arc.characterArcs?.length) out.push(`Character development: ${arc.characterArcs.map(ca => `${ca.name}: ${ca.development}`).join('; ')}`);
 			}
 		}
 
@@ -688,14 +1515,21 @@ class StoryStore {
 		const chapters = snap.chapters;
 		if (chapters.length === 0) return '';
 
+		const sorted = [...chapters].sort((a, b) => a.number - b.number);
 		const coveredIds = new Set(snap.arcs.flatMap(a => a.chapterIds));
-		const uncovered = chapters
-			.filter(c => c.pinned || !coveredIds.has(c.id))
-			.sort((a, b) => a.number - b.number);
-		if (uncovered.length === 0) return '';
+		// Always include the last 2 chapters even if covered by an arc — recency matters
+		// more than the small token cost, and arc summaries lose the per-chapter emotional tone.
+		const recent = sorted.slice(-2);
+		const recentIds = new Set(recent.map(c => c.id));
+		const uncovered = sorted.filter(c => c.pinned || !coveredIds.has(c.id));
+		const merged = [
+			...recent,
+			...uncovered.filter(c => !recentIds.has(c.id)),
+		].sort((a, b) => a.number - b.number);
+		if (merged.length === 0) return '';
 
 		const out: string[] = ['## Chapters'];
-		for (const ch of uncovered) {
+		for (const ch of merged) {
 			out.push('', `**Ch.${ch.number}: ${ch.title ?? 'Untitled'}**`);
 			out.push(ch.summary);
 			if (ch.emotionalTone) out.push(`[Tone: ${ch.emotionalTone}]`);
@@ -706,12 +1540,119 @@ class StoryStore {
 		return out.join('\n');
 	}
 
+	// ── Section 6b: Chapter Opening (transient — fires on a fresh chapter) ──
+	// When a chapter has just been created (the latest entries sit just past the
+	// last chapter's endEntryId), nudge the narrator to re-establish pacing and
+	// acknowledge the prior chapter's tone. Lives in the dynamic block so it
+	// disappears once the new chapter is a few entries deep.
+	#sectionChapterIntro(snap: StateSnapshot): string {
+		const chapters = snap.chapters;
+		if (chapters.length === 0) return '';
+		const sorted = [...chapters].sort((a, b) => a.number - b.number);
+		const last = sorted[sorted.length - 1];
+		const lastEndIdx = this.entries.findIndex(e => e.id === last.endEntryId);
+		// Entries authored AFTER the most-recent chapter ended.
+		const entriesPast = lastEndIdx === -1 ? 0 : this.entries.length - 1 - lastEndIdx;
+		if (entriesPast > 3) return '';
+
+		const out: string[] = ['## Chapter Opening'];
+		out.push(`A new chapter begins. The previous chapter, **Ch.${last.number}: ${last.title ?? 'Untitled'}**, has just closed.`);
+		if (last.emotionalTone) out.push(`It ended on: ${last.emotionalTone}.`);
+		if (last.summary) {
+			// Last sentence of the prior summary as the "final beat" hook.
+			const sentences = last.summary.split(/(?<=[.!?])\s+/).filter(Boolean);
+			const finalBeat = sentences[sentences.length - 1] ?? last.summary.slice(-160);
+			if (finalBeat && finalBeat.length <= 220) out.push(`Final beat: ${finalBeat}`);
+		}
+		// Diff against the chapter before that (if any) — what's changed?
+		const prev = sorted.length >= 2 ? sorted[sorted.length - 2] : null;
+		if (prev) {
+			const prevChars = new Set((prev.characters ?? []).map(s => s.toLowerCase()));
+			const lastChars = new Set((last.characters ?? []).map(s => s.toLowerCase()));
+			const dropped = (prev.characters ?? []).filter(c => !lastChars.has(c.toLowerCase()));
+			const introduced = (last.characters ?? []).filter(c => !prevChars.has(c.toLowerCase()));
+			if (dropped.length) out.push(`Off-stage: ${dropped.slice(0, 6).join(', ')}.`);
+			if (introduced.length) out.push(`Recently surfaced: ${introduced.slice(0, 6).join(', ')}.`);
+			const prevLocs = new Set((prev.locations ?? []).map(s => s.toLowerCase()));
+			const newLocs = (last.locations ?? []).filter(l => !prevLocs.has(l.toLowerCase()));
+			if (newLocs.length) out.push(`New setting: ${newLocs.slice(0, 4).join(', ')}.`);
+		}
+		out.push(`Re-establish pacing and refresh the setting through sensory detail. If time has passed, show it implicitly — do not narrate the gap.`);
+		return out.join('\n');
+	}
+
 	// ── Section 7: Entry History preamble ───────────────────────────────────
 	#sectionEntryHistoryPreamble(mode: string): string {
 		if (mode !== 'adventure') {
 			return `## Entry History\nPrior prose follows as conversation turns. Continue from the most recent turn.`;
 		}
 		return `## Entry History\nThe most recent exchanges follow as conversation turns. Each {{user}} turn is their next action; each assistant turn is your prior narration. Continue seamlessly from the latest turn — do not recap what just happened.`;
+	}
+
+	#sectionPlotLedger(snap: StateSnapshot): string {
+		const lines: string[] = ['## Plot Ledger'];
+		const significanceRank = { critical: 4, major: 3, moderate: 2, minor: 1 } as const;
+		const statusRank = { imminent: 4, open: 3, stalled: 2, closed: 1, abandoned: 0 } as const;
+
+		const activeThreads = snap.threads
+			.filter(t => t.status !== 'closed' && t.status !== 'abandoned')
+			.sort((a, b) =>
+				(statusRank[b.status] ?? 0) - (statusRank[a.status] ?? 0) ||
+				(significanceRank[b.significance] ?? 0) - (significanceRank[a.significance] ?? 0) ||
+				b.updatedAt - a.updatedAt
+			)
+			.slice(0, 8);
+		if (activeThreads.length > 0) {
+			lines.push('', '### Open Threads');
+			for (const t of activeThreads) {
+				lines.push(`- [${t.status}/${t.significance}] ${compactMemoryText(t.description, 180)}`);
+			}
+		}
+
+		const importantAgreements = snap.activeAgreements
+			.filter(a => ['oath', 'debt', 'promise', 'alliance', 'marriage', 'vassalage', 'bargain-with-entity'].includes(a.category))
+			.slice(0, 8);
+		if (importantAgreements.length > 0) {
+			lines.push('', '### Binding Obligations');
+			for (const a of importantAgreements) {
+				const secrecy = a.secrecy === 'public' ? '' : `/${a.secrecy}`;
+				lines.push(`- [${a.category}${secrecy}] ${a.parties.join(' <-> ')}: ${compactMemoryText(a.terms, 170)}`);
+			}
+		}
+
+		const urgentMoves = snap.factionActions
+			.filter(fa => fa.status === 'active' && (fa.urgency === 'critical' || fa.urgency === 'high'))
+			.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
+			.slice(0, 4);
+		if (urgentMoves.length > 0) {
+			lines.push('', '### Due Pressure');
+			for (const fa of urgentMoves) {
+				const target = fa.target ? ` -> ${fa.target}` : '';
+				lines.push(`- [${fa.urgency}] ${fa.factionName}${target}: ${compactMemoryText(fa.action, 160)}`);
+			}
+		}
+
+		return lines.length > 1 ? lines.join('\n') : '';
+	}
+
+	#sectionProceduralMemory(snap: StateSnapshot): string {
+		const rules = snap.proceduralRules;
+		if (!rules || rules.length === 0) return '';
+
+		const lines: string[] = [
+			'## Narrative Rules',
+			'',
+			'Learned patterns for this story. Apply them quietly; never explain them to the player.',
+		];
+
+		const ruleLimit = settings.uiSettings.proceduralMemoryLimit ?? rules.length;
+		for (const rule of rules.slice(0, ruleLimit)) {
+			const verb = rule.type === 'anti_pattern' ? 'AVOID' : 'APPLY';
+			const tag = rule.maturity === 'proven' ? '' : `/${rule.maturity}`;
+			lines.push(`- [${verb}${tag}] ${compactMemoryText(rule.content, 180)}`);
+		}
+
+		return lines.join('\n');
 	}
 
 	// ── Section 8: Living World ─────────────────────────────────────────────
@@ -801,39 +1742,111 @@ class StoryStore {
 		return ['## Living World', '', ...out].join('\n');
 	}
 
+	// ── Section 8b: Active Schemes (antagonist + player plans) ──────────────
+	#sectionSchemes(): string {
+		return injectSchemes(this.schemes);
+	}
+
+	// ── Section 8c: Plot Momentum (dynamic, generated by WorldSimulationService) ─
+	#sectionPlotMomentum(): string {
+		const pm = this.lastPlotMomentum;
+		if (!pm) return '';
+
+		const nb = pm.next_beat;
+		if (!nb) return '';
+
+		const lines: string[] = ['## Plot Momentum', ''];
+		lines.push('Use this as slow-burn pressure, not permission to force a twist. Most turns should deepen existing tension instead of changing the whole board.');
+		lines.push('');
+
+		const recommendedKey = nb.next_turn_strategy.recommended_path;
+		const recommended = nb.critical_path[recommendedKey];
+		if (recommended) {
+			const flags: string[] = [];
+			if (recommended.friction) flags.push('friction');
+			if (recommended.action) flags.push('action');
+			if (recommended.twist_from_existing_secret) flags.push('twist-candidate');
+			if (recommended.downgraded_to_friction) flags.push('downgraded');
+			const flagStr = flags.length > 0 ? ` [${flags.join(', ')}]` : '';
+			lines.push('**Recommended Pressure Beat:**');
+			lines.push(`- ${recommendedKey.toUpperCase()} (${recommended.type})${flagStr}: ${recommended.description}`);
+		}
+		lines.push(`- Rationale: ${nb.next_turn_strategy.rationale}`);
+		lines.push('- Pacing: favor setup, consequence, doubt, delay, and visible cost. Do not land a major reveal unless the player action directly triggers a prepared payoff.');
+		lines.push('');
+
+		const twistSeed = nb.critical_path.path_d;
+		if (twistSeed && recommendedKey !== 'path_d' && twistSeed.type !== 'none') {
+			lines.push('**Withheld Twist Seed:**');
+			lines.push(`- Keep off-page for now: ${twistSeed.description}`);
+			lines.push('- Foreshadow only through rumor, evidence, hesitation, cost, or changed behavior.');
+			lines.push('');
+		}
+
+		// Revelation Budget
+		lines.push('**Revelation Budget:**');
+		if (nb.revelation_budget.major_reveals_stewing.length > 0) {
+			for (const r of nb.revelation_budget.major_reveals_stewing) {
+				lines.push(`- Hold back: ${r}`);
+			}
+		} else {
+			lines.push('- (none stewing)');
+		}
+		lines.push(`- Notes: ${nb.revelation_budget.notes}`);
+		lines.push('');
+
+		// Faction Advisory
+		const factions = Object.entries(nb.faction_advisory);
+		if (factions.length > 0) {
+			lines.push('**Faction Advisory:**');
+			for (const [slug, f] of factions) {
+				lines.push(`- ${slug} [${f.disposition}]: ${f.likely_next_move}`);
+				if (f.notes) lines.push(`  ${f.notes}`);
+			}
+			lines.push('');
+		}
+
+		// Thread Awareness
+		lines.push('**Thread Awareness:**');
+		if (nb.thread_awareness.existing_threads.length > 0) {
+			for (const t of nb.thread_awareness.existing_threads) {
+				lines.push(`- Existing: ${t}`);
+			}
+		}
+		if (nb.thread_awareness.imminent_threads.length > 0) {
+			for (const t of nb.thread_awareness.imminent_threads) {
+				lines.push(`- Imminent: ${t}`);
+			}
+		}
+		lines.push(`- Alignment: ${nb.thread_awareness.branch_alignment}`);
+		lines.push('');
+
+		return lines.join('\n');
+	}
+
 	// ── Section 9: Final Instructions ───────────────────────────────────────
 	#sectionFinalInstructions(mode: string): string {
 		if (mode !== 'adventure') {
 			return `## Final Instructions\nContinue the prose from the most recent turn. Begin immediately, in the established voice. No preamble.`;
 		}
 		const lines: string[] = ['## Final Instructions', ''];
-		lines.push('═══ FINAL DIRECTIONS ═══');
+
+		// Plot momentum is generated by WorldSimulationService and injected above.
+		lines.push('Plot momentum guidance is provided in the section above. Read it before planning your next beat.');
 		lines.push('');
-		lines.push('You are a TEXT ADVENTURE game master. Not a novelist. Not a storyteller. A reactive GM.');
+
+		// Final reminder — last thing the model reads before generating.
+		// Recency wins. Keep this terse.
+		lines.push('═══ FINAL REMINDER ═══');
 		lines.push('');
-		lines.push('AGENCY:');
-		lines.push("- {{user}} controls their character. You control everything else.");
-		lines.push("- NEVER write {{user}}'s dialogue, thoughts, decisions, or actions.");
-		lines.push('- NEVER move {{user}} unless they said to move.');
-		lines.push('- NEVER skip ahead. One action → one immediate result.');
-		lines.push('- STOP when {{user}} needs to choose what to do next.');
+		lines.push('Before you write a single word:');
 		lines.push('');
-		lines.push('FORMAT:');
-		lines.push('- Write plain prose. No > action lines. No markdown headers. No meta-commentary.');
-		lines.push('- Dialogue in "quotes". Actions in plain text.');
-		lines.push('- Short for simple actions. Longer for complex scenes. Never padded.');
-		lines.push('');
-		lines.push('WORLD:');
-		lines.push('- Describe what {{user}} can SEE, HEAR, SMELL, FEEL — not what they think or feel about it.');
-		lines.push('- NPCs act on their own motivations. They can lie, refuse, attack, flee, or help.');
-		lines.push('- NPCs remember past interactions. Reference what they know.');
-		lines.push('- Consequences are real. The world does not reset.');
-		lines.push('- Write with weight. Every choice has a cost. NPCs have their own agendas and survival instincts.');
-		lines.push("- Don't pull punches. If the player walks into a trap, spring it. If an ally is outnumbered, they can die.");
-		lines.push('- Favor gritty specificity over generic fantasy: the smell of a wound, the sound of rain on mail, the taste of stale bread.');
-		lines.push("- Let silence and implication do work. Not every threat needs to be stated. A lord's pause before answering says more than a speech.");
-		lines.push('');
-		lines.push('CRITICAL: ALWAYS write narration prose FIRST. Tool calls without narration are a bug — the player must see story text every turn. Write the scene, then call `update_world_state` once at the end.');
+		lines.push("1. NEVER act for {{user}}. The player owns their voice, choices, and thoughts.");
+		lines.push('2. ADVANCE THE CLOCK in the header. Even a minute. Even a held breath.');
+		lines.push('3. DEFAULT TO FRICTION. NPCs have their own agendas. "Yes" is the rare answer.');
+		lines.push('4. CHECK NPC KNOWLEDGE. No one knows off-screen facts without a source, line of sight, message, evidence, inference, and time.');
+		lines.push('5. WRITE PROSE ONLY — state is extracted from your text. Outcomes plain.');
+		lines.push("6. STOP when {{user}} must choose. End on a sensory beat, an unanswered question, or a held silence.");
 		lines.push('');
 		lines.push('Now write the next turn of narration. Begin immediately, in-character, no preamble.');
 		return lines.join('\n');
@@ -845,16 +1858,18 @@ class StoryStore {
 	 * faction actions so buildSystemPrompt can populate the Characters / Arcs /
 	 * Chapters / Living World sections without re-querying.
 	 */
-	async buildStateSnapshot(): Promise<StateSnapshot> {
+	async buildStateSnapshot(currentAction = ''): Promise<StateSnapshot> {
 		const s = this.currentStory;
 		if (!s) return emptySnapshot();
 
 		let arcs: Arc[] = [];
 		let chapters: Chapter[] = [];
 		let storyBeats: StoryBeat[] = [];
+		let threads: StoryThread[] = [];
 		try { arcs = await getArcs(s.id); } catch { /* leave empty */ }
 		try { chapters = await getChapters(s.id); } catch { /* leave empty */ }
 		try { storyBeats = await getStoryBeats(s.id); } catch { /* leave empty */ }
+		try { threads = await getStoryThreads(s.id); } catch { /* leave empty */ }
 
 		const currentLocation = this.locations.find(l => l.current) ?? null;
 		const presentCharacters = this.characters
@@ -882,6 +1897,117 @@ class StoryStore {
 			return false;
 		});
 
+		// Faction roster — score and pick the most narratively-relevant ones.
+		// Always include factions with |playerStanding| >= 50; fill remaining slots
+		// by score until cap of 6.
+		const FACTION_CAP = 6;
+		const currentChapter = chapters.length > 0 ? Math.max(...chapters.map(c => c.number ?? 0)) : 0;
+		const factionActionNames = new Set(this.factionActions.map(fa => fa.factionName.toLowerCase()));
+		const factionEntries = this.lorebookEntries.filter(e => e.type === 'faction' && !e.deleted);
+		const scored = factionEntries.map(f => {
+			const state = f.state as FactionEntryState | undefined;
+			const standing = state?.playerStanding ?? 0;
+			let score = Math.abs(standing);
+			if (state?.lastActionChapter != null && currentChapter - state.lastActionChapter <= 3) score += 25;
+			if (state?.status === 'allied' || state?.status === 'hostile') score += 15;
+			if (factionActionNames.has(f.name.toLowerCase())) score += 20;
+			return { faction: f, score, force: Math.abs(standing) >= 50 };
+		});
+		const forced = scored.filter(s => s.force);
+		const others = scored.filter(s => !s.force).sort((a, b) => b.score - a.score);
+		const relevantFactions = [...forced, ...others.slice(0, Math.max(0, FACTION_CAP - forced.length))]
+			.sort((a, b) => b.score - a.score)
+			.slice(0, FACTION_CAP)
+			.map(s => s.faction);
+
+		const currentActionText = currentAction.trim();
+		let backendMemoryPacket: string | null = null;
+		let backendMemoryIds: string[] = [];
+		let backendMemoryDebug: string[] = [];
+		if (s.serverStoryId && currentActionText) {
+			try {
+				const packet = await retrieveBackendMemory({
+					storyId: s.serverStoryId,
+					query: currentActionText,
+					sceneEntityIds: [
+						...presentCharacters.map(c => c.id),
+						...relevantFactions.map(f => f.id),
+					],
+					locationId: currentLocation?.id ?? null,
+					threadIds: threads.filter(t => t.status !== 'closed').map(t => t.id),
+					currentFactionId: relevantFactions[0]?.id ?? null,
+					presentNpcIds: presentCharacters.map(c => c.id),
+					includeSecret: false,
+					tokenBudget: settings.uiSettings.backendMemoryTokenBudget || 1100,
+				});
+				if (packet?.packet) {
+					backendMemoryPacket = packet.packet;
+					backendMemoryIds = packet.nodes.map(node => node.id);
+					backendMemoryDebug = packet.retrievalDebug;
+				}
+			} catch (e) {
+				console.warn('[Story] backend memory retrieval failed:', e);
+			}
+		}
+
+		// Semantically retrieve lorebook entries relevant to the current action and recent narrative.
+		// Without this the narrator is blind to anything outside the current scene's
+		// characters/factions — locations, items, concepts, off-screen NPCs etc.
+		// Embeddings are pre-warmed by preEmbedLorebook() at story load.
+		let retrievedEntries: Entry[] = [];
+		try {
+			const { ai } = await import('$lib/services/ai');
+			const candidateEntries = this.lorebookEntries.filter(e => !e.deleted);
+			const loreLimit = settings.uiSettings.retrievedLoreEntryLimit ?? 8;
+			if (!backendMemoryPacket && loreLimit > 0 && candidateEntries.length > 0) {
+				const result = await ai.entryRetrieval.retrieve(candidateEntries, this.entries, Math.max(loreLimit, 1), currentActionText);
+				const factionIds = new Set(relevantFactions.map(f => f.id));
+				// Build the "already rendered" name set: present NPCs + the protagonist,
+				// since the protagonist is dumped in the Header/Roles + Characters sections
+				// and re-injecting them here is pure duplication.
+				const presentNames = new Set(presentCharacters.map(c => c.name.toLowerCase()));
+				const protagonistName = this.protagonist?.name?.toLowerCase();
+				if (protagonistName) presentNames.add(protagonistName);
+				retrievedEntries = result.entries
+					.filter(e => !factionIds.has(e.id))
+					.filter(e => {
+						if (e.type !== 'character') return true;
+						if (presentNames.has(e.name.toLowerCase())) return false;
+						return !(e.aliases ?? []).some(a => presentNames.has(a.toLowerCase()));
+					})
+					.slice(0, loreLimit);
+			}
+		} catch (e) {
+			console.warn('[Story] entryRetrieval failed:', e);
+		}
+
+		const episodic = backendMemoryPacket
+			? { chapters: [], reason: 'Backend memory packet supplied episodic context.' }
+			: retrieveChaptersForAction(chapters, this.entries, currentActionText, settings.uiSettings.retrievedChapterLimit ?? 3);
+		const relevantConversationMemories = selectConversationMemories(
+			this.conversationMemories,
+			presentCharacters,
+			currentActionText,
+			settings.uiSettings.conversationMemoryLimit ?? 6,
+		);
+
+		let proceduralRules: ProceduralRule[] = [];
+		const proceduralLimit = settings.uiSettings.proceduralMemoryLimit ?? 8;
+		if (currentActionText && proceduralLimit > 0 && settings.getServiceConfig('proceduralMemory').enabled) {
+			try {
+				const { ai } = await import('$lib/services/ai');
+				const recentNarrative = this.entries.slice(-8).map(e => e.content).join('\n');
+				proceduralRules = await ai.proceduralMemory.getRelevantRules(
+					s.id,
+					currentActionText,
+					recentNarrative,
+					proceduralLimit,
+				);
+			} catch (e) {
+				console.warn('[Story] procedural memory retrieval failed:', e);
+			}
+		}
+
 		return {
 			arcs,
 			chapters,
@@ -893,7 +2019,17 @@ class StoryStore {
 			recentWorldEvents,
 			reachableRumors,
 			factionActions: this.factionActions,
+			relevantFactions,
+			retrievedEntries,
+			retrievedChapters: episodic.chapters,
+			retrievedChapterReason: episodic.reason,
+			proceduralRules,
+			relevantConversationMemories,
+			backendMemoryPacket,
+			backendMemoryIds,
+			backendMemoryDebug,
 			worldSim: ws,
+			threads,
 		};
 	}
 
@@ -929,31 +2065,12 @@ class StoryStore {
 		stableParts.push(this.#sectionInstructions(s, mode));
 		if (mode === 'adventure') stableParts.push(this.#sectionTools(opts.useInlineTools ?? false));
 
-		const dynamicParts: string[] = [];
-		const chars = this.#sectionCharacters(s, snapshot);
-		if (chars) dynamicParts.push(chars);
-		const arcs = this.#sectionArcs(snapshot);
-		if (arcs) dynamicParts.push(arcs);
-		const chapters = this.#sectionChapters(snapshot);
-		if (chapters) dynamicParts.push(chapters);
-		dynamicParts.push(this.#sectionEntryHistoryPreamble(mode));
-		const lw = this.#sectionLivingWorld(snapshot);
-		if (lw) dynamicParts.push(lw);
-		dynamicParts.push(this.#sectionFinalInstructions(mode));
-
 		let stable = stableParts.filter(Boolean).join('\n\n');
-		let dynamic = dynamicParts.filter(Boolean).join('\n\n');
+		let dynamic = this.#buildBudgetedDynamicPrompt(s, snapshot, mode);
 
 		// Resolve role tags in both halves
-		if (mode === 'adventure') {
-			const userName = this.protagonist?.name ?? 'the player';
-			const resolveTags = (text: string) => text
-				.replace(/\{\{user\}\}/g, userName)
-				.replace(/\{\{char\}\}/g, 'NPCs')
-				.replace(/\{\{world\}\}/g, 'the world');
-			stable = resolveTags(stable);
-			dynamic = resolveTags(dynamic);
-		}
+		stable = this.#resolveRoleTags(stable, mode);
+		dynamic = this.#resolveRoleTags(dynamic, mode);
 
 		return { stable, dynamic };
 	}
@@ -984,6 +2101,9 @@ class StoryStore {
 		const protag = this.protagonist;
 		if (protag) {
 			lines.push(`Protagonist: ${protag.name}${protag.description ? ' — ' + protag.description : ''}`);
+		}
+		if (s.playerReputation?.trim()) {
+			lines.push(`Player reputation: ${compactMemoryText(s.playerReputation, 240)}`);
 		}
 		if (snap.equippedItems.length > 0) {
 			lines.push(`Inventory: ${snap.equippedItems.map(i => i.name).join(', ')}`);
@@ -1029,7 +2149,7 @@ class StoryStore {
 	buildConversationMessages(systemPromptTokens?: number): ChatMessage[] {
 		// Dynamic budget: fill whatever space remains after system prompt + output reserve.
 		// When context tiers are sparse (early story), history expands to use the freed space.
-		const model = settings.narrativeSettings?.model || '';
+		const model = settings.getServiceConfig('narrative').model || '';
 		const contextWindow = getModelContextWindow(model);
 		const RESERVED = 4096 + 1000; // output + user prompt
 		const available = contextWindow - RESERVED;
@@ -1131,7 +2251,7 @@ class StoryStore {
 
 	/**
 	 * Calculate context usage statistics.
-	 * Accepts optional tier usage from ContextAssembler for accurate reporting.
+	 * Accepts optional tier usage from the budgeted prompt/runtime context path.
 	 */
 	getContextStats(tierUsage?: Record<string, number>): { system: number; context: number; recentEntries: number; conversationHistory: number; total: number; tiers?: Record<string, number> } {
 		const systemTokens = countTokens(this.buildSystemPrompt());
@@ -1171,6 +2291,13 @@ class StoryStore {
 		const value = description?.trim() || null;
 		await updateStory(this.currentStory.id, { description: value, updatedAt: Date.now() });
 		this.currentStory = { ...this.currentStory, description: value };
+	}
+
+	async updatePlayerReputation(playerReputation: string | null) {
+		if (!this.currentStory) return;
+		const value = playerReputation?.trim() || null;
+		await updateStory(this.currentStory.id, { playerReputation: value, updatedAt: Date.now() });
+		this.currentStory = { ...this.currentStory, playerReputation: value };
 	}
 
 	/**
@@ -1344,66 +2471,6 @@ class StoryStore {
 		);
 	}
 
-	/**
-	 * Apply a new compacted lore block.
-	 * Pushes the previous value into history (capped at 10) before overwriting.
-	 */
-	async applyCompactedLore(newLore: string) {
-		if (!this.currentStory) return;
-		const MAX_HISTORY = 10;
-		const prev = this.currentStory.compactedLore;
-		const prevHistory = this.currentStory.compactedLoreHistory ?? [];
-
-		// Push previous lore into history if it exists
-		const updatedHistory = prev
-			? [...prevHistory, prev].slice(-MAX_HISTORY)
-			: prevHistory;
-
-		const updates = {
-			compactedLore: newLore,
-			compactedLoreHistory: updatedHistory,
-			updatedAt: Date.now(),
-		};
-
-		await updateStory(this.currentStory.id, updates);
-		this.currentStory = { ...this.currentStory, ...updates };
-	}
-
-	/**
-	 * Undo the last compaction — restore from history.
-	 */
-	async undoCompactedLore() {
-		if (!this.currentStory) return;
-		const history = this.currentStory.compactedLoreHistory ?? [];
-		if (history.length === 0) return;
-
-		const prev = history[history.length - 1];
-		const newHistory = history.slice(0, -1);
-
-		const updates = {
-			compactedLore: prev,
-			compactedLoreHistory: newHistory,
-			updatedAt: Date.now(),
-		};
-
-		await updateStory(this.currentStory.id, updates);
-		this.currentStory = { ...this.currentStory, ...updates };
-	}
-
-	/**
-	 * Clear the compacted lore entirely.
-	 */
-	async clearCompactedLore() {
-		if (!this.currentStory) return;
-		const updates = {
-			compactedLore: null,
-			compactedLoreHistory: null,
-			updatedAt: Date.now(),
-		};
-		await updateStory(this.currentStory.id, updates);
-		this.currentStory = { ...this.currentStory, ...updates };
-	}
-
 	/** Save a generated image to the database and local state. */
 	async addImage(image: Omit<EmbeddedImage, 'createdAt'>): Promise<void> {
 		await createEmbeddedImage(image);
@@ -1422,8 +2489,14 @@ class StoryStore {
 	}
 
 	clear() {
+		this._loadGeneration++;
 		this.currentStory = null;
 		this.entries = [];
+		this.entryCount = 0;
+		this.oldestLoadedEntryPosition = null;
+		this.loadingOlderEntries = false;
+		this.hydratingWorld = false;
+		this.worldHydrationError = null;
 		this.characters = [];
 		this.locations = [];
 		this.items = [];
@@ -1434,9 +2507,11 @@ class StoryStore {
 		this.agreements = [];
 		this.factionActions = [];
 		this.rumors = [];
+		this.schemes = [];
 		this.images = [];
 		this.lastWorldSimResult = null;
 		this.lastTierUsage = null;
+		this.lastPromptSectionUsage = null;
 		this.lastContextTotal = 0;
 		this.chatHistoryFloor = 0;
 	}

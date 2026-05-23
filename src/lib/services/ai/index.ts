@@ -17,12 +17,11 @@ export { StyleReviewerService } from './generation/StyleReviewerService';
 export { EntryRetrievalService } from './retrieval/EntryRetrievalService';
 
 export { LoreManagementService } from './lorebook/LoreManagementService';
-export { InteractiveVaultService } from './vault/InteractiveVaultService';
+export { EntryRefinementService } from './lorebook/EntryRefinementService';
 export { ImageGenerationService } from './image/ImageGenerationService';
 export { WorldSimulationService } from './generation/WorldSimulationService';
 export { ArcCondensationService } from './generation/ArcCondensationService';
 export { ProceduralMemoryService } from './memory/ProceduralMemoryService';
-export { CompactionService } from './memory/CompactionService';
 export { EmbeddingService } from './embeddings/EmbeddingService';
 export { WikiLintService } from './wiki/WikiLintService';
 
@@ -34,12 +33,11 @@ import { StyleReviewerService } from './generation/StyleReviewerService';
 import { EntryRetrievalService } from './retrieval/EntryRetrievalService';
 
 import { LoreManagementService } from './lorebook/LoreManagementService';
-import { InteractiveVaultService } from './vault/InteractiveVaultService';
+import { EntryRefinementService } from './lorebook/EntryRefinementService';
 import { ImageGenerationService } from './image/ImageGenerationService';
 import { WorldSimulationService } from './generation/WorldSimulationService';
 import { ArcCondensationService } from './generation/ArcCondensationService';
 import { ProceduralMemoryService } from './memory/ProceduralMemoryService';
-import { CompactionService } from './memory/CompactionService';
 import { EmbeddingService } from './embeddings/EmbeddingService';
 import { WikiLintService } from './wiki/WikiLintService';
 
@@ -50,12 +48,11 @@ let _styleReviewer: StyleReviewerService;
 let _entryRetrieval: EntryRetrievalService;
 
 let _loreManagement: LoreManagementService;
-let _vault: InteractiveVaultService;
+let _entryRefinement: EntryRefinementService;
 let _imageGen: ImageGenerationService;
 let _worldSim: WorldSimulationService;
 let _arcCondensation: ArcCondensationService;
 let _proceduralMemory: ProceduralMemoryService;
-let _compaction: CompactionService;
 let _embeddings: EmbeddingService;
 let _wikiLint: WikiLintService;
 
@@ -67,12 +64,11 @@ export const ai = {
 	get entryRetrieval() { return _entryRetrieval ??= new EntryRetrievalService(); },
 
 	get loreManagement() { return _loreManagement ??= new LoreManagementService(); },
-	get vault() { return _vault ??= new InteractiveVaultService(); },
+	get entryRefinement() { return _entryRefinement ??= new EntryRefinementService(); },
 	get imageGen() { return _imageGen ??= new ImageGenerationService(); },
 	get worldSim() { return _worldSim ??= new WorldSimulationService(); },
 	get arcCondensation() { return _arcCondensation ??= new ArcCondensationService(); },
 	get proceduralMemory() { return _proceduralMemory ??= new ProceduralMemoryService(); },
-	get compaction() { return _compaction ??= new CompactionService(); },
 	get embeddings() { return _embeddings ??= new EmbeddingService(); },
 	get wikiLint() { return _wikiLint ??= new WikiLintService(); },
 };

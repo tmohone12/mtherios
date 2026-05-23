@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { X, Check, ExternalLink, Eye, EyeOff, Globe, Server, Sparkles, Cpu, Zap, SlidersHorizontal, Wrench, Palette, ScrollText, ChevronDown, ImageIcon, Brain } from 'lucide-svelte';
+	import { X, Check, ExternalLink, Eye, EyeOff, Globe, Server, Sparkles, Cpu, Zap, SlidersHorizontal, Wrench, Palette, ScrollText, ChevronDown, ImageIcon, Brain, RefreshCw, Search } from 'lucide-svelte';
 	import ServiceConfigPanel from './ServiceConfigPanel.svelte';
 	import PromptInspector from './PromptInspector.svelte';
 	import ContextWindow from '../story/ContextWindow.svelte';
 	import { settings, SERVICE_DEFINITIONS, SERVICE_PROFILES } from '$lib/stores/settings.svelte';
 	import { PROVIDERS, getProviderList } from '$lib/services/ai/sdk/providers/config';
 	import { STYLE_PRESETS } from '$lib/services/ai/image/ImageGenerationService';
-	import type { ProviderType, APIProfile } from '$lib/types';
+	import type { ProviderType, APIProfile, UISettings } from '$lib/types';
 	import { uuid } from '$lib/utils/uuid';
 	import { fade } from 'svelte/transition';
 
@@ -19,6 +19,31 @@
 
 	// Tab navigation
 	type Tab = 'providers' | 'services' | 'memory' | 'images' | 'interface' | 'inspector';
+	type NumericUiSettingKey = Extract<keyof UISettings,
+		| 'maxMessages'
+		| 'maxHistoryEntries'
+		| 'chapterThreshold'
+		| 'postChapterBuffer'
+		| 'maxPrevChaptersInSummary'
+		| 'chaptersPerArc'
+		| 'retrievedChapterLimit'
+		| 'retrievedLoreEntryLimit'
+		| 'conversationMemoryLimit'
+		| 'proceduralMemoryLimit'
+		| 'backendMemoryTokenBudget'
+		| 'snapshotTokenCap'>;
+
+	interface MemoryDial {
+		key: NumericUiSettingKey;
+		label: string;
+		description: string;
+		min: number;
+		max: number;
+		step: number;
+		suffix?: string;
+		zeroLabel?: string;
+	}
+
 	let activeTab = $state<Tab>('providers');
 
 	// Provider editing
@@ -32,6 +57,10 @@
 	// Live model list fetched from /models for the provider being edited.
 	// Populated by testConnection on success, persisted by saveProfile.
 	let fetchedModelsForProfile = $state<string[]>([]);
+	let modelSearch = $state('');
+	let editModelSearch = $state('');
+	let fetchingModels = $state(false);
+	let modelFetchMessage = $state('');
 
 	/**
 	 * Fetch the live model list from an OpenAI-compatible /models endpoint.
@@ -61,20 +90,70 @@
 	}
 
 	// Merged chip list: fetched (live, canonical) wins, fallback fills gaps.
-	const modelChips = $derived.by(() => {
-		const fb = settings.activeProvider?.fallbackModels ?? [];
-		const fetched = settings.activeProfile?.fetchedModels ?? [];
-		return Array.from(new Set([...fetched, ...fb]));
-	});
+	function modelOptionsFor(profile: APIProfile | null | undefined, fallback: string[]): string[] {
+		const hidden = new Set(profile?.hiddenModels ?? []);
+		const ordered = [
+			...(profile?.favoriteModels ?? []),
+			...(profile?.fetchedModels ?? []),
+			...(profile?.customModels ?? []),
+			...fallback,
+		];
+		return Array.from(new Set(ordered)).filter(id => id && !hidden.has(id));
+	}
+
+	function filterModels(models: string[], query: string): string[] {
+		const q = query.trim().toLowerCase();
+		if (!q) return models;
+		return models.filter(id => id.toLowerCase().includes(q));
+	}
+
+	const modelChips = $derived.by(() =>
+		modelOptionsFor(settings.activeProfile, settings.activeProvider?.fallbackModels ?? [])
+	);
+
+	const filteredModelChips = $derived.by(() => filterModels(modelChips, modelSearch));
 
 	/** Merged list for the provider being edited — uses the locally-fetched list if present. */
 	function editModelChips(fallback: string[]): string[] {
-		return Array.from(new Set([...fetchedModelsForProfile, ...fallback]));
+		const existing = editingProvider ? getProfileByProvider(editingProvider) : undefined;
+		const profile = existing
+			? { ...existing, fetchedModels: fetchedModelsForProfile }
+			: {
+				id: '',
+				name: '',
+				providerType: editingProvider ?? 'openai-compatible',
+				apiKey: '',
+				customModels: [],
+				fetchedModels: fetchedModelsForProfile,
+				reasoningModels: [],
+				hiddenModels: [],
+				favoriteModels: [],
+				createdAt: 0,
+			} satisfies APIProfile;
+		return modelOptionsFor(profile, fallback);
+	}
+
+	function filteredEditModels(fallback: string[]): string[] {
+		return filterModels(editModelChips(fallback), editModelSearch);
 	}
 
 	// Helpers
 	function getProfileByProvider(providerType: ProviderType): APIProfile | undefined {
 		return settings.profiles.find(p => p.providerType === providerType);
+	}
+
+	function isProviderConfigured(providerType: ProviderType): boolean {
+		const profile = getProfileByProvider(providerType);
+		const provider = PROVIDERS[providerType];
+		if (!profile || !provider) return false;
+		return !provider.requiresApiKey || !!profile.apiKey;
+	}
+
+	function keyLabelFor(profile: APIProfile): string {
+		const provider = PROVIDERS[profile.providerType as ProviderType];
+		if (provider && !provider.requiresApiKey) return 'Application Default Credentials';
+		if (profile.apiKey.startsWith('sk-ant-oat-')) return 'Setup Token (OAuth)';
+		return profile.apiKey ? '••••' + profile.apiKey.slice(-4) : 'Not stored';
 	}
 
 	function selectProvider(id: ProviderType) {
@@ -86,9 +165,51 @@
 		showApiKey = false;
 		testStatus = 'idle';
 		testMessage = '';
+		editModelSearch = '';
 		// Preserve the profile's previously-fetched models so editing without
 		// re-testing doesn't blow them away on save.
 		fetchedModelsForProfile = existing?.fetchedModels ? [...existing.fetchedModels] : [];
+	}
+
+	async function fetchModelsForActiveProfile() {
+		const profile = settings.activeProfile;
+		const provider = settings.activeProvider;
+		if (!profile || !provider) return;
+		fetchingModels = true;
+		modelFetchMessage = '';
+		try {
+			const baseUrl = profile.baseUrl || provider.baseUrl;
+			if (!baseUrl) throw new Error('This provider does not expose an OpenAI-compatible /models endpoint.');
+			const ids = await fetchOpenAIModels(baseUrl, profile.apiKey);
+			profile.fetchedModels = ids;
+			await settings.saveProfiles();
+			modelFetchMessage = `Fetched ${ids.length} model${ids.length === 1 ? '' : 's'}.`;
+		} catch (e) {
+			modelFetchMessage = e instanceof Error ? e.message : 'Failed to fetch models.';
+		} finally {
+			fetchingModels = false;
+		}
+	}
+
+	async function fetchModelsForEditing() {
+		if (!editingProvider) return;
+		fetchingModels = true;
+		testStatus = 'testing';
+		testMessage = '';
+		try {
+			const provider = PROVIDERS[editingProvider];
+			const baseUrl = customUrl || provider.baseUrl;
+			if (!baseUrl) throw new Error('This provider does not expose an OpenAI-compatible /models endpoint.');
+			const ids = await fetchOpenAIModels(baseUrl, apiKey);
+			fetchedModelsForProfile = ids;
+			testStatus = 'success';
+			testMessage = `Fetched ${ids.length} model${ids.length === 1 ? '' : 's'}.`;
+		} catch (e) {
+			testStatus = 'error';
+			testMessage = e instanceof Error ? e.message : 'Failed to fetch models.';
+		} finally {
+			fetchingModels = false;
+		}
 	}
 
 	async function saveProfile() {
@@ -193,6 +314,31 @@
 		await settings.saveNarrativeSettings();
 	}
 
+	function clampDial(value: number, min: number, max: number): number {
+		if (!Number.isFinite(value)) return min;
+		return Math.min(max, Math.max(min, Math.round(value)));
+	}
+
+	function settingValue(key: NumericUiSettingKey): number {
+		return Number(settings.uiSettings[key] ?? 0);
+	}
+
+	function formatDialValue(dial: MemoryDial): string {
+		const value = settingValue(dial.key);
+		if (value === 0 && dial.zeroLabel) return dial.zeroLabel;
+		return `${value.toLocaleString()}${dial.suffix ? ` ${dial.suffix}` : ''}`;
+	}
+
+	async function saveUiNumber(key: NumericUiSettingKey, value: number, min: number, max: number) {
+		settings.uiSettings[key] = clampDial(value, min, max);
+		await settings.saveUISettings();
+	}
+
+	async function saveContextBudgetValue(value: number) {
+		settings.contextBudget = clampDial(value, 0, 200000);
+		await settings.saveContextBudget();
+	}
+
 	const providerIcons: Record<string, typeof Zap> = {
 		openrouter: Globe, nanogpt: Zap, anthropic: Sparkles, openai: Cpu,
 	};
@@ -275,23 +421,43 @@
 		}
 	}
 
-	const tabs: Array<{ id: Tab; label: string; icon: typeof Globe }> = [
-		{ id: 'providers', label: 'Providers & Models', icon: Globe },
-		{ id: 'services', label: 'AI Services', icon: Wrench },
-		{ id: 'memory', label: 'Memory', icon: Brain },
-		{ id: 'images', label: 'Image Generation', icon: ImageIcon },
-		{ id: 'interface', label: 'Interface', icon: Palette },
-		{ id: 'inspector', label: 'Inspector', icon: ScrollText },
+	const tabs: Array<{ id: Tab; label: string; shortLabel: string; icon: typeof Globe }> = [
+		{ id: 'providers', label: 'Providers & Models', shortLabel: 'Providers', icon: Globe },
+		{ id: 'services', label: 'AI Services', shortLabel: 'Services', icon: Wrench },
+		{ id: 'memory', label: 'Memory', shortLabel: 'Memory', icon: Brain },
+		{ id: 'images', label: 'Image Generation', shortLabel: 'Images', icon: ImageIcon },
+		{ id: 'interface', label: 'Interface', shortLabel: 'UI', icon: Palette },
+		{ id: 'inspector', label: 'Inspector', shortLabel: 'Inspector', icon: ScrollText },
+	];
+
+	const liveContextDials: MemoryDial[] = [
+		{ key: 'snapshotTokenCap', label: 'Dynamic Prompt Cap', description: 'Caps arcs, chapters, lore, world state, retrieved memory, and final instructions before history is added.', min: 0, max: 50000, step: 500, suffix: 'tokens', zeroLabel: 'Auto' },
+		{ key: 'maxMessages', label: 'Conversation Messages', description: 'Recent chat turns kept in the short-term prompt window.', min: 1, max: 1000, step: 5, suffix: 'messages' },
+		{ key: 'maxHistoryEntries', label: 'Raw History Scan', description: 'Raw entries allowed into the local history scan before token budgeting cuts them down.', min: 1, max: 1000, step: 5, suffix: 'entries' },
+	];
+
+	const retrievalDials: MemoryDial[] = [
+		{ key: 'backendMemoryTokenBudget', label: 'Backend Memory Packet', description: 'Target size for server-retrieved memory when a story is bound to backend canon.', min: 160, max: 2400, step: 40, suffix: 'tokens' },
+		{ key: 'retrievedChapterLimit', label: 'Chapter Memories', description: 'Searchable episodic chapters injected for the current action.', min: 0, max: 12, step: 1, suffix: 'chapters', zeroLabel: 'Off' },
+		{ key: 'retrievedLoreEntryLimit', label: 'Lorebook Matches', description: 'Local lore entries pulled by current action when backend retrieval is unavailable.', min: 0, max: 24, step: 1, suffix: 'entries', zeroLabel: 'Off' },
+		{ key: 'conversationMemoryLimit', label: 'NPC Conversation Memory', description: 'NPC-specific remembered exchanges eligible for the current scene.', min: 0, max: 24, step: 1, suffix: 'memories', zeroLabel: 'Off' },
+		{ key: 'proceduralMemoryLimit', label: 'Procedural Rules', description: 'Learned narrative rules and style constraints retrieved for this turn.', min: 0, max: 24, step: 1, suffix: 'rules', zeroLabel: 'Off' },
+	];
+
+	const summaryDials: MemoryDial[] = [
+		{ key: 'chapterThreshold', label: 'Chapter Threshold', description: 'Eligible entries needed before the chapter summarizer can run.', min: 5, max: 200, step: 5, suffix: 'entries' },
+		{ key: 'postChapterBuffer', label: 'Post-Chapter Buffer', description: 'Fresh entries protected from summarization so the current scene stays hot.', min: 0, max: 100, step: 1, suffix: 'entries' },
+		{ key: 'maxPrevChaptersInSummary', label: 'Prior Chapter Context', description: 'Older chapter summaries given to the chapter summarizer for continuity.', min: 0, max: 50, step: 1, suffix: 'chapters', zeroLabel: 'None' },
+		{ key: 'chaptersPerArc', label: 'Chapters per Arc', description: 'Uncovered chapters condensed into one long-term arc at a time.', min: 2, max: 50, step: 1, suffix: 'chapters' },
 	];
 </script>
 
 {#if open}
-<div class="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4" transition:fade={{ duration: 150 }}>
-	<button class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick={onClose}></button>
+<div class="fixed inset-0 z-50 flex items-stretch justify-stretch overflow-hidden p-0 sm:items-center sm:justify-center sm:p-4" transition:fade={{ duration: 150 }}>
+	<button class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick={onClose} aria-label="Close settings"></button>
 
 	<!-- Modal: wider, taller -->
-	<div class="relative flex w-full max-w-3xl overflow-hidden rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]"
-		style="height: min(92dvh, 800px);">
+	<div class="settings-modal-shell relative flex min-h-0 w-full max-w-3xl flex-col overflow-hidden rounded-none border-0 border-[var(--border-primary)] bg-[var(--bg-secondary)] sm:flex-row sm:rounded-2xl sm:border">
 
 		<!-- Sidebar -->
 		<div class="hidden sm:flex w-48 shrink-0 flex-col border-r border-[var(--border-primary)] bg-[var(--bg-primary)]">
@@ -314,23 +480,29 @@
 			</nav>
 		</div>
 
-		<!-- Mobile tab bar -->
-		<div class="absolute top-0 left-0 right-0 z-10 flex sm:hidden border-b border-[var(--border-primary)] bg-[var(--bg-secondary)]">
+		<!-- Mobile tab picker -->
+		<div class="grid shrink-0 grid-cols-3 gap-1.5 border-b border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 sm:hidden">
 			{#each tabs as tab}
 				<button
-					class="flex-1 py-3 text-center text-[10px] font-medium uppercase tracking-wider transition-colors
-						{activeTab === tab.id ? 'text-[var(--text-accent)] border-b-2 border-[var(--color-gold-400)]' : 'text-[var(--text-muted)]'}"
+					type="button"
+					aria-label={tab.label}
+					aria-pressed={activeTab === tab.id}
+					class="flex min-h-11 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[10px] font-semibold uppercase tracking-wider transition-colors
+						{activeTab === tab.id
+							? 'border-[var(--color-gold-600)]/50 bg-[rgba(212,168,83,0.12)] text-[var(--text-accent)]'
+							: 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-muted)]'}"
 					onclick={() => activeTab = tab.id}
 				>
-					{tab.label}
+					<tab.icon class="h-3.5 w-3.5 shrink-0" />
+					<span class="min-w-0 truncate">{tab.shortLabel}</span>
 				</button>
 			{/each}
 		</div>
 
 		<!-- Content area -->
-		<div class="flex flex-1 flex-col min-w-0">
+		<div class="flex min-h-0 flex-1 flex-col min-w-0">
 			<!-- Header -->
-			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-6 py-4 sm:py-3">
+			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3 sm:px-6 sm:py-3">
 				<h3 class="font-display text-base tracking-wide text-[var(--text-primary)]">
 					{tabs.find(t => t.id === activeTab)?.label ?? 'Settings'}
 				</h3>
@@ -340,7 +512,7 @@
 			</div>
 
 			<!-- Scrollable content -->
-			<div class="flex-1 overflow-y-auto p-6 pt-4 sm:pt-6" style="margin-top: 0;">
+			<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pt-4 sm:p-6 sm:pt-6" style="margin-top: 0; -webkit-overflow-scrolling: touch;">
 
 				<!-- ═══ TAB: PROVIDERS & MODELS ═══ -->
 				{#if activeTab === 'providers'}
@@ -358,7 +530,7 @@
 								Model: {settings.narrativeSettings.model || 'provider default'}
 							</div>
 							<div class="mt-1 font-mono text-xs text-[var(--text-muted)]">
-								Key: {settings.activeProfile.apiKey.startsWith('sk-ant-oat-') ? 'Setup Token (OAuth)' : '••••' + settings.activeProfile.apiKey.slice(-4)}
+								Key: {keyLabelFor(settings.activeProfile)}
 							</div>
 						</div>
 					{/if}
@@ -374,23 +546,48 @@
 								class="flex-1 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
 							/>
 							<button
+								class="flex items-center gap-1.5 rounded-lg border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-primary)] hover:border-[var(--color-gold-600)] disabled:opacity-50"
+								onclick={fetchModelsForActiveProfile}
+								disabled={fetchingModels || !settings.activeProfile}
+								title="Fetch models from the active provider"
+							>
+								<RefreshCw class="h-3.5 w-3.5 {fetchingModels ? 'animate-spin' : ''}" />
+								Get Models
+							</button>
+							<button
 								class="rounded-lg bg-[var(--color-gold-400)]/20 px-3 py-2 text-xs font-semibold text-[var(--text-accent)] hover:bg-[var(--color-gold-400)]/30"
 								onclick={() => settings.saveNarrativeSettings()}
 							>Save</button>
 						</div>
 						{#if modelChips.length > 0}
-							<div class="flex flex-wrap gap-1">
-								{#each modelChips.slice(0, 12) as fm}
-									<button
-										class="rounded border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]
-											{settings.narrativeSettings.model === fm ? 'border-[var(--color-gold-600)] text-[var(--text-accent)]' : ''}"
-										onclick={() => { settings.narrativeSettings.model = fm; settings.saveNarrativeSettings(); }}
-									>{fm}</button>
-								{/each}
-								{#if modelChips.length > 12}
-									<span class="px-1 text-[10px] text-[var(--text-muted)]">+{modelChips.length - 12} more</span>
+							<div class="relative">
+								<Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+								<input
+									type="search"
+									bind:value={modelSearch}
+									placeholder={`Search ${modelChips.length} model${modelChips.length === 1 ? '' : 's'}`}
+									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] py-1.5 pl-8 pr-3 font-mono text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
+								/>
+							</div>
+							<div class="max-h-44 overflow-y-auto rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2">
+								{#if filteredModelChips.length > 0}
+									<div class="flex flex-wrap gap-1">
+										{#each filteredModelChips as fm}
+											<button
+												class="max-w-full truncate rounded border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]
+													{settings.narrativeSettings.model === fm ? 'border-[var(--color-gold-600)] text-[var(--text-accent)]' : ''}"
+												onclick={() => { settings.narrativeSettings.model = fm; settings.saveNarrativeSettings(); }}
+												title={fm}
+											>{fm}</button>
+										{/each}
+									</div>
+								{:else}
+									<p class="px-1 py-2 text-xs text-[var(--text-muted)]">No models match that search.</p>
 								{/if}
 							</div>
+						{/if}
+						{#if modelFetchMessage}
+							<p class="text-[10px] {modelFetchMessage.startsWith('Fetched') ? 'text-emerald-400' : 'text-rose-400'}">{modelFetchMessage}</p>
 						{/if}
 					</div>
 
@@ -420,7 +617,7 @@
 							{#each topProviders as pid}
 								{@const prov = PROVIDERS[pid]}
 								{@const Icon = providerIcons[pid] ?? Server}
-								{@const isConfigured = !!getProfileByProvider(pid)?.apiKey}
+								{@const isConfigured = isProviderConfigured(pid)}
 								{@const isActive = settings.activeProfile?.providerType === pid}
 								<button class="relative flex items-center gap-3 rounded-xl border p-3 text-left transition-all
 									{isActive
@@ -446,7 +643,7 @@
 								</summary>
 								<div class="mt-2 space-y-1">
 									{#each otherProviders as prov}
-										{@const isConfigured = !!getProfileByProvider(prov.value)?.apiKey}
+										{@const isConfigured = isProviderConfigured(prov.value)}
 										<button class="flex w-full items-center gap-2 rounded-lg border border-[var(--border-primary)] px-3 py-2 text-left text-sm hover:border-[var(--color-gold-600)]"
 											onclick={() => selectProvider(prov.value)}>
 											<Server class="h-3.5 w-3.5 text-[var(--text-muted)]" />
@@ -462,6 +659,8 @@
 					<!-- Provider edit form (inline, expands below) -->
 					{#if editingProvider}
 						{@const prov = PROVIDERS[editingProvider]}
+						{@const editOptions = editModelChips(prov.fallbackModels)}
+						{@const visibleEditModels = filteredEditModels(prov.fallbackModels)}
 						<div class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4 space-y-4">
 							<div class="flex items-center justify-between">
 								<h4 class="font-display text-sm font-semibold text-[var(--text-primary)]">{prov.name}</h4>
@@ -497,7 +696,7 @@
 							{/if}
 
 							<!-- Custom URL -->
-							{#if editingProvider === 'openai-compatible' || editingProvider === 'ollama' || editingProvider === 'lmstudio'}
+							{#if editingProvider === 'openai-compatible' || editingProvider === 'ollama' || editingProvider === 'lmstudio' || editingProvider === 'anthropic-proxy'}
 								<div class="space-y-1.5">
 									<label class="text-xs text-[var(--text-muted)]">Base URL</label>
 									<input type="text" bind:value={customUrl}
@@ -510,17 +709,43 @@
 							<div class="space-y-1.5">
 								<label class="text-xs text-[var(--text-muted)]">Default Model</label>
 								<input type="text" bind:value={model}
-									placeholder={editModelChips(prov.fallbackModels)[0] ?? 'model-name'}
+									placeholder={editOptions[0] ?? 'model-name'}
 									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none" />
-								{#if editModelChips(prov.fallbackModels).length > 1}
-									<div class="flex flex-wrap gap-1">
-										{#each editModelChips(prov.fallbackModels).slice(0, 12) as fm}
-											<button class="rounded border border-[var(--border-primary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]
-												{model === fm ? 'border-[var(--color-gold-600)] text-[var(--text-accent)]' : ''}"
-												onclick={() => model = fm}>{fm}</button>
-										{/each}
-										{#if editModelChips(prov.fallbackModels).length > 12}
-											<span class="px-1 text-[10px] text-[var(--text-muted)]">+{editModelChips(prov.fallbackModels).length - 12} more</span>
+								<div class="flex gap-2">
+									<div class="relative flex-1">
+										<Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+										<input
+											type="search"
+											bind:value={editModelSearch}
+											placeholder={`Search ${editOptions.length} model${editOptions.length === 1 ? '' : 's'}`}
+											class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] py-1.5 pl-8 pr-3 font-mono text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
+										/>
+									</div>
+									<button
+										class="flex items-center gap-1.5 rounded-lg border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] hover:border-[var(--color-gold-600)] disabled:opacity-50"
+										onclick={fetchModelsForEditing}
+										disabled={fetchingModels || (prov.requiresApiKey && !apiKey)}
+										title="Fetch models from this provider"
+									>
+										<RefreshCw class="h-3.5 w-3.5 {fetchingModels ? 'animate-spin' : ''}" />
+										Get
+									</button>
+								</div>
+								{#if editOptions.length > 1}
+									<div class="max-h-44 overflow-y-auto rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)]/60 p-2">
+										{#if visibleEditModels.length > 0}
+											<div class="flex flex-wrap gap-1">
+												{#each visibleEditModels as fm}
+													<button
+														class="max-w-full truncate rounded border border-[var(--border-primary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]
+															{model === fm ? 'border-[var(--color-gold-600)] text-[var(--text-accent)]' : ''}"
+														onclick={() => model = fm}
+														title={fm}
+													>{fm}</button>
+												{/each}
+											</div>
+										{:else}
+											<p class="px-1 py-2 text-xs text-[var(--text-muted)]">No models match that search.</p>
 										{/if}
 									</div>
 								{/if}
@@ -556,6 +781,21 @@
 					<div class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
 						<ContextWindow />
 					</div>
+					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
+						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Backend Canon</h4>
+						<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+							<input
+								type="checkbox"
+								checked={settings.uiSettings.serverAuthoritativeTurns ?? false}
+								onchange={(e) => { settings.uiSettings.serverAuthoritativeTurns = (e.target as HTMLInputElement).checked; settings.saveUISettings(); }}
+								class="mt-0.5 accent-[var(--color-gold-400)]"
+							/>
+							<span class="min-w-0">
+								<span class="block text-xs font-medium text-[var(--text-primary)]">Server-authoritative online turns</span>
+								<span class="mt-1 block text-[10px] leading-relaxed text-[var(--text-muted)]">For backend-bound stories, route turns through /api/turn so canon, events, patches, and memory nodes are written server-side.</span>
+							</span>
+						</label>
+					</div>
 				</div>
 
 				<!-- ═══ TAB: AI SERVICES ═══ -->
@@ -564,75 +804,167 @@
 
 				<!-- ═══ TAB: MEMORY ═══ -->
 				{:else if activeTab === 'memory'}
-				<div class="space-y-5">
-					<!-- Message History -->
-					<div class="space-y-3">
-						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Conversation History</h4>
-						<div class="space-y-2">
-							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Max Messages ({settings.uiSettings.maxMessages})</label>
-							<input type="range" value={settings.uiSettings.maxMessages} min="10" max="500" step="10"
-								oninput={(e) => { settings.uiSettings.maxMessages = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
-								class="w-full accent-[var(--color-gold-400)]" />
-							<p class="text-[10px] text-[var(--text-muted)]">Maximum conversation turns sent to the narrator. Lower = cheaper, higher = better short-term memory.</p>
+				<div class="space-y-4">
+					<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
+						<div class="mb-4 flex items-start justify-between gap-3">
+							<div>
+								<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Live Context</h4>
+								<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">Prompt size, recent turns, and raw history intake.</p>
+							</div>
+							<span class="rounded-full border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
+								{settings.contextBudget === 0 ? 'Auto' : `${settings.contextBudget.toLocaleString()} tokens`}
+							</span>
 						</div>
-						<div class="space-y-2">
-							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Max History Entries ({settings.uiSettings.maxHistoryEntries})</label>
-							<input type="range" value={settings.uiSettings.maxHistoryEntries} min="50" max="500" step="25"
-								oninput={(e) => { settings.uiSettings.maxHistoryEntries = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
-								class="w-full accent-[var(--color-gold-400)]" />
-							<p class="text-[10px] text-[var(--text-muted)]">Hard cap on raw entries scanned for history. Token budget is the real gate.</p>
-						</div>
-					</div>
 
-					<!-- Chapter Settings -->
-					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
-						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Chapter Creation</h4>
-						<div class="space-y-2">
-							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Chapter Threshold ({settings.uiSettings.chapterThreshold} entries)</label>
-							<input type="range" value={settings.uiSettings.chapterThreshold} min="10" max="50" step="5"
-								oninput={(e) => { settings.uiSettings.chapterThreshold = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
-								class="w-full accent-[var(--color-gold-400)]" />
-							<p class="text-[10px] text-[var(--text-muted)]">Entries needed before chapter analysis triggers. Lower = more frequent chapters.</p>
-						</div>
-						<div class="space-y-2">
-							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Post-Chapter Buffer ({settings.uiSettings.postChapterBuffer})</label>
-							<input type="range" value={settings.uiSettings.postChapterBuffer} min="5" max="30" step="1"
-								oninput={(e) => { settings.uiSettings.postChapterBuffer = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
-								class="w-full accent-[var(--color-gold-400)]" />
-							<p class="text-[10px] text-[var(--text-muted)]">Raw entries kept in history after chapter creation. Rest is summarized.</p>
-						</div>
-						<div class="space-y-2">
-							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Previous Chapters in Summary ({settings.uiSettings.maxPrevChaptersInSummary})</label>
-							<input type="range" value={settings.uiSettings.maxPrevChaptersInSummary} min="2" max="10" step="1"
-								oninput={(e) => { settings.uiSettings.maxPrevChaptersInSummary = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
-								class="w-full accent-[var(--color-gold-400)]" />
-							<p class="text-[10px] text-[var(--text-muted)]">How many prior chapter summaries the AI sees when creating a new chapter. More = better continuity, more tokens.</p>
-						</div>
-					</div>
+						<div class="space-y-5">
+							<div class="space-y-2">
+								<div class="flex items-center justify-between gap-3">
+									<span class="text-xs font-medium text-[var(--text-primary)]">Context Budget</span>
+									<span class="font-mono text-[11px] text-[var(--text-muted)]">{settings.contextBudget === 0 ? 'Auto' : settings.contextBudget.toLocaleString()}</span>
+								</div>
+								<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
+									<input
+										type="range"
+										value={settings.contextBudget}
+										min="0"
+										max="200000"
+										step="1000"
+										oninput={(e) => saveContextBudgetValue(Number((e.target as HTMLInputElement).value))}
+										class="w-full accent-[var(--color-gold-400)]"
+									/>
+									<input
+										type="number"
+										value={settings.contextBudget}
+										min="0"
+										max="200000"
+										step="1000"
+										onchange={(e) => saveContextBudgetValue(Number((e.target as HTMLInputElement).value))}
+										class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-right font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none"
+									/>
+								</div>
+								<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">0 keeps the model-aware automatic budget.</p>
+							</div>
 
-					<!-- Arc Settings -->
-					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
-						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Arc Condensation</h4>
-						<div class="space-y-2">
-							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Chapters per Arc ({settings.uiSettings.chaptersPerArc})</label>
-							<input type="range" value={settings.uiSettings.chaptersPerArc} min="3" max="10" step="1"
-								oninput={(e) => { settings.uiSettings.chaptersPerArc = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
-								class="w-full accent-[var(--color-gold-400)]" />
-							<p class="text-[10px] text-[var(--text-muted)]">How many chapters get condensed into one arc summary. Lower = more arcs, higher = broader story arcs.</p>
+							{#each liveContextDials as dial}
+								<div class="space-y-2">
+									<div class="flex items-center justify-between gap-3">
+										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
+										<span class="font-mono text-[11px] text-[var(--text-muted)]">{formatDialValue(dial)}</span>
+									</div>
+									<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
+										<input
+											type="range"
+											value={settingValue(dial.key)}
+											min={dial.min}
+											max={dial.max}
+											step={dial.step}
+											oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+											class="w-full accent-[var(--color-gold-400)]"
+										/>
+										<input
+											type="number"
+											value={settingValue(dial.key)}
+											min={dial.min}
+											max={dial.max}
+											step={dial.step}
+											onchange={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+											class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-right font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none"
+										/>
+									</div>
+									<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">{dial.description}</p>
+								</div>
+							{/each}
 						</div>
-					</div>
+					</section>
 
-					<!-- Snapshot Budget -->
-					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
-						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Context Snapshot</h4>
-						<div class="space-y-2">
-							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Snapshot Token Cap ({settings.uiSettings.snapshotTokenCap === 0 ? 'Unlimited' : settings.uiSettings.snapshotTokenCap.toLocaleString()})</label>
-							<input type="range" value={settings.uiSettings.snapshotTokenCap} min="0" max="50000" step="2000"
-								oninput={(e) => { settings.uiSettings.snapshotTokenCap = Number((e.target as HTMLInputElement).value); settings.saveUISettings(); }}
-								class="w-full accent-[var(--color-gold-400)]" />
-							<p class="text-[10px] text-[var(--text-muted)]">Max tokens for the state snapshot (arcs + chapters + world state). 0 = unlimited — the model's context window is the only limit.</p>
+					<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
+						<div class="mb-4 flex items-start justify-between gap-3">
+							<div>
+								<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Retrieval</h4>
+								<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">How much searchable memory is pulled for the current action.</p>
+							</div>
+							<label class="flex items-center gap-2 rounded-full border border-[var(--border-primary)] px-2 py-1 text-[10px] text-[var(--text-muted)]">
+								<input
+									type="checkbox"
+									checked={settings.uiSettings.serverAuthoritativeTurns ?? false}
+									onchange={(e) => { settings.uiSettings.serverAuthoritativeTurns = (e.target as HTMLInputElement).checked; settings.saveUISettings(); }}
+									class="accent-[var(--color-gold-400)]"
+								/>
+								Backend turns
+							</label>
 						</div>
-					</div>
+
+						<div class="space-y-5">
+							{#each retrievalDials as dial}
+								<div class="space-y-2">
+									<div class="flex items-center justify-between gap-3">
+										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
+										<span class="font-mono text-[11px] text-[var(--text-muted)]">{formatDialValue(dial)}</span>
+									</div>
+									<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
+										<input
+											type="range"
+											value={settingValue(dial.key)}
+											min={dial.min}
+											max={dial.max}
+											step={dial.step}
+											oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+											class="w-full accent-[var(--color-gold-400)]"
+										/>
+										<input
+											type="number"
+											value={settingValue(dial.key)}
+											min={dial.min}
+											max={dial.max}
+											step={dial.step}
+											onchange={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+											class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-right font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none"
+										/>
+									</div>
+									<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">{dial.description}</p>
+								</div>
+							{/each}
+						</div>
+					</section>
+
+					<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
+						<div class="mb-4">
+							<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Summary Jobs</h4>
+							<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">Chapter creation and arc condensation pacing.</p>
+						</div>
+
+						<div class="space-y-5">
+							{#each summaryDials as dial}
+								<div class="space-y-2">
+									<div class="flex items-center justify-between gap-3">
+										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
+										<span class="font-mono text-[11px] text-[var(--text-muted)]">{formatDialValue(dial)}</span>
+									</div>
+									<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
+										<input
+											type="range"
+											value={settingValue(dial.key)}
+											min={dial.min}
+											max={dial.max}
+											step={dial.step}
+											oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+											class="w-full accent-[var(--color-gold-400)]"
+										/>
+										<input
+											type="number"
+											value={settingValue(dial.key)}
+											min={dial.min}
+											max={dial.max}
+											step={dial.step}
+											onchange={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+											class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-right font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none"
+										/>
+									</div>
+									<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">{dial.description}</p>
+								</div>
+							{/each}
+						</div>
+					</section>
 				</div>
 
 				<!-- ═══ TAB: IMAGE GENERATION ═══ -->
@@ -883,3 +1215,17 @@
 	</div>
 </div>
 {/if}
+
+<style>
+	.settings-modal-shell {
+		height: 100dvh;
+		max-height: 100dvh;
+	}
+
+	@media (min-width: 640px) {
+		.settings-modal-shell {
+			height: min(92dvh, 800px);
+			max-height: min(92dvh, 800px);
+		}
+	}
+</style>

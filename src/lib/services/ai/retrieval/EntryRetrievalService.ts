@@ -24,9 +24,11 @@ export class EntryRetrievalService {
 		allEntries: Entry[],
 		recentEntries: StoryEntry[],
 		maxEntries = 10,
+		currentAction = '',
 	): Promise<RetrievalResult> {
 		const recentText = recentEntries.slice(-10).map(e => e.content).join(' ');
-		const recentTextLower = recentText.toLowerCase();
+		const queryText = [currentAction, recentText].filter(Boolean).join(' ');
+		const queryLower = queryText.toLowerCase();
 
 		// Separate always-on entries from scored entries
 		const alwaysEntries: Array<{ entry: Entry; score: number }> = [];
@@ -45,11 +47,17 @@ export class EntryRetrievalService {
 		const { ai } = await import('$lib/services/ai');
 		const embeddingItems = candidates.map(e => ({
 			id: e.id,
-			text: `${e.name}: ${e.description}`,
+			text: [
+				e.name,
+				...(e.aliases ?? []),
+				...(e.injection?.keywords ?? []),
+				e.description,
+				e.hiddenInfo ?? '',
+			].filter(Boolean).join(' '),
 			sourceType: 'lorebook' as const,
 		}));
 
-		const embeddingScores = await ai.embeddings.scoreSimilarity(recentText, embeddingItems);
+		const embeddingScores = await ai.embeddings.scoreSimilarity(queryText, embeddingItems);
 		const scoreMap = new Map(embeddingScores.map(s => [s.id, s.score]));
 
 		// Combine embedding score with keyword boost
@@ -59,12 +67,16 @@ export class EntryRetrievalService {
 
 			// Keyword boost: +0.15 per hit, capped at +0.45
 			let keywordBoost = 0;
-			for (const kw of entry.injection.keywords) {
-				if (recentTextLower.includes(kw.toLowerCase())) {
-					keywordBoost += 0.15;
-				}
+			const searchableTerms = [
+				entry.name,
+				...(entry.aliases ?? []),
+				...(entry.injection?.keywords ?? []),
+			];
+			for (const term of searchableTerms) {
+				const key = term.trim().toLowerCase();
+				if (key && queryLower.includes(key)) keywordBoost += 0.18;
 			}
-			keywordBoost = Math.min(keywordBoost, 0.45);
+			keywordBoost = Math.min(keywordBoost, 0.54);
 
 			const finalScore = embeddingScore + keywordBoost;
 

@@ -238,8 +238,10 @@ function isIOSSafari(): boolean {
 function buildAuthHeaders(profile: APIProfile): Record<string, string> {
 	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
-		'Authorization': `Bearer ${profile.apiKey}`,
 	};
+	if (profile.apiKey) {
+		headers['Authorization'] = `Bearer ${profile.apiKey}`;
+	}
 	return headers;
 }
 
@@ -365,8 +367,10 @@ async function getActiveProfile(overrideProfileId?: string): Promise<{ profile: 
  * Get the active model for narrative generation.
  */
 export async function getActiveModel(profileId?: string): Promise<string> {
-	const modelOverride = await getSetting('narrativeModel');
-	if (modelOverride) return modelOverride;
+	if (!profileId) {
+		const modelOverride = await getSetting('narrativeModel');
+		if (modelOverride) return modelOverride;
+	}
 
 	const { profile } = await getActiveProfile(profileId);
 	const providerConfig = PROVIDERS[profile.providerType as ProviderType];
@@ -1040,6 +1044,21 @@ export async function generateStructuredWithTools(options: GenerateWithToolsOpti
 				});
 			} else {
 				console.warn('[generateStructuredWithTools] Could not parse JSON fallback from response text');
+			}
+		}
+
+		// Canonicalize tool names when forceTool is set. Some providers (GLM 5.1
+		// observed) emit truncated or malformed tool names like `update` instead
+		// of `update_world_state`. Since we forced one specific tool, any call
+		// returned IS that tool — rewrite the name so the executor's switch
+		// matches and the arguments aren't dropped on the floor.
+		if (options.forceTool) {
+			const knownNames = new Set(options.tools.map((t: any) => t.function?.name ?? t.name));
+			for (const tc of toolCalls) {
+				if (!knownNames.has(tc.name)) {
+					console.warn(`[generateStructuredWithTools] Renaming malformed tool call "${tc.name}" → "${options.forceTool}"`);
+					tc.name = options.forceTool;
+				}
 			}
 		}
 

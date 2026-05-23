@@ -1,11 +1,13 @@
 <script lang="ts">
-	import { X, Save, Trash2, Shield, ShieldOff, ArrowLeft, BookOpen } from 'lucide-svelte';
+	import { X, Save, Trash2, Shield, ShieldOff, ArrowLeft, BookOpen, Sparkles, Loader2 } from 'lucide-svelte';
 	import { updateLorebookEntry, deleteLorebookEntry, getRelationshipsForEntry } from '$lib/services/database';
-	import type { Entry, EntryType, EntryInjectionMode, EntryRelationship, CharacterEntryState, FactionEntryState, LocationEntryState, ItemEntryState } from '$lib/types';
+	import type { Entry, EntryType, EntryInjectionMode, EntryRelationship, CharacterEntryState, FactionEntryState, LocationEntryState, ItemEntryState, FactionGoal, FactionResources } from '$lib/types';
 	import { fade } from 'svelte/transition';
 	import { onMount, untrack } from 'svelte';
 	import { renderWiki, findInboundMentions, parseWikiHref } from '$lib/utils/wikilinks';
 	import ReputationPanel from './ReputationPanel.svelte';
+	import { ai } from '$lib/services/ai';
+	import type { EntryRefinementResult } from '$lib/services/ai/sdk/schemas/entryRefinement';
 
 	interface Props {
 		entry: Entry;
@@ -19,9 +21,11 @@
 		/** Back button — enabled when the parent has a navigation stack. */
 		canGoBack?: boolean;
 		onBack?: () => void;
+		/** When true, the "Refine with AI" panel starts expanded (used by per-row shortcut). */
+		initialRefineOpen?: boolean;
 	}
 
-	let { entry, allEntries = [], onSave, onDelete, onClose, onNavigate, canGoBack = false, onBack }: Props = $props();
+	let { entry, allEntries = [], onSave, onDelete, onClose, onNavigate, canGoBack = false, onBack, initialRefineOpen = false }: Props = $props();
 
 	type Tab = 'wiki' | 'general' | 'state' | 'injection' | 'info';
 	let activeTab = $state<Tab>('wiki');
@@ -47,6 +51,17 @@
 
 	// State (deep copy)
 	let entryState = $state(JSON.parse(JSON.stringify(entry.state)));
+	let factionMembers = $state('');
+	let factionTerritory = $state('');
+	let factionGoalsText = $state('');
+	let factionResources = $state<FactionResources>({ military: 50, wealth: 50, influence: 50, information: 50, morale: 50 });
+
+	// ── Refine with AI ──
+	let refineOpen = $state(initialRefineOpen);
+	let refineInstruction = $state('');
+	let refineLoading = $state(false);
+	let refinePreview = $state<EntryRefinementResult | null>(null);
+	let refineError = $state('');
 
 	const entryTypes: EntryType[] = ['character', 'location', 'item', 'faction', 'concept', 'event'];
 	const typeIcons: Record<string, string> = {
@@ -69,7 +84,13 @@
 			injectionPriority = e.injection?.priority ?? DEFAULT_INJECTION.priority;
 			keywords = (e.injection?.keywords ?? []).join(', ');
 			entryState = JSON.parse(JSON.stringify(e.state));
+			hydrateFactionDrafts(entryState);
 			confirmDelete = false;
+			// Reset refine UI on entry swap so previews don't bleed across entries.
+			refineInstruction = '';
+			refinePreview = null;
+			refineError = '';
+			refineLoading = false;
 		});
 		if (e.storyId && e.id) {
 			getRelationshipsForEntry(e.storyId, e.id).then((r) => (relationships = r));
@@ -91,7 +112,66 @@
 		onNavigate?.(id);
 	}
 
+	function toList(value: unknown): string[] {
+		if (Array.isArray(value)) return value.map(String).map(s => s.trim()).filter(Boolean);
+		if (typeof value === 'string') return value.split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+		return [];
+	}
+
+	function hydrateFactionDrafts(state: any) {
+		const factionState = state as Partial<FactionEntryState>;
+		factionMembers = toList(factionState.knownMembers).join(', ');
+		factionTerritory = toList(factionState.territory).join(', ');
+		factionGoalsText = (factionState.goals ?? [])
+			.map(g => `${g.description} | ${g.priority ?? 5} | ${g.progress ?? 0} | ${g.type ?? 'diplomatic'}${g.deadline ? ` | ${g.deadline}` : ''}`)
+			.join('\n');
+		factionResources = {
+			military: factionState.resources?.military ?? 50,
+			wealth: factionState.resources?.wealth ?? 50,
+			influence: factionState.resources?.influence ?? 50,
+			information: factionState.resources?.information ?? 50,
+			morale: factionState.resources?.morale ?? 50,
+		};
+	}
+
+	function parseFactionGoals(text: string): FactionGoal[] {
+		return text
+			.split('\n')
+			.map(line => line.trim())
+			.filter(Boolean)
+			.map(line => {
+				const [description, priority, progress, goalType, deadline] = line.split('|').map(part => part.trim());
+				const typeValue = ['military', 'diplomatic', 'economic', 'intelligence', 'survival', 'expansion'].includes(goalType)
+					? goalType as FactionGoal['type']
+					: 'diplomatic';
+				return {
+					description,
+					priority: Math.max(1, Math.min(10, Number(priority) || 5)),
+					progress: Math.max(0, Math.min(100, Number(progress) || 0)),
+					type: typeValue,
+					deadline: deadline || undefined,
+				};
+			});
+	}
+
+	function prepareStateForSave() {
+		const state = { ...entryState, type };
+		if (type === 'character') {
+			const cs = state as CharacterEntryState;
+			cs.motivations = toList(cs.motivations);
+		}
+		if (type === 'faction') {
+			const fs = state as FactionEntryState;
+			fs.knownMembers = toList(factionMembers);
+			fs.territory = toList(factionTerritory);
+			fs.goals = parseFactionGoals(factionGoalsText);
+			fs.resources = { ...factionResources };
+		}
+		return state;
+	}
+
 	async function handleSave() {
+		const preparedState = prepareStateForSave();
 		const updates: Partial<Entry> = {
 			name,
 			type,
@@ -104,7 +184,7 @@
 				keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
 				priority: injectionPriority,
 			},
-			state: { ...entryState, type },
+			state: preparedState,
 			updatedAt: Date.now(),
 		};
 		await updateLorebookEntry(entry.id, updates);
@@ -114,6 +194,64 @@
 	async function handleDelete() {
 		await deleteLorebookEntry(entry.id);
 		onDelete(entry.id);
+	}
+
+	async function handleRefineSubmit() {
+		if (!refineInstruction.trim() || refineLoading) return;
+		refineLoading = true;
+		refineError = '';
+		refinePreview = null;
+		try {
+			// Build a live Entry from the in-progress form values so the LLM
+			// reasons over what the user currently sees, not the stale prop
+			// from when the modal opened.
+			const liveEntry: Entry = {
+				...entry,
+				name,
+				type,
+				description,
+				hiddenInfo: hiddenInfo || null,
+				aliases: aliases.split(',').map(a => a.trim()).filter(Boolean),
+				injection: {
+					mode: injectionMode,
+					keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
+					priority: injectionPriority,
+				},
+				state: prepareStateForSave(),
+			};
+			refinePreview = await ai.entryRefinement.refine(liveEntry, refineInstruction);
+		} catch (e) {
+			refineError = e instanceof Error ? e.message : String(e);
+		} finally {
+			refineLoading = false;
+		}
+	}
+
+	async function applyRefinement() {
+		if (!refinePreview) return;
+		const p = refinePreview;
+		// Apply non-null fields into the form state so the user sees the merged
+		// result before the modal closes (and can keep editing if they want).
+		if (p.description != null) description = p.description;
+		if (p.keywords != null) keywords = p.keywords.join(', ');
+		if (p.aliases != null) aliases = p.aliases.join(', ');
+		if (p.hiddenInfo != null) hiddenInfo = p.hiddenInfo;
+		if (type === 'character') {
+			const cs = entryState as CharacterEntryState;
+			if (p.bio != null) cs.bio = p.bio;
+			if (p.motivations != null) cs.motivations = p.motivations;
+			if (p.personality != null) cs.personality = p.personality;
+			entryState = { ...cs };
+		}
+		refinePreview = null;
+		refineInstruction = '';
+		// Persist immediately — handleSave writes by explicit entry.id, so there's
+		// no name-matching path that could create a duplicate.
+		await handleSave();
+	}
+
+	function discardRefinement() {
+		refinePreview = null;
 	}
 
 	const sourceLabel: Record<string, string> = { user: 'User', ai: 'AI', import: 'Import', forge: 'Forge' };
@@ -138,6 +276,85 @@
 			<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
 				<X class="h-4 w-4" />
 			</button>
+		</div>
+
+		<!-- Refine with AI (collapsible, above tabs so it works on any tab) -->
+		<div class="border-b border-[var(--border-primary)] px-5 py-2.5">
+			<button onclick={() => refineOpen = !refineOpen}
+				class="flex w-full items-center gap-2 text-xs text-[var(--text-accent)] hover:text-[var(--text-primary)] transition-colors">
+				<Sparkles class="h-3.5 w-3.5" />
+				<span class="font-medium">{refineOpen ? 'Hide refinement' : 'Refine with AI'}</span>
+				<span class="ml-auto text-[10px] text-[var(--text-muted)]">{refineOpen ? '▾' : '▸'}</span>
+			</button>
+			{#if refineOpen}
+				<div class="mt-3 space-y-2">
+					<textarea bind:value={refineInstruction} rows="2"
+						placeholder="What should the AI add or change? e.g. 'Add that he was secretly poisoned in chapter 3 and now distrusts his apothecary.'"
+						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"></textarea>
+					<div class="flex items-center gap-2">
+						<button onclick={handleRefineSubmit} disabled={refineLoading || !refineInstruction.trim()}
+							class="flex items-center gap-1.5 rounded-lg bg-[rgba(212,168,83,0.12)] px-3 py-1.5 text-xs text-[var(--text-accent)] hover:bg-[rgba(212,168,83,0.2)] disabled:opacity-40">
+							{#if refineLoading}
+								<Loader2 class="h-3.5 w-3.5 animate-spin" />
+								<span>Refining…</span>
+							{:else}
+								<Sparkles class="h-3.5 w-3.5" />
+								<span>Refine</span>
+							{/if}
+						</button>
+						<p class="text-[10px] text-[var(--text-muted)]">Appends to this entry — never creates a duplicate.</p>
+					</div>
+					{#if refineError}
+						<div class="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-400">{refineError}</div>
+					{/if}
+					{#if refinePreview}
+						<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 space-y-2 text-xs">
+							<div class="text-[var(--text-muted)]">
+								<span class="font-semibold text-[var(--text-accent)]">Reasoning:</span> {refinePreview.reasoning}
+							</div>
+							{#if refinePreview.description != null}
+								<div>
+									<div class="font-semibold text-[var(--text-accent)]">New description</div>
+									<p class="mt-1 whitespace-pre-wrap text-[var(--text-primary)]">{refinePreview.description}</p>
+								</div>
+							{/if}
+							{#if refinePreview.keywords != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Keywords:</span> <span class="text-[var(--text-primary)]">{refinePreview.keywords.join(', ')}</span></div>
+							{/if}
+							{#if refinePreview.aliases != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Aliases:</span> <span class="text-[var(--text-primary)]">{refinePreview.aliases.join(', ')}</span></div>
+							{/if}
+							{#if refinePreview.hiddenInfo != null}
+								<div>
+									<div class="font-semibold text-[var(--text-accent)]">Hidden info</div>
+									<p class="mt-1 whitespace-pre-wrap text-[var(--text-primary)]">{refinePreview.hiddenInfo}</p>
+								</div>
+							{/if}
+							{#if refinePreview.bio != null}
+								<div>
+									<div class="font-semibold text-[var(--text-accent)]">Bio</div>
+									<p class="mt-1 whitespace-pre-wrap text-[var(--text-primary)]">{refinePreview.bio}</p>
+								</div>
+							{/if}
+							{#if refinePreview.motivations != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Motivations:</span> <span class="text-[var(--text-primary)]">{refinePreview.motivations.join('; ')}</span></div>
+							{/if}
+							{#if refinePreview.personality != null}
+								<div>
+									<div class="font-semibold text-[var(--text-accent)]">Personality</div>
+									<p class="mt-1 whitespace-pre-wrap text-[var(--text-primary)]">{refinePreview.personality}</p>
+								</div>
+							{/if}
+							<div class="flex gap-2 pt-1">
+								<button onclick={applyRefinement} class="flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/30">
+									<Save class="h-3.5 w-3.5" /> Apply &amp; save
+								</button>
+								<button onclick={discardRefinement} class="rounded-lg bg-[var(--bg-primary)] px-3 py-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">Discard</button>
+							</div>
+						</div>
+					{/if}
+				</div>
+			{/if}
 		</div>
 
 		<!-- Tabs -->
@@ -337,9 +554,47 @@
 							</select>
 						</div>
 						<div class="space-y-1">
-							<label class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Territory (comma-separated)</label>
-							<input type="text" bind:value={entryState.territory} placeholder="Regions this faction controls..."
+							<label for="faction-territory-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Territory (comma-separated)</label>
+							<input id="faction-territory-input" type="text" bind:value={factionTerritory} placeholder="Regions, holdings, routes..."
 								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+						</div>
+						<div class="space-y-1">
+							<label for="faction-members-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Known Members (comma-separated)</label>
+							<input id="faction-members-input" type="text" bind:value={factionMembers} placeholder="Character names or entry IDs..."
+								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
+						</div>
+						<div class="grid grid-cols-2 gap-3">
+							<div class="space-y-1">
+								<label for="faction-military-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Military</label>
+								<input id="faction-military-input" type="range" bind:value={factionResources.military} min="0" max="100" step="5" class="w-full accent-[var(--color-gold-400)]" />
+								<div class="text-center text-xs text-[var(--text-muted)]">{factionResources.military}</div>
+							</div>
+							<div class="space-y-1">
+								<label for="faction-wealth-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Wealth</label>
+								<input id="faction-wealth-input" type="range" bind:value={factionResources.wealth} min="0" max="100" step="5" class="w-full accent-[var(--color-gold-400)]" />
+								<div class="text-center text-xs text-[var(--text-muted)]">{factionResources.wealth}</div>
+							</div>
+							<div class="space-y-1">
+								<label for="faction-influence-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Influence</label>
+								<input id="faction-influence-input" type="range" bind:value={factionResources.influence} min="0" max="100" step="5" class="w-full accent-[var(--color-gold-400)]" />
+								<div class="text-center text-xs text-[var(--text-muted)]">{factionResources.influence}</div>
+							</div>
+							<div class="space-y-1">
+								<label for="faction-information-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Information</label>
+								<input id="faction-information-input" type="range" bind:value={factionResources.information} min="0" max="100" step="5" class="w-full accent-[var(--color-gold-400)]" />
+								<div class="text-center text-xs text-[var(--text-muted)]">{factionResources.information}</div>
+							</div>
+							<div class="space-y-1">
+								<label for="faction-morale-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Morale</label>
+								<input id="faction-morale-input" type="range" bind:value={factionResources.morale} min="0" max="100" step="5" class="w-full accent-[var(--color-gold-400)]" />
+								<div class="text-center text-xs text-[var(--text-muted)]">{factionResources.morale}</div>
+							</div>
+						</div>
+						<div class="space-y-1">
+							<label for="faction-goals-input" class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Goals</label>
+							<textarea id="faction-goals-input" bind:value={factionGoalsText} rows="4" placeholder="One per line: Secure the trade road | 8 | 20 | economic | before winter"
+								class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"></textarea>
+							<p class="text-[10px] text-[var(--text-muted)]">Format: description | priority 1-10 | progress 0-100 | type | deadline.</p>
 						</div>
 					</div>
 

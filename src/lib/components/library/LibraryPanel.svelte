@@ -175,7 +175,7 @@
 				{#each stories as s}
 					<div class="group relative">
 						<button
-							class="flex w-full items-center gap-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4 text-left transition-all hover:border-[var(--color-gold-600)] hover:bg-[rgba(212,168,83,0.04)]"
+							class="flex w-full items-center gap-4 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4 text-left transition-all hover:border-[var(--color-gold-600)] hover:bg-[rgba(212,168,83,0.04)] sm:pr-20"
 							onclick={() => app.openStory(s.id)}
 						>
 							<div class="flex h-11 w-11 items-center justify-center rounded-lg bg-[var(--bg-primary)]">
@@ -193,25 +193,27 @@
 
 						<!-- Hover actions -->
 						{#if confirmDelete === s.id}
-							<div class="absolute right-2 top-2 flex items-center gap-1 rounded-lg bg-[var(--bg-primary)] p-1 shadow-lg border border-[var(--border-primary)]">
-								<button onclick={() => handleDelete(s.id)} class="rounded px-2 py-1 text-xs text-red-400 hover:bg-red-500/10">Delete</button>
-								<button onclick={() => confirmDelete = null} class="rounded px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]">Cancel</button>
+							<div class="mt-1 flex items-center justify-end gap-1 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] p-1 shadow-lg sm:absolute sm:right-2 sm:top-2 sm:mt-0">
+								<button onclick={(e) => { e.stopPropagation(); handleDelete(s.id); }} class="min-h-9 rounded px-3 py-1 text-xs font-medium text-red-400 hover:bg-red-500/10">Delete</button>
+								<button onclick={(e) => { e.stopPropagation(); confirmDelete = null; }} class="min-h-9 rounded px-3 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]">Cancel</button>
 							</div>
 						{:else}
-							<div class="absolute right-2 top-2 flex items-center gap-0.5 opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+							<div class="mt-1 flex items-center justify-end gap-1 opacity-100 sm:absolute sm:right-2 sm:top-2 sm:mt-0 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100">
 								<button
-									class="rounded p-1.5 text-[var(--text-muted)] hover:text-[var(--text-accent)] hover:bg-[rgba(212,168,83,0.1)]"
+									class="flex h-10 w-10 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-muted)] shadow-sm active:scale-95 hover:bg-[rgba(212,168,83,0.1)] hover:text-[var(--text-accent)] sm:h-8 sm:w-8"
 									title="Export story"
+									aria-label="Export story"
 									onclick={(e) => handleExport(e, s.id)}
 								>
-									<Download class="h-3.5 w-3.5" />
+									<Download class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
 								</button>
 								<button
-									class="rounded p-1.5 text-[var(--text-muted)] hover:text-red-400 hover:bg-red-500/10"
+									class="flex h-10 w-10 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] text-[var(--text-muted)] shadow-sm active:scale-95 hover:bg-red-500/10 hover:text-red-400 sm:h-8 sm:w-8"
 									title="Delete story"
+									aria-label="Delete story"
 									onclick={(e) => { e.stopPropagation(); confirmDelete = s.id; }}
 								>
-									<Trash2 class="h-3.5 w-3.5" />
+									<Trash2 class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
 								</button>
 							</div>
 						{/if}

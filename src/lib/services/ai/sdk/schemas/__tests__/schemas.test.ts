@@ -6,11 +6,11 @@ import { styleReviewSchema } from '../style';
 import { chapterSummaryResultSchema, chapterAnalysisSchema, retrievalDecisionSchema } from '../memory';
 import {
 	plotInjectionSchema, factionActionSchema, rumorSchema,
-	worldSimulationResultSchema,
+	worldSimulationResultSchema, relationDeltaSchema, plotMomentumSchema,
 } from '../worldsim';
 import { arcSummarySchema } from '../arc';
 import { extractedRuleSchema, reflectionResultSchema, ruleRelevanceSchema } from '../procedural';
-import { vaultQuerySchema, vaultActionSchema, vaultResultSchema } from '../vault';
+import { entryRefinementResultSchema } from '../entryRefinement';
 
 // ════════════════════════════════════════════════════════════════
 // Action Choices
@@ -274,6 +274,114 @@ describe('worldSimulationResultSchema', () => {
 	});
 });
 
+describe('plotMomentumSchema', () => {
+	const validNextBeat = {
+		next_beat: {
+			critical_path: {
+				path_a: { type: 'political_overture', description: 'A raven arrives with a marriage offer.' },
+				path_b: { type: 'social_slight', description: 'A lord refuses to rise when the player enters.', friction: true },
+				path_c: { type: 'action_small_scale', description: 'A horse screams in the stable.', action: true },
+				path_d: { type: 'twist_from_secret', description: 'A maester reveals a hidden will.', twist_from_existing_secret: true },
+			},
+			next_turn_strategy: {
+				recommended_path: 'path_b',
+				rationale: 'The player has had two easy turns; friction raises temperature.',
+			},
+			revelation_budget: {
+				major_reveals_stewing: ['The heir is a bastard'],
+				notes: 'Hold the bastard reveal until the feast arc.',
+			},
+			faction_advisory: {
+				house_stark: { disposition: 'cautiously allied', likely_next_move: 'Send a raven warning.', notes: 'Honorable but stretched thin.' },
+			},
+			thread_awareness: {
+				existing_threads: ['Find the missing courier'],
+				imminent_threads: ['The feast approaches'],
+				branch_alignment: 'Path B advances the feast tension without forcing a reveal.',
+			},
+		},
+	};
+
+	it('accepts a valid plot momentum payload', () => {
+		const parsed = plotMomentumSchema.parse(validNextBeat);
+		expect(parsed.next_beat.critical_path.path_b.friction).toBe(true);
+		expect(parsed.next_beat.next_turn_strategy.recommended_path).toBe('path_b');
+		expect(parsed.next_beat.faction_advisory.house_stark.disposition).toBe('cautiously allied');
+	});
+
+	it('accepts minimal defaults for optional booleans', () => {
+		const minimal = {
+			next_beat: {
+				critical_path: {
+					path_a: { type: 'none', description: 'Nothing happens.' },
+					path_b: { type: 'none', description: 'Nothing happens.' },
+					path_c: { type: 'none', description: 'Nothing happens.' },
+					path_d: { type: 'none', description: 'Nothing happens.' },
+				},
+				next_turn_strategy: { recommended_path: 'path_a', rationale: 'Default.' },
+				revelation_budget: { major_reveals_stewing: [], notes: '' },
+				faction_advisory: {},
+				thread_awareness: { existing_threads: [], imminent_threads: [], branch_alignment: '' },
+			},
+		};
+		const parsed = plotMomentumSchema.parse(minimal);
+		expect(parsed.next_beat.critical_path.path_a.friction).toBe(false);
+	});
+
+	it('rejects invalid recommended_path', () => {
+		const bad = {
+			next_beat: {
+				...validNextBeat.next_beat,
+				next_turn_strategy: { recommended_path: 'path_e', rationale: 'bad' },
+			},
+		};
+		expect(() => plotMomentumSchema.parse(bad)).toThrow();
+	});
+});
+
+describe('relationDeltaSchema', () => {
+	it('accepts a normal delta', () => {
+		const parsed = relationDeltaSchema.parse({
+			targetFaction: 'House Stark', delta: -25, reason: 'sacked Sherrer',
+		});
+		expect(parsed).toEqual({ targetFaction: 'House Stark', delta: -25, reason: 'sacked Sherrer' });
+	});
+
+	it('clamps delta to ±50 instead of failing', () => {
+		const overshoot = relationDeltaSchema.parse({ targetFaction: 'X', delta: 80, reason: 'r' });
+		expect(overshoot.delta).toBe(50);
+		const undershoot = relationDeltaSchema.parse({ targetFaction: 'X', delta: -200, reason: 'r' });
+		expect(undershoot.delta).toBe(-50);
+	});
+
+	it('truncates over-long reason instead of failing', () => {
+		const longReason = 'a'.repeat(300);
+		const parsed = relationDeltaSchema.parse({ targetFaction: 'X', delta: 0, reason: longReason });
+		expect(parsed.reason.length).toBeLessThanOrEqual(140);
+	});
+});
+
+describe('factionActionSchema relationDeltas', () => {
+	const base = {
+		factionName: 'X', action: 'a', actionType: 'military' as const,
+		target: null, motivation: 'm', consequences: [], urgency: 'background' as const,
+		affectedRegions: [],
+	};
+
+	it('defaults relationDeltas to empty array when omitted', () => {
+		const parsed = factionActionSchema.parse(base);
+		expect(parsed.relationDeltas).toEqual([]);
+	});
+
+	it('caps relationDeltas at 4 silently (no throw)', () => {
+		const five = Array.from({ length: 5 }, (_, i) => ({
+			targetFaction: `T${i}`, delta: 5, reason: 'r',
+		}));
+		const parsed = factionActionSchema.parse({ ...base, relationDeltas: five });
+		expect(parsed.relationDeltas).toHaveLength(4);
+	});
+});
+
 // ════════════════════════════════════════════════════════════════
 // Arc
 // ════════════════════════════════════════════════════════════════
@@ -354,41 +462,50 @@ describe('ruleRelevanceSchema', () => {
 });
 
 // ════════════════════════════════════════════════════════════════
-// Vault
+// Entry Refinement
 // ════════════════════════════════════════════════════════════════
 
-describe('vaultQuerySchema', () => {
-	it('accepts minimal query', () => {
-		const data = { query: 'find warrior' };
-		expect(vaultQuerySchema.parse(data)).toBeTruthy();
-	});
-
-	it('accepts optional fields', () => {
-		const data = { query: 'dragon', entryTypes: ['character'], limit: 10 };
-		expect(vaultQuerySchema.parse(data).limit).toBe(10);
-	});
-});
-
-describe('vaultActionSchema', () => {
-	it('accepts valid action', () => {
-		const data = { action: 'create', name: 'Dragon', type: 'character', reason: 'Save for reuse' };
-		expect(vaultActionSchema.parse(data)).toBeTruthy();
-	});
-
-	it('accepts all action types', () => {
-		for (const action of ['create', 'update', 'delete', 'link', 'unlink']) {
-			expect(vaultActionSchema.parse({ action, reason: 'test' })).toBeTruthy();
-		}
-	});
-});
-
-describe('vaultResultSchema', () => {
-	it('accepts valid vault result', () => {
+describe('entryRefinementResultSchema', () => {
+	it('accepts a description-only refinement', () => {
 		const data = {
-			actions: [{ action: 'create', name: 'X', reason: 'Y' }],
-			reasoning: 'Created one entry',
+			description: 'Updated description with new facts appended.',
+			reasoning: 'Added the siege detail.',
 		};
-		expect(vaultResultSchema.parse(data)).toBeTruthy();
+		expect(entryRefinementResultSchema.parse(data).description).toBeTruthy();
+	});
+
+	it('accepts character enrichment fields', () => {
+		const data = {
+			description: 'Old text + new text.',
+			bio: 'Born in Pyke, raised at sea.',
+			motivations: ['Reclaim her birthright', 'Avenge her father'],
+			personality: 'Steely and quiet.',
+			reasoning: 'Character context expanded.',
+		};
+		const parsed = entryRefinementResultSchema.parse(data);
+		expect(parsed.bio).toBe('Born in Pyke, raised at sea.');
+		expect(parsed.motivations).toHaveLength(2);
+	});
+
+	it('accepts all optional fields omitted except reasoning', () => {
+		const data = { reasoning: 'Nothing to change.' };
+		expect(entryRefinementResultSchema.parse(data).reasoning).toBe('Nothing to change.');
+	});
+
+	it('accepts nullable description (no change)', () => {
+		const data = { description: null, reasoning: 'Unchanged.' };
+		expect(entryRefinementResultSchema.parse(data).description).toBeNull();
+	});
+
+	it('rejects missing reasoning', () => {
+		expect(() => entryRefinementResultSchema.parse({ description: 'x' })).toThrow();
+	});
+
+	it('rejects keywords with non-string entries', () => {
+		expect(() => entryRefinementResultSchema.parse({
+			keywords: [123, 'ok'],
+			reasoning: 'test',
+		})).toThrow();
 	});
 });
 

@@ -1,12 +1,14 @@
 <script lang="ts">
-	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap } from 'lucide-svelte';
-	import { WORLD_SIM_DAY_INTERVAL } from '$lib/services/ai/tools/helpers';
+	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search } from 'lucide-svelte';
+	import { WORLD_SIM_DAY_INTERVAL, normalizeRelation } from '$lib/services/ai/tools/helpers';
+	import { maybeRunWorldSim } from '$lib/services/ai/tools/executor';
+	import { settings } from '$lib/stores/settings.svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { getChapters, getArcs, createArc } from '$lib/services/database';
 	import { ai } from '$lib/services/ai';
 	import { uuid } from '$lib/utils/uuid';
 	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
-	import type { Arc } from '$lib/types';
+	import type { Arc, Entry, FactionActionRecord, FactionEntryState } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import type { Chapter } from '$lib/types';
 
@@ -53,6 +55,104 @@
 
 	const activeChars = $derived(story.characters.filter(c => c.status === 'active'));
 	const protagonist = $derived(story.protagonist);
+
+	type FactionStatusFilter = 'all' | FactionEntryState['status'];
+	type FactionSortMode = 'relevance' | 'standing' | 'resources' | 'name';
+	const FACTION_PAGE_SIZE = 12;
+
+	let factionSearch = $state('');
+	let factionStatusFilter = $state<FactionStatusFilter>('all');
+	let factionSortMode = $state<FactionSortMode>('relevance');
+	let factionDisplayLimit = $state(FACTION_PAGE_SIZE);
+
+	function factionState(entry: Entry): FactionEntryState {
+		return entry.state as FactionEntryState;
+	}
+
+	function factionResourceAverage(state: FactionEntryState): number {
+		const r = state.resources;
+		if (!r) return 0;
+		return Math.round((r.military + r.wealth + r.influence + r.information + r.morale) / 5);
+	}
+
+	function factionTopGoalScore(state: FactionEntryState): number {
+		const activeGoals = (state.goals ?? []).filter(goal => (goal.progress ?? 0) < 100);
+		if (activeGoals.length === 0) return 0;
+		return Math.max(...activeGoals.map(goal => (goal.priority ?? 0) * 10 + Math.max(0, 100 - (goal.progress ?? 0)) / 5));
+	}
+
+	function latestFactionAction(name: string): FactionActionRecord | null {
+		const lower = name.toLowerCase();
+		return [...story.factionActions]
+			.filter(action => action.factionName.toLowerCase() === lower)
+			.sort((a, b) => b.createdAt - a.createdAt)[0] ?? null;
+	}
+
+	function factionRelevance(entry: Entry): number {
+		const state = factionState(entry);
+		const lowerName = entry.name.toLowerCase();
+		let score = Math.abs(state.playerStanding ?? 0);
+		if (state.status === 'hostile' || state.status === 'allied') score += 30;
+		if (state.disposition === 'aggressive' || state.disposition === 'desperate') score += 25;
+		else if (state.disposition === 'scheming') score += 20;
+		score += factionTopGoalScore(state);
+		score += factionResourceAverage(state) / 4;
+		if (latestFactionAction(entry.name)) score += 40;
+		if (story.schemes.some(s => s.ownerType === 'faction' && s.ownerName.toLowerCase() === lowerName && !['resolved', 'foiled', 'abandoned'].includes(s.status))) score += 35;
+		if ((state.territory ?? []).length > 0) score += 5;
+		return score;
+	}
+
+	function factionSearchText(entry: Entry): string {
+		const state = factionState(entry);
+		const memberNames = (state.knownMembers ?? [])
+			.map(id => story.lorebookEntries.find(e => e.id === id)?.name ?? id);
+		return [
+			entry.name,
+			entry.description,
+			entry.aliases?.join(' '),
+			state.status,
+			state.disposition,
+			state.territory?.join(' '),
+			memberNames.join(' '),
+			state.goals?.map(goal => `${goal.type} ${goal.description} ${goal.deadline ?? ''}`).join(' '),
+		].filter(Boolean).join(' ').toLowerCase();
+	}
+
+	function compareFactions(a: Entry, b: Entry): number {
+		const aState = factionState(a);
+		const bState = factionState(b);
+		if (factionSortMode === 'name') return a.name.localeCompare(b.name);
+		if (factionSortMode === 'standing') {
+			return Math.abs(bState.playerStanding ?? 0) - Math.abs(aState.playerStanding ?? 0)
+				|| a.name.localeCompare(b.name);
+		}
+		if (factionSortMode === 'resources') {
+			return factionResourceAverage(bState) - factionResourceAverage(aState)
+				|| a.name.localeCompare(b.name);
+		}
+		return factionRelevance(b) - factionRelevance(a)
+			|| a.name.localeCompare(b.name);
+	}
+
+	function resetFactionRosterLimit() {
+		factionDisplayLimit = FACTION_PAGE_SIZE;
+	}
+
+	function setFactionSearch(value: string) {
+		factionSearch = value;
+		resetFactionRosterLimit();
+	}
+
+	function setFactionStatus(value: FactionStatusFilter) {
+		factionStatusFilter = value;
+		resetFactionRosterLimit();
+	}
+
+	function setFactionSort(value: FactionSortMode) {
+		factionSortMode = value;
+		resetFactionRosterLimit();
+	}
 
 	// Chapters / Memory
 	let chapters = $state<Chapter[]>([]);
@@ -113,6 +213,8 @@
 				keyPlotPoints: result.keyPlotPoints,
 				characterArcs: result.characterArcs,
 				unresolvedThreads: result.unresolvedThreads,
+				threadIds: [],
+				resolvedThreadIds: [],
 				emotionalProgression: result.emotionalProgression,
 				chapterIds: chaptersToCondense.map(c => c.id),
 				chapterRange: `${firstCh.number}-${lastCh.number}`,
@@ -203,6 +305,17 @@
 		return remaining > 0 ? remaining : 0;
 	});
 
+	// Manual world-sim trigger ─────────────────────────────────────────
+	let runningWorldSim = $state(false);
+	const worldSimEnabled = $derived(settings.getServiceConfig('worldSimulation').enabled);
+	async function runWorldSimNow() {
+		if (runningWorldSim || !worldSimEnabled || !story.currentStory) return;
+		runningWorldSim = true;
+		try { await maybeRunWorldSim({ force: true }); }
+		catch (e) { console.error('[WorldDrawer] manual world sim failed:', e); }
+		runningWorldSim = false;
+	}
+
 	// ── Meters (player only sees visible meters) ──
 	const visibleMeters = $derived(
 		(story.currentStory?.meters ?? []).filter(m => m.visible),
@@ -211,6 +324,12 @@
 	// ── Living World ──
 	const activeAgreements = $derived(
 		story.agreements.filter(a => a.status === 'active'),
+	);
+	const pastAgreements = $derived(
+		story.agreements
+			.filter(a => a.status !== 'active')
+			.sort((a, b) => (b.resolvedChapterNumber ?? 0) - (a.resolvedChapterNumber ?? 0))
+			.slice(0, 12),
 	);
 	const activeRumors = $derived(
 		story.rumors.filter(r => r.status !== 'stale' && r.status !== 'debunked')
@@ -227,8 +346,73 @@
 			.sort((a, b) => (b.appliedAt ?? 0) - (a.appliedAt ?? 0))
 			.slice(0, 5),
 	);
+	const allFactionEntries = $derived(
+		story.lorebookEntries
+			.filter(e => e.type === 'faction' && !e.deleted)
+			.sort(compareFactions),
+	);
+	const filteredFactionEntries = $derived.by(() => {
+		const query = factionSearch.trim().toLowerCase();
+		return allFactionEntries.filter(entry => {
+			const state = factionState(entry);
+			if (factionStatusFilter !== 'all' && state.status !== factionStatusFilter) return false;
+			if (!query) return true;
+			return factionSearchText(entry).includes(query);
+		});
+	});
+	const visibleFactionEntries = $derived(filteredFactionEntries.slice(0, factionDisplayLimit));
+	const hiddenFactionCount = $derived(Math.max(0, filteredFactionEntries.length - visibleFactionEntries.length));
 
 	let livingWorldCollapsed = $state(false);
+	let agreementsCollapsed = $state(false);
+	let alliancesCollapsed = $state(false);
+
+	// ── Alliances: flattened, deduped inter-faction relations ──
+	interface AllianceRow {
+		a: string;
+		b: string;
+		standing: number;
+		affinity: number;
+		recent: { event: string; chapter: number } | null;
+	}
+	const alliances = $derived.by<AllianceRow[]>(() => {
+		const factions = story.lorebookEntries.filter(e => e.type === 'faction' && !e.deleted);
+		const byNameLower = new Map(factions.map(f => [f.name.toLowerCase(), f.name]));
+		const seen = new Map<string, AllianceRow>();
+		for (const f of factions) {
+			const rels = (f.state as FactionEntryState | undefined)?.interFactionRelations ?? {};
+			for (const [otherName, raw] of Object.entries(rels)) {
+				// Resolve canonical name; skip if other faction not in lorebook.
+				const canonical = byNameLower.get(otherName.toLowerCase()) ?? otherName;
+				if (canonical.toLowerCase() === f.name.toLowerCase()) continue; // self-relation
+				const norm = normalizeRelation(raw);
+				if (Math.abs(norm.standing) < 30 && Math.abs(norm.affinity) < 30) continue;
+				const pair = [f.name, canonical].sort();
+				const key = pair.join('|');
+				const last = norm.history.length > 0 ? norm.history[norm.history.length - 1] : null;
+				const existing = seen.get(key);
+				if (!existing) {
+					seen.set(key, {
+						a: pair[0],
+						b: pair[1],
+						standing: norm.standing,
+						affinity: norm.affinity,
+						recent: last ? { event: last.event, chapter: last.chapter } : null,
+					});
+				} else {
+					// Reciprocal — average standing/affinity, keep newer history event
+					existing.standing = Math.round((existing.standing + norm.standing) / 2);
+					existing.affinity = Math.round((existing.affinity + norm.affinity) / 2);
+					if (last && (!existing.recent || last.chapter > existing.recent.chapter)) {
+						existing.recent = { event: last.event, chapter: last.chapter };
+					}
+				}
+			}
+		}
+		return [...seen.values()]
+			.sort((x, y) => (Math.abs(y.standing) + Math.abs(y.affinity)) - (Math.abs(x.standing) + Math.abs(x.affinity)))
+			.slice(0, 12);
+	});
 
 	// ── Timeline: chronological log of chapters + world events + entry creations ──
 	type TimelineKind = 'chapter' | 'event' | 'entry';
@@ -294,10 +478,10 @@
 
 {#if open}
 <div class="fixed inset-0 z-40 flex justify-end" transition:fly={{ x: 0, duration: 0 }}>
-	<button class="absolute inset-0 bg-black/40" onclick={onClose}></button>
+	<button class="absolute inset-0 bg-black/40" aria-label="Close world drawer" onclick={onClose}></button>
 
-	<div class="relative z-10 flex h-full w-80 flex-col border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]"
-		transition:fly={{ x: 320, duration: 200 }}>
+	<div class="relative z-10 flex h-full w-full max-w-[26rem] flex-col border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]"
+		transition:fly={{ x: 420, duration: 200 }}>
 
 		<!-- Header -->
 		<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3">
@@ -308,7 +492,7 @@
 					title="Export wiki as Obsidian-compatible .zip">
 					{#if exportingWiki}<Loader2 class="h-4 w-4 animate-spin" />{:else}<FileArchive class="h-4 w-4" />{/if}
 				</button>
-				<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+				<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]" aria-label="Close world drawer">
 					<X class="h-5 w-5" />
 				</button>
 			</div>
@@ -357,8 +541,51 @@
 					</span>
 					<span class="ml-auto text-sm tabular-nums text-[var(--text-primary)]">{currentTime.hms}</span>
 				</div>
+				<button
+					onclick={runWorldSimNow}
+					disabled={runningWorldSim || !worldSimEnabled || !story.currentStory}
+					class="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-1.5 text-xs text-sky-400 transition-colors hover:bg-sky-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
+					title={worldSimEnabled ? 'Run world simulation now (bypasses the 7-day cadence)' : 'World simulation is disabled in settings'}
+				>
+					{#if runningWorldSim}
+						<Loader2 class="h-3.5 w-3.5 animate-spin" />
+						<span>Running world sim…</span>
+					{:else}
+						<Play class="h-3.5 w-3.5" />
+						<span>Run world sim now</span>
+					{/if}
+				</button>
 			</div>
 			{/if}
+
+			<!-- Current Location (above meters so the player's "where am I" is at the top) -->
+			<div>
+				<div class="mb-2 flex items-center gap-2">
+					<MapPin class="h-4 w-4 text-blue-400" />
+					<span class="font-display text-xs tracking-wider uppercase text-blue-400">Location</span>
+				</div>
+				{#if currentLocation}
+					{@const charsHere = presenceMap.get(currentLocation.name) ?? []}
+					<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2">
+						<div class="flex items-center gap-2">
+							<span class="text-xs">📍</span>
+							<span class="text-sm text-[var(--text-primary)]">{currentLocation.name}</span>
+						</div>
+						{#if currentLocation.description}
+							<p class="mt-1 text-xs text-[var(--text-muted)]">{currentLocation.description}</p>
+						{/if}
+						{#if charsHere.length > 0}
+							<div class="mt-1 flex flex-wrap gap-1">
+								{#each charsHere as name}
+									<span class="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-400">{name}</span>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{:else}
+					<p class="text-xs text-[var(--text-muted)]">No current location.</p>
+				{/if}
+			</div>
 
 			<!-- Meters (visible only) -->
 			{#if visibleMeters.length > 0}
@@ -511,35 +738,6 @@
 				{/if}
 			</div>
 
-			<!-- Current Location -->
-			<div>
-				<div class="mb-2 flex items-center gap-2">
-					<MapPin class="h-4 w-4 text-blue-400" />
-					<span class="font-display text-xs tracking-wider uppercase text-blue-400">Location</span>
-				</div>
-				{#if currentLocation}
-					{@const charsHere = presenceMap.get(currentLocation.name) ?? []}
-					<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2">
-						<div class="flex items-center gap-2">
-							<span class="text-xs">📍</span>
-							<span class="text-sm text-[var(--text-primary)]">{currentLocation.name}</span>
-						</div>
-						{#if currentLocation.description}
-							<p class="mt-1 text-xs text-[var(--text-muted)]">{currentLocation.description}</p>
-						{/if}
-						{#if charsHere.length > 0}
-							<div class="mt-1 flex flex-wrap gap-1">
-								{#each charsHere as name}
-									<span class="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-400">{name}</span>
-								{/each}
-							</div>
-						{/if}
-					</div>
-				{:else}
-					<p class="text-xs text-[var(--text-muted)]">No current location.</p>
-				{/if}
-			</div>
-
 			<!-- Items -->
 			<div>
 				<div class="mb-2 flex items-center gap-2">
@@ -563,28 +761,27 @@
 				{/if}
 			</div>
 
-			<!-- Living World — agreements, factions, rumors, world events -->
-			{#if activeAgreements.length > 0 || recentFactionActions.length > 0 || activeRumors.length > 0 || recentWorldEvents.length > 0}
+			<!-- Promises & Agreements — treaties, oaths, debts, marriages, bargains -->
+			{#if activeAgreements.length > 0 || pastAgreements.length > 0}
 			<div>
 				<button class="mb-2 flex w-full items-center justify-between gap-2"
-					onclick={() => livingWorldCollapsed = !livingWorldCollapsed}>
+					onclick={() => agreementsCollapsed = !agreementsCollapsed}>
 					<div class="flex items-center gap-2">
-						<Zap class="h-4 w-4 text-violet-400" />
-						<span class="font-display text-xs tracking-wider uppercase text-violet-400">Living World</span>
+						<Scale class="h-4 w-4 text-violet-400" />
+						<span class="font-display text-xs tracking-wider uppercase text-violet-400">Promises & Agreements</span>
 						<span class="text-[10px] text-[var(--text-muted)]">
-							{activeAgreements.length + recentFactionActions.length + activeRumors.length + recentWorldEvents.length}
+							{activeAgreements.length + pastAgreements.length}
 						</span>
 					</div>
-					{#if livingWorldCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
+					{#if agreementsCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
 					{:else}<ChevronDown class="h-3.5 w-3.5 text-[var(--text-muted)]" />{/if}
 				</button>
 
-				{#if !livingWorldCollapsed}
+				{#if !agreementsCollapsed}
 					{#if activeAgreements.length > 0}
 						<div class="mb-3">
 							<div class="mb-1 flex items-center gap-1.5">
-								<Scale class="h-3 w-3 text-violet-400/80" />
-								<span class="text-[9px] tracking-wider uppercase text-violet-400/80">Active Agreements ({activeAgreements.length})</span>
+								<span class="text-[9px] tracking-wider uppercase text-violet-400/80">Active ({activeAgreements.length})</span>
 							</div>
 							<div class="space-y-1">
 								{#each activeAgreements as a}
@@ -595,14 +792,233 @@
 											{#if a.secrecy !== 'public'}
 												<span class="ml-auto rounded bg-rose-500/10 px-1 py-0 text-rose-400 italic">{a.secrecy}</span>
 											{/if}
+											{#if a.createdChapterNumber != null}
+												<span class="text-[9px] text-[var(--text-muted)]">ch.{a.createdChapterNumber}</span>
+											{/if}
 										</div>
 										<p class="mt-0.5 text-[10px] leading-relaxed text-[var(--text-muted)] line-clamp-2">{a.terms}</p>
+										{#if a.consequences && a.consequences.length > 0}
+											<p class="mt-0.5 text-[9px] italic text-[var(--text-muted)]/70 line-clamp-1">→ {a.consequences[0]}</p>
+										{/if}
 									</div>
 								{/each}
 							</div>
 						</div>
 					{/if}
 
+					{#if pastAgreements.length > 0}
+						<div>
+							<div class="mb-1 flex items-center gap-1.5">
+								<span class="text-[9px] tracking-wider uppercase text-[var(--text-muted)]">Past ({pastAgreements.length})</span>
+							</div>
+							<div class="space-y-1">
+								{#each pastAgreements as a}
+									{@const statusColor = a.status === 'fulfilled' ? 'text-emerald-400' : a.status === 'broken' ? 'text-rose-400' : 'text-[var(--text-muted)]'}
+									<div class="rounded-lg bg-[var(--bg-tertiary)]/60 px-2.5 py-1.5">
+										<div class="flex items-baseline gap-1.5 text-[10px]">
+											<span class="rounded bg-[var(--bg-primary)] px-1 py-0.5 text-[var(--text-muted)] capitalize">{a.category}</span>
+											<span class="text-[var(--text-muted)] truncate line-through">{a.parties.join(' ↔ ')}</span>
+											<span class="ml-auto italic capitalize {statusColor}">{a.status}</span>
+											{#if a.resolvedChapterNumber != null}
+												<span class="text-[9px] text-[var(--text-muted)]">ch.{a.resolvedChapterNumber}</span>
+											{/if}
+										</div>
+										<p class="mt-0.5 text-[9px] leading-relaxed text-[var(--text-muted)]/70 line-clamp-1">{a.terms}</p>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+				{/if}
+			</div>
+			{/if}
+
+			<!-- Factions -->
+			{#if allFactionEntries.length > 0}
+			<div>
+				<div class="mb-2 flex items-center gap-2">
+					<Flag class="h-4 w-4 text-orange-400" />
+					<span class="font-display text-xs tracking-wider uppercase text-orange-400">Factions ({visibleFactionEntries.length}/{allFactionEntries.length})</span>
+				</div>
+
+				<div class="mb-2 space-y-2">
+					<div class="relative">
+						<Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+						<input
+							aria-label="Search factions"
+							value={factionSearch}
+							oninput={(e) => setFactionSearch((e.currentTarget as HTMLInputElement).value)}
+							placeholder="Search factions..."
+							class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] py-1.5 pl-8 pr-2.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-orange-400 focus:outline-none"
+						/>
+					</div>
+					<div class="grid grid-cols-2 gap-2">
+						<select
+							aria-label="Filter factions by status"
+							value={factionStatusFilter}
+							onchange={(e) => setFactionStatus((e.currentTarget as HTMLSelectElement).value as FactionStatusFilter)}
+							class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-xs text-[var(--text-primary)] focus:border-orange-400 focus:outline-none"
+						>
+							<option value="all">All statuses</option>
+							<option value="allied">Allied</option>
+							<option value="neutral">Neutral</option>
+							<option value="hostile">Hostile</option>
+							<option value="unknown">Unknown</option>
+						</select>
+						<select
+							aria-label="Sort factions"
+							value={factionSortMode}
+							onchange={(e) => setFactionSort((e.currentTarget as HTMLSelectElement).value as FactionSortMode)}
+							class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-xs text-[var(--text-primary)] focus:border-orange-400 focus:outline-none"
+						>
+							<option value="relevance">Relevance</option>
+							<option value="standing">Standing</option>
+							<option value="resources">Resources</option>
+							<option value="name">Name</option>
+						</select>
+					</div>
+					{#if factionSearch || factionStatusFilter !== 'all'}
+						<div class="flex items-center justify-between rounded-lg bg-[var(--bg-tertiary)]/60 px-2.5 py-1 text-[10px] text-[var(--text-muted)]">
+							<span>{filteredFactionEntries.length} match{filteredFactionEntries.length === 1 ? '' : 'es'}</span>
+							<button
+								class="text-orange-300 hover:text-orange-200"
+								onclick={() => {
+									factionSearch = '';
+									factionStatusFilter = 'all';
+									resetFactionRosterLimit();
+								}}
+							>
+								Clear
+							</button>
+						</div>
+					{/if}
+				</div>
+
+				<div class="space-y-2">
+					{#each visibleFactionEntries as faction}
+						{@const fs = faction.state as FactionEntryState}
+						{@const members = (fs.knownMembers ?? []).map(id => story.lorebookEntries.find(e => e.id === id)?.name ?? id).slice(0, 5)}
+						{@const topGoal = (fs.goals ?? []).filter(g => (g.progress ?? 0) < 100).sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0]}
+						{@const lastMove = latestFactionAction(faction.name)}
+						<div class="rounded-lg bg-[var(--bg-tertiary)] p-2.5">
+							<div class="flex items-center gap-1.5">
+								<span class="text-sm font-semibold text-[var(--text-primary)] truncate">{faction.name}</span>
+								<span class="rounded bg-[var(--bg-primary)] px-1 py-0.5 text-[9px] capitalize text-[var(--text-muted)]">{fs.status ?? 'unknown'}</span>
+								<span class="ml-auto font-mono text-[10px] text-[var(--text-muted)]">{(fs.playerStanding ?? 0) > 0 ? '+' : ''}{fs.playerStanding ?? 0}</span>
+							</div>
+							{#if topGoal}
+								<p class="mt-1 text-xs text-[var(--text-muted)] line-clamp-2">Goal: {topGoal.description} ({topGoal.progress ?? 0}%)</p>
+							{/if}
+							{#if fs.resources}
+								<div class="mt-1.5 grid grid-cols-5 gap-1 text-center text-[9px] text-[var(--text-muted)]">
+									<span title="Military">mil {fs.resources.military}</span>
+									<span title="Wealth">wel {fs.resources.wealth}</span>
+									<span title="Influence">inf {fs.resources.influence}</span>
+									<span title="Information">spy {fs.resources.information}</span>
+									<span title="Morale">mor {fs.resources.morale}</span>
+								</div>
+							{/if}
+							{#if members.length > 0}
+								<p class="mt-1 text-[10px] text-[var(--text-muted)] line-clamp-1">Members: {members.join(', ')}</p>
+							{/if}
+							{#if lastMove}
+								<p class="mt-1 text-[10px] text-orange-300/80 line-clamp-1">Last move: {lastMove.action}</p>
+							{/if}
+						</div>
+					{/each}
+				</div>
+
+				{#if filteredFactionEntries.length === 0}
+					<p class="rounded-lg bg-[var(--bg-tertiary)]/60 px-3 py-2 text-xs text-[var(--text-muted)]">No factions match the current filters.</p>
+				{:else if hiddenFactionCount > 0 || factionDisplayLimit > FACTION_PAGE_SIZE}
+					<div class="mt-2 flex flex-wrap gap-2">
+						{#if hiddenFactionCount > 0}
+							<button
+								class="flex items-center gap-1.5 rounded-lg bg-[rgba(251,146,60,0.12)] px-2.5 py-1.5 text-[10px] text-orange-300 transition-colors hover:bg-[rgba(251,146,60,0.2)]"
+								onclick={() => factionDisplayLimit = Math.min(filteredFactionEntries.length, factionDisplayLimit + FACTION_PAGE_SIZE)}
+							>
+								<ChevronDown class="h-3 w-3" />
+								Show {Math.min(FACTION_PAGE_SIZE, hiddenFactionCount)} more
+							</button>
+							<button
+								class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5 text-[10px] text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+								onclick={() => factionDisplayLimit = filteredFactionEntries.length}
+							>
+								Show all {filteredFactionEntries.length}
+							</button>
+						{/if}
+						{#if factionDisplayLimit > FACTION_PAGE_SIZE}
+							<button
+								class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5 text-[10px] text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+								onclick={resetFactionRosterLimit}
+							>
+								Collapse
+							</button>
+						{/if}
+					</div>
+				{/if}
+			</div>
+			{/if}
+
+			<!-- Alliances — inter-faction relations, deduped symmetric pairs -->
+			{#if alliances.length > 0}
+			<div>
+				<button class="mb-2 flex w-full items-center justify-between gap-2"
+					onclick={() => alliancesCollapsed = !alliancesCollapsed}>
+					<div class="flex items-center gap-2">
+						<Handshake class="h-4 w-4 text-cyan-400" />
+						<span class="font-display text-xs tracking-wider uppercase text-cyan-400">Alliances</span>
+						<span class="text-[10px] text-[var(--text-muted)]">{alliances.length}</span>
+					</div>
+					{#if alliancesCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
+					{:else}<ChevronDown class="h-3.5 w-3.5 text-[var(--text-muted)]" />{/if}
+				</button>
+
+				{#if !alliancesCollapsed}
+					<div class="space-y-1">
+						{#each alliances as r}
+							{@const standingColor =
+								r.standing >= 50 ? 'text-emerald-400'
+								: r.standing >= 30 ? 'text-cyan-400'
+								: r.standing <= -50 ? 'text-rose-400'
+								: r.standing <= -30 ? 'text-amber-400'
+								: 'text-[var(--text-muted)]'}
+							{@const sign = (n: number) => `${n > 0 ? '+' : ''}${n}`}
+							<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5">
+								<div class="flex items-baseline gap-1.5 text-[10px]">
+									<span class="text-[var(--text-primary)] truncate">{r.a}</span>
+									<span class="text-[var(--text-muted)]">↔</span>
+									<span class="text-[var(--text-primary)] truncate">{r.b}</span>
+									<span class="ml-auto font-mono {standingColor}">st:{sign(r.standing)}</span>
+									<span class="font-mono text-[var(--text-muted)]">af:{sign(r.affinity)}</span>
+								</div>
+								{#if r.recent}
+									<p class="mt-0.5 text-[9px] italic text-[var(--text-muted)]/70 line-clamp-1">ch.{r.recent.chapter}: {r.recent.event}</p>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
+			{/if}
+
+			<!-- Living World — factions, rumors, world events -->
+			{#if recentFactionActions.length > 0 || activeRumors.length > 0 || recentWorldEvents.length > 0}
+			<div>
+				<button class="mb-2 flex w-full items-center justify-between gap-2"
+					onclick={() => livingWorldCollapsed = !livingWorldCollapsed}>
+					<div class="flex items-center gap-2">
+						<Zap class="h-4 w-4 text-violet-400" />
+						<span class="font-display text-xs tracking-wider uppercase text-violet-400">Living World</span>
+						<span class="text-[10px] text-[var(--text-muted)]">
+							{recentFactionActions.length + activeRumors.length + recentWorldEvents.length}
+						</span>
+					</div>
+					{#if livingWorldCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
+					{:else}<ChevronDown class="h-3.5 w-3.5 text-[var(--text-muted)]" />{/if}
+				</button>
+
+				{#if !livingWorldCollapsed}
 					{#if recentFactionActions.length > 0}
 						<div class="mb-3">
 							<div class="mb-1 flex items-center gap-1.5">

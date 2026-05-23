@@ -536,6 +536,42 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
     // No service defaults - user must configure models in Generation Settings
   },
 
+  'google-agent-platform': {
+    name: 'Google Agent Platform (ADC)',
+    description: 'Gemini on Google Cloud via Application Default Credentials. Run gcloud auth application-default login and set GOOGLE_CLOUD_PROJECT; GOOGLE_CLOUD_LOCATION defaults to global.',
+    baseUrl: '/api/google-agent-platform/openai',
+    requiresApiKey: false,
+    capabilities: {
+      textGeneration: true,
+      imageGeneration: false,
+      structuredOutput: true,
+      reasoning: false,
+    },
+    fallbackModels: [
+      'google/gemini-2.5-flash',
+      'google/gemini-2.5-pro',
+      'google/gemini-2.5-flash-lite',
+      'google/gemini-2.0-flash',
+    ],
+    services: makeServiceDefaults(
+      {
+        narrative: 'google/gemini-2.5-flash',
+        classification: 'google/gemini-2.5-flash-lite',
+        memory: 'google/gemini-2.5-flash-lite',
+        suggestions: 'google/gemini-2.5-flash-lite',
+        agentic: 'google/gemini-2.5-flash',
+        wizard: 'google/gemini-2.5-flash-lite',
+        translation: 'google/gemini-2.5-flash-lite',
+      },
+      {
+        narrative: { temperature: 0.9 },
+        classification: { reasoningEffort: 'off' },
+        memory: { reasoningEffort: 'off' },
+        agentic: { temperature: 0.8 },
+      },
+    ),
+  },
+
   'anthropic-proxy': {
     name: 'Claude (Subscription Proxy)',
     description: 'Use Claude via the cc-bridge running on Zo (routes through your Claude Code subscription). Paste the Bridge Token (BRIDGE_TOKEN env var on the cc-bridge service) as the API key. Override Base URL if you self-host the bridge elsewhere.',
