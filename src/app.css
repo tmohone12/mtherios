@@ -248,9 +248,50 @@
 
 	/* ── Dialogue highlighting (SillyTavern style) ── */
 	.dialogue {
-		color: #e8e0d0;
+		color: #f2d28b;
+		font-weight: 600;
 		font-style: normal;
-		text-shadow: 0 0 8px rgba(232, 224, 208, 0.15);
+		text-shadow: 0 0 10px rgba(242, 210, 139, 0.18);
+	}
+
+	.dialogue-tone-0 {
+		color: #f2d28b;
+		text-shadow: 0 0 10px rgba(242, 210, 139, 0.18);
+	}
+
+	.dialogue-tone-1 {
+		color: #9dd9ff;
+		text-shadow: 0 0 10px rgba(157, 217, 255, 0.16);
+	}
+
+	.dialogue-tone-2 {
+		color: #f0a6ca;
+		text-shadow: 0 0 10px rgba(240, 166, 202, 0.16);
+	}
+
+	.dialogue-tone-3 {
+		color: #a8e6a1;
+		text-shadow: 0 0 10px rgba(168, 230, 161, 0.16);
+	}
+
+	.dialogue-tone-4 {
+		color: #c9b7ff;
+		text-shadow: 0 0 10px rgba(201, 183, 255, 0.16);
+	}
+
+	.dialogue-tone-5 {
+		color: #ffb38a;
+		text-shadow: 0 0 10px rgba(255, 179, 138, 0.16);
+	}
+
+	.dialogue-tone-6 {
+		color: #7ee7d1;
+		text-shadow: 0 0 10px rgba(126, 231, 209, 0.16);
+	}
+
+	.dialogue-tone-7 {
+		color: #ff9c9c;
+		text-shadow: 0 0 10px rgba(255, 156, 156, 0.16);
 	}
 
 	/* ── Dice Roll Cards ── */

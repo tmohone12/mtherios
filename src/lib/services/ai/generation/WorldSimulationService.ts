@@ -142,8 +142,10 @@ function buildSimContext(
 	const hasFactions = factionEntries.length > 0;
 	let factionBlock = '';
 	if (hasFactions) {
-		const dossiers = factionEntries
-			.slice(0, MAX_FACTIONS_PER_TICK)
+		const selectedFactions = selectFactionsForTick(factionEntries, recentFactionActions, schemes);
+		const selectedIds = new Set(selectedFactions.map(faction => faction.id));
+		const omittedFactions = factionEntries.filter(faction => !selectedIds.has(faction.id));
+		const dossiers = selectedFactions
 			.map(e => {
 				const leaderRel = entryRelationships.find(r =>
 					r.targetEntryId === e.id && r.type === 'leader-of'
@@ -154,6 +156,9 @@ function buildSimContext(
 				return buildFactionDossier(e, leaderEntry ?? null, characterEntries);
 			});
 		factionBlock = dossiers.join('\n\n');
+		if (omittedFactions.length > 0) {
+			factionBlock += `\n\nOther known factions not fully simulated this tick: ${omittedFactions.map(f => f.name).sort().join(', ')}.\nOnly bring one of them forward if the current scene, an active scheme, or a recent event directly points at them.`;
+		}
 	}
 
 	// Thread registry
@@ -221,6 +226,49 @@ function buildConversationBlock(entries: StoryEntry[]): string {
 		}
 	}
 	return pairs.join('\n\n---\n\n');
+}
+
+function factionResourceAverage(state: FactionEntryState): number {
+	const r = state.resources;
+	if (!r) return 0;
+	return Math.round((r.military + r.wealth + r.influence + r.information + r.morale) / 5);
+}
+
+function factionGoalPressure(state: FactionEntryState): number {
+	const goals = (state.goals ?? []).filter(goal => (goal.progress ?? 0) < 100);
+	if (goals.length === 0) return 0;
+	return Math.max(...goals.map(goal => (goal.priority ?? 0) * 10 + Math.max(0, 100 - (goal.progress ?? 0)) / 5));
+}
+
+function scoreFactionForTick(
+	faction: Entry,
+	recentFactionActions: FactionActionRecord[],
+	schemes: string,
+): number {
+	const state = faction.state as FactionEntryState;
+	const name = faction.name.toLowerCase();
+	let score = Math.abs(state.playerStanding ?? 0);
+	if (state.status === 'hostile' || state.status === 'allied') score += 30;
+	if (state.disposition === 'aggressive' || state.disposition === 'desperate') score += 25;
+	else if (state.disposition === 'scheming') score += 20;
+	score += factionGoalPressure(state);
+	score += factionResourceAverage(state) / 4;
+	score += recentFactionActions.filter(action => action.factionName.toLowerCase() === name).length * 35;
+	if (schemes.toLowerCase().includes(name)) score += 35;
+	if ((state.territory ?? []).length > 0) score += 5;
+	return score;
+}
+
+function selectFactionsForTick(
+	factionEntries: Entry[],
+	recentFactionActions: FactionActionRecord[],
+	schemes: string,
+): Entry[] {
+	return factionEntries
+		.map((entry, index) => ({ entry, index, score: scoreFactionForTick(entry, recentFactionActions, schemes) }))
+		.sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name) || a.index - b.index)
+		.slice(0, MAX_FACTIONS_PER_TICK)
+		.map(item => item.entry);
 }
 
 function buildThreadRegistry(threads: StoryThread[]): string {

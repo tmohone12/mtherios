@@ -342,6 +342,10 @@ export async function putStoryEntry(entry: StoryEntry): Promise<void> {
 	await db.storyEntries.put(entry);
 }
 
+export async function getStoryEntry(id: string): Promise<StoryEntry | undefined> {
+	return db.storyEntries.get(id);
+}
+
 export async function getStoryEntries(storyId: string, branchId?: string | null): Promise<StoryEntry[]> {
 	let entries: StoryEntry[];
 	if (branchId) {
@@ -376,6 +380,27 @@ export async function getRecentStoryEntries(
 			.where('[storyId+position]')
 			.between([storyId, Dexie.minKey], [storyId, Dexie.maxKey])
 			.reverse()
+			.limit(limit)
+			.toArray();
+	return entries.sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
+}
+
+export async function getStoryEntriesAfterPosition(
+	storyId: string,
+	afterPosition: number,
+	limit: number,
+	branchId?: string | null,
+): Promise<StoryEntry[]> {
+	if (limit <= 0) return [];
+	const entries = branchId
+		? await db.storyEntries
+			.where('[storyId+branchId+position]')
+			.between([storyId, branchId, afterPosition], [storyId, branchId, Dexie.maxKey], false, true)
+			.limit(limit)
+			.toArray()
+		: await db.storyEntries
+			.where('[storyId+position]')
+			.between([storyId, afterPosition], [storyId, Dexie.maxKey], false, true)
 			.limit(limit)
 			.toArray();
 	return entries.sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);

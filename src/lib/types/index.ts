@@ -829,6 +829,7 @@ export type ProviderType =
   | 'mistral' // @ai-sdk/mistral
   | 'google-ai-studio' // OpenAI-compatible at generativelanguage.googleapis.com
   | 'google-vertex' // OpenAI-compatible at Vertex AI endpoint
+  | 'google-agent-platform' // OpenAI-compatible Gemini Enterprise Agent Platform via ADC proxy
   | 'anthropic-proxy' // Local proxy for Claude subscription users
   | 'kimi' // Moonshot AI — Kimi K2 family, OpenAI-compatible
 

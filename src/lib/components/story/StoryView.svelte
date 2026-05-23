@@ -8,6 +8,7 @@
 	import WorldDrawer from './WorldDrawer.svelte';
 	import { downloadStoryAsJson } from '$lib/services/storySync';
 	import { deleteStory } from '$lib/services/database';
+	import { formatNarrative } from '$lib/utils/narrativeHtml';
 	import { ArrowLeft, Loader2, Users, BookOpen, Image, AlertTriangle, Download, Trash2, MoreVertical, X, ScrollText, UserRound, Scissors } from 'lucide-svelte';
 	import { tick, onMount } from 'svelte';
 	import type { ActionChoice } from '$lib/services/ai/sdk/schemas/actionchoices';
@@ -177,6 +178,20 @@
 
 	const isAdventure = $derived(story.storyMode === 'adventure');
 	const visibleEntries = $derived(story.entries);
+	const dialogueSpeakers = $derived.by(() => {
+		const names = new Set<string>();
+		const addName = (name: string | null | undefined) => {
+			const trimmed = name?.trim();
+			if (trimmed) names.add(trimmed);
+		};
+
+		addName(story.protagonist?.name);
+		for (const character of story.characters) {
+			addName(character.name);
+		}
+
+		return [...names];
+	});
 
 	async function scrollToBottom() {
 		await tick();
@@ -412,7 +427,7 @@
 						<div class="group space-y-1" role="group" onmouseleave={clearMessageConfirmations}>
 							<div class="prose-mtherios">
 							<div class="rounded-2xl rounded-bl-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
-								{@html formatNarrative(entry.content)}
+								{@html formatNarrative(entry.content, dialogueSpeakers)}
 							</div>
 							{#if story.getImageForEntry(entry.id)}
 								{@const img = story.getImageForEntry(entry.id)}
@@ -481,7 +496,7 @@
 				{#if isStreaming && streamingContent}
 					<div class="prose-mtherios">
 						<div class="rounded-2xl rounded-bl-md border border-[var(--color-gold-600)]/30 bg-[var(--bg-tertiary)] px-4 py-3">
-							{@html formatNarrative(streamingContent)}
+							{@html formatNarrative(streamingContent, dialogueSpeakers)}
 							<span class="inline-block h-4 w-0.5 animate-pulse bg-[var(--text-accent)]"></span>
 						</div>
 					</div>
@@ -850,84 +865,3 @@
 		</div>
 	</div>
 {/if}
-
-<script module lang="ts">
-	/**
-	 * Render a {{dice:...}} marker as a styled dice roll card.
-	 * Format: {{dice:notation|natural|total|dc|pass/fail|ability|description[|crit-success/crit-failure]}}
-	 */
-	function renderDiceCard(marker: string): string {
-		const match = marker.match(
-			/\{\{dice:([^|]+)\|(\d+)\|(\d+)\|(\d+)\|(pass|fail)\|([^|]*)\|([^|}]*)(?:\|(crit-success|crit-failure))?\}\}/
-		);
-		if (!match) return `<p class="text-sm leading-relaxed text-[var(--text-primary)] mb-2">${marker}</p>`;
-
-		const [, notation, natural, total, dc, result, ability, description, critical] = match;
-		const isPass = result === 'pass';
-		const isCrit = !!critical;
-		const nat = parseInt(natural);
-		const tot = parseInt(total);
-		const mod = tot - nat;
-		const modStr = mod !== 0 ? ` (${nat}${mod > 0 ? '+' : ''}${mod})` : '';
-
-		const outcomeClass = isCrit
-			? (critical === 'crit-success' ? 'dice-crit-success' : 'dice-crit-failure')
-			: (isPass ? 'dice-pass' : 'dice-fail');
-		const outcomeText = isCrit
-			? (critical === 'crit-success' ? 'CRITICAL SUCCESS' : 'CRITICAL FAILURE')
-			: (isPass ? 'SUCCESS' : 'FAILURE');
-
-		return `<div class="dice-card ${outcomeClass}">
-			<div class="dice-card-header">
-				<span class="dice-card-icon">&#127922;</span>
-				<span class="dice-card-label">${ability ? ability + ' Check' : 'Roll'}</span>
-			</div>
-			<div class="dice-card-body">
-				<span class="dice-card-total">${total}</span>
-				<span class="dice-card-detail">${notation}${modStr} vs DC ${dc}</span>
-			</div>
-			<div class="dice-card-outcome">${outcomeText}</div>
-			${description ? `<div class="dice-card-desc">${description}</div>` : ''}
-		</div>`;
-	}
-
-	/**
-	 * Format narrative text with dialogue highlighting and dice roll cards.
-	 * - "Quoted dialogue" → bright colored span
-	 * - {{dice:...}} → styled roll card
-	 */
-	function escapeHtml(str: string): string {
-		return str
-			.replace(/&/g, '&amp;')
-			.replace(/</g, '&lt;')
-			.replace(/>/g, '&gt;');
-	}
-
-	function formatNarrative(text: string): string {
-		return text
-			.split('\n\n')
-			.map(p => {
-				const trimmed = p.trim();
-				if (!trimmed) return '';
-
-				// Dice roll card
-				if (trimmed.startsWith('{{dice:')) {
-					return renderDiceCard(trimmed);
-				}
-
-				// Escape HTML entities first to prevent XSS
-				let html = escapeHtml(trimmed).replace(/\n/g, '<br/>');
-				// Highlight "quoted dialogue" in bright color
-				html = html.replace(
-					/&quot;([^&]*?)&quot;|&ldquo;([^&]*?)&rdquo;|"([^"]*?)"/g,
-					(_, q1, q2, q3) => {
-						const quote = q1 ?? q2 ?? q3;
-						return `<span class="dialogue">&ldquo;${quote}&rdquo;</span>`;
-					}
-				);
-
-				return `<p class="text-sm leading-relaxed text-[var(--text-primary)] mb-2">${html}</p>`;
-			})
-			.join('');
-	}
-</script>

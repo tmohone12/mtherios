@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play } from 'lucide-svelte';
+	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search } from 'lucide-svelte';
 	import { WORLD_SIM_DAY_INTERVAL, normalizeRelation } from '$lib/services/ai/tools/helpers';
 	import { maybeRunWorldSim } from '$lib/services/ai/tools/executor';
 	import { settings } from '$lib/stores/settings.svelte';
@@ -8,7 +8,7 @@
 	import { ai } from '$lib/services/ai';
 	import { uuid } from '$lib/utils/uuid';
 	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
-	import type { Arc, FactionEntryState } from '$lib/types';
+	import type { Arc, Entry, FactionActionRecord, FactionEntryState } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import type { Chapter } from '$lib/types';
 
@@ -55,6 +55,104 @@
 
 	const activeChars = $derived(story.characters.filter(c => c.status === 'active'));
 	const protagonist = $derived(story.protagonist);
+
+	type FactionStatusFilter = 'all' | FactionEntryState['status'];
+	type FactionSortMode = 'relevance' | 'standing' | 'resources' | 'name';
+	const FACTION_PAGE_SIZE = 12;
+
+	let factionSearch = $state('');
+	let factionStatusFilter = $state<FactionStatusFilter>('all');
+	let factionSortMode = $state<FactionSortMode>('relevance');
+	let factionDisplayLimit = $state(FACTION_PAGE_SIZE);
+
+	function factionState(entry: Entry): FactionEntryState {
+		return entry.state as FactionEntryState;
+	}
+
+	function factionResourceAverage(state: FactionEntryState): number {
+		const r = state.resources;
+		if (!r) return 0;
+		return Math.round((r.military + r.wealth + r.influence + r.information + r.morale) / 5);
+	}
+
+	function factionTopGoalScore(state: FactionEntryState): number {
+		const activeGoals = (state.goals ?? []).filter(goal => (goal.progress ?? 0) < 100);
+		if (activeGoals.length === 0) return 0;
+		return Math.max(...activeGoals.map(goal => (goal.priority ?? 0) * 10 + Math.max(0, 100 - (goal.progress ?? 0)) / 5));
+	}
+
+	function latestFactionAction(name: string): FactionActionRecord | null {
+		const lower = name.toLowerCase();
+		return [...story.factionActions]
+			.filter(action => action.factionName.toLowerCase() === lower)
+			.sort((a, b) => b.createdAt - a.createdAt)[0] ?? null;
+	}
+
+	function factionRelevance(entry: Entry): number {
+		const state = factionState(entry);
+		const lowerName = entry.name.toLowerCase();
+		let score = Math.abs(state.playerStanding ?? 0);
+		if (state.status === 'hostile' || state.status === 'allied') score += 30;
+		if (state.disposition === 'aggressive' || state.disposition === 'desperate') score += 25;
+		else if (state.disposition === 'scheming') score += 20;
+		score += factionTopGoalScore(state);
+		score += factionResourceAverage(state) / 4;
+		if (latestFactionAction(entry.name)) score += 40;
+		if (story.schemes.some(s => s.ownerType === 'faction' && s.ownerName.toLowerCase() === lowerName && !['resolved', 'foiled', 'abandoned'].includes(s.status))) score += 35;
+		if ((state.territory ?? []).length > 0) score += 5;
+		return score;
+	}
+
+	function factionSearchText(entry: Entry): string {
+		const state = factionState(entry);
+		const memberNames = (state.knownMembers ?? [])
+			.map(id => story.lorebookEntries.find(e => e.id === id)?.name ?? id);
+		return [
+			entry.name,
+			entry.description,
+			entry.aliases?.join(' '),
+			state.status,
+			state.disposition,
+			state.territory?.join(' '),
+			memberNames.join(' '),
+			state.goals?.map(goal => `${goal.type} ${goal.description} ${goal.deadline ?? ''}`).join(' '),
+		].filter(Boolean).join(' ').toLowerCase();
+	}
+
+	function compareFactions(a: Entry, b: Entry): number {
+		const aState = factionState(a);
+		const bState = factionState(b);
+		if (factionSortMode === 'name') return a.name.localeCompare(b.name);
+		if (factionSortMode === 'standing') {
+			return Math.abs(bState.playerStanding ?? 0) - Math.abs(aState.playerStanding ?? 0)
+				|| a.name.localeCompare(b.name);
+		}
+		if (factionSortMode === 'resources') {
+			return factionResourceAverage(bState) - factionResourceAverage(aState)
+				|| a.name.localeCompare(b.name);
+		}
+		return factionRelevance(b) - factionRelevance(a)
+			|| a.name.localeCompare(b.name);
+	}
+
+	function resetFactionRosterLimit() {
+		factionDisplayLimit = FACTION_PAGE_SIZE;
+	}
+
+	function setFactionSearch(value: string) {
+		factionSearch = value;
+		resetFactionRosterLimit();
+	}
+
+	function setFactionStatus(value: FactionStatusFilter) {
+		factionStatusFilter = value;
+		resetFactionRosterLimit();
+	}
+
+	function setFactionSort(value: FactionSortMode) {
+		factionSortMode = value;
+		resetFactionRosterLimit();
+	}
 
 	// Chapters / Memory
 	let chapters = $state<Chapter[]>([]);
@@ -248,11 +346,22 @@
 			.sort((a, b) => (b.appliedAt ?? 0) - (a.appliedAt ?? 0))
 			.slice(0, 5),
 	);
-	const factionEntries = $derived(
+	const allFactionEntries = $derived(
 		story.lorebookEntries
 			.filter(e => e.type === 'faction' && !e.deleted)
-			.slice(0, 12),
+			.sort(compareFactions),
 	);
+	const filteredFactionEntries = $derived.by(() => {
+		const query = factionSearch.trim().toLowerCase();
+		return allFactionEntries.filter(entry => {
+			const state = factionState(entry);
+			if (factionStatusFilter !== 'all' && state.status !== factionStatusFilter) return false;
+			if (!query) return true;
+			return factionSearchText(entry).includes(query);
+		});
+	});
+	const visibleFactionEntries = $derived(filteredFactionEntries.slice(0, factionDisplayLimit));
+	const hiddenFactionCount = $derived(Math.max(0, filteredFactionEntries.length - visibleFactionEntries.length));
 
 	let livingWorldCollapsed = $state(false);
 	let agreementsCollapsed = $state(false);
@@ -369,10 +478,10 @@
 
 {#if open}
 <div class="fixed inset-0 z-40 flex justify-end" transition:fly={{ x: 0, duration: 0 }}>
-	<button class="absolute inset-0 bg-black/40" onclick={onClose}></button>
+	<button class="absolute inset-0 bg-black/40" aria-label="Close world drawer" onclick={onClose}></button>
 
-	<div class="relative z-10 flex h-full w-80 flex-col border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]"
-		transition:fly={{ x: 320, duration: 200 }}>
+	<div class="relative z-10 flex h-full w-full max-w-[26rem] flex-col border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]"
+		transition:fly={{ x: 420, duration: 200 }}>
 
 		<!-- Header -->
 		<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3">
@@ -383,7 +492,7 @@
 					title="Export wiki as Obsidian-compatible .zip">
 					{#if exportingWiki}<Loader2 class="h-4 w-4 animate-spin" />{:else}<FileArchive class="h-4 w-4" />{/if}
 				</button>
-				<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+				<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]" aria-label="Close world drawer">
 					<X class="h-5 w-5" />
 				</button>
 			</div>
@@ -725,17 +834,72 @@
 			{/if}
 
 			<!-- Factions -->
-			{#if factionEntries.length > 0}
+			{#if allFactionEntries.length > 0}
 			<div>
 				<div class="mb-2 flex items-center gap-2">
 					<Flag class="h-4 w-4 text-orange-400" />
-					<span class="font-display text-xs tracking-wider uppercase text-orange-400">Factions ({factionEntries.length})</span>
+					<span class="font-display text-xs tracking-wider uppercase text-orange-400">Factions ({visibleFactionEntries.length}/{allFactionEntries.length})</span>
 				</div>
+
+				<div class="mb-2 space-y-2">
+					<div class="relative">
+						<Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+						<input
+							aria-label="Search factions"
+							value={factionSearch}
+							oninput={(e) => setFactionSearch((e.currentTarget as HTMLInputElement).value)}
+							placeholder="Search factions..."
+							class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] py-1.5 pl-8 pr-2.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-orange-400 focus:outline-none"
+						/>
+					</div>
+					<div class="grid grid-cols-2 gap-2">
+						<select
+							aria-label="Filter factions by status"
+							value={factionStatusFilter}
+							onchange={(e) => setFactionStatus((e.currentTarget as HTMLSelectElement).value as FactionStatusFilter)}
+							class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-xs text-[var(--text-primary)] focus:border-orange-400 focus:outline-none"
+						>
+							<option value="all">All statuses</option>
+							<option value="allied">Allied</option>
+							<option value="neutral">Neutral</option>
+							<option value="hostile">Hostile</option>
+							<option value="unknown">Unknown</option>
+						</select>
+						<select
+							aria-label="Sort factions"
+							value={factionSortMode}
+							onchange={(e) => setFactionSort((e.currentTarget as HTMLSelectElement).value as FactionSortMode)}
+							class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1.5 text-xs text-[var(--text-primary)] focus:border-orange-400 focus:outline-none"
+						>
+							<option value="relevance">Relevance</option>
+							<option value="standing">Standing</option>
+							<option value="resources">Resources</option>
+							<option value="name">Name</option>
+						</select>
+					</div>
+					{#if factionSearch || factionStatusFilter !== 'all'}
+						<div class="flex items-center justify-between rounded-lg bg-[var(--bg-tertiary)]/60 px-2.5 py-1 text-[10px] text-[var(--text-muted)]">
+							<span>{filteredFactionEntries.length} match{filteredFactionEntries.length === 1 ? '' : 'es'}</span>
+							<button
+								class="text-orange-300 hover:text-orange-200"
+								onclick={() => {
+									factionSearch = '';
+									factionStatusFilter = 'all';
+									resetFactionRosterLimit();
+								}}
+							>
+								Clear
+							</button>
+						</div>
+					{/if}
+				</div>
+
 				<div class="space-y-2">
-					{#each factionEntries as faction}
+					{#each visibleFactionEntries as faction}
 						{@const fs = faction.state as FactionEntryState}
 						{@const members = (fs.knownMembers ?? []).map(id => story.lorebookEntries.find(e => e.id === id)?.name ?? id).slice(0, 5)}
 						{@const topGoal = (fs.goals ?? []).filter(g => (g.progress ?? 0) < 100).sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0]}
+						{@const lastMove = latestFactionAction(faction.name)}
 						<div class="rounded-lg bg-[var(--bg-tertiary)] p-2.5">
 							<div class="flex items-center gap-1.5">
 								<span class="text-sm font-semibold text-[var(--text-primary)] truncate">{faction.name}</span>
@@ -757,9 +921,42 @@
 							{#if members.length > 0}
 								<p class="mt-1 text-[10px] text-[var(--text-muted)] line-clamp-1">Members: {members.join(', ')}</p>
 							{/if}
+							{#if lastMove}
+								<p class="mt-1 text-[10px] text-orange-300/80 line-clamp-1">Last move: {lastMove.action}</p>
+							{/if}
 						</div>
 					{/each}
 				</div>
+
+				{#if filteredFactionEntries.length === 0}
+					<p class="rounded-lg bg-[var(--bg-tertiary)]/60 px-3 py-2 text-xs text-[var(--text-muted)]">No factions match the current filters.</p>
+				{:else if hiddenFactionCount > 0 || factionDisplayLimit > FACTION_PAGE_SIZE}
+					<div class="mt-2 flex flex-wrap gap-2">
+						{#if hiddenFactionCount > 0}
+							<button
+								class="flex items-center gap-1.5 rounded-lg bg-[rgba(251,146,60,0.12)] px-2.5 py-1.5 text-[10px] text-orange-300 transition-colors hover:bg-[rgba(251,146,60,0.2)]"
+								onclick={() => factionDisplayLimit = Math.min(filteredFactionEntries.length, factionDisplayLimit + FACTION_PAGE_SIZE)}
+							>
+								<ChevronDown class="h-3 w-3" />
+								Show {Math.min(FACTION_PAGE_SIZE, hiddenFactionCount)} more
+							</button>
+							<button
+								class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5 text-[10px] text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+								onclick={() => factionDisplayLimit = filteredFactionEntries.length}
+							>
+								Show all {filteredFactionEntries.length}
+							</button>
+						{/if}
+						{#if factionDisplayLimit > FACTION_PAGE_SIZE}
+							<button
+								class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5 text-[10px] text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+								onclick={resetFactionRosterLimit}
+							>
+								Collapse
+							</button>
+						{/if}
+					</div>
+				{/if}
 			</div>
 			{/if}
 

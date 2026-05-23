@@ -101,7 +101,10 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 	};
 	const retrieved = await retrieveMemoryPacket(retrievalRequest);
 	const ctx = await loadTurnContext(request.storyId, request.clientContext?.presentNpcIds ?? []);
-	const prompt = buildServerTurnPrompt(ctx, retrieved, playerEntryId);
+	const prompt = buildServerTurnPrompt(ctx, retrieved, playerEntryId, {
+		currentFactionId: request.clientContext?.currentFactionId ?? null,
+		sceneEntityIds: request.clientContext?.sceneEntityIds ?? [],
+	});
 
 	let narration = '';
 	const warnings: string[] = [];

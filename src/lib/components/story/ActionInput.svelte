@@ -63,10 +63,12 @@
 
 	function shouldUseBackendTurn(): boolean {
 		const profile = settings.getServiceProfile('narrative');
+		const provider = settings.getServiceProvider('narrative');
+		const configured = Boolean(profile && provider && (!provider.requiresApiKey || profile.apiKey));
 		return Boolean(
 			settings.uiSettings.serverAuthoritativeTurns &&
 			story.currentStory?.serverStoryId &&
-			profile?.apiKey,
+			configured,
 		);
 	}
 
@@ -623,7 +625,8 @@
 		if (!story.currentStory?.serverStoryId) return false;
 		const narrativeConfig = getNarrativeRequestConfig();
 		const profile = settings.getServiceProfile('narrative');
-		if (!profile?.apiKey) return false;
+		const provider = settings.getServiceProvider('narrative');
+		if (!profile || !provider || (provider.requiresApiKey && !profile.apiKey)) return false;
 
 		isGenerating = true;
 		abortController = new AbortController();
@@ -649,6 +652,14 @@
 				onStreamChunk?.(response.narration);
 			}
 			onStreamClear?.();
+			try {
+				const backgroundErrors = await runBackgroundJobs();
+				if (backgroundErrors.length > 0) {
+					console.warn('[BackendTurn] Background job errors:', backgroundErrors);
+				}
+			} catch (e) {
+				console.warn('[BackendTurn] Background jobs failed:', e);
+			}
 			onStreamEnd?.(response.narration);
 			return true;
 		} catch (error) {

@@ -238,8 +238,10 @@ function isIOSSafari(): boolean {
 function buildAuthHeaders(profile: APIProfile): Record<string, string> {
 	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
-		'Authorization': `Bearer ${profile.apiKey}`,
 	};
+	if (profile.apiKey) {
+		headers['Authorization'] = `Bearer ${profile.apiKey}`;
+	}
 	return headers;
 }
 

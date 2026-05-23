@@ -180,7 +180,10 @@ class SettingsStore {
 	}
 
 	get needsApiKey(): boolean {
-		return !this.activeProfile?.apiKey;
+		const profile = this.activeProfile;
+		if (!profile) return true;
+		const provider = PROVIDERS[profile.providerType as ProviderType];
+		return Boolean(provider?.requiresApiKey && !profile.apiKey);
 	}
 
 	// ── Init (load from IndexedDB) ──

@@ -1,6 +1,10 @@
 import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 import type { TurnRequest } from '$lib/contracts/memory';
 import type { ProviderType } from '$lib/types';
+import {
+	getGoogleAgentPlatformBaseUrl,
+	getGoogleAgentPlatformHeaders,
+} from '$lib/server/ai/googleAgentPlatform';
 
 type ProviderProfile = NonNullable<TurnRequest['providerProfile']>;
 
@@ -17,6 +21,15 @@ export interface ServerGenerationOptions {
 
 function isAnthropicProvider(profile: ProviderProfile): boolean {
 	return profile.providerType === 'anthropic' || profile.providerType === 'anthropic-proxy';
+}
+
+function isGoogleAgentPlatformProvider(profile: ProviderProfile): boolean {
+	return profile.providerType === 'google-agent-platform';
+}
+
+function requiresApiKey(profile: ProviderProfile): boolean {
+	const provider = PROVIDERS[profile.providerType as ProviderType];
+	return provider?.requiresApiKey ?? true;
 }
 
 function baseUrlFor(profile: ProviderProfile): string {
@@ -45,14 +58,15 @@ function anthropicHeaders(profile: ProviderProfile): Record<string, string> {
 }
 
 function openAiHeaders(profile: ProviderProfile): Record<string, string> {
-	return {
+	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
-		Authorization: `Bearer ${profile.apiKey}`,
 	};
+	if (profile.apiKey) headers.Authorization = `Bearer ${profile.apiKey}`;
+	return headers;
 }
 
 export async function generateServerText(options: ServerGenerationOptions): Promise<string> {
-	if (!options.profile.apiKey?.trim()) {
+	if (requiresApiKey(options.profile) && !options.profile.apiKey?.trim()) {
 		throw new Error('Server turn generation requires an API profile with an API key.');
 	}
 
@@ -60,7 +74,10 @@ export async function generateServerText(options: ServerGenerationOptions): Prom
 	const temperature = options.temperature ?? 1;
 	const maxTokens = options.maxTokens ?? 4096;
 	const useAnthropic = isAnthropicProvider(options.profile);
-	const baseUrl = baseUrlFor(options.profile);
+	const useGoogleAgentPlatform = isGoogleAgentPlatformProvider(options.profile);
+	const baseUrl = useGoogleAgentPlatform
+		? await getGoogleAgentPlatformBaseUrl()
+		: baseUrlFor(options.profile);
 	const messages = options.messages ?? [];
 
 	const endpoint = useAnthropic
@@ -92,7 +109,11 @@ export async function generateServerText(options: ServerGenerationOptions): Prom
 
 	const response = await fetch(endpoint, {
 		method: 'POST',
-		headers: useAnthropic ? anthropicHeaders(options.profile) : openAiHeaders(options.profile),
+		headers: useAnthropic
+			? anthropicHeaders(options.profile)
+			: useGoogleAgentPlatform
+				? { 'Content-Type': 'application/json', ...await getGoogleAgentPlatformHeaders() }
+				: openAiHeaders(options.profile),
 		body: JSON.stringify(body),
 	});
 

@@ -1,0 +1,292 @@
+{
+  "volantene_houses": [
+    {
+      "name": "House Balaerys",
+      "rank": "First Among Equals",
+      "wealth": 100,
+      "influence": 95,
+      "military": 60,
+      "properties": [
+        "The Crimson Spire (primary manse inside Black Walls)",
+        "Three merchant fleets",
+        "Gold mines in the Hills of Norvos",
+        "The largest slave market share in Volantis",
+        "Valyrian steel vault"
+      ],
+      "triarch_seats": 12,
+      "notes": "Richest and most influential of the Old Blood. Controls much of Volantis' eastern trade."
+    },
+    {
+      "name": "House Vhassar",
+      "rank": "Old Blood",
+      "wealth": 88,
+      "influence": 82,
+      "military": 55,
+      "properties": [
+        "The Tower of Vhassar",
+        "Two war galleys",
+        "Silk plantations along the Rhoyne",
+        "Extensive banking interests"
+      ],
+      "triarch_seats": 9,
+      "notes": "Strong in finance and naval power."
+    },
+    {
+      "name": "House Qoheros",
+      "rank": "Old Blood",
+      "wealth": 79,
+      "influence": 75,
+      "military": 48,
+      "properties": [
+        "The Serpent's Coil manse",
+        "Spice trading monopoly",
+        "Vineyards in the Orange Shore"
+      ],
+      "triarch_seats": 7,
+      "notes": "Masters of spice and luxury goods."
+    },
+    {
+      "name": "House Maegyr",
+      "rank": "Old Blood",
+      "wealth": 85,
+      "influence": 80,
+      "military": 52,
+      "properties": [
+        "The Dragon's Rest",
+        "Valyrian steel forges",
+        "Large slave breeding operations"
+      ],
+      "triarch_seats": 8,
+      "notes": "Known for producing fine arms and armor."
+    },
+    {
+      "name": "House Laerys",
+      "rank": "Old Blood",
+      "wealth": 72,
+      "influence": 68,
+      "military": 40,
+      "properties": [
+        "The Ivory Tower",
+        "Pearl fisheries",
+        "Art and sculpture collection"
+      ],
+      "triarch_seats": 5,
+      "notes": "Patrons of the arts and culture."
+    },
+    {
+      "name": "House Nyessos",
+      "rank": "Old Blood",
+      "wealth": 81,
+      "influence": 77,
+      "military": 45,
+      "properties": [
+        "The Azure Manse",
+        "Grain fleets",
+        "Extensive farmlands in the Disputed Lands"
+      ],
+      "triarch_seats": 6,
+      "notes": "Controls significant food supply to the city."
+    },
+    {
+      "name": "House Rhaenysar",
+      "rank": "Old Blood",
+      "wealth": 68,
+      "influence": 71,
+      "military": 58,
+      "properties": [
+        "The Red Dragon Hall",
+        "Private mercenary company",
+        "Horse breeding estates"
+      ],
+      "triarch_seats": 4,
+      "notes": "Maintains the largest private military force among the Old Blood."
+    },
+    {
+      "name": "House Saathos",
+      "rank": "Old Blood",
+      "wealth": 65,
+      "influence": 62,
+      "military": 35,
+      "properties": [
+        "The Whispering Spires",
+        "Information networks across Essos",
+        "Rare book and map collection"
+      ],
+      "triarch_seats": 3,
+      "notes": "Masters of secrets and intelligence."
+    },
+    {
+      "name": "House Velhaerys",
+      "rank": "Old Blood",
+      "wealth": 77,
+      "influence": 69,
+      "military": 42,
+      "properties": [
+        "The Golden Lantern",
+        "Wine trade empire",
+        "Multiple pleasure houses"
+      ],
+      "triarch_seats": 5,
+      "notes": "Dominant in the pleasure and wine trades."
+    },
+    {
+      "name": "House Daerys",
+      "rank": "Old Blood",
+      "wealth": 70,
+      "influence": 65,
+      "military": 50,
+      "properties": [
+        "The Black Fang",
+        "Shipyards",
+        "Pirate-hunting privateers"
+      ],
+      "triarch_seats": 4,
+      "notes": "Strong naval presence and anti-piracy operations."
+    },
+    {
+      "name": "House Talaerys",
+      "rank": "Old Blood",
+      "wealth": 63,
+      "influence": 58,
+      "military": 38,
+      "properties": [
+        "The Starfall Manse",
+        "Astronomy and navigation school",
+        "Lighthouse rights"
+      ],
+      "triarch_seats": 2,
+      "notes": "Scholars and navigators."
+    },
+    {
+      "name": "House Vaelys",
+      "rank": "Old Blood",
+      "wealth": 59,
+      "influence": 55,
+      "military": 32,
+      "properties": [
+        "The Emerald Court",
+        "Emerald and jade mines",
+        "Jewelry monopoly"
+      ],
+      "triarch_seats": 3,
+      "notes": "Controls the gem trade."
+    },
+    {
+      "name": "House Rhyos",
+      "rank": "Old Blood",
+      "wealth": 74,
+      "influence": 66,
+      "military": 44,
+      "properties": [
+        "The Crimson Vaults",
+        "Banking houses",
+        "Debt collection operations"
+      ],
+      "triarch_seats": 4,
+      "notes": "Powerful bankers and moneylenders."
+    },
+    {
+      "name": "House Aelor",
+      "rank": "Old Blood",
+      "wealth": 61,
+      "influence": 60,
+      "military": 36,
+      "properties": [
+        "The Silver Spire",
+        "Temple donations and religious influence",
+        "Healing houses"
+      ],
+      "triarch_seats": 2,
+      "notes": "Strong ties to the Red Temple."
+    },
+    {
+      "name": "House Zherys",
+      "rank": "Old Blood",
+      "wealth": 67,
+      "influence": 64,
+      "military": 41,
+      "properties": [
+        "The Obsidian Keep",
+        "Volcano glass trade",
+        "Weapon smithing"
+      ],
+      "triarch_seats": 3,
+      "notes": "Masters of obsidian and glass weapons."
+    },
+    {
+      "name": "House Malarys",
+      "rank": "Old Blood",
+      "wealth": 58,
+      "influence": 52,
+      "military": 30,
+      "properties": [
+        "The Quiet Manse",
+        "Poison and antidote production",
+        "Assassin networks"
+      ],
+      "triarch_seats": 1,
+      "notes": "Whispered to deal in subtle deaths."
+    },
+    {
+      "name": "House Pyros",
+      "rank": "Old Blood",
+      "wealth": 55,
+      "influence": 49,
+      "military": 28,
+      "properties": [
+        "The Flame Court",
+        "Fire priest patronage",
+        "Incense and spice trade"
+      ],
+      "triarch_seats": 2,
+      "notes": "Closely tied to the Red Temple's inner circle."
+    },
+    {
+      "name": "House Sythar",
+      "rank": "Old Blood",
+      "wealth": 52,
+      "influence": 47,
+      "military": 25,
+      "properties": [
+        "The Painted Halls",
+        "Artist and scribe patronage",
+        "Map-making guild"
+      ],
+      "triarch_seats": 1,
+      "notes": "Patrons of knowledge and cartography."
+    },
+    {
+      "name": "House Orlarys",
+      "rank": "Old Blood",
+      "wealth": 49,
+      "influence": 44,
+      "military": 22,
+      "properties": [
+        "The Broken Tower",
+        "Ruins excavation rights",
+        "Valyrian artifact trade"
+      ],
+      "triarch_seats": 1,
+      "notes": "Deal in ancient relics and lost knowledge."
+    },
+    {
+      "name": "House Korys",
+      "rank": "Old Blood",
+      "wealth": 46,
+      "influence": 41,
+      "military": 20,
+      "properties": [
+        "The Salt House",
+        "Salt and fish trade",
+        "Harbor warehouse district"
+      ],
+      "triarch_seats": 0,
+      "notes": "Newer to prominence but rising through trade."
+    }
+  ],
+  "meta": {
+    "total_houses": 20,
+    "richest": "House Balaerys",
+    "note": "All houses are members of the Old Blood and eligible for Triarch election. Wealth and influence are relative scores (0-100)."
+  }
+}

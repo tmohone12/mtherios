@@ -142,6 +142,20 @@
 		return settings.profiles.find(p => p.providerType === providerType);
 	}
 
+	function isProviderConfigured(providerType: ProviderType): boolean {
+		const profile = getProfileByProvider(providerType);
+		const provider = PROVIDERS[providerType];
+		if (!profile || !provider) return false;
+		return !provider.requiresApiKey || !!profile.apiKey;
+	}
+
+	function keyLabelFor(profile: APIProfile): string {
+		const provider = PROVIDERS[profile.providerType as ProviderType];
+		if (provider && !provider.requiresApiKey) return 'Application Default Credentials';
+		if (profile.apiKey.startsWith('sk-ant-oat-')) return 'Setup Token (OAuth)';
+		return profile.apiKey ? '••••' + profile.apiKey.slice(-4) : 'Not stored';
+	}
+
 	function selectProvider(id: ProviderType) {
 		editingProvider = id;
 		const existing = getProfileByProvider(id);
@@ -407,13 +421,13 @@
 		}
 	}
 
-	const tabs: Array<{ id: Tab; label: string; icon: typeof Globe }> = [
-		{ id: 'providers', label: 'Providers & Models', icon: Globe },
-		{ id: 'services', label: 'AI Services', icon: Wrench },
-		{ id: 'memory', label: 'Memory', icon: Brain },
-		{ id: 'images', label: 'Image Generation', icon: ImageIcon },
-		{ id: 'interface', label: 'Interface', icon: Palette },
-		{ id: 'inspector', label: 'Inspector', icon: ScrollText },
+	const tabs: Array<{ id: Tab; label: string; shortLabel: string; icon: typeof Globe }> = [
+		{ id: 'providers', label: 'Providers & Models', shortLabel: 'Providers', icon: Globe },
+		{ id: 'services', label: 'AI Services', shortLabel: 'Services', icon: Wrench },
+		{ id: 'memory', label: 'Memory', shortLabel: 'Memory', icon: Brain },
+		{ id: 'images', label: 'Image Generation', shortLabel: 'Images', icon: ImageIcon },
+		{ id: 'interface', label: 'Interface', shortLabel: 'UI', icon: Palette },
+		{ id: 'inspector', label: 'Inspector', shortLabel: 'Inspector', icon: ScrollText },
 	];
 
 	const liveContextDials: MemoryDial[] = [
@@ -466,15 +480,21 @@
 			</nav>
 		</div>
 
-		<!-- Mobile tab bar -->
-		<div class="flex shrink-0 overflow-x-auto border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] sm:hidden">
+		<!-- Mobile tab picker -->
+		<div class="grid shrink-0 grid-cols-3 gap-1.5 border-b border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 sm:hidden">
 			{#each tabs as tab}
 				<button
-					class="shrink-0 whitespace-nowrap px-3 py-3 text-center text-[10px] font-medium uppercase tracking-wider transition-colors
-						{activeTab === tab.id ? 'text-[var(--text-accent)] border-b-2 border-[var(--color-gold-400)]' : 'text-[var(--text-muted)]'}"
+					type="button"
+					aria-label={tab.label}
+					aria-pressed={activeTab === tab.id}
+					class="flex min-h-11 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[10px] font-semibold uppercase tracking-wider transition-colors
+						{activeTab === tab.id
+							? 'border-[var(--color-gold-600)]/50 bg-[rgba(212,168,83,0.12)] text-[var(--text-accent)]'
+							: 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-muted)]'}"
 					onclick={() => activeTab = tab.id}
 				>
-					{tab.label}
+					<tab.icon class="h-3.5 w-3.5 shrink-0" />
+					<span class="min-w-0 truncate">{tab.shortLabel}</span>
 				</button>
 			{/each}
 		</div>
@@ -482,7 +502,7 @@
 		<!-- Content area -->
 		<div class="flex min-h-0 flex-1 flex-col min-w-0">
 			<!-- Header -->
-			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-6 py-4 sm:py-3">
+			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3 sm:px-6 sm:py-3">
 				<h3 class="font-display text-base tracking-wide text-[var(--text-primary)]">
 					{tabs.find(t => t.id === activeTab)?.label ?? 'Settings'}
 				</h3>
@@ -510,7 +530,7 @@
 								Model: {settings.narrativeSettings.model || 'provider default'}
 							</div>
 							<div class="mt-1 font-mono text-xs text-[var(--text-muted)]">
-								Key: {settings.activeProfile.apiKey.startsWith('sk-ant-oat-') ? 'Setup Token (OAuth)' : '••••' + settings.activeProfile.apiKey.slice(-4)}
+								Key: {keyLabelFor(settings.activeProfile)}
 							</div>
 						</div>
 					{/if}
@@ -597,7 +617,7 @@
 							{#each topProviders as pid}
 								{@const prov = PROVIDERS[pid]}
 								{@const Icon = providerIcons[pid] ?? Server}
-								{@const isConfigured = !!getProfileByProvider(pid)?.apiKey}
+								{@const isConfigured = isProviderConfigured(pid)}
 								{@const isActive = settings.activeProfile?.providerType === pid}
 								<button class="relative flex items-center gap-3 rounded-xl border p-3 text-left transition-all
 									{isActive
@@ -623,7 +643,7 @@
 								</summary>
 								<div class="mt-2 space-y-1">
 									{#each otherProviders as prov}
-										{@const isConfigured = !!getProfileByProvider(prov.value)?.apiKey}
+										{@const isConfigured = isProviderConfigured(prov.value)}
 										<button class="flex w-full items-center gap-2 rounded-lg border border-[var(--border-primary)] px-3 py-2 text-left text-sm hover:border-[var(--color-gold-600)]"
 											onclick={() => selectProvider(prov.value)}>
 											<Server class="h-3.5 w-3.5 text-[var(--text-muted)]" />

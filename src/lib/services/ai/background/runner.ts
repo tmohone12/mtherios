@@ -20,6 +20,7 @@ import { uuid } from '$lib/utils/uuid';
 import {
 	getChapters, createChapter, getArcs, createArc,
 	getStoryBeats, createLorebookEntry, updateLorebookEntry,
+	getStoryEntry, getStoryEntriesAfterPosition,
 } from '$lib/services/database';
 import { findMatchingLoreEntry, makeLoreEntry } from '$lib/services/ai/tools/helpers';
 import { LORE_MGMT_CHAPTER_INTERVAL } from '$lib/services/ai/lorebook/LoreManagementService';
@@ -29,6 +30,12 @@ type FactionGoalInput = Omit<Partial<FactionGoal>, 'deadline'> & {
 	description: string;
 	deadline?: string | null;
 };
+
+function chaptersForBranch(chapters: Chapter[], branchId: string | null): Chapter[] {
+	return chapters
+		.filter(chapter => (chapter.branchId ?? null) === branchId)
+		.sort((a, b) => a.number - b.number || a.createdAt - b.createdAt);
+}
 
 /**
  * Run all threshold-based background jobs.
@@ -82,26 +89,40 @@ export async function runBackgroundJobs(): Promise<string[]> {
 async function runChapterCheck(): Promise<void> {
 	if (!story.currentStory) return;
 
-	const chapters = await getChapters(story.currentStory.id);
-	let lastChapterEndIndex = 0;
+	const branchId = story.currentStory.currentBranchId ?? null;
+	const chapters = chaptersForBranch(await getChapters(story.currentStory.id), branchId);
+	let lastChapterEndPosition = -1;
 	if (chapters.length > 0) {
-		const foundIdx = story.entries.findIndex(e => e.id === chapters[chapters.length - 1].endEntryId);
-		if (foundIdx < 0) {
+		const lastChapter = chapters[chapters.length - 1];
+		const endEntry = await getStoryEntry(lastChapter.endEntryId)
+			?? story.entries.find(e => e.id === lastChapter.endEntryId);
+		if (!endEntry) {
 			console.warn('[Background] Chapter endEntryId not found — skipping chapter check');
+			console.warn('[Background] Chapter check details:', {
+				chapterId: lastChapter.id,
+				endEntryId: lastChapter.endEntryId,
+			});
 			return;
 		}
-		lastChapterEndIndex = foundIdx + 1;
+		lastChapterEndPosition = endEntry.position;
 	}
 
-	const entriesOutsideChapter = story.entries.slice(lastChapterEndIndex);
 	const chapterThreshold = settings.uiSettings.chapterThreshold || 20;
 	const postChapterBuffer = Math.max(0, settings.uiSettings.postChapterBuffer ?? 10);
+	const queryLimit = Math.max(chapterThreshold, 50) + postChapterBuffer;
+	const entriesOutsideChapter = await getStoryEntriesAfterPosition(
+		story.currentStory.id,
+		lastChapterEndPosition,
+		queryLimit,
+		branchId,
+	);
 	const eligibleEntries = postChapterBuffer > 0
 		? entriesOutsideChapter.slice(0, -postChapterBuffer)
 		: entriesOutsideChapter;
 	console.log('[Background] Chapter check:', {
-		totalEntries: story.entries.length,
-		lastChapterEndIndex,
+		loadedEntries: story.entries.length,
+		totalEntries: story.entryCount,
+		lastChapterEndPosition,
 		entriesOutside: entriesOutsideChapter.length,
 		eligibleEntries: eligibleEntries.length,
 		buffer: postChapterBuffer,
@@ -113,7 +134,7 @@ async function runChapterCheck(): Promise<void> {
 	const analysisWindow = eligibleEntries.slice(0, 50);
 	const tokensOutsideBuffer = eligibleEntries.reduce((sum, e) => sum + Math.ceil(e.content.length / 4), 0);
 	const analysis = await ai.memory.analyzeForChapter(
-		analysisWindow, lastChapterEndIndex, tokensOutsideBuffer,
+		analysisWindow, lastChapterEndPosition + 1, tokensOutsideBuffer,
 		story.storyMode, story.pov, story.tense,
 	);
 
