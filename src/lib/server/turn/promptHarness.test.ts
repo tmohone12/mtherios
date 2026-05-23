@@ -188,7 +188,7 @@ describe('turn prompt harness', () => {
 		});
 
 		const findings = evaluatePromptHarness(report, {
-			systemIncludes: ['server-side narrator', '296 AC', '15th day of the 8th moon'],
+			systemIncludes: ['server-side narrator', '1 Volantene honor = 1 gold dragon', 'Bayesian social prior', '296 AC', '15th day of the 8th moon'],
 			promptIncludes: [
 				'The Crimson Spire',
 				'Balaerys Heir',

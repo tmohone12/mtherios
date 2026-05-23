@@ -309,6 +309,27 @@ describe('plotMomentumSchema', () => {
 		expect(parsed.next_beat.faction_advisory.house_stark.disposition).toBe('cautiously allied');
 	});
 
+	it('accepts earned reward path types for plot momentum', () => {
+		const parsed = plotMomentumSchema.parse({
+			next_beat: {
+				...validNextBeat.next_beat,
+				critical_path: {
+					...validNextBeat.next_beat.critical_path,
+					path_a: {
+						type: 'loyalty_payoff',
+						description: 'A sworn ally quietly vouches for the player at the gate.',
+					},
+				},
+				next_turn_strategy: {
+					recommended_path: 'path_a',
+					rationale: 'Prior loyalty can now return as a quiet advantage.',
+				},
+			},
+		});
+
+		expect(parsed.next_beat.critical_path.path_a.type).toBe('loyalty_payoff');
+	});
+
 	it('accepts minimal defaults for optional booleans', () => {
 		const minimal = {
 			next_beat: {

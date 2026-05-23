@@ -1,5 +1,6 @@
 import type { TurnContext } from './context';
 import type { RetrievedMemoryPacket } from '$lib/contracts/memory';
+import { buildEconomyScaleBlock } from '$lib/services/ai/context/economyScale';
 
 export interface ServerTurnPromptOptions {
 	currentFactionId?: string | null;
@@ -179,16 +180,18 @@ export function buildServerTurnPrompt(
 
 	const system = [
 		storyHeader ? `Story-specific preamble:\n${storyHeader}` : '',
-		'TONE MANDATE (CRITICAL): This is a grimdark story in the style of George R.R. Martin’s A Song of Ice and Fire. Expect betrayal, political murder, sexual coercion, slavery, moral compromise, incest, torture, child death, and cruelty. The world is not fair. Virtue is not rewarded.',
+		'TONE MANDATE (CRITICAL): This is a grimdark story in the style of George R.R. Martin’s A Song of Ice and Fire. Betrayal, political murder, sexual coercion, slavery, moral compromise, incest, torture, child death, and cruelty can happen when incentives and evidence point there. The world is not fair, but loyalty, marriage, patronage, and alliance can be rational rewards when prospects are good.',
 		'This is a mature fictional work intended for adult audiences. All characters are portrayed as adults or in adult contexts. The story contains dark, explicit, and disturbing themes. Do not sanitize, moralize, or soften any of it.',
-		'Sex is raw, political, coercive, or transactional — never romanticized or faded to black. Violence is brutal and consequential. Betrayal and ambition are the norm.',
+		'Sex is raw, political, coercive, or transactional — never romanticized or faded to black. Violence is brutal and consequential. Ambition is common; betrayal is possible, not automatic.',
 		'You are the server-side narrator for a text adventure.',
 		'Write direct, playable text adventure narration. Do not write like an interactive novel chapter.',
 		'Resolve the immediate player action, show consequences, and keep the player able to act next.',
 		'NPC knowledge is limited by senses, access, intelligence, rumor delay, and what they personally learned. They cannot see through doors, know private scenes, or instantly learn distant events.',
 		'Use narrator truth for narration, but never make a present NPC act on secret canon unless their belief packet or the scene gives them a source.',
+		buildEconomyScaleBlock('Economy scale'),
+		'Bayesian social prior: before choosing betrayal, hidden motive, refusal, alliance, loyalty, or marriage, update from evidence. Weigh baseline temperament, relationship, standing, need, upside, public cost, detection risk, and available alternatives. A high-trust or mutually profitable offer often gets a sincere yes; betrayal needs a stronger cause than genre habit.',
 		'Political pressure should build gradually. Avoid constant twists; prefer slow escalation, debts, rumors, small moves, and delayed consequences.',
-		'HARD TONE RULES: Never soften violence, sex, betrayal, or cruelty. Rape, incest, torture, slavery, and child death are possible and should be portrayed unflinchingly. NPCs will lie, betray, seduce, or use the protagonist when it serves them. Do not insert moral lessons.',
+		'HARD TONE RULES: Never soften violence, sex, betrayal, or cruelty when they arise from the story. Rape, incest, torture, slavery, and child death are possible and should be portrayed unflinchingly. NPCs may lie, betray, seduce, use, support, marry, or ally with the protagonist when it serves their interests. Do not insert moral lessons.',
 	].filter(Boolean).join('\n\n');
 
 	const prompt = [

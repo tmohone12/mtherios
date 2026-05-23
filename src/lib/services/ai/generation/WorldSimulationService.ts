@@ -30,6 +30,7 @@ import {
 } from '../sdk/schemas/worldsim';
 import { createLogger } from '../core/config';
 import { normalizeRelation } from '../tools/helpers';
+import { buildEconomyScaleBlock } from '../context/economyScale';
 import type {
 	Entry, Chapter, Arc, StoryEntry, TimeTracker, EntryRelationship,
 	CharacterEntryState, FactionEntryState, FactionActionRecord,
@@ -92,6 +93,8 @@ export function calculateSeason(time: TimeTracker | null): SeasonEffect {
 interface SimContext {
 	arcBlock: string;
 	chapterBlock: string;
+	historyLedgerBlock: string;
+	earnedPayoffBlock: string;
 	allThreads: string[];
 	characterArcs: Array<string | { name: string; development: string }>;
 	tacticalBlock: string;
@@ -124,7 +127,7 @@ function buildSimContext(
 	recentFactionActions: FactionActionRecord[],
 	relationChangeLog: RelationChangeEvent[],
 ): SimContext {
-	const { arcBlock, chapterBlock, allThreads, characterArcs } = buildStoryContext(chapters, arcs);
+	const { arcBlock, chapterBlock, historyLedgerBlock, allThreads, characterArcs } = buildStoryContext(chapters, arcs);
 
 	// Tactical: last 40 entries
 	const recent = recentEntries.slice(-MAX_RECENT_ENTRIES);
@@ -170,13 +173,22 @@ function buildSimContext(
 		? activeAgreements.slice(0, 10).map(a => `- ${a.parties.join(' ↔ ')} (${a.category}): ${a.terms.slice(0, 120)}`).join('\n')
 		: '';
 
+	const earnedPayoffBlock = buildEarnedPayoffBlock(
+		chapters,
+		arcs,
+		agreements,
+		recentFactionActions,
+		relationChangeLog,
+	);
+
 	// World events
 	const worldEventBlock = worldEvents.length > 0
 		? worldEvents.slice(0, 6).map(e => `- ${e.name}${e.description ? ': ' + e.description.slice(0, 100) : ''}`).join('\n')
 		: '';
 
 	return {
-		arcBlock, chapterBlock, allThreads, characterArcs,
+		arcBlock, chapterBlock, historyLedgerBlock, earnedPayoffBlock,
+		allThreads, characterArcs,
 		tacticalBlock, conversationBlock, factionBlock, hasFactions,
 		season, recentFactionActions: recentFactionActions.slice(-5),
 		relationChangeLog: relationChangeLog.slice(0, 8),
@@ -185,15 +197,41 @@ function buildSimContext(
 	};
 }
 
+const PAYOFF_KEYWORDS = [
+	'loyal', 'favor', 'favour', 'debt', 'promise', 'oath', 'reward', 'gift',
+	'helped', 'saved', 'rescued', 'protected', 'alliance', 'ally', 'gratitude',
+	'trust', 'standing', 'honor', 'honour', 'mercy', 'vouched', 'invitation',
+	'shelter', 'safe passage', 'patron', 'sponsor', 'commended', 'praised',
+];
+
+function truncateText(value: string | null | undefined, max: number): string {
+	if (!value) return '';
+	return value.length > max ? value.slice(0, max - 1) + '...' : value;
+}
+
+function hasPayoffCue(value: string | null | undefined): boolean {
+	if (!value) return false;
+	const lower = value.toLowerCase();
+	return PAYOFF_KEYWORDS.some(keyword => lower.includes(keyword));
+}
+
 function buildStoryContext(chapters: Chapter[], arcs: Arc[]) {
 	const coveredIds = new Set(arcs.flatMap(a => a.chapterIds));
 	const uncovered = chapters
 		.filter(c => !coveredIds.has(c.id))
 		.sort((a, b) => a.number - b.number);
+	const recentChapters = chapters
+		.slice()
+		.sort((a, b) => a.number - b.number)
+		.slice(-8);
+	const recentArcs = arcs
+		.slice()
+		.sort((a, b) => a.arcNumber - b.arcNumber)
+		.slice(-4);
 
 	const arcBlock = arcs.length > 0
 		? arcs.map(a =>
-			`Arc ${a.arcNumber}: "${a.title}" (Ch.${a.chapterRange})\n${a.summary.slice(0, 350)}`
+			`Arc ${a.arcNumber}: "${a.title}" (Ch.${a.chapterRange})\n${truncateText(a.summary, 350)}`
 		).join('\n\n')
 		: '';
 
@@ -201,9 +239,29 @@ function buildStoryContext(chapters: Chapter[], arcs: Arc[]) {
 		.map(ch => {
 			const chars = ch.characters?.length ? ` | Characters: ${ch.characters.join(', ')}` : '';
 			const locs = ch.locations?.length ? ` | Locations: ${ch.locations.join(', ')}` : '';
-			return `Ch.${ch.number}: ${ch.title ?? 'Untitled'}${chars}${locs}\n${ch.summary.slice(0, 250)}`;
+			return `Ch.${ch.number}: ${ch.title ?? 'Untitled'}${chars}${locs}\n${truncateText(ch.summary, 250)}`;
 		})
 		.join('\n\n');
+
+	const historyLedgerLines: string[] = [];
+	for (const arc of recentArcs) {
+		const threads = arc.unresolvedThreads?.length
+			? ` Threads still live: ${arc.unresolvedThreads.slice(0, 3).join('; ')}.`
+			: '';
+		const characterMovement = arc.characterArcs?.length
+			? ` Character movement: ${arc.characterArcs.slice(0, 3).map(ca => `${ca.name}: ${ca.development}`).join('; ')}.`
+			: '';
+		historyLedgerLines.push(
+			`- [Arc ${arc.arcNumber}, Ch.${arc.chapterRange}] ${truncateText(arc.summary, 260)}${threads}${characterMovement}`,
+		);
+	}
+	for (const ch of recentChapters) {
+		const threads = ch.plotThreads?.length ? ` Threads: ${ch.plotThreads.slice(0, 3).join('; ')}.` : '';
+		historyLedgerLines.push(
+			`- [Ch.${ch.number}${ch.title ? ` "${ch.title}"` : ''}] ${truncateText(ch.summary, 220)}${threads}`,
+		);
+	}
+	const historyLedgerBlock = historyLedgerLines.join('\n');
 
 	const allThreads = arcs.flatMap(a => a.unresolvedThreads).filter(Boolean);
 
@@ -211,7 +269,64 @@ function buildStoryContext(chapters: Chapter[], arcs: Arc[]) {
 		.flatMap(a => a.characterArcs ?? [])
 		.filter(Boolean);
 
-	return { arcBlock, chapterBlock, allThreads, characterArcs };
+	return { arcBlock, chapterBlock, historyLedgerBlock, allThreads, characterArcs };
+}
+
+function buildEarnedPayoffBlock(
+	chapters: Chapter[],
+	arcs: Arc[],
+	agreements: Agreement[],
+	recentFactionActions: FactionActionRecord[],
+	relationChangeLog: RelationChangeEvent[],
+): string {
+	const lines: string[] = [];
+
+	for (const agreement of agreements
+		.filter(a => a.status === 'active' || a.status === 'fulfilled')
+		.slice(-10)) {
+		const chapter = agreement.createdChapterNumber != null ? `Ch.${agreement.createdChapterNumber}` : 'prior history';
+		const status = agreement.status === 'fulfilled' ? 'fulfilled' : 'owed';
+		lines.push(
+			`- [${chapter} ${agreement.category} ${status}] ${agreement.parties.join(' / ')}: ${truncateText(agreement.terms, 170)}`,
+		);
+		for (const consequence of agreement.consequences.slice(0, 2)) {
+			if (hasPayoffCue(consequence)) lines.push(`  payoff cue: ${truncateText(consequence, 150)}`);
+		}
+	}
+
+	for (const shift of relationChangeLog.filter(e => e.delta > 0).slice(0, 8)) {
+		lines.push(
+			`- [Ch.${shift.chapter} relation +${shift.delta}] ${shift.source} and ${shift.target}: ${truncateText(shift.event, 150)}. This can mature as trust, loyalty, access, aid, or a warning.`,
+		);
+	}
+
+	for (const action of recentFactionActions.slice(-8)) {
+		const positiveConsequences = action.consequences.filter(hasPayoffCue);
+		if (!hasPayoffCue(action.action) && positiveConsequences.length === 0) continue;
+		const target = action.target ? ` -> ${action.target}` : '';
+		lines.push(`- [Faction action ${action.factionName}${target}] ${truncateText(action.action, 170)}`);
+		for (const consequence of positiveConsequences.slice(0, 2)) {
+			lines.push(`  payoff cue: ${truncateText(consequence, 150)}`);
+		}
+	}
+
+	for (const arc of arcs.slice(-4)) {
+		for (const ca of (arc.characterArcs ?? []).filter(ca => hasPayoffCue(ca.development)).slice(0, 3)) {
+			lines.push(`- [Arc ${arc.arcNumber} character arc] ${ca.name}: ${truncateText(ca.development, 170)}`);
+		}
+	}
+
+	for (const chapter of chapters.slice(-8)) {
+		const chapterCues = [
+			...(chapter.plotThreads ?? []).filter(hasPayoffCue),
+			chapter.summary,
+		].filter(hasPayoffCue);
+		for (const cue of chapterCues.slice(0, 2)) {
+			lines.push(`- [Ch.${chapter.number} reward seed] ${truncateText(cue, 170)}`);
+		}
+	}
+
+	return lines.slice(0, 18).join('\n');
 }
 
 function buildConversationBlock(entries: StoryEntry[]): string {
@@ -371,6 +486,8 @@ The story's own memory is canon. Use chapter summaries, arcs, faction dossiers, 
 
 	if (p.arcBlock) sys += `\n\n═══ STORY ARCS ═══\n${p.arcBlock}`;
 	if (p.chapterBlock) sys += `\n\n═══ RECENT CHAPTERS ═══\n${p.chapterBlock}`;
+	if (p.historyLedgerBlock) sys += `\n\n=== CAUSAL HISTORY LEDGER ===\nEvery new move should trace back to one of these sources unless the immediate scene creates a stronger cause.\n${p.historyLedgerBlock}`;
+	if (p.earnedPayoffBlock) sys += `\n\n=== EARNED PAYOFFS / REWARD SEEDS ===\nThese are not guaranteed wins, but they are permissions for future loyalty, favors, access, protection, reputation gains, invitations, warnings, safe passage, resources, or standing.\n${p.earnedPayoffBlock}`;
 	if (p.allThreads.length > 0) sys += `\n\n═══ OPEN THREADS ═══\n${p.allThreads.map(t => `- ${t}`).join('\n')}`;
 	if (p.characterArcs.length > 0) sys += `\n\n═══ CHARACTER ARCS ═══\n${p.characterArcs.map(ca => `- ${typeof ca === 'string' ? ca : `${ca.name}: ${ca.development}`}`).join('\n')}`;
 
@@ -413,6 +530,17 @@ Reading the pair:
   - Low standing + high affinity = wounded friendship, ripe for reconciliation.
   - High both = dependable ally. Low both = entrenched foe. Use the gap to gauge sincerity.
 
+Bayesian motive prior:
+  - Start from the faction's known culture, goals, resources, standing, affinity, leader temperament,
+    and recent evidence. Then update toward alliance, betrayal, caution, or sincere cooperation.
+  - Betrayal needs a strong posterior: high upside, low detection risk, old grievance, desperation,
+    coercion, ideology, fear, or a better patron. Do not make betrayal the default hidden layer.
+  - Sincere alliance, loyalty, marriage, trade, or service is probable when expected value is good:
+    survival improves, status rises, kin are protected, debts are honored, or public cost of betrayal
+    is too high.
+  - If standing and affinity are high, prefer trust unless evidence says otherwise. If standing is
+    neutral but the offer is profitable, prefer cautious bargain over secret treachery.
+
 Before targeting another faction:
   1. If standing >= +30 (ally), do NOT attack unless motivation is overwhelming
      (existential threat, succession crisis, betrayal). Note the cost in your \`consequences\`.
@@ -448,6 +576,8 @@ DEFAULT PRESET:
 - Essos machinery: free cities, merchant princes, magisters, triarchs, guilds, banks, sellsail fleets, mercenary companies, slave economies, red priests, courtesans, old Valyrian ruins, city-state rivalries, and trade wars. Braavos, Volantis, Pentos, Myr, Tyrosh, Lys, Norvos, Qohor, Lorath, Slaver's Bay, the Dothraki Sea, and the Summer Isles can shape pressure when the story points there.
 - Do not force a specific canon city, ruler, or book event. Use the ruleset and social pressures, not a fixed timeline or one-region monoculture.
 - Sexual scandal is political leverage: affairs, secret lovers, coerced marriages, paternity doubts, bastardy, incest rumors, fertility pressure, brothel gossip, and accusations of sexual deviancy can drive blackmail, religious pressure, succession crises, and faction moves. Keep it non-graphic and consequence-focused.
+
+${buildEconomyScaleBlock('ECONOMY SCALE')}
 
 DYNASTIC:
 - Marriage pacts and betrothals: offer a daughter to seal peace, break an engagement to insult a rival, rush a wedding before a war starts
@@ -518,7 +648,19 @@ DIPLOMATIC:
    - If an expected death, betrayal, or battle is approaching, ask whether this timeline needs it. Maybe it fails. Maybe someone else pays the cost.
    - Factions that seemed opposed may find common cause. Factions that seemed allied may uncover old grievances.
 
-   PUSH BACK ON THE PROTAGONIST (important):
+   EARNED PAYOFFS AND LOYALTY (important):
+   - Not every thread maturation is a punishment, twist, or new cost. If the player has earned trust,
+     saved someone, honored a debt, kept an oath, improved standing, or helped an ally, let that history
+     return as visible story value.
+   - Payoffs should fit the setting: a vassal vouches for them, a house sends a warning, a gate opens,
+     a debt is forgiven, a guard looks away, a patron offers introductions, smallfolk spread praise, a
+     merchant gives better terms, an ally commits men, or an NPC shows loyalty under pressure.
+   - Use the EARNED PAYOFFS / REWARD SEEDS block as evidence. A reward with no prior cause is as bad as
+     a random twist. A reward with history behind it makes the world feel alive.
+   - Rewards can still create later obligations, but do not hide every reward behind a trap. Sometimes
+     the honest consequence of a good choice is that somebody helps.
+
+   PUSH BACK AND PAY OFF THE PROTAGONIST (important):
    - Read the OPEN THREADS list above. Most of those threads are the protagonist's plans, betrothals, alliances,
      or pending business. They are TARGETS, not promises. The world does not exist to deliver them.
    - Occasionally choose ONE open thread tied to the protagonist and let a faction complicate it.
@@ -566,6 +708,11 @@ TONE: The world breathes with quiet menace. Seasons change, debts come due, old 
 When you do inject, make it feel like a distant rumble — something the protagonist half-notices
 but can't yet name.
 
+BALANCE: The world should also remember earned goodwill. If recent history contains loyalty,
+kept promises, rescued allies, repaid debts, or improved standing, a future beat can be a quiet
+reward: help offered, a door opened, reputation improved, safe passage granted, or a warning sent.
+Trace every reward to a prior chapter, arc, agreement, relationship shift, or thread.
+
 - worldNarrative: 1-2 sentences summarizing the world's current state/mood.
 - plotInjection: null most of the time. When warranted: 1-2 sentences of in-world prose
   (${p.pov} person, ${p.tense} tense). urgency: almost always "simmer" or "emerging."
@@ -591,9 +738,10 @@ Your job: read the current world state, recent history, faction dossiers, active
 Think like a patient showrunner planning the next scene. You are NOT writing prose. You are writing a concise strategic brief that the GM will read before generating. The goal is slow-burn escalation, not a twist machine.
 
 SLOW-BURN DIRECTIVE:
-- Most next beats should preserve the current scene's pressure, deepen a relationship, clarify a cost, or let a consequence breathe.
+- Most next beats should preserve the current scene's pressure, deepen a relationship, clarify a cost, or let a consequence or reward breathe.
 - Do not raise dramatic temperature every turn. Plateaus are useful when they make the next rise feel earned.
 - Twists are dormant seeds until the story has paid for them with setup, evidence, suspicion, and player-facing cost.
+- If the history ledger shows earned goodwill, at least one path should be a quiet payoff, loyalty response, or opportunity unless the current scene is in immediate crisis.
 - Prefer path_a or path_b unless a thread is already imminent. Path_d should almost never be recommended.
 
 ═══ OUTPUT FORMAT ═══
@@ -603,14 +751,14 @@ Respond with JSON matching the schema. The top-level key is \`next_beat\`.
 Inside \`next_beat\`:
 
 1. **critical_path** — four path objects:
-   - \`path_a\`: the obvious next NPC move (political overture, summons, trade proposal).
+   - \`path_a\`: the obvious next NPC move or earned opening (political overture, summons, trade proposal, loyalty payoff).
    - \`path_b\`: friction — resistance, counter-demand, refusal, social slight.
    - \`path_c\`: action — physical movement, escalation, arrival/departure, sound from elsewhere.
    - \`path_d\`: dormant twist seed — drawn from stewing secrets ONLY. Usually this is NOT for the next turn; it marks what to withhold or foreshadow.
 
    Each path object:
    {
-     "type": "political_overture|social_slight|action_small_scale|twist_from_secret|environmental_shift|discovery|negotiation|confrontation|none",
+     "type": "political_overture|social_slight|action_small_scale|twist_from_secret|environmental_shift|discovery|negotiation|confrontation|earned_reward|loyalty_payoff|opportunity|none",
      "description": "1-2 sentences describing the NPC action or environmental shift",
      "friction": true|false,
      "action": true|false,
@@ -647,9 +795,9 @@ Inside \`next_beat\`:
 
 1. CRITICAL PATH RULE — you only control NPCs and the environment. NEVER predict, assume, or dictate what the player will do. All paths describe NPC actions, environmental shifts, or off-screen events ONLY.
 
-2. DEFAULT TO CONTINUITY AND FRICTION. NPCs have their own agendas, but resistance can be quiet: delay, uncertainty, price, silence, logistics, or a small refusal.
+2. DEFAULT TO CONTINUITY, FRICTION, AND PAYOFF. NPCs have their own agendas, but resistance can be quiet: delay, uncertainty, price, silence, logistics, or a small refusal. Earned goodwill can also be quiet: a warning, better terms, public credit, access, cover, shelter, or a loyal NPC choosing the player under pressure.
 
-3. PLOT BRANCHES must be drawn from existing open threads, faction goals, and scheme seeds. NEVER invent new lore. If a twist (Path D) has no stewing secret with prior setup to draw from, set Path D to "none" or downgrade it to friction.
+3. PLOT BRANCHES must be drawn from existing open threads, faction goals, scheme seeds, causal history ledger items, or earned payoff seeds. NEVER invent new lore. If a twist (Path D) has no stewing secret with prior setup to draw from, set Path D to "none" or downgrade it to friction.
 
 4. NEXT TURN STRATEGY — select the slowest path that keeps pressure alive. Default to path_a or path_b. Do not pick path_c or path_d just because the player has had an easy stretch. Pick path_d only when an existing imminent thread, visible evidence, and player action make the reveal unavoidable.
 
@@ -658,6 +806,11 @@ Inside \`next_beat\`:
 6. FACTION ADVISORY — for each relevant faction, note their current disposition toward the player and their most likely next move. Factor in recent world events, relation shifts, resources, goals, and seasonal pressures. Use lowercase faction slugs as keys.
 
 7. THREAD AWARENESS — read the THREAD REGISTRY. Factor imminent threads into your branch planning, but a branch may point toward a payoff without landing it.
+
+8. BAYESIAN SOCIAL PRIOR — do not overfit to betrayal. For each major NPC/faction choice,
+   weigh prior relationship, standing, affinity, visible upside, downside risk, detection risk,
+   public reputation cost, and alternatives. If marriage, alliance, loyalty, or service improves
+   the NPC's prospects, it can be sincere. Hidden motives require evidence, not genre habit.
 
 ═══ STRATEGY ═══
 
@@ -668,15 +821,20 @@ Momentum is built on shifting pressure:
 - Hospitality, contracts, sacred promises, laws, and customs are weapons and targets.
 - Seasons, distance, shortages, and communications matter. A faction that ignores its supply line pays for it.
 - Heirs, wards, deputies, informants, clients, rivals, and overlooked relatives are loose threads powerful factions ignore at their peril.
+- Rewards are also momentum: loyalty gained, an ally acting first, a debt repaid, an invitation extended, or standing improving can move the plot without another twist.
+
+${buildEconomyScaleBlock('ECONOMY SCALE')}
 
 When plotting branches:
-- Path A (obvious) should usually be an overture: an offer, summons, alliance proposal, trade, deal, or invitation.
+- Path A (obvious) should usually be an overture or earned opportunity: an offer, summons, alliance proposal, trade, deal, invitation, repaid favor, or ally opening a door.
 - Path B (friction) should often be a social, legal, or logistical obstacle: a refusal, insult, broken promise, blocked route, recalled debt, or missing resource.
 - Path C (action) should be occasional and small-scale: a messenger arriving, a patrol sighted, a door barred, a theft discovered, a distant fire, a public challenge, or a limited confrontation. Avoid constant raids, abductions, assassinations, and sudden attacks.
 - Path D (twist) should usually be dormant. Use it to name a secret pressure that remains off-page unless the current action directly forces it. If it is not earned, set type "none" or downgrade to friction.`;
 
 	if (p.arcBlock) sys += `\n\n═══ STORY ARCS ═══\n${p.arcBlock}`;
 	if (p.chapterBlock) sys += `\n\n═══ RECENT CHAPTERS ═══\n${p.chapterBlock}`;
+	if (p.historyLedgerBlock) sys += `\n\n=== CAUSAL HISTORY LEDGER ===\nUse this as the source list for future consequences, rewards, and twists.\n${p.historyLedgerBlock}`;
+	if (p.earnedPayoffBlock) sys += `\n\n=== EARNED PAYOFFS / REWARD SEEDS ===\nUse these to create earned_reward, loyalty_payoff, or opportunity paths when the next beat can honor prior choices.\n${p.earnedPayoffBlock}`;
 	if (p.characterArcs.length > 0) sys += `\n\n═══ CHARACTER ARCS ═══\n${p.characterArcs.map(ca => `- ${typeof ca === 'string' ? ca : `${ca.name}: ${ca.development}`}`).join('\n')}`;
 
 	if (p.tacticalBlock) {
@@ -717,6 +875,17 @@ When plotting branches:
 
 type PlotPathKey = PlotMomentum['next_beat']['next_turn_strategy']['recommended_path'];
 
+const REWARD_PATH_TYPES = new Set(['earned_reward', 'loyalty_payoff', 'opportunity']);
+
+function firstRewardPathKey(
+	criticalPath: PlotMomentum['next_beat']['critical_path'],
+): PlotPathKey | null {
+	for (const key of ['path_a', 'path_b', 'path_c', 'path_d'] as PlotPathKey[]) {
+		if (REWARD_PATH_TYPES.has(criticalPath[key].type)) return key;
+	}
+	return null;
+}
+
 function applySlowBurnGuard(momentum: PlotMomentum): PlotMomentum {
 	const nb = momentum.next_beat;
 	const pathD = nb.critical_path.path_d;
@@ -742,7 +911,8 @@ function applySlowBurnGuard(momentum: PlotMomentum): PlotMomentum {
 
 	let nextTurnStrategy = nb.next_turn_strategy;
 	if (nextTurnStrategy.recommended_path === 'path_d' && !twistIsEarned) {
-		const fallback: PlotPathKey = criticalPath.path_b.type !== 'none' ? 'path_b' : 'path_a';
+		const fallback: PlotPathKey = firstRewardPathKey(criticalPath)
+			?? (criticalPath.path_b.type !== 'none' ? 'path_b' : 'path_a');
 		nextTurnStrategy = {
 			...nextTurnStrategy,
 			recommended_path: fallback,

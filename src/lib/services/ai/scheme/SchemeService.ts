@@ -83,8 +83,11 @@ export async function evaluate(
 		`look at what just happened and decide whether any antagonist would now plot against ` +
 		`the player, escalate an existing plot, or abandon a foiled one. Be concrete and ` +
 		`character-driven — only create schemes when the player did something that genuinely ` +
-		`warrants response from a specific antagonist. Quiet turns warrant no action — return ` +
-		`empty arrays and let the world breathe.`;
+		`warrants response from a specific antagonist. Use the latest narrative and current ` +
+		`state snapshot as evidence; do not create a scheme from genre vibes, outside canon, or ` +
+		`a random desire for a twist. Escalate existing schemes only when this turn touches their ` +
+		`owner, target, goal, or trigger. Quiet turns and positive-only developments warrant no ` +
+		`action — return empty arrays and let the world breathe.`;
 
 	const userPrompt =
 		`Latest narrative:\n\n---\n${narrative}\n---\n\n` +
@@ -99,7 +102,7 @@ export async function evaluate(
 					)
 					.join('\n')}\n\n`
 			: 'No existing active schemes.\n\n') +
-		`Call manage_schemes. Most turns warrant nothing — only act when antagonists would actually react.`;
+		`Call manage_schemes. Most turns warrant nothing. Only act when a named antagonist would actually react to evidence in the narrative or state snapshot.`;
 
 	let result: { toolCalls: Array<{ name: string; arguments: Record<string, any> }> };
 	try {
