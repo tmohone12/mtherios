@@ -403,8 +403,8 @@
 			const promptUsage = story.lastPromptSectionUsage ?? {};
 			story.lastTierUsage = {
 				snapshot: estimateTokens(snapshotText),
-				scene: (promptUsage.characters ?? 0) + (promptUsage.playerReputation ?? 0),
-				recent: (promptUsage.arcs ?? 0) + (promptUsage.chapters ?? 0) + (promptUsage.chapterIntro ?? 0),
+				scene: (promptUsage.characters ?? 0) + (promptUsage.playerReputation ?? 0) + (promptUsage.playerLedger ?? 0),
+				recent: (promptUsage.storyMemory ?? 0) + (promptUsage.arcs ?? 0) + (promptUsage.chapters ?? 0) + (promptUsage.chapterIntro ?? 0),
 				world: (promptUsage.factions ?? 0) + (promptUsage.livingWorld ?? 0) + (promptUsage.schemes ?? 0) + (promptUsage.plotMomentum ?? 0) + (promptUsage.plotLedger ?? 0),
 				procedural: promptUsage.proceduralMemory ?? 0,
 				retrieved: (promptUsage.lore ?? 0) + (promptUsage.episodicMemory ?? 0) + (promptUsage.conversationMemory ?? 0) + (promptUsage.backendMemory ?? 0),
@@ -622,7 +622,8 @@
 	}
 
 	async function submitBackendAuthoritativeTurn(content: string): Promise<boolean> {
-		if (!story.currentStory?.serverStoryId) return false;
+		const currentStory = story.currentStory;
+		if (!currentStory?.serverStoryId) return false;
 		const narrativeConfig = getNarrativeRequestConfig();
 		const profile = settings.getServiceProfile('narrative');
 		const provider = settings.getServiceProvider('narrative');
@@ -646,6 +647,8 @@
 					presentNpcIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
 					locationId: story.locations.find((location) => location.current)?.id ?? null,
 					threadIds: [],
+					playerReputation: currentStory.playerReputation ?? null,
+					playerLedger: currentStory.playerLedger ?? null,
 				},
 			});
 			if (response.narration.trim()) {

@@ -114,6 +114,7 @@ export const createStoryRequestSchema = z.object({
 	title: z.string().min(1),
 	description: z.string().nullable().optional(),
 	playerReputation: z.string().nullable().optional(),
+	playerLedger: z.string().nullable().optional(),
 	clientStoryId: z.string().optional(),
 });
 
@@ -251,6 +252,8 @@ export const turnRequestSchema = z.object({
 		presentNpcIds: z.array(z.string()).default([]),
 		threadIds: z.array(z.string()).default([]),
 		currentFactionId: z.string().nullable().optional(),
+		playerReputation: z.string().nullable().optional(),
+		playerLedger: z.string().nullable().optional(),
 	}).optional(),
 });
 

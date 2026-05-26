@@ -11,7 +11,7 @@ import {
 	getEntryRelationships, getConversationMemory, getWorldEvents,
 	getChapters, getStoryBeats, getArcs,
 	getEmbeddedImages, getEmbeddedImagesForEntryIds, createEmbeddedImage, deleteEmbeddedImage,
-	createAgreement, updateAgreement, getAgreements,
+	createAgreement, updateAgreement, deleteAgreement, getAgreements,
 	getFactionActions, getRumors,
 	getSchemes, getStoryThreads,
 	createWorldEvent,
@@ -20,6 +20,8 @@ import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
 import { normalizeRelation } from '$lib/services/ai/tools/helpers';
 import { buildEconomyScaleBlock } from '$lib/services/ai/context/economyScale';
+import { buildNarratorOverviewBlock } from '$lib/services/ai/context/narratorOverview';
+import { selectStoryMemory } from '$lib/services/ai/context/storyMemorySelector';
 import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, ConceptEntryState, EventEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Chapter, StoryBeat, Scheme, StoryThread, ProceduralRule } from '$lib/types';
 import { injectSchemes } from '$lib/services/ai/scheme/SchemeService';
 import type { WorldSimulationResult, PlotMomentum } from '$lib/services/ai/sdk/schemas/worldsim';
@@ -70,6 +72,8 @@ export interface StateSnapshot {
 	backendMemoryPacket: string | null;
 	backendMemoryIds: string[];
 	backendMemoryDebug: string[];
+	selectedStoryMemoryBlock: string;
+	selectedStoryMemoryDebug: string[];
 	worldSim: (WorldSimulationResult & { seasonEffect?: SeasonEffect }) | null;
 	threads: StoryThread[];
 }
@@ -95,6 +99,8 @@ function emptySnapshot(): StateSnapshot {
 		backendMemoryPacket: null,
 		backendMemoryIds: [],
 		backendMemoryDebug: [],
+		selectedStoryMemoryBlock: '',
+		selectedStoryMemoryDebug: [],
 		worldSim: null,
 		threads: [],
 	};
@@ -559,12 +565,28 @@ class StoryStore {
 			localVersion: this.currentStory.serverVersion ?? 0,
 		});
 		await this.mirrorBackendEntries(response.entries);
+		const storyMetadataPatch: Partial<Story> = {};
+		for (const change of response.syncChanges) {
+			if (change.table !== 'stories' || !change.row || typeof change.row !== 'object') continue;
+			const row = change.row as Record<string, unknown>;
+			const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+				? row.metadata as Record<string, unknown>
+				: {};
+			if ('playerReputation' in metadata) {
+				storyMetadataPatch.playerReputation = typeof metadata.playerReputation === 'string' ? metadata.playerReputation : null;
+			}
+			if ('playerLedger' in metadata) {
+				storyMetadataPatch.playerLedger = typeof metadata.playerLedger === 'string' ? metadata.playerLedger : null;
+			}
+		}
 		this.currentStory = {
 			...this.currentStory,
+			...storyMetadataPatch,
 			serverVersion: response.serverVersion,
 			syncStatus: response.warnings.length > 0 ? 'syncing' : 'synced',
 		};
 		await updateStory(this.currentStory.id, {
+			...storyMetadataPatch,
 			serverVersion: response.serverVersion,
 			syncStatus: this.currentStory.syncStatus,
 			updatedAt: Date.now(),
@@ -928,6 +950,8 @@ class StoryStore {
 		if (mode === 'adventure') {
 			const playerReputation = this.#sectionPlayerReputation(s);
 			if (playerReputation) sections.push({ key: 'playerReputation', text: playerReputation });
+			const playerLedger = this.#sectionPlayerLedger(s);
+			if (playerLedger) sections.push({ key: 'playerLedger', text: playerLedger });
 		}
 		const factions = this.#sectionFactions(s, snap);
 		if (factions) sections.push({ key: 'factions', text: factions });
@@ -937,10 +961,15 @@ class StoryStore {
 		if (episodic) sections.push({ key: 'episodicMemory', text: episodic });
 		const conversations = this.#sectionConversationMemory(snap);
 		if (conversations) sections.push({ key: 'conversationMemory', text: conversations });
-		const arcs = this.#sectionArcs(snap);
-		if (arcs) sections.push({ key: 'arcs', text: arcs });
-		const chapters = this.#sectionChapters(snap);
-		if (chapters) sections.push({ key: 'chapters', text: chapters });
+		const storyMemory = this.#sectionSelectedStoryMemory(snap);
+		if (storyMemory) {
+			sections.push({ key: 'storyMemory', text: storyMemory });
+		} else {
+			const arcs = this.#sectionArcs(snap);
+			if (arcs) sections.push({ key: 'arcs', text: arcs });
+			const chapters = this.#sectionChapters(snap);
+			if (chapters) sections.push({ key: 'chapters', text: chapters });
+		}
 		const chapterIntro = this.#sectionChapterIntro(snap);
 		if (chapterIntro) sections.push({ key: 'chapterIntro', text: chapterIntro });
 		sections.push({ key: 'entryHistory', text: this.#sectionEntryHistoryPreamble(mode) });
@@ -1036,6 +1065,8 @@ class StoryStore {
 
 		if (mode === 'adventure') {
 			parts.push(`### Hard Rules\n\nThese six override everything. Re-read before generating:\n\n1. **NEVER write {{user}}'s dialogue, thoughts, decisions, or actions.** The player owns those.\n2. **EVERY TURN ADVANCES THE CLOCK.** The header H2 must show a new time, and the prose must state the time passed plainly ("five minutes later", "by morning", "a moment passes"). Frozen clock = dead world.\n3. **DEFAULT TO INCENTIVE-BASED FRICTION.** Powerful NPCs do not agree for free, but they can sincerely agree when the upside is high, trust is established, and the social risk is acceptable.\n4. **NO OMNISCIENT NPCs.** Each NPC knows only what they saw, heard, were told, found evidence for, or can plausibly infer after enough time.\n5. **NARRATE PROSE ONLY.** State changes are extracted from your text — make outcomes plain. Who moved, what was sworn, who took damage, what time passed, what changed.\n6. **STOP at the first moment {{user}}'s input is needed** — a question, a choice, or a held silence.`);
+
+			parts.push(buildNarratorOverviewBlock());
 
 			parts.push(`### Dream Team — Internal Quality Checklist\n\nBefore writing, run a quick check across five specialists. NORA resolves disagreements.\n\n- **NORA (Continuity)** — Does the header advance? Is the clock moving? Are character states consistent with last turn? Am I respecting the POV lock and evidence rules?\n- **ANVIL (Psychology)** — Are NPCs reacting from their own emotional state, not plot convenience? Is there emotional inertia (no instant flips)? Are misunderstandings possible based on subjective bias?\n- **OPUS (Pacing)** — Does this beat end on a narrative hook (question, silence, sudden event) that demands player response? Did I let NPCs respond to the PC's action before stopping?\n- **JULIA (Prose)** — Is the opening anchored in place/weather/sound, not emotion? Is there concrete sensory texture? Am I showing, not telling?\n- **MIKI (Dialogue)** — Does spoken text sound like real imperfect speech? Under stress, does it fragment? Are there verbal tics, hesitations, or subtext that reveal character?`);
 
@@ -1292,6 +1323,20 @@ class StoryStore {
 		].join('\n');
 	}
 
+	#sectionPlayerLedger(s: Story): string {
+		const ledger = s.playerLedger?.trim();
+
+		return [
+			'## Player Ledger',
+			'',
+			'Material canon attached to {{user}}. Track coin, income, holdings, assets, payroll, debts owed by or to the player, claims, stores, ships, troops under pay, and regular expenses.',
+			'',
+			ledger ? compactMemoryText(ledger, 1200) : 'No durable player ledger recorded yet. Establish one only when the fiction creates material assets, income, costs, debts, claims, or obligations.',
+			'',
+			'Treat player-written ledger notes as durable canon unless newer events contradict them. If material standing changes, update player_ledger through world state as a compact full replacement.',
+		].join('\n');
+	}
+
 	#sectionFactions(_s: Story, snap: StateSnapshot): string {
 		const factions = snap.relevantFactions;
 		if (!factions || factions.length === 0) return '';
@@ -1478,6 +1523,14 @@ class StoryStore {
 			? `\n\n[retrieval-debug: ${snap.backendMemoryDebug.join(' | ')}]`
 			: '';
 		return `${snap.backendMemoryPacket}${debug}`;
+	}
+
+	#sectionSelectedStoryMemory(snap: StateSnapshot): string {
+		if (!snap.selectedStoryMemoryBlock?.trim()) return '';
+		const debug = snap.selectedStoryMemoryDebug.length
+			? `\n\n[story-memory-debug: ${snap.selectedStoryMemoryDebug.join(' | ')}]`
+			: '';
+		return `${snap.selectedStoryMemoryBlock}${debug}`;
 	}
 
 	#sectionArcs(snap: StateSnapshot): string {
@@ -2015,6 +2068,26 @@ class StoryStore {
 			}
 		}
 
+		const storyMemorySelection = selectStoryMemory(chapters, arcs, {
+			query: [
+				currentActionText,
+				this.entries.slice(-8).map(e => e.content).join('\n'),
+				threads.filter(t => t.status !== 'closed').map(t => t.description).join('\n'),
+				relevantFactions.map(f => f.name).join(', '),
+			].join('\n\n'),
+			sceneEntityNames: [
+				...presentCharacters.map(c => c.name),
+				...relevantFactions.map(f => f.name),
+			],
+			currentLocationName: currentLocation?.name ?? null,
+			threadHints: threads.filter(t => t.status !== 'closed').map(t => t.description),
+			tokenBudget: backendMemoryPacket ? 1200 : 1800,
+			recentCount: 4,
+			relevantCount: 6,
+			resurfacedCount: 2,
+			seed: `${s.id}:${this.entries.length}:${currentActionText}`,
+		});
+
 		return {
 			arcs,
 			chapters,
@@ -2035,6 +2108,8 @@ class StoryStore {
 			backendMemoryPacket,
 			backendMemoryIds,
 			backendMemoryDebug,
+			selectedStoryMemoryBlock: storyMemorySelection.block,
+			selectedStoryMemoryDebug: storyMemorySelection.debug,
 			worldSim: ws,
 			threads,
 		};
@@ -2111,6 +2186,9 @@ class StoryStore {
 		}
 		if (s.playerReputation?.trim()) {
 			lines.push(`Player reputation: ${compactMemoryText(s.playerReputation, 240)}`);
+		}
+		if (s.playerLedger?.trim()) {
+			lines.push(`Player ledger: ${compactMemoryText(s.playerLedger, 360)}`);
 		}
 		if (snap.equippedItems.length > 0) {
 			lines.push(`Inventory: ${snap.equippedItems.map(i => i.name).join(', ')}`);
@@ -2307,6 +2385,13 @@ class StoryStore {
 		this.currentStory = { ...this.currentStory, playerReputation: value };
 	}
 
+	async updatePlayerLedger(playerLedger: string | null) {
+		if (!this.currentStory) return;
+		const value = playerLedger?.trim() || null;
+		await updateStory(this.currentStory.id, { playerLedger: value, updatedAt: Date.now() });
+		this.currentStory = { ...this.currentStory, playerLedger: value };
+	}
+
 	/**
 	 * Apply a batch of meter changes from update_world_state.
 	 * Creates meters on first reference using the model-provided `initial`
@@ -2455,6 +2540,34 @@ class StoryStore {
 
 			await updateAgreement(target.id, patch);
 			this.agreements = this.agreements.map((a) => (a.id === target.id ? { ...a, ...patch } : a));
+		}
+	}
+
+	async removeAgreement(id: string): Promise<void> {
+		if (!this.currentStory) return;
+		const target = this.agreements.find((a) => a.id === id);
+		if (!target) return;
+		await deleteAgreement(id);
+		this.agreements = this.agreements.filter((a) => a.id !== id);
+		await updateStory(this.currentStory.id, { updatedAt: Date.now() });
+		if (this.currentStory.serverStoryId) {
+			try {
+				await queueBackendSyncOp(this.currentStory, 'state_correction', {
+					operations: [{ op: 'archive', path: `/agreements/${id}`, value: { id } }],
+					reason: `Player removed ${target.category}: ${target.parties.join(' & ')}.`,
+				});
+				const sync = await pushPendingBackendOps(this.currentStory);
+				if (sync) {
+					this.currentStory = {
+						...this.currentStory,
+						serverVersion: sync.serverVersion,
+						syncStatus: sync.syncStatus,
+					};
+				}
+			} catch (e) {
+				console.warn('[Story] backend agreement removal sync failed:', e);
+				this.currentStory = { ...this.currentStory, syncStatus: 'offline' };
+			}
 		}
 	}
 

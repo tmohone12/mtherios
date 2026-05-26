@@ -54,6 +54,8 @@ export interface Story {
   headerPrompt: string | null // Per-story preamble: tone, rules, and narrative guidelines
   /** Compact public/social reputation note for the protagonist; injected as its own prompt section. */
   playerReputation?: string | null
+  /** Player-facing ledger for income, assets, holdings, debts, expenses, and material claims. */
+  playerLedger?: string | null
   /** Backend canonical story id. When set, IndexedDB is an offline cache for this story. */
   serverStoryId?: string | null
   /** Last backend version applied to the local cache. */
@@ -612,6 +614,8 @@ export interface CharacterEntryState extends BaseEntryState {
   // Examples: "being courted by a wealthy older merchant", "father has gambling debts",
   // "wants revenge for a slain brother", "running out of coin".
   pressures?: string[]
+  /** Faction names/ids this character belongs to, serves, leads, represents, or is sworn to. */
+  factionTags?: string[]
 }
 
 export interface RelationshipChange {

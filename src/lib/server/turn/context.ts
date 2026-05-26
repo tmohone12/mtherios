@@ -2,6 +2,8 @@ import { and, desc, eq, ne } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
 import {
 	agreements,
+	arcs as arcRowsTable,
+	chapters as chapterRowsTable,
 	entities,
 	factions,
 	factionGoals,
@@ -26,6 +28,8 @@ export interface TurnContext {
 	threads: Array<typeof storyThreads.$inferSelect>;
 	events: Array<typeof storyEvents.$inferSelect>;
 	beliefs: Array<typeof npcBeliefs.$inferSelect>;
+	chapters: Array<typeof chapterRowsTable.$inferSelect>;
+	arcs: Array<typeof arcRowsTable.$inferSelect>;
 }
 
 export async function loadTurnContext(storyId: string, presentNpcIds: string[] = []): Promise<TurnContext> {
@@ -44,6 +48,8 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		threadRows,
 		eventRows,
 		beliefRows,
+		chapterRows,
+		arcRows,
 	] = await Promise.all([
 		db.select().from(storyEntries).where(eq(storyEntries.storyId, storyId)).orderBy(desc(storyEntries.position)).limit(40),
 		db.select().from(entities).where(eq(entities.storyId, storyId)).limit(160),
@@ -57,6 +63,8 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		presentNpcIds.length
 			? db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).limit(120)
 			: db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).limit(40),
+		db.select().from(chapterRowsTable).where(eq(chapterRowsTable.storyId, storyId)).orderBy(desc(chapterRowsTable.number)).limit(40),
+		db.select().from(arcRowsTable).where(eq(arcRowsTable.storyId, storyId)).orderBy(desc(arcRowsTable.number)).limit(16),
 	]);
 
 	const presentSet = new Set(presentNpcIds);
@@ -74,5 +82,7 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		beliefs: presentSet.size > 0
 			? beliefRows.filter((belief) => presentSet.has(belief.believerEntityId))
 			: beliefRows,
+		chapters: [...chapterRows].reverse(),
+		arcs: [...arcRows].reverse(),
 	};
 }

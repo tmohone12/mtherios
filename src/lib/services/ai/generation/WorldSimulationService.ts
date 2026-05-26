@@ -31,6 +31,7 @@ import {
 import { createLogger } from '../core/config';
 import { normalizeRelation } from '../tools/helpers';
 import { buildEconomyScaleBlock } from '../context/economyScale';
+import { selectStoryMemory } from '../context/storyMemorySelector';
 import type {
 	Entry, Chapter, Arc, StoryEntry, TimeTracker, EntryRelationship,
 	CharacterEntryState, FactionEntryState, FactionActionRecord,
@@ -91,6 +92,7 @@ export function calculateSeason(time: TimeTracker | null): SeasonEffect {
 // ── Shared Context Builder ──
 
 interface SimContext {
+	storyMemoryBlock: string;
 	arcBlock: string;
 	chapterBlock: string;
 	historyLedgerBlock: string;
@@ -137,6 +139,25 @@ function buildSimContext(
 
 	// Conversation: last 20 user/assistant pairs
 	const conversationBlock = buildConversationBlock(recentEntries.slice(-MAX_CONVERSATION_PAIRS * 2));
+	const storyMemory = selectStoryMemory(chapters, arcs, {
+		query: [
+			locationName,
+			schemes,
+			tacticalBlock,
+			conversationBlock,
+			threads.map(thread => thread.description).join('\n'),
+			factionEntries.map(entry => entry.name).join(', '),
+			characterEntries.slice(0, 24).map(entry => entry.name).join(', '),
+		].join('\n\n'),
+		sceneEntityNames: characterEntries.slice(0, 24).map(entry => entry.name),
+		currentLocationName: locationName,
+		threadHints: threads.map(thread => thread.description),
+		tokenBudget: 2600,
+		recentCount: 6,
+		relevantCount: 8,
+		resurfacedCount: 3,
+		seed: `${chapters.length}:${arcs.length}:${locationName}`,
+	});
 
 	// Season
 	const season = calculateSeason(timeTracker);
@@ -187,6 +208,7 @@ function buildSimContext(
 		: '';
 
 	return {
+		storyMemoryBlock: storyMemory.block,
 		arcBlock, chapterBlock, historyLedgerBlock, earnedPayoffBlock,
 		allThreads, characterArcs,
 		tacticalBlock, conversationBlock, factionBlock, hasFactions,
@@ -484,8 +506,12 @@ TONE: Think like a living-world referee. Power is negotiated, spent, lost, and s
 
 The story's own memory is canon. Use chapter summaries, arcs, faction dossiers, relationships, active agreements, schemes, and recent events. Do not steer toward outside canon, genre tropes, or assumed source-material outcomes unless the current story explicitly establishes them. The point is to simulate what happens here.`;
 
-	if (p.arcBlock) sys += `\n\n═══ STORY ARCS ═══\n${p.arcBlock}`;
-	if (p.chapterBlock) sys += `\n\n═══ RECENT CHAPTERS ═══\n${p.chapterBlock}`;
+	if (p.storyMemoryBlock) {
+		sys += `\n\n${p.storyMemoryBlock}`;
+	} else {
+		if (p.arcBlock) sys += `\n\n═══ STORY ARCS ═══\n${p.arcBlock}`;
+		if (p.chapterBlock) sys += `\n\n═══ RECENT CHAPTERS ═══\n${p.chapterBlock}`;
+	}
 	if (p.historyLedgerBlock) sys += `\n\n=== CAUSAL HISTORY LEDGER ===\nEvery new move should trace back to one of these sources unless the immediate scene creates a stronger cause.\n${p.historyLedgerBlock}`;
 	if (p.earnedPayoffBlock) sys += `\n\n=== EARNED PAYOFFS / REWARD SEEDS ===\nThese are not guaranteed wins, but they are permissions for future loyalty, favors, access, protection, reputation gains, invitations, warnings, safe passage, resources, or standing.\n${p.earnedPayoffBlock}`;
 	if (p.allThreads.length > 0) sys += `\n\n═══ OPEN THREADS ═══\n${p.allThreads.map(t => `- ${t}`).join('\n')}`;
@@ -831,8 +857,12 @@ When plotting branches:
 - Path C (action) should be occasional and small-scale: a messenger arriving, a patrol sighted, a door barred, a theft discovered, a distant fire, a public challenge, or a limited confrontation. Avoid constant raids, abductions, assassinations, and sudden attacks.
 - Path D (twist) should usually be dormant. Use it to name a secret pressure that remains off-page unless the current action directly forces it. If it is not earned, set type "none" or downgrade to friction.`;
 
-	if (p.arcBlock) sys += `\n\n═══ STORY ARCS ═══\n${p.arcBlock}`;
-	if (p.chapterBlock) sys += `\n\n═══ RECENT CHAPTERS ═══\n${p.chapterBlock}`;
+	if (p.storyMemoryBlock) {
+		sys += `\n\n${p.storyMemoryBlock}`;
+	} else {
+		if (p.arcBlock) sys += `\n\n═══ STORY ARCS ═══\n${p.arcBlock}`;
+		if (p.chapterBlock) sys += `\n\n═══ RECENT CHAPTERS ═══\n${p.chapterBlock}`;
+	}
 	if (p.historyLedgerBlock) sys += `\n\n=== CAUSAL HISTORY LEDGER ===\nUse this as the source list for future consequences, rewards, and twists.\n${p.historyLedgerBlock}`;
 	if (p.earnedPayoffBlock) sys += `\n\n=== EARNED PAYOFFS / REWARD SEEDS ===\nUse these to create earned_reward, loyalty_payoff, or opportunity paths when the next beat can honor prior choices.\n${p.earnedPayoffBlock}`;
 	if (p.characterArcs.length > 0) sys += `\n\n═══ CHARACTER ARCS ═══\n${p.characterArcs.map(ca => `- ${typeof ca === 'string' ? ca : `${ca.name}: ${ca.development}`}`).join('\n')}`;

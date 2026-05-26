@@ -12,12 +12,14 @@ import { z } from 'zod';
 
 export const worldStateCharacterSchema = z.object({
 	name: z.string(),
+	aliases: z.array(z.string()).optional().default([]),
 	status: z.enum(['active', 'departed', 'deceased', 'inactive']).optional().default('active'),
 	description: z.string().nullable().optional().default(null),
 	relationship: z.string().nullable().optional().default(null),
 	traits: z.array(z.string()).optional().default([]),
 	present: z.boolean().optional().default(true),
 	pressures: z.array(z.string()).optional().default([]),
+	faction_tags: z.array(z.string()).optional().default([]),
 });
 
 export const worldStateLocationConnectionSchema = z.object({
@@ -135,6 +137,7 @@ export const worldStateUpdateSchema = z.object({
 	time_delta: z.string().nullable().optional(),
 	mood: z.string().nullable().optional(),
 	player_reputation: z.string().nullable().optional(),
+	player_ledger: z.string().nullable().optional(),
 	conversations: z.array(worldStateConversationSchema).optional().default([]),
 	relationships: z.array(worldStateRelationshipSchema).optional().default([]),
 	story_beats: z.array(worldStateStoryBeatSchema).optional().default([]),
@@ -201,6 +204,11 @@ export const GM_TOOLS = [
 							type: 'object',
 							properties: {
 								name: { type: 'string' },
+								aliases: {
+									type: 'array',
+									items: { type: 'string' },
+									description: 'Alternate names, titles, house styles, or epithets used for the same character.',
+								},
 								status: { type: 'string', enum: ['active', 'departed', 'deceased', 'inactive'] },
 								description: { type: 'string' },
 								relationship: { type: 'string' },
@@ -210,6 +218,11 @@ export const GM_TOOLS = [
 									type: 'array',
 									items: { type: 'string' },
 									description: "Circumstances tightening around this NPC that they will act on even when off-screen. Short sentences. Add when meaningfully introduced or when the situation shifts (new debt, a suitor circling, a brother killed, illness, a deadline). Examples: 'being courted by a wealthy older merchant who is abusive', 'father drowning in gambling debts', 'wants revenge for her slain brother', 'is running out of coin and time'.",
+								},
+								faction_tags: {
+									type: 'array',
+									items: { type: 'string' },
+									description: 'Faction names or ids this character belongs to, serves, leads, commands, publicly represents, or is sworn to. Use only when established by the scene or existing context.',
 								},
 							},
 							required: ['name'],
@@ -258,6 +271,10 @@ export const GM_TOOLS = [
 					player_reputation: {
 						type: 'string',
 						description: 'Optional full replacement for the compact Player Reputation prompt section. Use only when public reputation changed: titles, scandals, rumors, feared/loved status, legal standing, house/court gossip, or how strangers and factions speak of the player. Omit when unchanged.',
+					},
+					player_ledger: {
+						type: 'string',
+						description: 'Optional full replacement for the Player Ledger prompt section. Use only when coin, income, assets, holdings, payroll, debts, claims, stores, ships, troops under pay, or regular expenses materially changed. Preserve player-written durable notes; omit when unchanged.',
 					},
 					conversations: {
 						type: 'array',
@@ -351,7 +368,7 @@ export const GM_TOOLS = [
 								keywords: { type: 'array', items: { type: 'string' }, description: '3–5 retrieval keywords (name, aliases, related terms) for context injection' },
 								injection_mode: { type: 'string', enum: ['always', 'keyword', 'never'], description: 'How this entry is injected into context. keyword = inject when keywords match recent text. always = inject every turn. never = archived.' },
 								priority: { type: 'number', description: 'Injection priority. Higher = earlier in context. 0 is default.' },
-								state_overrides: { type: 'object', description: 'Optional type-specific state overrides. For characters: { pressures: string[] }. For locations: { connections: [{ targetName, direction?, travelTimeMinutes? }] }. For factions: { playerStanding: number, status: string }.' },
+								state_overrides: { type: 'object', description: 'Optional type-specific state overrides. For characters: { pressures: string[], factionTags: string[] }. For locations: { connections: [{ targetName, direction?, travelTimeMinutes? }] }. For factions: { playerStanding: number, status: string }.' },
 								known_members: {
 									type: 'array',
 									items: { type: 'string' },

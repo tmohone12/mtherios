@@ -526,6 +526,8 @@ export async function importStoryFromWiki(file: File): Promise<WikiImportResult>
 		currentBranchId: null,
 		currentBgImage: null,
 		headerPrompt: null,
+		playerReputation: null,
+		playerLedger: null,
 		lastWorldSimDay: null,
 		compactedLore: null,
 		compactedLoreHistory: null,

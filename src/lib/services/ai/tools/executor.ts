@@ -225,6 +225,63 @@ function truncateForTool(text: string, maxChars: number): string {
 	return clean.slice(0, Math.max(0, maxChars - 3)).trimEnd() + '...';
 }
 
+type IncomingCharacterUpdate = WorldStateUpdate['characters'][number];
+
+function findLoreCharacterForUpdate(char: IncomingCharacterUpdate): Entry | undefined {
+	return findMatchingLoreEntry(story.lorebookEntries, {
+		name: char.name,
+		type: 'character',
+		aliases: char.aliases ?? [],
+	});
+}
+
+function findRuntimeCharacterForUpdate(char: IncomingCharacterUpdate, loreEntry?: Entry) {
+	const keys = new Set([
+		loreNameKey(char.name),
+		...(char.aliases ?? []).map(loreNameKey),
+		loreEntry ? loreNameKey(loreEntry.name) : '',
+		...(loreEntry?.aliases ?? []).map(loreNameKey),
+	].filter(Boolean));
+	return story.characters.find(c => keys.has(loreNameKey(c.name)));
+}
+
+function canonicalCharacterNameForUpdate(char: IncomingCharacterUpdate): string {
+	const loreEntry = findLoreCharacterForUpdate(char);
+	return findRuntimeCharacterForUpdate(char, loreEntry)?.name ?? loreEntry?.name ?? char.name;
+}
+
+async function mergeCharacterLoreSignals(
+	target: Entry | undefined,
+	char: IncomingCharacterUpdate,
+	protagonistName: string | undefined,
+): Promise<void> {
+	if (!target || char.name.toLowerCase() === protagonistName) return;
+	const incomingFactionTags = (char.faction_tags ?? []).map(tag => tag.trim()).filter(Boolean);
+	const incomingAliases = (char.aliases ?? []).map(alias => alias.trim()).filter(Boolean);
+	if (incomingFactionTags.length === 0 && incomingAliases.length === 0) return;
+
+	const prev = target.state as CharacterEntryState;
+	const nextState: CharacterEntryState = {
+		...prev,
+		type: 'character',
+	};
+	if (incomingFactionTags.length > 0) {
+		nextState.factionTags = mergeStrings(prev.factionTags ?? [], incomingFactionTags).slice(-8);
+	}
+	const nextAliases = incomingAliases.length > 0
+		? mergeStrings(target.aliases ?? [], incomingAliases)
+		: target.aliases;
+
+	await updateLorebookEntry(target.id, { state: nextState as any, aliases: nextAliases, updatedAt: Date.now() });
+	story.lorebookEntries = story.lorebookEntries.map(e =>
+		e.id === target.id ? { ...e, state: nextState as any, aliases: nextAliases } : e
+	);
+
+	if (incomingFactionTags.length > 0) {
+		await syncFactionKnownMembersForCharacter(target, incomingFactionTags);
+	}
+}
+
 async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 	if (!story.currentStory) return;
 
@@ -234,29 +291,32 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 	for (const char of args.characters) {
 		if (!char.name) continue;
 
-		const exists = story.characters.some(c => c.name.toLowerCase() === char.name.toLowerCase());
-		if (exists) {
-			await story.updateCharacterFromClassification(char.name, {
+		const loreTarget = findLoreCharacterForUpdate(char);
+		const runtimeTarget = findRuntimeCharacterForUpdate(char, loreTarget);
+		const canonicalName = runtimeTarget?.name ?? loreTarget?.name ?? char.name;
+		if (runtimeTarget) {
+			await story.updateCharacterFromClassification(runtimeTarget.name, {
 				description: char.description,
 				relationship: char.relationship,
 				status: char.status,
 				traits: char.traits,
 			});
 		} else {
-			await story.addCharacter(char.name, char.description ?? undefined, char.relationship ?? undefined);
+			await story.addCharacter(canonicalName, char.description ?? undefined, char.relationship ?? undefined);
 			// Brand-new characters skip the status/traits processing in addCharacter,
 			// so a "newly-introduced and departed in the same turn" mention would
 			// otherwise be saved as status='active' regardless of args. Run them
 			// through the classification updater so 'departed' → 'inactive'
 			// normalization fires and traits get merged.
 			if ((char.status && char.status !== 'active') || (char.traits && char.traits.length > 0)) {
-				await story.updateCharacterFromClassification(char.name, {
+				await story.updateCharacterFromClassification(canonicalName, {
 					status: char.status,
 					traits: char.traits,
 				});
 			}
 		}
 
+		await mergeCharacterLoreSignals(loreTarget, char, protagonistName);
 		// Merge pressures onto an existing lorebook entry (canonical or alias match).
 		// Pressures accumulate — they're conditions of the NPC's life. The narrator
 		// is responsible for marking them resolved by emitting a replacement set.
@@ -292,7 +352,7 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 			c.status === 'inactive' ||
 			c.present === false
 		))
-		.map(c => c.name);
+		.map(c => canonicalCharacterNameForUpdate(c));
 	if (offstageNames.length > 0) await story.clearPresenceForCharacters(offstageNames);
 
 	// ── Locations ──
@@ -333,7 +393,7 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 				&& c.status !== 'departed'
 				&& c.status !== 'inactive',
 			)
-			.map(c => c.name);
+			.map(c => canonicalCharacterNameForUpdate(c));
 		if (presentNames.length > 0) await story.updatePresence(presentNames, currentLocName);
 	}
 
@@ -390,6 +450,10 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 
 	if (args.player_reputation !== undefined) {
 		await story.updatePlayerReputation(args.player_reputation);
+	}
+
+	if (args.player_ledger !== undefined) {
+		await story.updatePlayerLedger(args.player_ledger);
 	}
 
 	// ── Agreement changes (treaties, oaths, bonds, bargains...) ──
@@ -592,6 +656,31 @@ function memberNameToEntryId(name: string): string | null {
 		aliases: [],
 	});
 	return entry?.id ?? null;
+}
+
+async function syncFactionKnownMembersForCharacter(characterEntry: Entry, factionTags: string[]): Promise<void> {
+	const updates = new Map<string, Entry>();
+	for (const tag of factionTags) {
+		const factionEntry = findMatchingLoreEntry(story.lorebookEntries, {
+			name: tag,
+			type: 'faction',
+			aliases: [],
+		});
+		if (!factionEntry) continue;
+		const prev = factionEntry.state as FactionEntryState;
+		const knownMembers = mergeStrings(prev.knownMembers ?? [], [characterEntry.id]);
+		if (knownMembers.length === (prev.knownMembers ?? []).length) continue;
+		const nextState: FactionEntryState = {
+			...prev,
+			type: 'faction',
+			knownMembers,
+		};
+		updates.set(factionEntry.id, { ...factionEntry, state: nextState, updatedAt: Date.now() });
+		await updateLorebookEntry(factionEntry.id, { state: nextState as any, updatedAt: Date.now() });
+	}
+	if (updates.size > 0) {
+		story.lorebookEntries = story.lorebookEntries.map(e => updates.get(e.id) ?? e);
+	}
 }
 
 function mergeStrings(existing: string[], incoming: string[]): string[] {

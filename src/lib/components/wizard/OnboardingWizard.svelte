@@ -190,6 +190,7 @@
 			currentBgImage: null,
 			headerPrompt: null,
 			playerReputation: null,
+			playerLedger: null,
 			lastWorldSimDay: null,
 			compactedLore: null,
 			compactedLoreHistory: null,

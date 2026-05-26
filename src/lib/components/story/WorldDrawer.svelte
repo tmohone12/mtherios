@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search } from 'lucide-svelte';
+	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search, Trash2 } from 'lucide-svelte';
 	import { WORLD_SIM_DAY_INTERVAL, normalizeRelation } from '$lib/services/ai/tools/helpers';
 	import { maybeRunWorldSim } from '$lib/services/ai/tools/executor';
 	import { settings } from '$lib/stores/settings.svelte';
@@ -8,7 +8,7 @@
 	import { ai } from '$lib/services/ai';
 	import { uuid } from '$lib/utils/uuid';
 	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
-	import type { Arc, Entry, FactionActionRecord, FactionEntryState } from '$lib/types';
+	import type { Agreement, Arc, Entry, FactionActionRecord, FactionEntryState } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import type { Chapter } from '$lib/types';
 
@@ -366,6 +366,16 @@
 	let livingWorldCollapsed = $state(false);
 	let agreementsCollapsed = $state(false);
 	let alliancesCollapsed = $state(false);
+	let confirmingAgreementDeleteId = $state<string | null>(null);
+
+	async function removeAgreement(agreement: Agreement) {
+		if (confirmingAgreementDeleteId !== agreement.id) {
+			confirmingAgreementDeleteId = agreement.id;
+			return;
+		}
+		await story.removeAgreement(agreement.id);
+		confirmingAgreementDeleteId = null;
+	}
 
 	// ── Alliances: flattened, deduped inter-faction relations ──
 	interface AllianceRow {
@@ -790,11 +800,19 @@
 											<span class="rounded bg-violet-500/10 px-1 py-0.5 text-violet-400 capitalize">{a.category}</span>
 											<span class="text-[var(--text-primary)] truncate">{a.parties.join(' ↔ ')}</span>
 											{#if a.secrecy !== 'public'}
-												<span class="ml-auto rounded bg-rose-500/10 px-1 py-0 text-rose-400 italic">{a.secrecy}</span>
+												<span class="rounded bg-rose-500/10 px-1 py-0 text-rose-400 italic">{a.secrecy}</span>
 											{/if}
 											{#if a.createdChapterNumber != null}
 												<span class="text-[9px] text-[var(--text-muted)]">ch.{a.createdChapterNumber}</span>
 											{/if}
+											<button
+												class="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-rose-500/10 hover:text-rose-300 {confirmingAgreementDeleteId === a.id ? 'bg-rose-500/10 text-rose-300' : ''}"
+												onclick={() => removeAgreement(a)}
+												title={confirmingAgreementDeleteId === a.id ? 'Click again to remove agreement' : 'Remove agreement'}
+												aria-label={confirmingAgreementDeleteId === a.id ? 'Confirm remove agreement' : 'Remove agreement'}
+											>
+												<Trash2 class="h-3 w-3" />
+											</button>
 										</div>
 										<p class="mt-0.5 text-[10px] leading-relaxed text-[var(--text-muted)] line-clamp-2">{a.terms}</p>
 										{#if a.consequences && a.consequences.length > 0}
@@ -818,10 +836,18 @@
 										<div class="flex items-baseline gap-1.5 text-[10px]">
 											<span class="rounded bg-[var(--bg-primary)] px-1 py-0.5 text-[var(--text-muted)] capitalize">{a.category}</span>
 											<span class="text-[var(--text-muted)] truncate line-through">{a.parties.join(' ↔ ')}</span>
-											<span class="ml-auto italic capitalize {statusColor}">{a.status}</span>
+											<span class="italic capitalize {statusColor}">{a.status}</span>
 											{#if a.resolvedChapterNumber != null}
 												<span class="text-[9px] text-[var(--text-muted)]">ch.{a.resolvedChapterNumber}</span>
 											{/if}
+											<button
+												class="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-rose-500/10 hover:text-rose-300 {confirmingAgreementDeleteId === a.id ? 'bg-rose-500/10 text-rose-300' : ''}"
+												onclick={() => removeAgreement(a)}
+												title={confirmingAgreementDeleteId === a.id ? 'Click again to remove agreement' : 'Remove agreement'}
+												aria-label={confirmingAgreementDeleteId === a.id ? 'Confirm remove agreement' : 'Remove agreement'}
+											>
+												<Trash2 class="h-3 w-3" />
+											</button>
 										</div>
 										<p class="mt-0.5 text-[9px] leading-relaxed text-[var(--text-muted)]/70 line-clamp-1">{a.terms}</p>
 									</div>

@@ -1,9 +1,10 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '$lib/server/db/client';
 import {
 	agreements,
 	entities,
+	entityAliases,
 	factions,
 	factionGoals,
 	factionMemberships,
@@ -34,6 +35,50 @@ function normalizeName(value: string): string {
 	return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+const TYPE_PREFIX_RE = /^(?:lore|item|character|house|group|organization|organisation|faction|location|concept|event|general lore|general history)\s*:\s+/i;
+const LEADING_TITLE_RE = /^(?:(?:the|a|an|lord|lady|ser|sir|king|queen|prince|princess|duke|duchess|baron|baroness|count|countess|captain|commander|general|maester|archmaester|master|mistress|brother|sister|father|mother|high priest|high priestess|priest|priestess|saint|house|clan|guild|order)\s+)+/i;
+
+function lookupKey(value: string): string {
+	return value
+		.normalize('NFKD')
+		.replace(TYPE_PREFIX_RE, '')
+		.replace(/[\u2019']/g, '')
+		.replace(/[^a-zA-Z0-9]+/g, ' ')
+		.trim()
+		.toLowerCase()
+		.replace(LEADING_TITLE_RE, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asStringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+		: [];
+}
+
+function mergeStrings(...groups: string[][]): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const value of groups.flat()) {
+		const clean = value.trim();
+		const key = normalizeName(clean);
+		if (!clean || seen.has(key)) continue;
+		seen.add(key);
+		out.push(clean);
+	}
+	return out;
+}
+
+function aliasId(entityId: string, alias: string): string {
+	const key = normalizeName(alias).replace(/\s+/g, '_').slice(0, 80) || 'name';
+	return `alias_${entityId}_${key}`;
+}
+
 function sourceIds(...values: Array<string | null | undefined>): string[] {
 	return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
@@ -50,15 +95,151 @@ export function parseTurnUpdate(input: unknown): { update: WorldStateUpdate; war
 }
 
 async function findEntityByName(storyId: string, name: string, type?: string): Promise<typeof entities.$inferSelect | null> {
-	const rows = await getDb()
+	const db = getDb();
+	const rows = await db
 		.select()
 		.from(entities)
-		.where(and(eq(entities.storyId, storyId), eq(entities.name, name)))
-		.limit(20);
+		.where(eq(entities.storyId, storyId))
+		.limit(500);
 	const normalized = normalizeName(name);
-	return rows.find((row) => normalizeName(row.name) === normalized && (!type || row.type === type))
-		?? rows.find((row) => normalizeName(row.name) === normalized)
+	const key = lookupKey(name);
+	const candidates = type ? rows.filter((row) => row.type === type) : rows;
+	const exact = candidates.find((row) => row.name === name)
+		?? candidates.find((row) => normalizeName(row.name) === normalized)
+		?? candidates.find((row) => lookupKey(row.name) === key)
+		?? candidates.find((row) => {
+			const state = asRecord(row.state);
+			const aliases = [
+				...asStringArray(state.aliases),
+				...asStringArray(state.alternateNames),
+			];
+			return aliases.some((alias) => normalizeName(alias) === normalized || lookupKey(alias) === key);
+		});
+	if (exact) return exact;
+
+	const aliasRows = await db
+		.select({ entityId: entityAliases.entityId })
+		.from(entityAliases)
+		.where(and(eq(entityAliases.storyId, storyId), eq(entityAliases.normalizedAlias, normalized)))
+		.limit(20);
+	const aliasEntityIds = new Set(aliasRows.map((row) => row.entityId));
+	return candidates.find((row) => aliasEntityIds.has(row.id))
+		?? rows.find((row) => aliasEntityIds.has(row.id))
 		?? null;
+}
+
+async function persistEntityAliases(
+	storyId: string,
+	entityId: string,
+	aliases: string[],
+	sourceEntryIds: string[],
+	serverVersion: number,
+	createdAt: string,
+): Promise<void> {
+	const normalizedAliases = mergeStrings(aliases)
+		.map((alias) => ({ alias, normalizedAlias: normalizeName(alias) }))
+		.filter((alias) => alias.normalizedAlias);
+	for (const alias of normalizedAliases) {
+		await getDb().insert(entityAliases).values({
+			id: aliasId(entityId, alias.alias),
+			storyId,
+			entityId,
+			alias: alias.alias,
+			normalizedAlias: alias.normalizedAlias,
+			sourceEntryIds,
+			serverVersion,
+			createdAt,
+			updatedAt: createdAt,
+		}).onConflictDoUpdate({
+			target: entityAliases.id,
+			set: {
+				alias: alias.alias,
+				normalizedAlias: alias.normalizedAlias,
+				sourceEntryIds,
+				serverVersion,
+				updatedAt: createdAt,
+			},
+		});
+	}
+}
+
+async function syncCharacterFactionTags(
+	storyId: string,
+	entityId: string,
+	tags: string[],
+	sourceEntryIds: string[],
+	sourcePatchIds: string[],
+	serverVersion: number,
+	createdAt: string,
+): Promise<string[]> {
+	const cleanTags = mergeStrings(tags);
+	if (cleanTags.length === 0) return [];
+	const db = getDb();
+	const factionRows = await db.select().from(factions).where(eq(factions.storyId, storyId)).limit(300);
+	const tagAliases = cleanTags.map(normalizeName).filter(Boolean);
+	const aliasRows = tagAliases.length > 0
+		? await db
+			.select({ entityId: entityAliases.entityId, normalizedAlias: entityAliases.normalizedAlias })
+			.from(entityAliases)
+			.where(and(eq(entityAliases.storyId, storyId), inArray(entityAliases.normalizedAlias, tagAliases)))
+			.limit(100)
+		: [];
+	const aliasEntityIdsByName = new Map(aliasRows.map((row) => [row.normalizedAlias, row.entityId]));
+	const unresolved: string[] = [];
+
+	for (const tag of cleanTags) {
+		const normalized = normalizeName(tag);
+		const key = lookupKey(tag);
+		const aliasEntityId = aliasEntityIdsByName.get(normalized);
+		const faction = factionRows.find((row) =>
+			row.id === tag ||
+			row.entityId === tag ||
+			row.entityId === aliasEntityId ||
+			normalizeName(row.name) === normalized ||
+			lookupKey(row.name) === key
+		);
+		if (!faction) {
+			unresolved.push(tag);
+			continue;
+		}
+		await db.insert(factionMemberships).values({
+			id: `${faction.id}_member_${entityId}`,
+			storyId,
+			factionId: faction.id,
+			entityId,
+			role: 'member',
+			rank: null,
+			status: 'active',
+			visibility: 'player_known',
+			metadata: { factionTag: tag },
+			sourceEntryIds,
+			sourceEventIds: [],
+			sourcePatchIds,
+			serverVersion,
+			createdAt,
+			updatedAt: createdAt,
+		}).onConflictDoUpdate({
+			target: factionMemberships.id,
+			set: {
+				status: 'active',
+				entityId,
+				metadata: { factionTag: tag },
+				sourceEntryIds,
+				sourcePatchIds,
+				serverVersion,
+				updatedAt: createdAt,
+			},
+		});
+		const memberEntityIds = mergeStrings(asStringArray(faction.memberEntityIds), [entityId]);
+		await db.update(factions).set({
+			memberEntityIds,
+			sourcePatchIds,
+			serverVersion,
+			updatedAt: createdAt,
+		}).where(eq(factions.id, faction.id));
+	}
+
+	return unresolved;
 }
 
 async function upsertEntity(
@@ -72,10 +253,18 @@ async function upsertEntity(
 	sourcePatchIds: string[],
 	serverVersion: number,
 	createdAt: string,
+	aliases: string[] = [],
 ): Promise<string> {
 	const existing = await findEntityByName(storyId, name, type);
 	const entityId = existing?.id ?? id('entity');
-	const nextState = { ...(existing?.state as Record<string, unknown> | null ?? {}), ...state };
+	const existingState = asRecord(existing?.state);
+	const nextState = { ...existingState, ...state };
+	const mergedAliases = mergeStrings(asStringArray(existingState.aliases), aliases, asStringArray(state.aliases), [name]);
+	if (mergedAliases.length > 0) nextState.aliases = mergedAliases;
+	const incomingFactionTags = mergeStrings(asStringArray(state.factionTags), asStringArray(state.faction_tags), asStringArray(state.involvedFactions));
+	if (incomingFactionTags.length > 0) {
+		nextState.factionTags = mergeStrings(asStringArray(existingState.factionTags), incomingFactionTags);
+	}
 	await getDb().insert(entities).values({
 		id: entityId,
 		storyId,
@@ -105,12 +294,21 @@ async function upsertEntity(
 			updatedAt: createdAt,
 		},
 	});
+	await persistEntityAliases(
+		storyId,
+		entityId,
+		mergedAliases,
+		sourceIds(...(existing?.sourceEntryIds ?? []), ...sourceEntryIds),
+		serverVersion,
+		createdAt,
+	);
 	return entityId;
 }
 
 function makeOperations(update: WorldStateUpdate): Array<Record<string, unknown>> {
 	const operations: Array<Record<string, unknown>> = [];
-	if (update.player_reputation) operations.push({ op: 'replace', path: '/stories/playerReputation', value: update.player_reputation });
+	if (update.player_reputation !== undefined) operations.push({ op: 'replace', path: '/stories/playerReputation', value: update.player_reputation });
+	if (update.player_ledger !== undefined) operations.push({ op: 'replace', path: '/stories/playerLedger', value: update.player_ledger });
 	for (const character of update.characters) operations.push({ op: 'upsert', path: '/entities/character', value: character });
 	for (const location of update.locations) operations.push({ op: 'upsert', path: '/entities/location', value: location });
 	for (const item of update.items) operations.push({ op: 'upsert', path: '/entities/item', value: item });
@@ -165,11 +363,14 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 		updatedAt: createdAt,
 	});
 
-	if (input.update.player_reputation) {
+	if (input.update.player_reputation !== undefined || input.update.player_ledger !== undefined) {
 		const [story] = await db.select().from(stories).where(eq(stories.id, input.storyId)).limit(1);
 		const metadata = story?.metadata && typeof story.metadata === 'object' ? story.metadata as Record<string, unknown> : {};
+		const metadataPatch: Record<string, unknown> = {};
+		if (input.update.player_reputation !== undefined) metadataPatch.playerReputation = input.update.player_reputation;
+		if (input.update.player_ledger !== undefined) metadataPatch.playerLedger = input.update.player_ledger;
 		await db.update(stories).set({
-			metadata: { ...metadata, playerReputation: input.update.player_reputation },
+			metadata: { ...metadata, ...metadataPatch },
 			serverVersion: input.serverVersion,
 			updatedAt: createdAt,
 		}).where(eq(stories.id, input.storyId));
@@ -193,13 +394,27 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 	eventIds.push(turnEventId);
 
 	for (const character of input.update.characters) {
-		await upsertEntity(input.storyId, 'character', character.name, character.description, {
+		const factionTags = mergeStrings(character.faction_tags ?? []);
+		const entityId = await upsertEntity(input.storyId, 'character', character.name, character.description, {
 			status: character.status,
 			relationship: character.relationship,
 			traits: character.traits,
 			present: character.present,
 			pressures: character.pressures,
-		}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt);
+			factionTags,
+		}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt, character.aliases ?? []);
+		const unresolved = await syncCharacterFactionTags(
+			input.storyId,
+			entityId,
+			factionTags,
+			[input.assistantEntryId],
+			[patchId],
+			input.serverVersion,
+			createdAt,
+		);
+		for (const tag of unresolved) {
+			warnings.push(`Character ${character.name} kept unresolved faction tag "${tag}".`);
+		}
 	}
 
 	for (const location of input.update.locations) {
@@ -219,12 +434,44 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 	}
 
 	for (const entry of input.update.lorebook_entries) {
-		const entityId = await upsertEntity(input.storyId, entry.type, entry.name, entry.description, {
+		const entryState = {
 			hiddenInfo: entry.hidden_info,
 			aliases: entry.aliases,
 			keywords: entry.keywords,
 			...entry.state_overrides,
-		}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt);
+		};
+		const entityId = await upsertEntity(
+			input.storyId,
+			entry.type,
+			entry.name,
+			entry.description,
+			entryState,
+			[input.assistantEntryId],
+			[],
+			[patchId],
+			input.serverVersion,
+			createdAt,
+			entry.aliases,
+		);
+		if (entry.type === 'character') {
+			const factionTags = mergeStrings(
+				asStringArray(entry.state_overrides.factionTags),
+				asStringArray(entry.state_overrides.faction_tags),
+				asStringArray(entry.state_overrides.involvedFactions),
+			);
+			const unresolved = await syncCharacterFactionTags(
+				input.storyId,
+				entityId,
+				factionTags,
+				[input.assistantEntryId],
+				[patchId],
+				input.serverVersion,
+				createdAt,
+			);
+			for (const tag of unresolved) {
+				warnings.push(`Lorebook character ${entry.name} kept unresolved faction tag "${tag}".`);
+			}
+		}
 		if (entry.type === 'faction') {
 			const factionId = `faction_${entityId}`;
 			await db.insert(factions).values({
