@@ -17,6 +17,7 @@ import {
 	updateStory, getChapters, getArcs,
 	bulkPutFactionActions, bulkPutRumors, updateRumor,
 	getStoryThreads, createStoryThread, updateStoryThread, getAgreements, getWorldEvents,
+	getLatestStrategicWorldFrame,
 } from '$lib/services/database';
 import {
 	parseTimeProgression, advanceTime, clamp,
@@ -104,6 +105,7 @@ export async function executeToolCall(
 					story.tense,
 					recentFactionActions,
 					[],
+					snapshot.strategicWorldFrame,
 				);
 				story.lastWorldSimResult = {
 					...(story.lastWorldSimResult ?? {
@@ -282,6 +284,41 @@ async function mergeCharacterLoreSignals(
 	}
 }
 
+async function mergeCharacterPressures(
+	target: Entry | undefined,
+	char: IncomingCharacterUpdate,
+	protagonistName: string | undefined,
+): Promise<void> {
+	if (!target || char.name.toLowerCase() === protagonistName) return;
+	if (!char.pressures || char.pressures.length === 0) return;
+
+	const prev = target.state as CharacterEntryState;
+	const merged = [...new Set([
+		...(prev.pressures ?? []),
+		...char.pressures.filter(p => p && p.trim()),
+	])].slice(-8);
+	if (merged.length === (prev.pressures ?? []).length) return;
+
+	const newState: CharacterEntryState = { ...prev, type: 'character', pressures: merged };
+	await updateLorebookEntry(target.id, { state: newState as any, updatedAt: Date.now() });
+	story.lorebookEntries = story.lorebookEntries.map(e =>
+		e.id === target.id ? { ...e, state: newState as any } : e
+	);
+}
+
+async function syncDeferredCharacterLoreSignals(
+	characters: WorldStateUpdate['characters'],
+	protagonistName: string | undefined,
+): Promise<void> {
+	for (const char of characters) {
+		if (!char.name) continue;
+		const target = findLoreCharacterForUpdate(char);
+		if (!target) continue;
+		await mergeCharacterLoreSignals(target, char, protagonistName);
+		await mergeCharacterPressures(target, char, protagonistName);
+	}
+}
+
 async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 	if (!story.currentStory) return;
 
@@ -317,10 +354,11 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 		}
 
 		await mergeCharacterLoreSignals(loreTarget, char, protagonistName);
+		await mergeCharacterPressures(loreTarget, char, protagonistName);
 		// Merge pressures onto an existing lorebook entry (canonical or alias match).
 		// Pressures accumulate — they're conditions of the NPC's life. The narrator
 		// is responsible for marking them resolved by emitting a replacement set.
-		if (char.pressures && char.pressures.length > 0 && char.name.toLowerCase() !== protagonistName) {
+		if (!loreTarget && char.pressures && char.pressures.length > 0 && char.name.toLowerCase() !== protagonistName) {
 			const needle = char.name.toLowerCase();
 			const target = story.lorebookEntries.find(e => {
 				if (e.type !== 'character') return false;
@@ -406,6 +444,7 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 	// ── Explicit lorebook entry creation ──
 	if (args.lorebook_entries.length > 0) {
 		await handleLorebookCreations(args.lorebook_entries);
+		await syncDeferredCharacterLoreSignals(args.characters, protagonistName);
 	}
 
 	// ── Time progression ──
@@ -489,11 +528,17 @@ async function handleLorebookCreations(
 
 	for (const incoming of entries) {
 		if (!incoming.name) continue;
-		const existing = findExistingLoreEntry(incoming);
+		const existing = findExistingLoreEntry(incoming, entriesWithPendingLoreChanges(newEntries, updatedEntries));
 		if (existing) {
-			const updated = mergeLorebookEntry(existing, incoming);
+			const updated = mergeLorebookEntry(existing, incoming, entriesWithPendingLoreChanges(newEntries, updatedEntries));
 			await updateLorebookEntry(existing.id, updated);
-			updatedEntries.set(existing.id, { ...existing, ...updated });
+			const mergedEntry = { ...existing, ...updated };
+			const newIndex = newEntries.findIndex(e => e.id === existing.id);
+			if (newIndex >= 0) {
+				newEntries[newIndex] = mergedEntry;
+			} else {
+				updatedEntries.set(existing.id, mergedEntry);
+			}
 			console.log(`[Executor] Lorebook entry "${incoming.name}" already exists — skipping creation`);
 			continue;
 		}
@@ -510,7 +555,7 @@ async function handleLorebookCreations(
 				keywords: incoming.keywords.length > 0 ? incoming.keywords : [loreNameKey(incoming.name)],
 				injectionMode: incoming.injection_mode,
 				priority: incoming.priority,
-				state: buildIncomingLoreState(incoming),
+				state: buildIncomingLoreState(incoming, entriesWithPendingLoreChanges(newEntries, updatedEntries)),
 			},
 		);
 
@@ -526,22 +571,38 @@ async function handleLorebookCreations(
 		story.lorebookEntries = [...story.lorebookEntries, ...newEntries];
 		console.log(`[Executor] Created ${newEntries.length} lorebook entries: ${newEntries.map(e => e.name).join(', ')}`);
 	}
+	await reconcileFactionKnownMembers(entries);
 }
 
 // ── Location connections ──
 
-function findExistingLoreEntry(incoming: WorldStateLorebookEntry): Entry | undefined {
-	return findMatchingLoreEntry(story.lorebookEntries, {
+function entriesWithPendingLoreChanges(newEntries: Entry[], updatedEntries: Map<string, Entry>): Entry[] {
+	const byId = new Map(story.lorebookEntries.map(e => [e.id, updatedEntries.get(e.id) ?? e]));
+	for (const entry of newEntries) {
+		byId.set(entry.id, updatedEntries.get(entry.id) ?? entry);
+	}
+	return [...byId.values()];
+}
+
+function findExistingLoreEntry(
+	incoming: WorldStateLorebookEntry,
+	candidates: Entry[] = story.lorebookEntries,
+): Entry | undefined {
+	return findMatchingLoreEntry(candidates, {
 		name: incoming.name,
 		type: incoming.type,
 		aliases: incoming.aliases,
 	});
 }
 
-function mergeLorebookEntry(existing: Entry, incoming: WorldStateLorebookEntry): Partial<Entry> {
+function mergeLorebookEntry(
+	existing: Entry,
+	incoming: WorldStateLorebookEntry,
+	candidates: Entry[] = story.lorebookEntries,
+): Partial<Entry> {
 	const mergedAliases = mergeStrings(existing.aliases ?? [], incoming.aliases ?? []);
 	const mergedKeywords = mergeStrings(existing.injection?.keywords ?? [], incoming.keywords ?? []);
-	const incomingState = buildIncomingLoreState(incoming) ?? {};
+	const incomingState = buildIncomingLoreState(incoming, candidates) ?? {};
 
 	return {
 		description: mergeLoreText(existing.description ?? '', incoming.description, 'Recent development'),
@@ -557,7 +618,10 @@ function mergeLorebookEntry(existing: Entry, incoming: WorldStateLorebookEntry):
 	};
 }
 
-function buildIncomingLoreState(incoming: WorldStateLorebookEntry): Record<string, any> | undefined {
+function buildIncomingLoreState(
+	incoming: WorldStateLorebookEntry,
+	candidates: Entry[] = story.lorebookEntries,
+): Record<string, any> | undefined {
 	const state: Record<string, any> = { ...(incoming.state_overrides ?? {}) };
 	if (incoming.type === 'faction') {
 		if (incoming.faction_goals?.length) state.goals = normalizeFactionGoals(incoming.faction_goals);
@@ -566,11 +630,39 @@ function buildIncomingLoreState(incoming: WorldStateLorebookEntry): Record<strin
 		if (incoming.territory?.length) state.territory = incoming.territory.map(t => t.trim()).filter(Boolean);
 		if (incoming.known_members?.length) {
 			state.knownMembers = incoming.known_members
-				.map(memberNameToEntryId)
+				.map(name => memberNameToEntryId(name, candidates))
 				.filter((id): id is string => !!id);
 		}
 	}
 	return Object.keys(state).length > 0 ? state : undefined;
+}
+
+async function reconcileFactionKnownMembers(entries: WorldStateLorebookEntry[]): Promise<void> {
+	const updates = new Map<string, Entry>();
+	for (const incoming of entries) {
+		if (incoming.type !== 'faction' || !incoming.known_members?.length) continue;
+		const baseFaction = findExistingLoreEntry(incoming);
+		if (!baseFaction) continue;
+
+		const factionEntry = updates.get(baseFaction.id) ?? baseFaction;
+		const memberIds = incoming.known_members
+			.map(name => memberNameToEntryId(name))
+			.filter((id): id is string => !!id);
+		if (memberIds.length === 0) continue;
+
+		const prev = factionEntry.state as FactionEntryState;
+		const knownMembers = mergeStrings(prev.knownMembers ?? [], memberIds);
+		if (knownMembers.length === (prev.knownMembers ?? []).length) continue;
+
+		const nextState: FactionEntryState = { ...prev, type: 'faction', knownMembers };
+		const updatedEntry = { ...factionEntry, state: nextState, updatedAt: Date.now() };
+		updates.set(factionEntry.id, updatedEntry);
+		await updateLorebookEntry(factionEntry.id, { state: nextState as any, updatedAt: updatedEntry.updatedAt });
+	}
+
+	if (updates.size > 0) {
+		story.lorebookEntries = story.lorebookEntries.map(e => updates.get(e.id) ?? e);
+	}
 }
 
 function mergeEntryState(existing: Entry, incomingState: Record<string, any>): any {
@@ -649,8 +741,8 @@ function mergeFactionResources(existing: FactionResources | undefined, incoming:
 	};
 }
 
-function memberNameToEntryId(name: string): string | null {
-	const entry = findMatchingLoreEntry(story.lorebookEntries, {
+function memberNameToEntryId(name: string, candidates: Entry[] = story.lorebookEntries): string | null {
+	const entry = findMatchingLoreEntry(candidates, {
 		name,
 		type: 'character',
 		aliases: [],
@@ -765,9 +857,11 @@ async function syncConversationMemory(
 	const updatedEntries = new Map<string, Entry>();
 
 	for (const conv of conversations) {
-		const npcEntry = story.lorebookEntries.find(
-			e => e.type === 'character' && e.name.toLowerCase() === conv.npcName.toLowerCase()
-		);
+		const npcEntry = findMatchingLoreEntry(story.lorebookEntries, {
+			name: conv.npcName,
+			type: 'character',
+			aliases: [],
+		});
 		if (!npcEntry) continue;
 
 		await createConversationMemory({
@@ -1012,6 +1106,8 @@ export async function maybeRunWorldSim(opts: { force?: boolean } = {}): Promise<
 		const schemeText = story.schemes.length > 0
 			? story.schemes.map(s => `- ${s.ownerName} (${s.status}): ${s.goal.slice(0, 120)}`).join('\n')
 			: '';
+		const strategicWorldFrame = story.latestStrategicWorldFrame
+			?? await getLatestStrategicWorldFrame(story.currentStory.id);
 
 		const result = await ai.worldSim.simulate(
 			chapters, arcs, story.entries, factionEntries, characterEntries,
@@ -1019,6 +1115,7 @@ export async function maybeRunWorldSim(opts: { force?: boolean } = {}): Promise<
 			locationName, schemeText, tracker,
 			story.storyMode, story.pov, story.tense,
 			recentFactionActions, relationChangeLog,
+			strategicWorldFrame,
 		);
 		story.lastWorldSimResult = result;
 
@@ -1190,9 +1287,11 @@ async function evaluateConsequences(
 
 	for (const c of characters) {
 		if (c.status !== 'deceased') continue;
-		const charEntry = story.lorebookEntries.find(
-			e => e.type === 'character' && e.name.toLowerCase() === c.name.toLowerCase()
-		);
+		const charEntry = findMatchingLoreEntry(story.lorebookEntries, {
+			name: c.name,
+			type: 'character',
+			aliases: c.aliases ?? [],
+		});
 		if (!charEntry) continue;
 
 		const rels = await getRelationshipsForEntry(story.currentStory.id, charEntry.id);

@@ -14,6 +14,7 @@ import {
 	storyEntries,
 	storyEvents,
 	storyThreads,
+	strategicWorldFrames,
 } from '$lib/server/db/schema';
 
 export interface TurnContext {
@@ -30,6 +31,7 @@ export interface TurnContext {
 	beliefs: Array<typeof npcBeliefs.$inferSelect>;
 	chapters: Array<typeof chapterRowsTable.$inferSelect>;
 	arcs: Array<typeof arcRowsTable.$inferSelect>;
+	strategicWorldFrame: typeof strategicWorldFrames.$inferSelect | null;
 }
 
 export async function loadTurnContext(storyId: string, presentNpcIds: string[] = []): Promise<TurnContext> {
@@ -50,6 +52,7 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		beliefRows,
 		chapterRows,
 		arcRows,
+		strategicFrameRows,
 	] = await Promise.all([
 		db.select().from(storyEntries).where(eq(storyEntries.storyId, storyId)).orderBy(desc(storyEntries.position)).limit(40),
 		db.select().from(entities).where(eq(entities.storyId, storyId)).limit(160),
@@ -65,6 +68,7 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 			: db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).limit(40),
 		db.select().from(chapterRowsTable).where(eq(chapterRowsTable.storyId, storyId)).orderBy(desc(chapterRowsTable.number)).limit(40),
 		db.select().from(arcRowsTable).where(eq(arcRowsTable.storyId, storyId)).orderBy(desc(arcRowsTable.number)).limit(16),
+		db.select().from(strategicWorldFrames).where(eq(strategicWorldFrames.storyId, storyId)).orderBy(desc(strategicWorldFrames.createdAt)).limit(1),
 	]);
 
 	const presentSet = new Set(presentNpcIds);
@@ -84,5 +88,6 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 			: beliefRows,
 		chapters: [...chapterRows].reverse(),
 		arcs: [...arcRows].reverse(),
+		strategicWorldFrame: strategicFrameRows[0] ?? null,
 	};
 }

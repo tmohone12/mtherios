@@ -348,6 +348,34 @@ export const arcs = pgTable('arcs', {
 	storyNumberIdx: index('arcs_story_number_idx').on(table.storyId, table.number),
 }));
 
+export const strategicWorldFrames = pgTable('strategic_world_frames', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	arcId: text('arc_id').references(() => arcs.id, { onDelete: 'set null' }),
+	arcNumber: integer('arc_number').notNull().default(0),
+	trigger: text('trigger').notNull().default('manual'),
+	publicSummary: text('public_summary').notNull().default(''),
+	hiddenStrategicSummary: text('hidden_strategic_summary').notNull().default(''),
+	narratorPromptCard: text('narrator_prompt_card').notNull().default(''),
+	fastWorldSimInstructions: text('fast_world_sim_instructions').notNull().default(''),
+	worldMood: jsonb('world_mood').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	continuityAssessment: jsonb('continuity_assessment').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	mainPlots: jsonb('main_plots').$type<Array<Record<string, unknown>>>().notNull().default(jsonArray),
+	subplots: jsonb('subplots').$type<Array<Record<string, unknown>>>().notNull().default(jsonArray),
+	factionGoalUpdates: jsonb('faction_goal_updates').$type<Array<Record<string, unknown>>>().notNull().default(jsonArray),
+	schemeDirectives: jsonb('scheme_directives').$type<Array<Record<string, unknown>>>().notNull().default(jsonArray),
+	strategicClocks: jsonb('strategic_clocks').$type<Array<Record<string, unknown>>>().notNull().default(jsonArray),
+	rumorSeeds: jsonb('rumor_seeds').$type<Array<Record<string, unknown>>>().notNull().default(jsonArray),
+	worldEventSuggestions: jsonb('world_event_suggestions').$type<Array<Record<string, unknown>>>().notNull().default(jsonArray),
+	canonPatchSuggestions: jsonb('canon_patch_suggestions').$type<Array<Record<string, unknown>>>().notNull().default(jsonArray),
+	payload: jsonb('payload_json').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (table) => ({
+	storyArcIdx: index('strategic_world_frames_story_arc_idx').on(table.storyId, table.arcNumber),
+	storyCreatedIdx: index('strategic_world_frames_story_created_idx').on(table.storyId, table.createdAt),
+}));
+
 export const syncOps = pgTable('sync_ops', {
 	id: text('id').primaryKey(),
 	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
@@ -398,6 +426,7 @@ export const schema = {
 	memoryNodes,
 	chapters,
 	arcs,
+	strategicWorldFrames,
 	syncOps,
 	backendJobs,
 };

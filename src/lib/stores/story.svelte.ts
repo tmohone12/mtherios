@@ -14,15 +14,43 @@ import {
 	createAgreement, updateAgreement, deleteAgreement, getAgreements,
 	getFactionActions, getRumors,
 	getSchemes, getStoryThreads,
+	getStrategicWorldFrames,
 	createWorldEvent,
 } from '$lib/services/database';
 import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
-import { normalizeRelation } from '$lib/services/ai/tools/helpers';
+import { findMatchingLoreEntry, loreNameKey, normalizeRelation } from '$lib/services/ai/tools/helpers';
 import { buildEconomyScaleBlock } from '$lib/services/ai/context/economyScale';
+import {
+	buildBackgroundMagicDoctrineBlock,
+	buildDragonBondCommandBlock,
+	buildDragonRealityDoctrineBlock,
+	buildHiddenDragonSecrecyBlock,
+	buildMagicalKnowledgeBoundariesBlock,
+	buildMagicMovesThroughSocietyBlock,
+	buildProphecyVisionDisciplineBlock,
+	buildSupernaturalAndSpecialRulesBlock,
+	buildValyrianArtifactsBlock,
+} from '$lib/services/ai/context/magicDoctrine';
 import { buildNarratorOverviewBlock } from '$lib/services/ai/context/narratorOverview';
+import {
+	buildNoAbstractPoliticalSummaryBlock,
+	buildObservableNpcRuleBlock,
+	buildPlayerActionBoundaryBlock,
+} from '$lib/services/ai/context/narrationGuardrails';
+import { buildNpcBeliefStateBlock, buildNpcKnowledgeBlock } from '$lib/services/ai/context/npcKnowledge';
+import {
+	buildAntiSanitaryTextureBlock,
+	buildDialogueNotLoreDeliveryBlock,
+	buildGrimFeudalVoiceBlock,
+	buildPerTurnSceneTestBlock,
+	buildPoliticalConsequenceEngineBlock,
+	buildRumorDamageBlock,
+} from '$lib/services/ai/context/politicalRealism';
 import { selectStoryMemory } from '$lib/services/ai/context/storyMemorySelector';
-import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, ConceptEntryState, EventEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Chapter, StoryBeat, Scheme, StoryThread, ProceduralRule } from '$lib/types';
+import { buildStrategicNarratorBlock } from '$lib/services/ai/context/strategicFramePromptCard';
+import { buildWarNarrationRulesBlock } from '$lib/services/ai/context/warDoctrine';
+import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, ConceptEntryState, EventEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Chapter, StoryBeat, Scheme, StoryThread, ProceduralRule, StrategicWorldFrame } from '$lib/types';
 import { injectSchemes } from '$lib/services/ai/scheme/SchemeService';
 import type { WorldSimulationResult, PlotMomentum } from '$lib/services/ai/sdk/schemas/worldsim';
 import type { SeasonEffect } from '$lib/services/ai/generation/WorldSimulationService';
@@ -74,6 +102,7 @@ export interface StateSnapshot {
 	backendMemoryDebug: string[];
 	selectedStoryMemoryBlock: string;
 	selectedStoryMemoryDebug: string[];
+	strategicWorldFrame: StrategicWorldFrame | null;
 	worldSim: (WorldSimulationResult & { seasonEffect?: SeasonEffect }) | null;
 	threads: StoryThread[];
 }
@@ -101,6 +130,7 @@ function emptySnapshot(): StateSnapshot {
 		backendMemoryDebug: [],
 		selectedStoryMemoryBlock: '',
 		selectedStoryMemoryDebug: [],
+		strategicWorldFrame: null,
 		worldSim: null,
 		threads: [],
 	};
@@ -253,6 +283,7 @@ class StoryStore {
 	factionActions = $state<FactionActionRecord[]>([]);
 	rumors = $state<RumorRecord[]>([]);
 	schemes = $state<Scheme[]>([]);
+	strategicWorldFrames = $state<StrategicWorldFrame[]>([]);
 	images = $state<EmbeddedImage[]>([]);
 	loading = $state(false);
 	hydratingWorld = $state(false);
@@ -285,6 +316,11 @@ class StoryStore {
 	get protagonist(): Character | undefined {
 		return this.characters.find(c => c.relationship === 'self');
 	}
+	get latestStrategicWorldFrame(): StrategicWorldFrame | null {
+		return this.strategicWorldFrames.length > 0
+			? this.strategicWorldFrames[this.strategicWorldFrames.length - 1]
+			: null;
+	}
 
 	async loadStory(storyId: string) {
 		const generation = ++this._loadGeneration;
@@ -310,6 +346,7 @@ class StoryStore {
 			this.factionActions = [];
 			this.rumors = [];
 			this.schemes = [];
+			this.strategicWorldFrames = [];
 			const branchId = s.currentBranchId ?? null;
 			const [entryCount, entries, characters, locations, items] = await Promise.all([
 				countStoryEntries(storyId, branchId),
@@ -374,15 +411,17 @@ class StoryStore {
 			this.worldEvents = worldEvents;
 			this.agreements = agreements;
 
-			const [factionActions, rumors, schemes] = await Promise.all([
+			const [factionActions, rumors, schemes, strategicWorldFrames] = await Promise.all([
 				getFactionActions(storyId),
 				getRumors(storyId),
 				getSchemes(storyId),
+				getStrategicWorldFrames(storyId),
 			]);
 			if (!this.isCurrentLoad(storyId, generation)) return;
 			this.factionActions = factionActions;
 			this.rumors = rumors;
 			this.schemes = schemes;
+			this.strategicWorldFrames = strategicWorldFrames;
 
 			globalThis.setTimeout(() => {
 				if (!this.isCurrentLoad(storyId, generation)) return;
@@ -979,6 +1018,8 @@ class StoryStore {
 		if (procedural) sections.push({ key: 'proceduralMemory', text: procedural });
 		const lw = this.#sectionLivingWorld(snap);
 		if (lw) sections.push({ key: 'livingWorld', text: lw });
+		const strategicPressure = this.#sectionStrategicWorldPressure(snap);
+		if (strategicPressure) sections.push({ key: 'strategicPressure', text: strategicPressure });
 		const schemes = this.#sectionSchemes();
 		if (schemes) sections.push({ key: 'schemes', text: schemes });
 		const pm = this.#sectionPlotMomentum();
@@ -1064,7 +1105,8 @@ class StoryStore {
 		const parts: string[] = ['## Instructions'];
 
 		if (mode === 'adventure') {
-			parts.push(`### Hard Rules\n\nThese six override everything. Re-read before generating:\n\n1. **NEVER write {{user}}'s dialogue, thoughts, decisions, or actions.** The player owns those.\n2. **EVERY TURN ADVANCES THE CLOCK.** The header H2 must show a new time, and the prose must state the time passed plainly ("five minutes later", "by morning", "a moment passes"). Frozen clock = dead world.\n3. **DEFAULT TO INCENTIVE-BASED FRICTION.** Powerful NPCs do not agree for free, but they can sincerely agree when the upside is high, trust is established, and the social risk is acceptable.\n4. **NO OMNISCIENT NPCs.** Each NPC knows only what they saw, heard, were told, found evidence for, or can plausibly infer after enough time.\n5. **NARRATE PROSE ONLY.** State changes are extracted from your text — make outcomes plain. Who moved, what was sworn, who took damage, what time passed, what changed.\n6. **STOP at the first moment {{user}}'s input is needed** — a question, a choice, or a held silence.`);
+			parts.push(`### Hard Rules\n\nThese six override everything. Re-read before generating:\n\n1. **NEVER write {{user}}'s dialogue, thoughts, decisions, or actions.** The player owns those.\n2. **EVERY TURN ADVANCES THE CLOCK.** The header H2 must show a new time, and the prose must state the time passed plainly ("five minutes later", "by morning", "a moment passes"). Frozen clock = dead world.\n3. **DEFAULT TO INCENTIVE-BASED FRICTION.** Powerful NPCs do not agree for free, but they can sincerely agree when the upside is high, trust is established, and the social risk is acceptable.\n4. **NO OMNISCIENT NPCs OR SHARED NPC MEMORY.** Each NPC has a separate belief-state. An NPC may only reference facts they personally witnessed, heard, were told by a plausible source, found evidence for, received by message, or inferred from visible consequences after enough time. Clever NPCs may suspect; they do not magically know. If the source of knowledge is not clear, show it in the scene or make the NPC ignorant, wrong, or only partly informed.\n5. **NARRATE PROSE ONLY.** State changes are extracted from your text — make outcomes plain. Who moved, what was sworn, who took damage, what time passed, what changed.\n6. **STOP at the first moment {{user}}'s input is needed** — a question, a choice, or a held silence.`);
+			parts.push(buildPlayerActionBoundaryBlock());
 
 			parts.push(buildNarratorOverviewBlock());
 
@@ -1072,11 +1114,19 @@ class StoryStore {
 
 			parts.push(`### Header Rules\n\nUPDATE H1 the moment {{user}} moves to a new room, building, wilderness feature, vehicle, or district. Be specific enough that the player knows where they can act.\nUPDATE H2 every turn. Even a single beat moves time. Use clear diegetic time: "early morning, Day 12", "midnight, three hours later", or the setting's own calendar if the story header defines one.\nUPDATE H3 with immediate atmosphere only: weather, light, noise, crowd pressure, danger, or other scene conditions.\nThe H1/H2/H3 format itself is shown in the Role section — follow it exactly.`);
 
-			parts.push(`### World\n\nUse the story's header, world description, lorebook, character state, faction dossiers, and recent memory as canon. If those sources conflict, prefer the most recent explicit in-story fact, then the user's header instructions, then older lore.\n\nDefault preset: A Song of Ice and Fire-style Known World political fantasy. Westeros supplies feudal houses, bannermen, wards, hostages, bastards, bloodlines, marriages, dowries, inheritance, guest right, oaths, ravens, maesters, septons, tourneys, trials, spies, sellswords, smallfolk, famine, debt, and reputation. Essos supplies free cities, merchant princes, magisters, triarchs, courtesans, sellsail fleets, banks, guilds, slave economies, red priests, black stone, old Valyrian ruins, and city-state rivalries. Braavos, Volantis, Pentos, Myr, Tyrosh, Lys, Norvos, Qohor, Lorath, Slaver's Bay, the Dothraki Sea, the Summer Isles, and other far places should shape customs and pressure when the lorebook or scene points there.\n\nDo not force Westeros as the center of every story beat. Do not hard-code a specific canon city, route, ruler, or timeline unless the story header or lorebook establishes it. Use the wider world's social rules, distances, cultures, religions, trade, debts, and rumors as pressure.\n\nWhen the player changes the world, keep the consequences alive. Factions spend resources, NPCs remember, rumors travel, promises bind, injuries linger, and time makes unattended problems worse.`);
+			parts.push(`### World\n\nUse the story's header, world description, lorebook, character state, faction dossiers, and recent memory as canon. If those sources conflict, prefer the most recent explicit in-story fact, then the user's header instructions, then older lore.\n\nFaction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.\n\nDefault preset: A Song of Ice and Fire-style Known World political fantasy. Westeros supplies feudal houses, bannermen, wards, hostages, bastards, bloodlines, marriages, dowries, inheritance, guest right, oaths, ravens, maesters, septons, tourneys, trials, spies, sellswords, smallfolk, famine, debt, and reputation. Essos supplies free cities, merchant princes, magisters, triarchs, courtesans, sellsail fleets, banks, guilds, slave economies, red priests, black stone, old Valyrian ruins, and city-state rivalries. Braavos, Volantis, Pentos, Myr, Tyrosh, Lys, Norvos, Qohor, Lorath, Slaver's Bay, the Dothraki Sea, the Summer Isles, and other far places should shape customs and pressure when the lorebook or scene points there.\n\nDo not force Westeros as the center of every story beat. Do not hard-code a specific canon city, route, ruler, or timeline unless the story header or lorebook establishes it. Use the wider world's social rules, distances, cultures, religions, trade, debts, and rumors as pressure.\n\nWhen the player changes the world, keep the consequences alive. Factions spend resources, NPCs remember, rumors travel, promises bind, injuries linger, and time makes unattended problems worse.`);
 
-			parts.push(`### Dragons And Public Reaction\n\nDragons are not treated like ordinary beasts. People react with awe, terror, religious dread, ambition, greed, disbelief, or political calculation depending on what they have seen, heard, and survived. Smallfolk may flee, pray, riot, hide children, spread wild rumors, or worship. Nobles and factions measure dragons as legitimacy, conquest, succession, hostage value, apocalyptic threat, or a weapon that changes every alliance.\n\nReactions are not uniform. Veterans, maesters, dragonkeepers, priests, rulers, soldiers, merchants, and peasants respond differently. Distance matters: a rumor of a dragon creates denial and gossip; a shadow overhead creates panic; burned fields create famine, hatred, refugees, and faction moves. If dragons appear, make the social, military, religious, and economic consequences visible.`);
+			parts.push(buildPoliticalConsequenceEngineBlock());
+			parts.push(buildNoAbstractPoliticalSummaryBlock());
+			parts.push(buildWarNarrationRulesBlock());
 
-			parts.push(`### NPC Knowledge Boundaries\n\nNPC knowledge is local, delayed, and fallible. NPCs cannot see through doors, walls, distance, crowds, darkness, disguises, or private rooms. They do not know what {{user}} did off-screen unless they witnessed it, overheard it, were told by someone who could know, found evidence, received a raven/message, or had time to infer it from visible consequences.\n\nWhen an NPC reacts to hidden or off-screen facts, the scene must imply the source: a witness, servant, spy, rumor, letter, blood trail, missing item, changed guard pattern, or similar evidence. If no source exists, the NPC must remain ignorant, suspicious without proof, wrong, late, or only partially informed.\n\nIntelligence varies. Some NPCs are observant, educated, paranoid, or well-informed; others are dull, drunk, panicked, distracted, superstitious, biased, illiterate, proud, or bad at reading people. Use mistakes, delays, bad assumptions, gossip distortion, and faction misinformation as normal play.`);
+			parts.push(buildDragonRealityDoctrineBlock());
+			parts.push(buildHiddenDragonSecrecyBlock());
+			parts.push(buildDragonBondCommandBlock());
+
+			parts.push(buildNpcKnowledgeBlock());
+			parts.push(buildObservableNpcRuleBlock());
+			parts.push(buildNpcBeliefStateBlock());
 
 			parts.push(`### Known World Social Rules\n\nPower is personal, public, and regional. Bloodline, sex, legitimacy, religion, wealth, age, gender expectations, citizenship, freedom, debt, guild status, foreign birth, and rumor decide what people can safely want or say. Noble courtesy, merchant contracts, temple doctrine, bank ledgers, hostage customs, slave law, and guest right can all be weapons.\n\nWesteros is not Essos. A northern lord, a Dornish prince, an ironborn captain, a Braavosi banker, a Volantene triarch, a Pentoshi magister, a Lysene courtesan, a Qohorik smith, a red priest, and a Dothraki khalasar do not use the same social logic. Let region, faith, class, trade, and local law change how people speak, bargain, threaten, marry, punish, and remember insults.\n\nSexual politics matter as leverage and scandal. Affairs, secret lovers, brothels, coerced marriages, paternity doubts, bastardy, incest rumors, fertility pressure, forbidden desire, and in-world accusations of sexual deviancy can create blackmail, inheritance crises, religious condemnation, revenge, and faction moves. Treat "deviancy" as an in-world social accusation, not the narrator's moral judgment.\n\nSexual content involving minors is never part of play.\n\nRules of status matter every turn. A peasant cannot insult a lord without risk. A hostage smiles while measuring exits. A knight may choose oath over love. A septon may turn rumor into doctrine. A maester may hide knowledge behind service. A magister may buy what a lord would demand by blood. A banker may be more dangerous than a king. A bastard, freedman, exile, hostage, slave, sellsword, priest, or foreigner is never socially neutral.`);
 
@@ -1084,9 +1134,17 @@ class StoryStore {
 
 			parts.push(`### Bayesian Social Logic\n\nBefore assigning betrayal, hidden motives, refusal, alliance, loyalty, or marriage, update the odds from evidence instead of defaulting to suspicion.\n\nStart with the NPC's baseline: personality, house culture, public reputation, current need, prior relationship, and known pressure. Then update with the scene evidence: {{user}}'s offer, leverage, kindness, threat, rank, resources, dragon power, debts, oaths, witnesses, and what the NPC can safely gain or lose.\n\nBetrayal or secret exploitation needs evidence: desperation, old grievance, low affinity, high upside, low detection risk, coercion, ideology, fear, or a stronger patron. Do not staple a hidden dagger onto every agreement.\n\nSincere agreement is common when expected value is positive: alliance improves survival, marriage raises status, trade increases wealth, loyalty protects kin, or public support costs less than rejection. If the deal is rational and the relationship is warm, let the "yes" land cleanly or with ordinary terms rather than automatic treachery.\n\nUse rough priors: strong ally/high trust = likely sincere; neutral but mutually beneficial = cautious bargain; hostile/low trust = demands proof; desperate or cornered = volatile. Show uncertainty through behavior, not narrator math.`);
 
-			parts.push(`### Supernatural And Special Rules\n\nUse only the supernatural, technological, social, or mechanical rules established by the story header and lorebook. If a power, prophecy, species, machine, ritual, or hidden system is not established, do not introduce it as a shortcut.\n\nEscalate slowly. Foreshadow through evidence, cost, witnesses, and consequences before revealing major truths. A reveal that changes the world should create a new problem, not solve the scene for free.`);
+			parts.push(buildSupernaturalAndSpecialRulesBlock());
+			parts.push(buildBackgroundMagicDoctrineBlock());
+			parts.push(buildValyrianArtifactsBlock());
+			parts.push(buildProphecyVisionDisciplineBlock());
+			parts.push(buildMagicMovesThroughSocietyBlock());
+			parts.push(buildMagicalKnowledgeBoundariesBlock());
 
-			parts.push(`### Tone & Speech Register\n\nUse the tone from the story settings and header. Keep prose grounded, concrete, and playable. The player should always understand what changed, who is present, what is risky, and what they can respond to.\n\nNPC voices must be distinct and shaped by rank, house, region, faith, education, stress, motive, and relationship to {{user}}. Dialogue should sound spoken, not polished into exposition. Highborn NPCs speak with courtesy, implication, insult, and debt. Smallfolk speak with practical fear, gossip, hunger, superstition, or hard-earned bluntness. Under pressure, people interrupt themselves, evade, bargain, lie, or fall silent.\n\nFactions should appear as living institutions with members, resources, goals, territory, enemies, allies, and internal pressures. Mention those facts naturally through action and consequence, not encyclopedia paragraphs.`);
+			parts.push(buildGrimFeudalVoiceBlock());
+			parts.push(buildAntiSanitaryTextureBlock());
+			parts.push(buildDialogueNotLoreDeliveryBlock());
+			parts.push(buildRumorDamageBlock());
 
 			parts.push(`### Text Adventure Style\n\nThis is not an interactive novel chapter. It is a playable text-adventure turn.\n\nWrite compact scene-forward narration: usually 1-3 paragraphs, shorter for routine actions, longer only when the action is dangerous or consequential. Lead with what the player can perceive and act on. Avoid summarizing the player's input back at them.\n\nEvery turn should answer: where are we, who is here, what changed, what pressure is rising, and what immediate opening exists for {{user}}. End at a decision point, a direct NPC prompt, a revealed obstacle, or a concrete sensory beat that invites action.\n\nDo not over-style the prose. Prefer precise nouns, active verbs, and clear consequences over literary flourish.`);
 
@@ -1095,6 +1153,8 @@ class StoryStore {
 			parts.push(`**Psychological Realism.** Emotional inertia — feelings do not flip instantly. An NPC who distrusted {{user}} last scene does not become a confidant without cause shown on the page. NPCs have subtext, contradictions, and stable quirks. Subjective bias: two NPCs witnessing the same PC action may interpret it differently. Misunderstandings are common because NPCs interpret {{user}} only through observable cues, never through authorial knowledge of intent.`);
 
 			parts.push(`### Anti-Slop\n\nAvoid these patterns:\n1. Summarizing or approving {{user}}'s input before reacting.\n2. Writing {{user}}'s thoughts, dialogue, decisions, intent, or hidden emotions.\n3. Ending with vague prompts like "What do you do?" when a concrete in-world pressure could invite action instead.\n4. Repeating the same sensory detail every turn without a new reason.\n5. Turning NPC dialogue into lore exposition.\n6. Creating new lorebook names for entities already known under aliases or titles.\n\nReplace clinical emotion labels with visible action. Not "she is afraid" - show what her hands, voice, posture, or choices do. Keep the camera on observable evidence.`);
+
+			parts.push(buildPerTurnSceneTestBlock());
 
 			parts.push(`### Craft\n\n**POV lock.** The player controls {{user}}. The narrator controls the world, NPCs, and consequences. Stay outside {{user}}'s thoughts and decisions. Sensory/somatic facts are allowed only when they are immediate and observable from the protagonist's body.\n\n**Scene separation.** A character in Scene B knows what happened in Scene A only if they were present, were told by a plausible source, found evidence, or inferred it from visible facts after enough time. Knowledge needs a source and travel time.\n\n**NPC state.** NPCs keep stable motives, fears, loyalties, grudges, and pressures. They do not flip from distrust to loyalty in one exchange unless the story shows a cost or cause.\n\n**Introduction protocol.** When a significant NPC, location, item, or faction appears for the first time, define it through action and one or two memorable specifics. Do not create a list or pause the scene for exposition.`);
 
@@ -1135,6 +1195,7 @@ class StoryStore {
 		if (useInlineTools) {
 			return [
 				'## Tools',
+				'Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.',
 				'You have direct access to world-state tools. **At the end of every turn**, after writing your narration, call `update_world_state` with everything that changed in the scene. The state recorded there IS the canonical world — anything you do not record is forgotten.',
 				'',
 				'### When to call which tool',
@@ -1160,6 +1221,7 @@ class StoryStore {
 		// Fallback: model writes prose only; a separate classifier extracts deltas.
 		return [
 			'## Tools & State Tracking',
+			'Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.',
 			'State updates are extracted from your prose by a separate step — you do **not** emit JSON or call tools. To make extraction accurate:',
 			'',
 			'- **Name characters and locations explicitly** when they appear, change, or leave. Avoid vague pronouns at state-change moments.',
@@ -1232,12 +1294,10 @@ class StoryStore {
 				// Find the matching lorebook entry (canonical or alias) — that's
 				// where the rich state lives. Falls back to the bare Character
 				// row when no entry exists yet (early-game).
-				const needle = c.name.toLowerCase();
-				const lore = this.lorebookEntries.find(e => {
-					if (e.type !== 'character' || (e as any).deleted) return false;
-					if (e.name?.toLowerCase() === needle) return true;
-					return (e.aliases ?? []).some(a => a?.toLowerCase() === needle);
-				});
+				const lore = findMatchingLoreEntry(
+					this.lorebookEntries.filter(e => e.type === 'character' && !(e as any).deleted),
+					{ name: c.name, type: 'character', aliases: [] },
+				);
 				const cs = lore?.state as CharacterEntryState | undefined;
 
 				// Header: name, relationship word + numeric level if known
@@ -1801,6 +1861,10 @@ class StoryStore {
 	}
 
 	// ── Section 8b: Active Schemes (antagonist + player plans) ──────────────
+	#sectionStrategicWorldPressure(snap: StateSnapshot): string {
+		return buildStrategicNarratorBlock(snap.strategicWorldFrame);
+	}
+
 	#sectionSchemes(): string {
 		return injectSchemes(this.schemes);
 	}
@@ -1814,7 +1878,9 @@ class StoryStore {
 		if (!nb) return '';
 
 		const lines: string[] = ['## Plot Momentum', ''];
-		lines.push('Use this as slow-burn pressure, not permission to force a twist. Most turns should deepen existing tension instead of changing the whole board.');
+		lines.push('Use this as slow-burn pressure, not permission to force a twist or move Aurion. Plot momentum is advisory, not a command queue.');
+		lines.push('If the beat depends on Aurion moving, summoning, writing, opening, entering, leaving, or otherwise acting, present only a reason, invitation, interruption, object, message, sound, document, delay, rumor, or NPC question.');
+		lines.push('Do not move Aurion to reach this beat. Most turns should deepen existing tension instead of changing the whole board.');
 		lines.push('');
 
 		const recommendedKey = nb.next_turn_strategy.recommended_path;
@@ -1901,10 +1967,10 @@ class StoryStore {
 		lines.push('');
 		lines.push('Before you write a single word:');
 		lines.push('');
-		lines.push("1. NEVER act for {{user}}. The player owns their voice, choices, and thoughts.");
+		lines.push("1. NEVER act for {{user}}. The player owns their voice, choices, thoughts, movement, memory, knowledge, and decisions. Do not move Aurion to satisfy plot momentum.");
 		lines.push('2. ADVANCE THE CLOCK in the header. Even a minute. Even a held breath.');
 		lines.push('3. DEFAULT TO FRICTION. NPCs have their own agendas. "Yes" is the rare answer.');
-		lines.push('4. CHECK NPC KNOWLEDGE. No one knows off-screen facts without a source, line of sight, message, evidence, inference, and time.');
+		lines.push('4. CHECK NPC KNOWLEDGE. No one knows off-screen facts without a source, line of sight, message, evidence, inference, and time. No NPC interiority; show belief through behavior, speech, silence, objects, or evidence.');
 		lines.push('5. WRITE PROSE ONLY — state is extracted from your text. Outcomes plain.');
 		lines.push("6. STOP when {{user}} must choose. End on a sensory beat, an unanswered question, or a held silence.");
 		lines.push('');
@@ -2025,15 +2091,15 @@ class StoryStore {
 				// Build the "already rendered" name set: present NPCs + the protagonist,
 				// since the protagonist is dumped in the Header/Roles + Characters sections
 				// and re-injecting them here is pure duplication.
-				const presentNames = new Set(presentCharacters.map(c => c.name.toLowerCase()));
-				const protagonistName = this.protagonist?.name?.toLowerCase();
+				const presentNames = new Set(presentCharacters.map(c => loreNameKey(c.name)));
+				const protagonistName = this.protagonist?.name ? loreNameKey(this.protagonist.name) : '';
 				if (protagonistName) presentNames.add(protagonistName);
 				retrievedEntries = result.entries
 					.filter(e => !factionIds.has(e.id))
 					.filter(e => {
 						if (e.type !== 'character') return true;
-						if (presentNames.has(e.name.toLowerCase())) return false;
-						return !(e.aliases ?? []).some(a => presentNames.has(a.toLowerCase()));
+						if (presentNames.has(loreNameKey(e.name))) return false;
+						return !(e.aliases ?? []).some(a => presentNames.has(loreNameKey(a)));
 					})
 					.slice(0, loreLimit);
 			}
@@ -2110,6 +2176,7 @@ class StoryStore {
 			backendMemoryDebug,
 			selectedStoryMemoryBlock: storyMemorySelection.block,
 			selectedStoryMemoryDebug: storyMemorySelection.debug,
+			strategicWorldFrame: this.latestStrategicWorldFrame,
 			worldSim: ws,
 			threads,
 		};
@@ -2628,6 +2695,7 @@ class StoryStore {
 		this.factionActions = [];
 		this.rumors = [];
 		this.schemes = [];
+		this.strategicWorldFrames = [];
 		this.images = [];
 		this.lastWorldSimResult = null;
 		this.lastTierUsage = null;

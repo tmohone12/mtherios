@@ -17,6 +17,7 @@ export type PromptSectionKey =
 	| 'chapterIntro'
 	| 'entryHistory'
 	| 'livingWorld'
+	| 'strategicPressure'
 	| 'schemes'
 	| 'plotMomentum'
 	| 'finalInstructions';
@@ -61,6 +62,7 @@ export const DEFAULT_PROMPT_SECTION_BUDGETS: Record<PromptSectionKey, SectionBud
 	chapterIntro: { maxTokens: 300, minTokens: 120, priority: 4 },
 	entryHistory: { maxTokens: 160, minTokens: 80, priority: 5 },
 	livingWorld: { maxTokens: 1200, minTokens: 260, priority: 4 },
+	strategicPressure: { maxTokens: 1000, minTokens: 180, priority: 4 },
 	schemes: { maxTokens: 700, minTokens: 160, priority: 3 },
 	plotMomentum: { maxTokens: 900, minTokens: 220, priority: 4 },
 	finalInstructions: { maxTokens: 420, minTokens: 220, priority: 5 },

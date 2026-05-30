@@ -10,6 +10,7 @@ import { BaseAIService } from '../BaseAIService';
 import { loreManagementResultSchema, type LoreManagementResult } from '../sdk/schemas/lorebook';
 import { createLogger } from '../core/config';
 import type { Entry, Chapter, Arc, CharacterEntryState, FactionEntryState } from '$lib/types';
+import { buildWarMemoryContinuityBlock } from '../context/warDoctrine';
 
 const log = createLogger('LoreManagement');
 
@@ -82,6 +83,10 @@ export class LoreManagementService extends BaseAIService {
 		}).join('\n');
 
 		const system = `You are a lorebook curator for an interactive fiction story. You maintain the world's knowledge base by analyzing CHAPTER SUMMARIES and ARC SUMMARIES — condensed, verified accounts of what happened in the story.
+
+Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.
+
+${buildWarMemoryContinuityBlock()}
 
 Your job has two parts: DISCOVER new entries worth tracking, and CURATE existing ones.
 

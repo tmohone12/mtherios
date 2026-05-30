@@ -28,6 +28,7 @@ export const SERVICE_DEFINITIONS: Record<string, { label: string; description: s
 	entryRefinement: { label: 'Entry Refinement', description: 'Per-entry AI refinement from the lorebook entry modal', profile: 'lorebook', defaultTemp: 0.4, defaultMaxTokens: 4096 },
 	imageGeneration: { label: 'Image Generation', description: 'Scene image generation', profile: 'image', defaultTemp: 0.7, defaultMaxTokens: 1024 },
 	worldSimulation: { label: 'World Simulation', description: 'Living world DM — plot injection, faction movements, rumors, world tension', profile: 'worldState', defaultTemp: 0.6, defaultMaxTokens: 8192 },
+	strategicWorldBrain: { label: 'Strategic World Brain', description: 'Deep arc-level simulation for factions, schemes, plots, subplots, and world pressure', profile: 'deepSimulation', defaultTemp: 0.45, defaultMaxTokens: 9000 },
 	arcCondensation: { label: 'Arc Condensation', description: 'Condense chapters into arc summaries', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
 	proceduralMemory: { label: 'Procedural Memory', description: 'CASS-inspired narrative rule extraction and injection', profile: 'memoryContext', defaultTemp: 0.4, defaultMaxTokens: 4096 },
 	wikiLint: { label: 'Wiki Lint', description: 'Health-check the lorebook for contradictions, stale claims, orphan entries, and missing entries.', profile: 'lorebook', defaultTemp: 0.2, defaultMaxTokens: 16384 },
@@ -44,6 +45,7 @@ export interface ServiceProfile {
 }
 
 export const SERVICE_PROFILES: ServiceProfile[] = [
+	{ id: 'deepSimulation', label: 'Deep Simulation', description: 'Rare strategic planning for factions, schemes, plots, and arc pressure', icon: 'S', serviceIds: ['strategicWorldBrain'] },
 	{ id: 'narrative', label: 'Narrative', description: 'Main story generation engine', icon: '✍️', serviceIds: ['narrative'] },
 	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, items, living world simulation, and plot momentum', icon: '🌍', serviceIds: ['classifier', 'worldSimulation'] },
 	{ id: 'guidance', label: 'Player Guidance', description: 'Suggestions and branching action choices', icon: '🧭', serviceIds: ['suggestions', 'actionChoices'] },

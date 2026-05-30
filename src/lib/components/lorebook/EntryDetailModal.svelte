@@ -122,15 +122,23 @@
 		const factionState = state as Partial<FactionEntryState>;
 		factionMembers = toList(factionState.knownMembers).join(', ');
 		factionTerritory = toList(factionState.territory).join(', ');
-		factionGoalsText = (factionState.goals ?? [])
-			.map(g => `${g.description} | ${g.priority ?? 5} | ${g.progress ?? 0} | ${g.type ?? 'diplomatic'}${g.deadline ? ` | ${g.deadline}` : ''}`)
+		factionGoalsText = formatFactionGoalsText(factionState.goals ?? []);
+		factionResources = normalizeFactionResources(factionState.resources);
+	}
+
+	function formatFactionGoalsText(goals: Array<Partial<FactionGoal>>): string {
+		return goals
+			.map(g => `${g.description ?? ''} | ${g.priority ?? 5} | ${g.progress ?? 0} | ${g.type ?? 'diplomatic'}${g.deadline ? ` | ${g.deadline}` : ''}`)
 			.join('\n');
-		factionResources = {
-			military: factionState.resources?.military ?? 50,
-			wealth: factionState.resources?.wealth ?? 50,
-			influence: factionState.resources?.influence ?? 50,
-			information: factionState.resources?.information ?? 50,
-			morale: factionState.resources?.morale ?? 50,
+	}
+
+	function normalizeFactionResources(resources: Partial<FactionResources> | null | undefined): FactionResources {
+		return {
+			military: resources?.military ?? 50,
+			wealth: resources?.wealth ?? 50,
+			influence: resources?.influence ?? 50,
+			information: resources?.information ?? 50,
+			morale: resources?.morale ?? 50,
 		};
 	}
 
@@ -152,6 +160,18 @@
 					deadline: deadline || undefined,
 				};
 			});
+	}
+
+	function normalizeRefinedFactionGoals(goals: NonNullable<EntryRefinementResult['goals']>): FactionGoal[] {
+		return goals
+			.map(goal => ({
+				description: goal.description.trim(),
+				priority: goal.priority ?? 5,
+				progress: goal.progress ?? 0,
+				type: goal.type ?? 'diplomatic',
+				deadline: goal.deadline?.trim() || undefined,
+			}))
+			.filter(goal => goal.description);
 	}
 
 	function prepareStateForSave() {
@@ -241,7 +261,42 @@
 			if (p.bio != null) cs.bio = p.bio;
 			if (p.motivations != null) cs.motivations = p.motivations;
 			if (p.personality != null) cs.personality = p.personality;
+			if (p.currentDisposition != null) cs.currentDisposition = p.currentDisposition;
+			if (p.personalOpinion != null) cs.personalOpinion = p.personalOpinion;
+			if (p.pressures != null) cs.pressures = p.pressures;
+			if (p.factionTags != null) cs.factionTags = p.factionTags;
+			if (p.knownFacts != null) cs.knownFacts = p.knownFacts;
+			if (p.revealedSecrets != null) cs.revealedSecrets = p.revealedSecrets;
+			if (p.relationshipLevel != null || p.relationshipStatus != null) {
+				cs.relationship = {
+					...(cs.relationship ?? { level: 0, status: 'unknown', history: [] }),
+					level: p.relationshipLevel ?? cs.relationship?.level ?? 0,
+					status: p.relationshipStatus ?? cs.relationship?.status ?? 'unknown',
+				};
+			}
 			entryState = { ...cs };
+		} else if (type === 'faction') {
+			const fs = entryState as FactionEntryState;
+			if (p.playerStanding != null) fs.playerStanding = p.playerStanding;
+			if (p.factionStatus != null) fs.status = p.factionStatus;
+			if (p.knownMembers != null) {
+				fs.knownMembers = p.knownMembers;
+				factionMembers = p.knownMembers.join(', ');
+			}
+			if (p.goals != null) {
+				fs.goals = normalizeRefinedFactionGoals(p.goals);
+				factionGoalsText = formatFactionGoalsText(fs.goals);
+			}
+			if (p.resources != null) {
+				fs.resources = normalizeFactionResources(p.resources);
+				factionResources = { ...fs.resources };
+			}
+			if (p.disposition != null) fs.disposition = p.disposition;
+			if (p.territory != null) {
+				fs.territory = p.territory;
+				factionTerritory = p.territory.join(', ');
+			}
+			entryState = { ...fs };
 		}
 		refinePreview = null;
 		refineInstruction = '';
@@ -343,6 +398,52 @@
 								<div>
 									<div class="font-semibold text-[var(--text-accent)]">Personality</div>
 									<p class="mt-1 whitespace-pre-wrap text-[var(--text-primary)]">{refinePreview.personality}</p>
+								</div>
+							{/if}
+							{#if refinePreview.currentDisposition != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Disposition:</span> <span class="text-[var(--text-primary)]">{refinePreview.currentDisposition}</span></div>
+							{/if}
+							{#if refinePreview.personalOpinion != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Personal opinion:</span> <span class="text-[var(--text-primary)]">{refinePreview.personalOpinion}</span></div>
+							{/if}
+							{#if refinePreview.pressures != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Pressures:</span> <span class="text-[var(--text-primary)]">{refinePreview.pressures.join('; ')}</span></div>
+							{/if}
+							{#if refinePreview.factionTags != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Faction tags:</span> <span class="text-[var(--text-primary)]">{refinePreview.factionTags.join(', ')}</span></div>
+							{/if}
+							{#if refinePreview.knownFacts != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Known facts:</span> <span class="text-[var(--text-primary)]">{refinePreview.knownFacts.join('; ')}</span></div>
+							{/if}
+							{#if refinePreview.revealedSecrets != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Revealed secrets:</span> <span class="text-[var(--text-primary)]">{refinePreview.revealedSecrets.join('; ')}</span></div>
+							{/if}
+							{#if refinePreview.relationshipLevel != null || refinePreview.relationshipStatus != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Relationship:</span> <span class="text-[var(--text-primary)]">{refinePreview.relationshipStatus ?? 'unchanged'}{refinePreview.relationshipLevel != null ? ` (${refinePreview.relationshipLevel})` : ''}</span></div>
+							{/if}
+							{#if refinePreview.playerStanding != null || refinePreview.factionStatus != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Faction standing:</span> <span class="text-[var(--text-primary)]">{refinePreview.factionStatus ?? 'unchanged'}{refinePreview.playerStanding != null ? ` (${refinePreview.playerStanding})` : ''}</span></div>
+							{/if}
+							{#if refinePreview.knownMembers != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Known members:</span> <span class="text-[var(--text-primary)]">{refinePreview.knownMembers.join(', ')}</span></div>
+							{/if}
+							{#if refinePreview.territory != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Territory:</span> <span class="text-[var(--text-primary)]">{refinePreview.territory.join(', ')}</span></div>
+							{/if}
+							{#if refinePreview.disposition != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Faction disposition:</span> <span class="text-[var(--text-primary)]">{refinePreview.disposition}</span></div>
+							{/if}
+							{#if refinePreview.resources != null}
+								<div><span class="font-semibold text-[var(--text-accent)]">Resources:</span> <span class="text-[var(--text-primary)]">mil {refinePreview.resources.military}, wealth {refinePreview.resources.wealth}, influence {refinePreview.resources.influence}, info {refinePreview.resources.information}, morale {refinePreview.resources.morale}</span></div>
+							{/if}
+							{#if refinePreview.goals != null}
+								<div>
+									<div class="font-semibold text-[var(--text-accent)]">Faction goals</div>
+									<ul class="mt-1 list-disc space-y-1 pl-4 text-[var(--text-primary)]">
+										{#each refinePreview.goals as goal}
+											<li>{goal.description} ({goal.type}, P{goal.priority}, {goal.progress}%{goal.deadline ? `, ${goal.deadline}` : ''})</li>
+										{/each}
+									</ul>
 								</div>
 							{/if}
 							<div class="flex gap-2 pt-1">

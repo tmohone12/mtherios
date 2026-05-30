@@ -32,6 +32,7 @@ import type {
 	RumorRecord,
 	Scheme,
 	StoryThread,
+	StrategicWorldFrame,
 	SyncOutboxOp,
 } from '$lib/types';
 
@@ -60,6 +61,7 @@ interface MtheriosDB extends Dexie {
 	rumors: Table<RumorRecord, string>;
 	schemes: Table<Scheme, string>;
 	storyThreads: Table<StoryThread, string>;
+	strategicWorldFrames: Table<StrategicWorldFrame, string>;
 	syncOutbox: Table<SyncOutboxOp, string>;
 	appSettings: Table<{ key: string; value: string }, string>;
 }
@@ -235,6 +237,33 @@ db.version(11).stores({
 	syncOutbox: 'id, storyId, serverStoryId, status, createdAt, [storyId+status]',
 });
 
+// Version 12: Strategic world frames - rare arc-level faction/scheme/plot planning.
+db.version(12).stores({
+	stories: 'id, title, createdAt, updatedAt, serverStoryId, serverVersion',
+	storyEntries: 'id, storyId, position, type, [storyId+position], [storyId+branchId+position]',
+	characters: 'id, storyId, name, [storyId+name]',
+	locations: 'id, storyId, name, [storyId+name]',
+	items: 'id, storyId, name, [storyId+name]',
+	storyBeats: 'id, storyId, type, status',
+	chapters: 'id, storyId, number, [storyId+number]',
+	lorebookEntries: 'id, storyId, name, type, [storyId+type]',
+	embeddedImages: 'id, storyId, entryId, status, [storyId+entryId]',
+	appSettings: 'key',
+	arcs: 'id, storyId, arcNumber, [storyId+arcNumber]',
+	proceduralRules: 'id, storyId, category, maturity, [storyId+category], [storyId+maturity]',
+	embeddingCache: 'id, sourceId, sourceType, [sourceType+sourceId]',
+	entryRelationships: 'id, storyId, sourceEntryId, targetEntryId, type, [storyId+sourceEntryId], [storyId+targetEntryId]',
+	conversationMemory: 'id, storyId, npcEntryId, storyPosition, [storyId+npcEntryId], [storyId+storyPosition]',
+	worldEvents: 'id, storyId, triggerPosition, type, [storyId+triggerPosition]',
+	agreements: 'id, storyId, status, category, createdChapterNumber, [storyId+status], [storyId+category]',
+	factionActions: 'id, storyId, factionName, chapterNumber, urgency, [storyId+chapterNumber]',
+	rumors: 'id, storyId, status, chapterNumber, relatedFaction, [storyId+status]',
+	schemes: 'id, storyId, status, ownerType, ownerEntryId, branchId, [storyId+status], [storyId+ownerType], [storyId+branchId]',
+	storyThreads: 'id, storyId, status, significance, [storyId+status], [storyId+significance]',
+	strategicWorldFrames: 'id, storyId, arcNumber, createdAt, trigger, [storyId+arcNumber]',
+	syncOutbox: 'id, storyId, serverStoryId, status, createdAt, [storyId+status]',
+});
+
 // Debug function to check DB status
 export async function debugDatabaseStatus(): Promise<void> {
 	console.log('=== Database Debug Info ===');
@@ -296,6 +325,7 @@ export async function deleteStory(id: string): Promise<void> {
 		db.rumors,
 		db.schemes,
 		db.storyThreads,
+		db.strategicWorldFrames,
 		db.syncOutbox,
 	], async () => {
 		const [chapterIds, lorebookEntryIds] = await Promise.all([
@@ -326,6 +356,7 @@ export async function deleteStory(id: string): Promise<void> {
 		await db.rumors.where('storyId').equals(id).delete();
 		await db.schemes.where('storyId').equals(id).delete();
 		await db.storyThreads.where('storyId').equals(id).delete();
+		await db.strategicWorldFrames.where('storyId').equals(id).delete();
 		await db.syncOutbox.where('storyId').equals(id).delete();
 	});
 }
@@ -916,6 +947,27 @@ export async function updateStoryThread(id: string, updates: Partial<StoryThread
 
 export async function deleteStoryThread(id: string): Promise<void> {
 	await db.storyThreads.delete(id);
+}
+
+// ============================================================================
+// Strategic World Frames (v12 - rare arc-level strategy)
+// ============================================================================
+
+export async function createStrategicWorldFrame(frame: StrategicWorldFrame): Promise<void> {
+	await db.strategicWorldFrames.add(frame);
+}
+
+export async function putStrategicWorldFrame(frame: StrategicWorldFrame): Promise<void> {
+	await db.strategicWorldFrames.put(frame);
+}
+
+export async function getStrategicWorldFrames(storyId: string): Promise<StrategicWorldFrame[]> {
+	return db.strategicWorldFrames.where('storyId').equals(storyId).sortBy('createdAt');
+}
+
+export async function getLatestStrategicWorldFrame(storyId: string): Promise<StrategicWorldFrame | null> {
+	const frames = await db.strategicWorldFrames.where('storyId').equals(storyId).sortBy('createdAt');
+	return frames[frames.length - 1] ?? null;
 }
 
 // ============================================================================

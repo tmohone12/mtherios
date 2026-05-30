@@ -2,6 +2,7 @@
 	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search, Trash2 } from 'lucide-svelte';
 	import { WORLD_SIM_DAY_INTERVAL, normalizeRelation } from '$lib/services/ai/tools/helpers';
 	import { maybeRunWorldSim } from '$lib/services/ai/tools/executor';
+	import { runStrategicWorldBrainNow } from '$lib/services/ai/background/runner';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { getChapters, getArcs, createArc } from '$lib/services/database';
@@ -307,13 +308,32 @@
 
 	// Manual world-sim trigger ─────────────────────────────────────────
 	let runningWorldSim = $state(false);
+	let runningStrategicBrain = $state(false);
+	let strategicBrainMessage = $state<string | null>(null);
 	const worldSimEnabled = $derived(settings.getServiceConfig('worldSimulation').enabled);
+	const strategicWorldBrainEnabled = $derived(settings.getServiceConfig('strategicWorldBrain').enabled);
 	async function runWorldSimNow() {
 		if (runningWorldSim || !worldSimEnabled || !story.currentStory) return;
 		runningWorldSim = true;
 		try { await maybeRunWorldSim({ force: true }); }
 		catch (e) { console.error('[WorldDrawer] manual world sim failed:', e); }
 		runningWorldSim = false;
+	}
+	async function runStrategicBrainNow() {
+		if (runningStrategicBrain || !strategicWorldBrainEnabled || !story.currentStory) return;
+		runningStrategicBrain = true;
+		strategicBrainMessage = null;
+		try {
+			const frame = await runStrategicWorldBrainNow();
+			strategicBrainMessage = frame
+				? `Frame ${frame.arcNumber} saved (${frame.reconcilerResult?.applied ?? 0} scheme updates).`
+				: 'No frame was created.';
+		} catch (e) {
+			console.error('[WorldDrawer] manual strategic world brain failed:', e);
+			strategicBrainMessage = e instanceof Error ? e.message : String(e);
+		} finally {
+			runningStrategicBrain = false;
+		}
 	}
 
 	// ── Meters (player only sees visible meters) ──
@@ -565,6 +585,23 @@
 						<span>Run world sim now</span>
 					{/if}
 				</button>
+				<button
+					onclick={runStrategicBrainNow}
+					disabled={runningStrategicBrain || !strategicWorldBrainEnabled || !story.currentStory}
+					class="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/5 px-3 py-1.5 text-xs text-violet-300 transition-colors hover:bg-violet-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
+					title={strategicWorldBrainEnabled ? 'Run the strategic world brain now and save a new strategic frame' : 'Strategic World Brain is disabled in settings'}
+				>
+					{#if runningStrategicBrain}
+						<Loader2 class="h-3.5 w-3.5 animate-spin" />
+						<span>Running strategic brain...</span>
+					{:else}
+						<Activity class="h-3.5 w-3.5" />
+						<span>Run strategic brain</span>
+					{/if}
+				</button>
+				{#if strategicBrainMessage}
+					<p class="mt-1 text-[10px] text-[var(--text-muted)]">{strategicBrainMessage}</p>
+				{/if}
 			</div>
 			{/if}
 

@@ -50,14 +50,22 @@
 	onMount(async () => {
 		stories = await getAllStories();
 		if (stories.length > 0) {
-			selectedStoryId = stories[0].id;
+			selectedStoryId = stories.find(s => s.id === story.currentStory?.id)?.id ?? stories[0].id;
 			await loadEntries();
 		}
 	});
 
 	async function loadEntries() {
 		if (!selectedStoryId) { entries = []; return; }
-		entries = await getLorebookEntries(selectedStoryId);
+		const loaded = await getLorebookEntries(selectedStoryId);
+		entries = loaded;
+		syncActiveStoryEntries(loaded);
+	}
+
+	function syncActiveStoryEntries(nextEntries = entries) {
+		if (story.currentStory?.id === selectedStoryId) {
+			story.lorebookEntries = [...nextEntries];
+		}
 	}
 
 	function summaryFor(e: Entry): string {
@@ -185,7 +193,7 @@
 	}
 
 	async function applyLintTextFix(fix: WikiTextFix) {
-		const target = findEntryByName(fix.entryName);
+		const target = entries.find(entry => entry.id === fix.entryId) ?? findEntryByName(fix.entryName);
 		if (!target) throw new Error(`Could not find wiki entry "${fix.entryName}".`);
 
 		const updates: Partial<Entry> = { updatedAt: Date.now() };
@@ -242,6 +250,7 @@
 		};
 		await createLorebookEntry(entry);
 		entries = [...entries, entry];
+		syncActiveStoryEntries(entries);
 		resetCreate();
 	}
 

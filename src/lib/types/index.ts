@@ -812,6 +812,226 @@ export interface UIState {
   settingsModalOpen: boolean
 }
 
+// StrategicWorldFrame - rare arc-level world strategy generated above the fast world sim.
+export type StrategicBrainTrigger =
+  | 'arc_created'
+  | 'manual'
+  | 'major_event'
+  | 'scheme_threshold'
+  | 'faction_shock'
+  | 'scheme_exposed'
+  | 'scheme_completed'
+  | 'leader_killed'
+  | 'war_declared'
+  | 'treaty_signed'
+  | 'territory_changed'
+  | 'major_secret_revealed'
+  | 'manual_debug_run'
+
+export type StrategicVisibility = 'public' | 'rumored' | 'secret' | 'unknown'
+
+export interface StrategicEvidenceRef {
+  sourceType: 'arc' | 'chapter' | 'scheme' | 'thread' | 'world_event' | 'faction' | 'rumor' | 'agreement' | 'entry' | 'memory' | 'unknown'
+  sourceId?: string | null
+  label: string
+  note?: string | null
+}
+
+export interface VerboseFactionGoalDirective {
+  type: 'create_goal' | 'update_goal' | 'retire_goal' | 'reframe_goal'
+  factionName: string
+  goalId?: string | null
+  title?: string | null
+  description: string
+  publicAim?: string | null
+  hiddenAim?: string | null
+  priority?: number
+  urgency?: 'dormant' | 'low' | 'rising' | 'urgent' | 'existential'
+  progressDelta?: number
+  desiredEndState?: string | null
+  currentPhase?: string | null
+  constraints?: string[]
+  dependencies?: string[]
+  blockers?: string[]
+  risks?: string[]
+  linkedSchemeIds?: string[]
+  linkedThreadIds?: string[]
+  evidenceRefs?: StrategicEvidenceRef[]
+  confidence: number
+  reason: string
+}
+
+export interface SchemeDirective {
+  type:
+    | 'create_scheme'
+    | 'update_scheme'
+    | 'advance_scheme'
+    | 'stall_scheme'
+    | 'fork_scheme'
+    | 'merge_scheme'
+    | 'expose_scheme'
+    | 'complete_scheme'
+    | 'retire_scheme'
+  schemeId?: string | null
+  title?: string | null
+  ownerType?: 'faction' | 'character' | 'player' | 'unknown'
+  ownerName?: string | null
+  goal?: string | null
+  progressDelta?: number
+  pressureDelta?: number
+  newStage?: string | null
+  visibility?: StrategicVisibility
+  status?: 'incubating' | 'active' | 'climaxing' | 'resolved' | 'foiled' | 'abandoned' | null
+  visibleEffects: string[]
+  hiddenEffects: string[]
+  nextMoves: string[]
+  linkedFactionGoalIds: string[]
+  linkedThreadIds: string[]
+  linkedWorldEventIds: string[]
+  evidenceRefs: StrategicEvidenceRef[]
+  confidence: number
+  reason: string
+}
+
+export interface StrategicClock {
+  id: string
+  name: string
+  ownerFactionName: string
+  progress: number
+  velocity: 'stalled' | 'slow' | 'steady' | 'fast' | 'surging'
+  goal: string
+  visibleToPlayer: boolean
+  tickTriggers: string[]
+  stallTriggers: string[]
+  completionConsequences: string[]
+  currentPhase: string
+}
+
+export interface StrategicRumorSeed {
+  text: string
+  origin: string
+  truthLevel: 'false' | 'partial' | 'true' | 'unknown'
+  relatedFactionNames: string[]
+  revealConditions: string[]
+}
+
+export interface StrategicWarPressureCard {
+  phase: string
+  mainFactions: string[]
+  warAims: string[]
+  frontsOrTheaters: string[]
+  importantSchemes: string[]
+  visibleSigns: string[]
+  hiddenFacts: string[]
+  nextEscalationIfIgnored: string
+  playerInterventionPoints: string[]
+}
+
+export interface StrategicFactionOperation {
+  id: string
+  factionName: string
+  operation: string
+  objective: string
+  actionType: 'diplomatic' | 'military' | 'economic' | 'intelligence' | 'propaganda' | 'logistics' | 'internal'
+  target?: string | null
+  urgency: 'low' | 'rising' | 'urgent' | 'critical'
+  visibility: StrategicVisibility
+  timeHorizon: 'next_tick' | 'next_few_turns' | 'this_arc' | 'future_arc' | 'long_burn'
+  triggerConditions: string[]
+  stallConditions: string[]
+  visibleSignals: string[]
+  hiddenSteps: string[]
+  resourcePressure?: Partial<Record<keyof FactionResources, number>>
+  linkedClockIds: string[]
+  linkedSchemeIds: string[]
+  evidenceRefs: StrategicEvidenceRef[]
+  confidence: number
+}
+
+export interface StrategicPlotLine {
+  title: string
+  kind:
+    | 'main_plot'
+    | 'subplot'
+    | 'character_arc'
+    | 'faction_plot'
+    | 'mystery'
+    | 'war'
+    | 'political_intrigue'
+    | 'survival'
+    | 'personal_goal'
+    | 'background_pressure'
+  pressure: 'low' | 'medium' | 'high' | 'critical'
+  summary: string
+  linkedSchemeIds: string[]
+  linkedFactionGoalIds: string[]
+  linkedThreadIds: string[]
+  expectedPayoff: 'soon' | 'this_arc' | 'future_arc' | 'long_burn' | 'optional'
+  playerAgency: 'player_driven' | 'world_driven' | 'reactive' | 'background'
+}
+
+export interface WorldEventSuggestion {
+  title: string
+  description: string
+  type: string
+  visibility: StrategicVisibility
+  linkedSchemeIds: string[]
+  linkedThreadIds: string[]
+  evidenceRefs: StrategicEvidenceRef[]
+  confidence: number
+}
+
+export type StrategicCanonPatch =
+  | { type: 'faction_goal_add'; factionName: string; goal: Partial<FactionGoal>; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
+  | { type: 'faction_goal_update'; factionName: string; goalRef: string; progressDelta: number; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
+  | { type: 'faction_resource_delta'; factionName: string; resource: keyof FactionResources; delta: number; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
+  | { type: 'faction_relation_delta'; sourceFaction: string; targetFaction: string; delta: number; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
+  | { type: 'territory_pressure'; factionName: string; region: string; pressure: string; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
+  | { type: 'scheme_create'; ownerFactionName: string; scheme: Partial<Scheme>; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
+  | { type: 'rumor_seed'; rumor: Partial<RumorRecord>; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
+  | { type: 'thread_create'; thread: Partial<StoryThread>; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
+  | { type: 'custom'; label: string; payload: Record<string, unknown>; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
+
+export interface StrategicWorldFrame {
+  id: string
+  storyId: string
+  arcId?: string | null
+  arcNumber: number
+  trigger: StrategicBrainTrigger
+  chapterRange: { from: number; to: number }
+  createdAt: number
+  continuityAssessment: {
+    summary: string
+    unresolvedContinuityRisks: string[]
+    staleThreads: string[]
+    contradictionsToReview: string[]
+  }
+  worldMood: {
+    politicalTemperature: 'calm' | 'tense' | 'volatile' | 'war' | 'collapse'
+    supernaturalPressure?: 'none' | 'low' | 'rising' | 'dominant'
+    economicPressure?: 'stable' | 'strained' | 'scarcity' | 'famine'
+    socialPressure?: 'stable' | 'anxious' | 'unrest' | 'rebellion'
+  }
+  publicSummary: string
+  hiddenStrategicSummary: string
+  mainPlots: StrategicPlotLine[]
+  subplots: StrategicPlotLine[]
+  factionGoalUpdates: VerboseFactionGoalDirective[]
+  schemeDirectives: SchemeDirective[]
+  strategicClocks: StrategicClock[]
+  factionOperations: StrategicFactionOperation[]
+  warPressureCard: StrategicWarPressureCard | null
+  rumorSeeds: StrategicRumorSeed[]
+  worldEventSuggestions: WorldEventSuggestion[]
+  fastWorldSimInstructions: string
+  narratorPromptCard: string
+  canonPatchSuggestions: StrategicCanonPatch[]
+  reconcilerResult?: {
+    applied: number
+    rejected: string[]
+  }
+}
+
 // Provider types matching Vercel AI SDK providers
 export type ProviderType =
   | 'openrouter' // @openrouter/ai-sdk-provider

@@ -11,6 +11,7 @@ import { GM_TOOLS, worldStateUpdateSchema, type WorldStateUpdate } from './schem
 import { executeToolCall, runSchemeEvaluation } from './executor';
 import { runBackgroundJobs } from '$lib/services/ai/background/runner';
 import { settings } from '$lib/stores/settings.svelte';
+import { buildWarExtractionRulesBlock } from '$lib/services/ai/context/warDoctrine';
 
 const WORLD_UPDATE_TOOLS = GM_TOOLS.filter(tool => tool.function.name === 'update_world_state');
 
@@ -32,7 +33,9 @@ export async function executeWorldUpdate(
 	try {
 		const classifierConfig = settings.getServiceConfig('classifier');
 
-		const systemPrompt = `You are a world state tracker for an interactive fiction game. Your job is to analyze a narrative passage and extract ALL state changes that occurred. Be thorough — anything not recorded here is forgotten.`;
+		const systemPrompt = `You are a world state tracker for an interactive fiction game. Your job is to analyze a narrative passage and extract ALL state changes that occurred. Be thorough — anything not recorded here is forgotten.
+
+${buildWarExtractionRulesBlock()}`;
 
 		const userPrompt = `You just narrated the following scene:
 
@@ -73,6 +76,7 @@ LOREBOOK ENTRIES (new — explicit creation):
 - Do not create a new lorebook entry for a known entity under a slightly different title. Use aliases/keywords and relationships instead.
 - Skip unnamed, generic elements ("a guard", "the tavern", "some coins").
 FACTION GUIDANCE:
+- Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.
 - For FACTION entries, include \`known_members\`, \`faction_goals\`, \`faction_resources\`, \`faction_disposition\`, and \`territory\` when the scene or existing state gives enough evidence.
 - Also emit character \`faction_tags\` plus relationships such as member-of, leader-of, serves, allied-with, or enemy-of when a character/faction connection is established or changes.
 - Faction resources are relative 0-100 scores: military, wealth, influence, information, morale. Unknown scores should be omitted rather than invented.

@@ -21,15 +21,20 @@ import {
 	getChapters, createChapter, getArcs, createArc,
 	getStoryBeats, createLorebookEntry, updateLorebookEntry,
 	getStoryEntry, getStoryEntriesAfterPosition,
+	getSchemes, getStoryThreads, getAgreements, getWorldEvents, getRumors, getFactionActions,
+	getStrategicWorldFrames, putStrategicWorldFrame,
 } from '$lib/services/database';
 import { findMatchingLoreEntry, makeLoreEntry } from '$lib/services/ai/tools/helpers';
 import { LORE_MGMT_CHAPTER_INTERVAL } from '$lib/services/ai/lorebook/LoreManagementService';
-import type { Chapter, Arc, Entry, CharacterEntryState, FactionEntryState, FactionGoal, FactionResources } from '$lib/types';
+import { StrategicSchemeReconciler } from '$lib/services/ai/strategy/StrategicSchemeReconciler';
+import type { Chapter, Arc, Entry, CharacterEntryState, FactionEntryState, FactionGoal, FactionResources, StrategicWorldFrame } from '$lib/types';
 
 type FactionGoalInput = Omit<Partial<FactionGoal>, 'deadline'> & {
 	description: string;
 	deadline?: string | null;
 };
+
+let backgroundJobsInFlight: Promise<string[]> | null = null;
 
 function chaptersForBranch(chapters: Chapter[], branchId: string | null): Chapter[] {
 	return chapters
@@ -42,43 +47,43 @@ function chaptersForBranch(chapters: Chapter[], branchId: string | null): Chapte
  * Returns error messages for any failed jobs (never throws).
  */
 export async function runBackgroundJobs(): Promise<string[]> {
+	if (backgroundJobsInFlight) return backgroundJobsInFlight;
+	backgroundJobsInFlight = runBackgroundJobsSerial();
+	try {
+		return await backgroundJobsInFlight;
+	} finally {
+		backgroundJobsInFlight = null;
+	}
+}
+
+async function runBackgroundJobsSerial(): Promise<string[]> {
 	const errors: string[] = [];
-	const jobs: Promise<void>[] = [];
+
+	const runJob = async (label: string, job: () => Promise<void>) => {
+		try {
+			await job();
+		} catch (e) {
+			const msg = `${label}: ${e}`;
+			errors.push(msg);
+			console.error(`[Background] ${msg}`);
+		}
+	};
 
 	const memoryConfig = settings.getServiceConfig('memory');
 	if (memoryConfig.enabled) {
-		jobs.push(
-			runChapterCheck().catch(e => {
-				const msg = `ChapterCheck: ${e}`;
-				errors.push(msg);
-				console.error(`[Background] ${msg}`);
-			})
-		);
+		await runJob('ChapterCheck', runChapterCheck);
 	}
 
 	const arcConfig = settings.getServiceConfig('arcCondensation');
 	if (arcConfig.enabled) {
-		jobs.push(
-			runBackgroundArcCheck().catch(e => {
-				const msg = `BackgroundArcCheck: ${e}`;
-				errors.push(msg);
-				console.error(`[Background] ${msg}`);
-			})
-		);
+		await runJob('BackgroundArcCheck', runBackgroundArcCheck);
 	}
 
 	const loreConfig = settings.getServiceConfig('loreManagement');
 	if (loreConfig.enabled) {
-		jobs.push(
-			runBackgroundLoreCheck().catch(e => {
-				const msg = `BackgroundLoreCheck: ${e}`;
-				errors.push(msg);
-				console.error(`[Background] ${msg}`);
-			})
-		);
+		await runJob('BackgroundLoreCheck', runBackgroundLoreCheck);
 	}
 
-	await Promise.all(jobs);
 	return errors;
 }
 
@@ -261,6 +266,9 @@ async function runAutoArcCondensation(chapters: Chapter[]): Promise<void> {
 	await createArc(arc);
 	console.log(`[Background] Auto arc ${arcNumber}: "${arc.title}" (Ch.${arc.chapterRange})`);
 
+	// Strategic world brain — rare arc-level faction/scheme/plot planning.
+	await runStrategicWorldBrainForArc(arc, [...arcs, arc], chapters);
+
 	// CASS reflection — fire and forget (capture storyId before async to prevent null access if user navigates away)
 	const procConfig = settings.getServiceConfig('proceduralMemory');
 	if (procConfig.enabled && story.currentStory) {
@@ -275,6 +283,121 @@ async function runAutoArcCondensation(chapters: Chapter[]): Promise<void> {
 // ══════════════════════════════════════════════════════════════
 // Lore management — extracted from GenerationPipeline
 // ══════════════════════════════════════════════════════════════
+
+export async function runStrategicWorldBrainNow(): Promise<StrategicWorldFrame | null> {
+	if (!story.currentStory) return null;
+	const storyId = story.currentStory.id;
+	const [chapters, arcs] = await Promise.all([
+		getChapters(storyId),
+		getArcs(storyId),
+	]);
+	if (chapters.length === 0 && arcs.length === 0) {
+		throw new Error('Create at least one chapter or arc before running the strategic world brain.');
+	}
+	const currentArc = arcs[arcs.length - 1] ?? null;
+	return runStrategicWorldBrainForArc(currentArc, arcs, chapters, 'manual_debug_run');
+}
+
+async function runStrategicWorldBrainForArc(
+	arc: Arc | null,
+	allArcs: Arc[],
+	chapters: Chapter[],
+	trigger: 'arc_created' | 'manual_debug_run' = 'arc_created',
+): Promise<StrategicWorldFrame | null> {
+	if (!story.currentStory) return null;
+	const config = settings.getServiceConfig('strategicWorldBrain');
+	if (!config.enabled) return null;
+
+	const storyId = story.currentStory.id;
+	try {
+		const [
+			allSchemes,
+			threads,
+			agreements,
+			worldEvents,
+			rumors,
+			factionActions,
+			existingFrames,
+		] = await Promise.all([
+			getSchemes(storyId),
+			getStoryThreads(storyId),
+			getAgreements(storyId),
+			getWorldEvents(storyId),
+			getRumors(storyId),
+			getFactionActions(storyId),
+			getStrategicWorldFrames(storyId),
+		]);
+		const activeSchemes = allSchemes.filter(scheme =>
+			scheme.status === 'incubating' || scheme.status === 'active' || scheme.status === 'climaxing',
+		);
+		const recentlyResolvedSchemes = allSchemes.filter(scheme =>
+			scheme.status === 'resolved' || scheme.status === 'foiled' || scheme.status === 'abandoned',
+		).slice(-12);
+		const currentArcChapterIds = new Set(arc?.chapterIds ?? []);
+		const currentArcChapters = arc
+			? chapters.filter(chapter => currentArcChapterIds.has(chapter.id))
+			: chapters.slice(-Math.max(1, settings.uiSettings.chaptersPerArc || 5));
+		const recentChapters = chapters.slice(-10);
+		const recentArcs = allArcs.slice(-5);
+		const relevantOlderArcs = allArcs.slice(0, Math.max(0, allArcs.length - recentArcs.length)).slice(-4);
+		const factionEntries = story.lorebookEntries.filter(entry => entry.type === 'faction' && !entry.deleted);
+		const characterEntries = story.lorebookEntries.filter(entry => entry.type === 'character' && !entry.deleted);
+		const previousStrategicFrame: StrategicWorldFrame | null = existingFrames[existingFrames.length - 1] ?? null;
+		const frame = await ai.strategicWorldBrain.plan({
+			story: story.currentStory,
+			trigger,
+			currentArc: arc,
+			recentArcs,
+			relevantOlderArcs,
+			currentArcChapters,
+			recentChapters,
+			recentEntries: story.entries.slice(-32),
+			factions: factionEntries,
+			characters: characterEntries,
+			activeSchemes,
+			recentlyResolvedSchemes,
+			storyThreads: threads,
+			worldEvents,
+			rumors,
+			agreements,
+			factionActions,
+			playerLedger: story.currentStory.playerLedger ?? null,
+			playerReputation: story.currentStory.playerReputation ?? null,
+			previousStrategicFrame,
+			mode: story.storyMode,
+			pov: story.pov,
+			tense: story.tense,
+			timeTracker: story.currentStory.timeTracker,
+		});
+
+		const currentChapterNumber = currentArcChapters.length > 0
+			? Math.max(...currentArcChapters.map(chapter => chapter.number))
+			: null;
+		const totalDays = story.currentStory.timeTracker
+			? story.currentStory.timeTracker.years * 365 + story.currentStory.timeTracker.days
+			: null;
+		const reconciler = new StrategicSchemeReconciler();
+		const result = await reconciler.applyDirectives(frame.schemeDirectives, {
+			storyId,
+			branchId: story.currentStory.currentBranchId ?? null,
+			currentChapterNumber,
+			totalDays,
+			schemes: allSchemes,
+			ownerEntries: [...factionEntries, ...characterEntries],
+		});
+		const persistedFrame: StrategicWorldFrame = { ...frame, reconcilerResult: result };
+		await putStrategicWorldFrame(persistedFrame);
+		story.strategicWorldFrames = [...existingFrames, persistedFrame];
+		if (result.applied > 0) {
+			story.schemes = await getSchemes(storyId);
+		}
+		console.log(`[Background] Strategic world frame ${persistedFrame.arcNumber}: ${result.applied} scheme directive(s) applied`);
+		return persistedFrame;
+	} catch (error) {
+		console.warn('[Background] Strategic world brain failed:', error);
+		throw error;
+	}
+}
 
 async function runLoreManagement(chapters: Chapter[]): Promise<void> {
 	if (!story.currentStory) return;

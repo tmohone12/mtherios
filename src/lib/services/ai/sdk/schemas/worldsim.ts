@@ -83,9 +83,9 @@ export const criticalPathItemSchema = z.object({
 		'opportunity',
 		'none',
 	]).describe('Taxonomy of this path; reward/payoff types must be earned from prior story evidence'),
-	description: z.string().describe('1-2 sentence description of the NPC action, environmental shift, quiet pressure, earned reward, opportunity, or withheld seed'),
+	description: z.string().describe('1-2 sentence description of NPC action, environmental pressure, off-screen movement, earned reward, conditional opportunity, or withheld seed. Do not dictate player movement/action; if player action/location is required, phrase conditionally.'),
 	friction: z.boolean().optional().default(false).describe('True if this path introduces resistance, counter-demand, or refusal'),
-	action: z.boolean().optional().default(false).describe('True if this path involves physical movement, escalation, arrival/departure, or sound'),
+	action: z.boolean().optional().default(false).describe('True if this path involves NPC/environment physical movement, escalation, arrival/departure, or sound'),
 	twist_from_existing_secret: z.boolean().optional().default(false).describe('True if this path draws from a stewing secret; this normally means foreshadow, not reveal'),
 	downgraded_to_friction: z.boolean().optional().default(false).describe('True if this path was originally a twist but was held back or softened into friction'),
 });

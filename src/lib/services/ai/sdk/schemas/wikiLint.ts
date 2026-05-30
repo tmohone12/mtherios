@@ -15,53 +15,91 @@ export const lintEntryTypeSchema = z.enum([
 	'character', 'location', 'item', 'faction', 'concept', 'event',
 ]);
 
+const nonEmptyText = (max = 1000) => z.string().trim().min(1).max(max);
+const evidenceSchema = z.array(nonEmptyText(260)).min(1).max(8);
+const confidenceSchema = z.number().min(0).max(1);
+const entryIdSchema = nonEmptyText(160);
+
 export const wikiContradictionSchema = z.object({
-	entryName: z.string(),
-	issue: z.string(),
-	conflictsWith: z.string().nullable().optional().default(null),
-	severity: lintSeveritySchema.default('moderate'),
-});
+	entryId: entryIdSchema,
+	entryName: nonEmptyText(160),
+	issue: nonEmptyText(900),
+	conflictingEntryId: entryIdSchema.nullable(),
+	conflictsWith: nonEmptyText(500),
+	severity: lintSeveritySchema,
+	evidence: evidenceSchema,
+	confidence: confidenceSchema,
+}).strict();
 
 export const wikiStaleClaimSchema = z.object({
-	entryName: z.string(),
-	claim: z.string(),
-	supersededBy: z.string(),
-});
+	entryId: entryIdSchema,
+	entryName: nonEmptyText(160),
+	claim: nonEmptyText(700),
+	supersededBy: nonEmptyText(700),
+	severity: lintSeveritySchema,
+	evidence: evidenceSchema,
+	confidence: confidenceSchema,
+}).strict();
 
 export const wikiOrphanSchema = z.object({
-	entryName: z.string(),
-	reason: z.string(),
-});
+	entryId: entryIdSchema,
+	entryName: nonEmptyText(160),
+	reason: nonEmptyText(700),
+	evidence: evidenceSchema,
+	confidence: confidenceSchema,
+}).strict();
 
 export const wikiMissingEntrySchema = z.object({
-	suggestedName: z.string(),
+	suggestedName: nonEmptyText(160),
 	suggestedType: lintEntryTypeSchema,
-	mentionedIn: z.string(),
-	reason: z.string(),
-});
+	mentionedIn: nonEmptyText(220),
+	reason: nonEmptyText(700),
+	evidence: evidenceSchema,
+	confidence: confidenceSchema,
+}).strict();
 
 export const wikiGapSuggestionSchema = z.object({
-	topic: z.string(),
-	suggestion: z.string(),
-});
+	topic: nonEmptyText(220),
+	suggestion: nonEmptyText(900),
+	relatedEntryIds: z.array(entryIdSchema).max(12).default([]),
+	severity: lintSeveritySchema,
+	evidence: evidenceSchema,
+	confidence: confidenceSchema,
+}).strict();
 
 export const wikiTextFixSchema = z.object({
-	entryName: z.string(),
+	entryId: entryIdSchema,
+	entryName: nonEmptyText(160),
 	field: z.enum(['name', 'description', 'hiddenInfo']),
-	originalText: z.string(),
-	correctedText: z.string(),
-	reason: z.string(),
+	originalText: nonEmptyText(1200),
+	correctedText: nonEmptyText(1200),
+	reason: nonEmptyText(700),
+	evidence: evidenceSchema,
+	confidence: confidenceSchema,
+	safeToAutoApply: z.boolean(),
+}).strict().refine((fix) => fix.originalText !== fix.correctedText, {
+	message: 'correctedText must differ from originalText',
+	path: ['correctedText'],
 });
 
+export const wikiLintCoverageSchema = z.object({
+	entryCount: z.number().int().nonnegative(),
+	relationshipCount: z.number().int().nonnegative(),
+	chapterCount: z.number().int().nonnegative(),
+	allEntriesIncluded: z.boolean(),
+	notes: nonEmptyText(600),
+}).strict();
+
 export const wikiLintResultSchema = z.object({
-	contradictions: z.array(wikiContradictionSchema).optional().default([]),
-	staleClaims: z.array(wikiStaleClaimSchema).optional().default([]),
-	orphans: z.array(wikiOrphanSchema).optional().default([]),
-	missingEntries: z.array(wikiMissingEntrySchema).optional().default([]),
-	gapSuggestions: z.array(wikiGapSuggestionSchema).optional().default([]),
-	textFixes: z.array(wikiTextFixSchema).optional().default([]),
-	summary: z.string(),
-});
+	coverage: wikiLintCoverageSchema,
+	contradictions: z.array(wikiContradictionSchema).max(40).default([]),
+	staleClaims: z.array(wikiStaleClaimSchema).max(40).default([]),
+	orphans: z.array(wikiOrphanSchema).max(80).default([]),
+	missingEntries: z.array(wikiMissingEntrySchema).max(60).default([]),
+	gapSuggestions: z.array(wikiGapSuggestionSchema).max(60).default([]),
+	textFixes: z.array(wikiTextFixSchema).max(80).default([]),
+	summary: nonEmptyText(1200),
+}).strict();
 
 export type WikiLintResult = z.infer<typeof wikiLintResultSchema>;
 export type WikiMissingEntry = z.infer<typeof wikiMissingEntrySchema>;

@@ -1,8 +1,15 @@
 import type { TurnContext } from './context';
 import type { RetrievedMemoryPacket } from '$lib/contracts/memory';
 import { buildEconomyScaleBlock } from '$lib/services/ai/context/economyScale';
+import { buildMagicDoctrineCompactBlock } from '$lib/services/ai/context/magicDoctrine';
 import { buildNarratorOverviewBlock } from '$lib/services/ai/context/narratorOverview';
+import { buildNarrationGuardrailsCompactBlock } from '$lib/services/ai/context/narrationGuardrails';
+import { buildNpcKnowledgeBlock } from '$lib/services/ai/context/npcKnowledge';
+import {
+	buildPoliticalRealismCompactBlock,
+} from '$lib/services/ai/context/politicalRealism';
 import { selectStoryMemory } from '$lib/services/ai/context/storyMemorySelector';
+import { buildWarNarrationRulesCompactBlock } from '$lib/services/ai/context/warDoctrine';
 import { countTokens } from '$lib/utils/tokens';
 
 export interface ServerTurnPromptOptions {
@@ -421,6 +428,14 @@ export function buildServerTurnPrompt(
 		entityNameById,
 		options.ledgerTokenBudget ?? DEFAULT_LEDGER_TOKEN_BUDGET,
 	);
+	const strategicFrame = ctx.strategicWorldFrame;
+	const strategicPressure = strategicFrame?.narratorPromptCard
+		? [
+			'Strategic world pressure:',
+			'Use as background pressure only. Do not reveal secret faction strategy unless evidence or investigation justifies it.',
+			compact(strategicFrame.narratorPromptCard, 1200),
+		].join('\n')
+		: '';
 
 	const entityLines = presentEntities.map((entity) =>
 		`- ${entity.type}: ${entity.name}${entity.description ? ` - ${compact(entity.description, 220)}` : ''}`
@@ -428,19 +443,23 @@ export function buildServerTurnPrompt(
 
 	const system = [
 		storyHeader ? `Story-specific preamble:\n${storyHeader}` : '',
-		'TONE MANDATE (CRITICAL): This is a grimdark story in the style of George R.R. Martin’s A Song of Ice and Fire. Betrayal, political murder, sexual coercion, slavery, moral compromise, incest, torture, child death, and cruelty can happen when incentives and evidence point there. The world is not fair, but loyalty, marriage, patronage, and alliance can be rational rewards when prospects are good.',
-		'This is a mature fictional work intended for adult audiences. All characters are portrayed as adults or in adult contexts. The story contains dark, explicit, and disturbing themes. Do not sanitize, moralize, or soften any of it.',
-		'Sex is raw, political, coercive, or transactional — never romanticized or faded to black. Violence is brutal and consequential. Ambition is common; betrayal is possible, not automatic.',
+		'TONE MANDATE (CRITICAL): Grimdark political fantasy. Betrayal, murder, coercion, slavery, compromise, incest, torture, child death, and cruelty can happen when incentives and evidence point there. Loyalty, marriage, patronage, and alliance can be rational rewards.',
+		'Mature fictional work for adult audiences. Characters are portrayed as adults or in adult contexts. Do not sanitize, moralize, or soften dark material.',
+		'Sex is raw, political, coercive, or transactional. Violence is brutal and consequential. Ambition is common; betrayal is possible, not automatic.',
 		'You are the server-side narrator for a text adventure.',
 		buildNarratorOverviewBlock('Text Adventure GM Overview'),
+		'Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.',
 		'Write direct, playable text adventure narration. Do not write like an interactive novel chapter.',
 		'Resolve the immediate player action, show consequences, and keep the player able to act next.',
-		'NPC knowledge is limited by senses, access, intelligence, rumor delay, and what they personally learned. They cannot see through doors, know private scenes, or instantly learn distant events.',
-		'Use narrator truth for narration, but never make a present NPC act on secret canon unless their belief packet or the scene gives them a source.',
+		buildNpcKnowledgeBlock('NPC Knowledge, Rumor, and Ignorance'),
+		buildNarrationGuardrailsCompactBlock(),
+		buildMagicDoctrineCompactBlock(),
+		buildPoliticalRealismCompactBlock(),
+		buildWarNarrationRulesCompactBlock(),
 		buildEconomyScaleBlock('Economy scale'),
-		'Bayesian social prior: before choosing betrayal, hidden motive, refusal, alliance, loyalty, or marriage, update from evidence. Weigh baseline temperament, relationship, standing, need, upside, public cost, detection risk, and available alternatives. A high-trust or mutually profitable offer often gets a sincere yes; betrayal needs a stronger cause than genre habit.',
-		'Political pressure should build gradually. Avoid constant twists; prefer slow escalation, debts, rumors, small moves, and delayed consequences.',
-		'HARD TONE RULES: Never soften violence, sex, betrayal, or cruelty when they arise from the story. Rape, incest, torture, slavery, and child death are possible and should be portrayed unflinchingly. NPCs may lie, betray, seduce, use, support, marry, or ally with the protagonist when it serves their interests. Do not insert moral lessons.',
+		'Bayesian social prior: weigh temperament, relationship, standing, need, upside, public cost, detection risk, and alternatives. Betrayal needs cause; high-trust or mutually profitable offers can earn sincere yes.',
+		'Political pressure should build gradually through debts, rumors, small moves, and delayed consequences.',
+		'HARD TONE RULES: Do not soften story-earned violence, sex, betrayal, or cruelty. NPCs may lie, betray, seduce, use, support, marry, or ally when incentives fit. Do not insert moral lessons.',
 	].filter(Boolean).join('\n\n');
 
 	const promptSections = [
@@ -452,6 +471,7 @@ export function buildServerTurnPrompt(
 		{ key: 'presentEntities', text: entityLines.length ? `Present or active entities:\n${entityLines.join('\n')}` : '' },
 		{ key: 'wikiContext', text: wikiContext.lines.length ? `Wiki context:\n${wikiContext.lines.join('\n')}` : '' },
 		{ key: 'factions', text: factionLines.length ? `Faction canon:\n${factionLines.join('\n')}` : '' },
+		{ key: 'strategicPressure', text: strategicPressure },
 		{ key: 'beliefs', text: ledgerLines.beliefs.length ? `Actor belief limits:\n${ledgerLines.beliefs.join('\n')}` : '' },
 		{ key: 'agreements', text: ledgerLines.agreements.length ? `Agreements and obligations:\n${ledgerLines.agreements.join('\n')}` : '' },
 		{ key: 'threads', text: ledgerLines.threads.length ? `Open plot ledger:\n${ledgerLines.threads.join('\n')}` : '' },
@@ -494,6 +514,7 @@ export function buildStateExtractionPrompt(playerText: string, narration: string
 	return [
 		'Return a JSON object with a single key "update".',
 		'The value of "update" must contain only facts that clearly changed or became known in this turn.',
+		'Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.',
 		'Use these optional keys when applicable: characters, locations, items, time_delta, mood, player_reputation, player_ledger, conversations, relationships, story_beats, meter_changes, agreements, lorebook_entries.',
 		'For player_ledger, emit a compact full replacement only when money, income, assets, holdings, payroll, debts, claims, stores, ships, paid troops, or recurring expenses materially changed. Preserve player-written ledger notes when updating.',
 		'For characters, include aliases for titles/epithets that appeared and faction_tags for factions they visibly belong to, serve, lead, represent, or are sworn to.',
