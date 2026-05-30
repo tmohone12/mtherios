@@ -16,6 +16,7 @@
  *   - Tactical: last 40 raw story entries (what just happened)
  *   - Dialogue: last 20 user/assistant message pairs (conversation rhythm)
  *   - Faction dossiers: lorebook entries of type 'faction' with goals/resources/disposition
+ *   - Character dossiers: lorebook entries of type 'character' with motives/pressures/ties
  *   - Schemes: active antagonist + player plans
  *
  * Season effects are calculated deterministically in code, not by the LLM.
@@ -31,10 +32,14 @@ import {
 import { createLogger } from '../core/config';
 import { normalizeRelation } from '../tools/helpers';
 import { buildEconomyScaleBlock } from '../context/economyScale';
+import { applyPlotMomentumAgencyGuard } from '../context/plotMomentumAgency';
+import { selectStoryMemory } from '../context/storyMemorySelector';
+import { buildStrategicWorldSimBlock } from '../context/strategicFramePromptCard';
+import { buildWarExecutionRulesBlock } from '../context/warDoctrine';
 import type {
 	Entry, Chapter, Arc, StoryEntry, TimeTracker, EntryRelationship,
 	CharacterEntryState, FactionEntryState, FactionActionRecord,
-	StoryThread, Agreement,
+	StoryThread, Agreement, StrategicWorldFrame,
 } from '$lib/types';
 
 /** A single inter-faction relation shift, derived from FactionRelation.history. */
@@ -59,6 +64,9 @@ const MAX_CONVERSATION_PAIRS = 20;
 
 /** Max factions per tick to prevent token explosion */
 const MAX_FACTIONS_PER_TICK = 12;
+
+/** Max character dossiers per tick to prevent token explosion */
+const MAX_CHARACTERS_PER_TICK = 16;
 
 // ── Season calculation (deterministic, no LLM needed) ──
 
@@ -91,6 +99,7 @@ export function calculateSeason(time: TimeTracker | null): SeasonEffect {
 // ── Shared Context Builder ──
 
 interface SimContext {
+	storyMemoryBlock: string;
 	arcBlock: string;
 	chapterBlock: string;
 	historyLedgerBlock: string;
@@ -100,6 +109,7 @@ interface SimContext {
 	tacticalBlock: string;
 	conversationBlock: string;
 	factionBlock: string;
+	characterBlock: string;
 	hasFactions: boolean;
 	season: SeasonEffect;
 	recentFactionActions: FactionActionRecord[];
@@ -109,6 +119,7 @@ interface SimContext {
 	agreementBlock: string;
 	worldEventBlock: string;
 	locationBlock: string;
+	strategicFrameBlock: string;
 }
 
 function buildSimContext(
@@ -126,6 +137,7 @@ function buildSimContext(
 	timeTracker: TimeTracker | null,
 	recentFactionActions: FactionActionRecord[],
 	relationChangeLog: RelationChangeEvent[],
+	strategicWorldFrame?: StrategicWorldFrame | null,
 ): SimContext {
 	const { arcBlock, chapterBlock, historyLedgerBlock, allThreads, characterArcs } = buildStoryContext(chapters, arcs);
 
@@ -137,6 +149,25 @@ function buildSimContext(
 
 	// Conversation: last 20 user/assistant pairs
 	const conversationBlock = buildConversationBlock(recentEntries.slice(-MAX_CONVERSATION_PAIRS * 2));
+	const storyMemory = selectStoryMemory(chapters, arcs, {
+		query: [
+			locationName,
+			schemes,
+			tacticalBlock,
+			conversationBlock,
+			threads.map(thread => thread.description).join('\n'),
+			factionEntries.map(entry => entry.name).join(', '),
+			characterEntries.slice(0, 24).map(entry => entry.name).join(', '),
+		].join('\n\n'),
+		sceneEntityNames: characterEntries.slice(0, 24).map(entry => entry.name),
+		currentLocationName: locationName,
+		threadHints: threads.map(thread => thread.description),
+		tokenBudget: 2600,
+		recentCount: 6,
+		relevantCount: 8,
+		resurfacedCount: 3,
+		seed: `${chapters.length}:${arcs.length}:${locationName}`,
+	});
 
 	// Season
 	const season = calculateSeason(timeTracker);
@@ -164,6 +195,14 @@ function buildSimContext(
 		}
 	}
 
+	const characterBlock = buildCharacterStateBlock(
+		characterEntries,
+		factionEntries,
+		recentEntries,
+		schemes,
+		locationName,
+	);
+
 	// Thread registry
 	const threadRegistry = buildThreadRegistry(threads);
 
@@ -187,13 +226,15 @@ function buildSimContext(
 		: '';
 
 	return {
+		storyMemoryBlock: storyMemory.block,
 		arcBlock, chapterBlock, historyLedgerBlock, earnedPayoffBlock,
 		allThreads, characterArcs,
-		tacticalBlock, conversationBlock, factionBlock, hasFactions,
+		tacticalBlock, conversationBlock, factionBlock, characterBlock, hasFactions,
 		season, recentFactionActions: recentFactionActions.slice(-5),
 		relationChangeLog: relationChangeLog.slice(0, 8),
 		threadRegistry, schemeBlock: schemes, agreementBlock,
 		worldEventBlock, locationBlock: locationName,
+		strategicFrameBlock: buildStrategicWorldSimBlock(strategicWorldFrame),
 	};
 }
 
@@ -405,6 +446,106 @@ function buildThreadRegistry(threads: StoryThread[]): string {
 	return lines.join('\n');
 }
 
+function factionNamesForCharacter(character: Entry, factionEntries: Entry[]): string[] {
+	const directTags = ((character.state as CharacterEntryState | undefined)?.factionTags ?? [])
+		.map(tag => tag.trim())
+		.filter(Boolean);
+	const memberships = factionEntries
+		.filter(faction => {
+			const state = faction.state as FactionEntryState | undefined;
+			return (state?.knownMembers ?? []).some(member =>
+				member === character.id ||
+				member.toLowerCase() === character.name.toLowerCase() ||
+				(character.aliases ?? []).some(alias => member.toLowerCase() === alias.toLowerCase())
+			);
+		})
+		.map(faction => faction.name);
+	return [...new Set([...directTags, ...memberships])];
+}
+
+function scoreCharacterForTick(
+	character: Entry,
+	factionEntries: Entry[],
+	recentEntries: StoryEntry[],
+	schemes: string,
+	locationName: string,
+): number {
+	const state = character.state as CharacterEntryState | undefined;
+	const recentText = recentEntries.slice(-MAX_RECENT_ENTRIES)
+		.map(entry => entry.content)
+		.join('\n')
+		.toLowerCase();
+	const name = character.name.toLowerCase();
+	const aliases = (character.aliases ?? []).map(alias => alias.toLowerCase());
+	let score = 0;
+	if (recentText.includes(name) || aliases.some(alias => recentText.includes(alias))) score += 50;
+	if (schemes.toLowerCase().includes(name) || aliases.some(alias => schemes.toLowerCase().includes(alias))) score += 35;
+	if (state?.isPresent) score += 45;
+	if (state?.lastSeenLocation && locationName && state.lastSeenLocation.toLowerCase().includes(locationName.toLowerCase())) score += 30;
+	if (state?.pressures?.length) score += 25;
+	if (state?.motivations?.length) score += 20;
+	if (state?.personalOpinion) score += 15;
+	if (character.hiddenInfo) score += 10;
+	const relLevel = state?.relationship?.level ?? 0;
+	if (Math.abs(relLevel) >= 25) score += Math.abs(relLevel) / 2;
+	score += factionNamesForCharacter(character, factionEntries).length * 12;
+	return score;
+}
+
+function selectCharactersForTick(
+	characterEntries: Entry[],
+	factionEntries: Entry[],
+	recentEntries: StoryEntry[],
+	schemes: string,
+	locationName: string,
+): Entry[] {
+	return characterEntries
+		.filter(entry => !entry.deleted)
+		.map((entry, index) => ({
+			entry,
+			index,
+			score: scoreCharacterForTick(entry, factionEntries, recentEntries, schemes, locationName),
+		}))
+		.filter(item => item.score > 0)
+		.sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name) || a.index - b.index)
+		.slice(0, MAX_CHARACTERS_PER_TICK)
+		.map(item => item.entry);
+}
+
+function buildCharacterDossier(character: Entry, factionEntries: Entry[]): string {
+	const state = character.state as CharacterEntryState | undefined;
+	const factions = factionNamesForCharacter(character, factionEntries);
+	let d = `-- ${character.name} --\n`;
+	const description = truncateText(state?.bio || character.description, 260);
+	if (description) d += `${description}\n`;
+	if (character.hiddenInfo) d += `[Hidden]: ${truncateText(character.hiddenInfo, 180)}\n`;
+	if (state?.personality) d += `Personality: ${truncateText(state.personality, 180)}\n`;
+	if (state?.currentDisposition) d += `Current disposition: ${state.currentDisposition}\n`;
+	if (state?.personalOpinion) d += `Opinion of player: ${truncateText(state.personalOpinion, 180)}\n`;
+	if (state?.relationship) d += `Relationship: ${state.relationship.status}, level ${state.relationship.level}\n`;
+	if (state?.motivations?.length) d += `Motivations: ${state.motivations.slice(0, 5).join('; ')}\n`;
+	if (state?.pressures?.length) d += `Pressures: ${state.pressures.slice(0, 5).join('; ')}\n`;
+	if (state?.knownFacts?.length) d += `Known facts: ${state.knownFacts.slice(-5).join('; ')}\n`;
+	if (state?.revealedSecrets?.length) d += `Revealed secrets: ${state.revealedSecrets.slice(-4).join('; ')}\n`;
+	if (factions.length > 0) d += `Faction ties: ${factions.slice(0, 5).join(', ')}\n`;
+	if (!description && !state?.motivations?.length && !state?.pressures?.length && !state?.personalOpinion) {
+		d += '(No operational character state defined yet.)\n';
+	}
+	return d;
+}
+
+function buildCharacterStateBlock(
+	characterEntries: Entry[],
+	factionEntries: Entry[],
+	recentEntries: StoryEntry[],
+	schemes: string,
+	locationName: string,
+): string {
+	const selected = selectCharactersForTick(characterEntries, factionEntries, recentEntries, schemes, locationName);
+	if (selected.length === 0) return '';
+	return selected.map(character => buildCharacterDossier(character, factionEntries)).join('\n');
+}
+
 function buildFactionDossier(faction: Entry, leaderEntry: Entry | null, characterEntries: Entry[]): string {
 	const state = faction.state as FactionEntryState;
 	let d = `── ${faction.name} ──\n`;
@@ -482,14 +623,26 @@ TONE: Think like a living-world referee. Power is negotiated, spent, lost, and s
 
 ═══ CONTINUITY RULE ═══
 
-The story's own memory is canon. Use chapter summaries, arcs, faction dossiers, relationships, active agreements, schemes, and recent events. Do not steer toward outside canon, genre tropes, or assumed source-material outcomes unless the current story explicitly establishes them. The point is to simulate what happens here.`;
+The story's own memory is canon. Use chapter summaries, arcs, faction dossiers, character dossiers, relationships, active agreements, schemes, and recent events. Do not steer toward outside canon, genre tropes, or assumed source-material outcomes unless the current story explicitly establishes them. The point is to simulate what happens here.`;
 
-	if (p.arcBlock) sys += `\n\n═══ STORY ARCS ═══\n${p.arcBlock}`;
-	if (p.chapterBlock) sys += `\n\n═══ RECENT CHAPTERS ═══\n${p.chapterBlock}`;
+	sys += `\n\nFaction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.`;
+	sys += `\n\n${buildWarExecutionRulesBlock()}`;
+
+	if (p.strategicFrameBlock) {
+		sys += `\n\n=== STRATEGIC WORLD FRAME ===\n${p.strategicFrameBlock}\n\nUse the strategic frame as the arc-level weather system. This tick should choose 1-3 immediate visible movements inside that frame: rumors, prices, patrols, shortages, letters, troop motion, diplomatic tension, or NPC behavior. If forward faction operations are listed, prefer due or urgent operations and translate them into factionActions, rumor seeds, resource pressure, or visible NPC behavior. Do not resolve strategic clocks instantly unless completion conditions are already met.`;
+	}
+
+	if (p.storyMemoryBlock) {
+		sys += `\n\n${p.storyMemoryBlock}`;
+	} else {
+		if (p.arcBlock) sys += `\n\n═══ STORY ARCS ═══\n${p.arcBlock}`;
+		if (p.chapterBlock) sys += `\n\n═══ RECENT CHAPTERS ═══\n${p.chapterBlock}`;
+	}
 	if (p.historyLedgerBlock) sys += `\n\n=== CAUSAL HISTORY LEDGER ===\nEvery new move should trace back to one of these sources unless the immediate scene creates a stronger cause.\n${p.historyLedgerBlock}`;
 	if (p.earnedPayoffBlock) sys += `\n\n=== EARNED PAYOFFS / REWARD SEEDS ===\nThese are not guaranteed wins, but they are permissions for future loyalty, favors, access, protection, reputation gains, invitations, warnings, safe passage, resources, or standing.\n${p.earnedPayoffBlock}`;
 	if (p.allThreads.length > 0) sys += `\n\n═══ OPEN THREADS ═══\n${p.allThreads.map(t => `- ${t}`).join('\n')}`;
 	if (p.characterArcs.length > 0) sys += `\n\n═══ CHARACTER ARCS ═══\n${p.characterArcs.map(ca => `- ${typeof ca === 'string' ? ca : `${ca.name}: ${ca.development}`}`).join('\n')}`;
+	if (p.characterBlock) sys += `\n\n=== CHARACTER STATE DOSSIERS ===\nUse these NPC states for continuity, motives, loyalties, faction ties, and off-screen pressure. Do not invent contradictory motives when a dossier gives a clearer one.\n${p.characterBlock}`;
 
 	if (p.tacticalBlock) {
 		sys += `\n\n═══ RECENT EVENTS ═══\n${p.tacticalBlock}`;
@@ -733,9 +886,13 @@ Trace every reward to a prior chapter, arc, agreement, relationship shift, or th
 function buildMomentumSystemPrompt(p: SimContext & { mode: string; pov: string; tense: string }): string {
 	let sys = `You are a story strategist for an interactive fiction GM.
 
-Your job: read the current world state, recent history, faction dossiers, active schemes, thread registry, and open threads — then plot the NEXT narrative beat's momentum.
+Your job: read the current world state, recent history, faction dossiers, character dossiers, active schemes, thread registry, and open threads — then plot the NEXT narrative beat's momentum.
 
 Think like a patient showrunner planning the next scene. You are NOT writing prose. You are writing a concise strategic brief that the GM will read before generating. The goal is slow-burn escalation, not a twist machine.
+
+Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.
+
+${buildWarExecutionRulesBlock('WAR MOMENTUM RULES')}
 
 SLOW-BURN DIRECTIVE:
 - Most next beats should preserve the current scene's pressure, deepen a relationship, clarify a cost, or let a consequence or reward breathe.
@@ -753,13 +910,13 @@ Inside \`next_beat\`:
 1. **critical_path** — four path objects:
    - \`path_a\`: the obvious next NPC move or earned opening (political overture, summons, trade proposal, loyalty payoff).
    - \`path_b\`: friction — resistance, counter-demand, refusal, social slight.
-   - \`path_c\`: action — physical movement, escalation, arrival/departure, sound from elsewhere.
+   - \`path_c\`: action — NPC/environment physical movement, escalation, arrival/departure, sound from elsewhere.
    - \`path_d\`: dormant twist seed — drawn from stewing secrets ONLY. Usually this is NOT for the next turn; it marks what to withhold or foreshadow.
 
    Each path object:
    {
      "type": "political_overture|social_slight|action_small_scale|twist_from_secret|environmental_shift|discovery|negotiation|confrontation|earned_reward|loyalty_payoff|opportunity|none",
-     "description": "1-2 sentences describing the NPC action or environmental shift",
+     "description": "1-2 sentences describing NPC action, environmental pressure, off-screen movement, or a conditional opportunity. Never command or assume player movement/action.",
      "friction": true|false,
      "action": true|false,
      "twist_from_existing_secret": true|false,
@@ -793,7 +950,9 @@ Inside \`next_beat\`:
 
 ═══ RULES ═══
 
-1. CRITICAL PATH RULE — you only control NPCs and the environment. NEVER predict, assume, or dictate what the player will do. All paths describe NPC actions, environmental shifts, or off-screen events ONLY.
+1. CRITICAL PATH RULE — you only control NPCs and the environment. NEVER predict, assume, or dictate what the player will do. All paths describe NPC actions, environmental shifts, off-screen events, or conditional opportunities ONLY.
+
+1a. PLOT MOMENTUM IS NOT A COMMAND QUEUE. It may offer pressure, openings, summons, messengers, sounds, objects, documents, delays, rumors, NPC questions, or off-screen NPC movement. It may not move Aurion. If a beat depends on Aurion choosing movement, summoning someone, writing, opening, entering, leaving, or otherwise acting, write it conditionally: "If Aurion chooses to return to the Eastern Wing or summons Vessia..." If he remains elsewhere, foreshadow only through a messenger, distant sound, waiting ledger, household servant question, or similar pressure.
 
 2. DEFAULT TO CONTINUITY, FRICTION, AND PAYOFF. NPCs have their own agendas, but resistance can be quiet: delay, uncertainty, price, silence, logistics, or a small refusal. Earned goodwill can also be quiet: a warning, better terms, public credit, access, cover, shelter, or a loyal NPC choosing the player under pressure.
 
@@ -829,13 +988,24 @@ When plotting branches:
 - Path A (obvious) should usually be an overture or earned opportunity: an offer, summons, alliance proposal, trade, deal, invitation, repaid favor, or ally opening a door.
 - Path B (friction) should often be a social, legal, or logistical obstacle: a refusal, insult, broken promise, blocked route, recalled debt, or missing resource.
 - Path C (action) should be occasional and small-scale: a messenger arriving, a patrol sighted, a door barred, a theft discovered, a distant fire, a public challenge, or a limited confrontation. Avoid constant raids, abductions, assassinations, and sudden attacks.
-- Path D (twist) should usually be dormant. Use it to name a secret pressure that remains off-page unless the current action directly forces it. If it is not earned, set type "none" or downgrade to friction.`;
+- Path D (twist) should usually be dormant. Use it to name a secret pressure that remains off-page unless the current action directly forces it. If it is not earned, set type "none" or downgrade to friction.
+- Any path that depends on Aurion moving, writing, opening, entering, leaving, summoning, deciding, remembering, realizing, or knowing something must be phrased as a conditional opportunity only.
+- Earned payoff paths that require Aurion to go somewhere or summon someone must be framed as optional openings, not transitions.`;
 
-	if (p.arcBlock) sys += `\n\n═══ STORY ARCS ═══\n${p.arcBlock}`;
-	if (p.chapterBlock) sys += `\n\n═══ RECENT CHAPTERS ═══\n${p.chapterBlock}`;
+	if (p.strategicFrameBlock) {
+		sys += `\n\n=== STRATEGIC WORLD FRAME ===\n${p.strategicFrameBlock}\n\nUse this as arc-level pressure for next-beat planning. If forward faction operations are listed, pick the operation most likely to touch the current scene through evidence, rumor, envoy, cost, weather, shortage, or NPC behavior. The recommended next beat may foreshadow or localize the pressure, but must not expose hidden strategy without scene evidence.`;
+	}
+
+	if (p.storyMemoryBlock) {
+		sys += `\n\n${p.storyMemoryBlock}`;
+	} else {
+		if (p.arcBlock) sys += `\n\n═══ STORY ARCS ═══\n${p.arcBlock}`;
+		if (p.chapterBlock) sys += `\n\n═══ RECENT CHAPTERS ═══\n${p.chapterBlock}`;
+	}
 	if (p.historyLedgerBlock) sys += `\n\n=== CAUSAL HISTORY LEDGER ===\nUse this as the source list for future consequences, rewards, and twists.\n${p.historyLedgerBlock}`;
-	if (p.earnedPayoffBlock) sys += `\n\n=== EARNED PAYOFFS / REWARD SEEDS ===\nUse these to create earned_reward, loyalty_payoff, or opportunity paths when the next beat can honor prior choices.\n${p.earnedPayoffBlock}`;
+	if (p.earnedPayoffBlock) sys += `\n\n=== EARNED PAYOFFS / REWARD SEEDS ===\nUse these to create earned_reward, loyalty_payoff, or opportunity paths when the next beat can honor prior choices. If a payoff needs Aurion to move, summon, write, open, enter, leave, or decide, describe only the conditional opening or the NPC/environment pressure that invites that choice.\n${p.earnedPayoffBlock}`;
 	if (p.characterArcs.length > 0) sys += `\n\n═══ CHARACTER ARCS ═══\n${p.characterArcs.map(ca => `- ${typeof ca === 'string' ? ca : `${ca.name}: ${ca.development}`}`).join('\n')}`;
+	if (p.characterBlock) sys += `\n\n=== CHARACTER STATE DOSSIERS ===\nUse these NPC states for continuity, motives, loyalties, faction ties, and off-screen pressure. The next beat should respect what each NPC wants, knows, fears, and owes.\n${p.characterBlock}`;
 
 	if (p.tacticalBlock) {
 		sys += `\n\n═══ RECENT EVENTS (last ${MAX_RECENT_ENTRIES} entries) ═══\n${p.tacticalBlock}`;
@@ -958,6 +1128,7 @@ export class WorldSimulationService extends BaseAIService {
 		tense = 'present',
 		recentFactionActions: FactionActionRecord[] = [],
 		relationChangeLog: RelationChangeEvent[] = [],
+		strategicWorldFrame: StrategicWorldFrame | null = null,
 	): Promise<WorldSimulationResult & { seasonEffect: SeasonEffect }> {
 		const hasFactions = factionEntries.length > 0;
 
@@ -973,6 +1144,7 @@ export class WorldSimulationService extends BaseAIService {
 			chapters, arcs, recentEntries, factionEntries, characterEntries,
 			entryRelationships, threads, agreements, worldEvents, locationName,
 			schemes, timeTracker, recentFactionActions, relationChangeLog,
+			strategicWorldFrame,
 		);
 
 		const system = buildWorldSimSystemPrompt({ ...ctx, mode, pov, tense });
@@ -983,7 +1155,7 @@ export class WorldSimulationService extends BaseAIService {
 
 		const result = await this.generateStructured(worldSimulationResultSchema, system, prompt);
 		const guarded = result.plotMomentum
-			? { ...result, plotMomentum: applySlowBurnGuard(result.plotMomentum) }
+			? { ...result, plotMomentum: applyPlotMomentumAgencyGuard(applySlowBurnGuard(result.plotMomentum)) }
 			: result;
 
 		return { ...guarded, seasonEffect: ctx.season };
@@ -1012,6 +1184,7 @@ export class WorldSimulationService extends BaseAIService {
 		tense = 'present',
 		recentFactionActions: FactionActionRecord[] = [],
 		relationChangeLog: RelationChangeEvent[] = [],
+		strategicWorldFrame: StrategicWorldFrame | null = null,
 	): Promise<PlotMomentum> {
 		log('generateMomentum', {
 			entries: recentEntries.length,
@@ -1023,6 +1196,7 @@ export class WorldSimulationService extends BaseAIService {
 			chapters, arcs, recentEntries, factionEntries, characterEntries,
 			entryRelationships, threads, agreements, worldEvents, locationName,
 			schemes, timeTracker, recentFactionActions, relationChangeLog,
+			strategicWorldFrame,
 		);
 
 		const system = buildMomentumSystemPrompt({ ...ctx, mode, pov, tense });
@@ -1036,6 +1210,6 @@ Recent context: ${recentEntries.length} entries, ${factionEntries.length} factio
 Generate the plot momentum JSON.`;
 
 		const result = await this.generateStructured(plotMomentumSchema, system, prompt);
-		return applySlowBurnGuard(result);
+		return applyPlotMomentumAgencyGuard(applySlowBurnGuard(result));
 	}
 }

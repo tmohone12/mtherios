@@ -22,6 +22,7 @@ import {
 	getRumors,
 	getSchemes,
 	getStoryThreads,
+	getStrategicWorldFrames,
 	getSetting,
 	setSetting,
 	createStory,
@@ -33,6 +34,7 @@ import {
 	createChapter,
 	createLorebookEntry,
 	createArc,
+	createStrategicWorldFrame,
 } from '$lib/services/database';
 import type {
 	Story,
@@ -52,6 +54,7 @@ import type {
 	RumorRecord,
 	Scheme,
 	StoryThread,
+	StrategicWorldFrame,
 } from '$lib/types';
 
 // ============================================================================
@@ -86,6 +89,7 @@ export interface StoryExportData {
 	rumors?: RumorRecord[];
 	schemes?: Scheme[];
 	storyThreads?: StoryThread[];
+	strategicWorldFrames?: StrategicWorldFrame[];
 	/** API profiles & service configs — lets the other device connect without re-setup. */
 	settings?: ExportedSettings;
 }
@@ -115,6 +119,7 @@ export async function exportStory(storyId: string): Promise<StoryExportData> {
 		rumors,
 		schemes,
 		storyThreads,
+		strategicWorldFrames,
 	] = await Promise.all([
 		getStoryEntries(storyId),
 		getCharacters(storyId),
@@ -132,6 +137,7 @@ export async function exportStory(storyId: string): Promise<StoryExportData> {
 		getRumors(storyId),
 		getSchemes(storyId),
 		getStoryThreads(storyId),
+		getStrategicWorldFrames(storyId),
 	]);
 
 	// Bundle API settings so the receiving device can connect
@@ -167,6 +173,7 @@ export async function exportStory(storyId: string): Promise<StoryExportData> {
 		rumors,
 		schemes,
 		storyThreads,
+		strategicWorldFrames,
 		settings: Object.keys(settings).length > 0 ? settings : undefined,
 	};
 }
@@ -349,6 +356,18 @@ export async function importStoryFromJson(file: File): Promise<string> {
 				branchId: arc.branchId ? remap(arc.branchId) : null,
 			};
 			await createArc(mapped);
+		}
+	}
+
+	if (data.strategicWorldFrames) {
+		for (const frame of data.strategicWorldFrames) {
+			const mapped: StrategicWorldFrame = {
+				...frame,
+				id: remap(frame.id),
+				storyId: newStoryId,
+				arcId: frame.arcId ? remap(frame.arcId) : null,
+			};
+			await createStrategicWorldFrame(mapped);
 		}
 	}
 

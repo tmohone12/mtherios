@@ -11,6 +11,12 @@ import {
 import { arcSummarySchema } from '../arc';
 import { extractedRuleSchema, reflectionResultSchema, ruleRelevanceSchema } from '../procedural';
 import { entryRefinementResultSchema } from '../entryRefinement';
+import { strategicWorldFrameSchema } from '../strategicWorldBrain';
+import { wikiLintResultSchema, wikiTextFixSchema } from '../wikiLint';
+import {
+	applyPlotMomentumAgencyGuard,
+	describesForcedPlayerAction,
+} from '../../../context/plotMomentumAgency';
 
 // ════════════════════════════════════════════════════════════════
 // Action Choices
@@ -279,7 +285,7 @@ describe('plotMomentumSchema', () => {
 		next_beat: {
 			critical_path: {
 				path_a: { type: 'political_overture', description: 'A raven arrives with a marriage offer.' },
-				path_b: { type: 'social_slight', description: 'A lord refuses to rise when the player enters.', friction: true },
+				path_b: { type: 'social_slight', description: 'A lord refuses to rise when the player is announced.', friction: true },
 				path_c: { type: 'action_small_scale', description: 'A horse screams in the stable.', action: true },
 				path_d: { type: 'twist_from_secret', description: 'A maester reveals a hidden will.', twist_from_existing_secret: true },
 			},
@@ -307,6 +313,24 @@ describe('plotMomentumSchema', () => {
 		expect(parsed.next_beat.critical_path.path_b.friction).toBe(true);
 		expect(parsed.next_beat.next_turn_strategy.recommended_path).toBe('path_b');
 		expect(parsed.next_beat.faction_advisory.house_stark.disposition).toBe('cautiously allied');
+	});
+
+	it('accepts conditional player-dependent payoff wording', () => {
+		const parsed = plotMomentumSchema.parse({
+			next_beat: {
+				...validNextBeat.next_beat,
+				critical_path: {
+					...validNextBeat.next_beat.critical_path,
+					path_a: {
+						type: 'loyalty_payoff',
+						description: 'If Aurion chooses to return to the Eastern Wing or summons Vessia, she may be available with the war-galley ledgers.',
+					},
+				},
+			},
+		});
+
+		expect(parsed.next_beat.critical_path.path_a.description).toContain('If Aurion chooses');
+		expect(describesForcedPlayerAction(parsed.next_beat.critical_path.path_a.description)).toBe(false);
 	});
 
 	it('accepts earned reward path types for plot momentum', () => {
@@ -357,6 +381,323 @@ describe('plotMomentumSchema', () => {
 			},
 		};
 		expect(() => plotMomentumSchema.parse(bad)).toThrow();
+	});
+
+	it('detects forced player movement in momentum descriptions', () => {
+		expect(describesForcedPlayerAction('Aurion returns to the Eastern Wing.')).toBe(true);
+		expect(describesForcedPlayerAction('You leave the vault.')).toBe(true);
+		expect(describesForcedPlayerAction('A messenger knocks at the vault door.')).toBe(false);
+	});
+
+	it('annotates forced player movement as conditional momentum', () => {
+		const forced = plotMomentumSchema.parse({
+			next_beat: {
+				...validNextBeat.next_beat,
+				critical_path: {
+					...validNextBeat.next_beat.critical_path,
+					path_a: {
+						type: 'loyalty_payoff',
+						description: 'Aurion returns to the Eastern Wing. Aurion writes the letter to Braavos.',
+						action: true,
+					},
+				},
+				next_turn_strategy: {
+					recommended_path: 'path_a',
+					rationale: 'The payoff is ready.',
+				},
+			},
+		});
+
+		const guarded = applyPlotMomentumAgencyGuard(forced);
+		const path = guarded.next_beat.critical_path.path_a;
+		expect(path.description).toContain('Conditional opportunity only');
+		expect(path.description).toContain('Aurion may choose to return');
+		expect(path.description).toContain('Aurion may choose to write');
+		expect(path.description).toContain('Do not move Aurion');
+		expect(path.action).toBe(false);
+		expect(path.downgraded_to_friction).toBe(true);
+		expect(guarded.next_beat.next_turn_strategy.rationale).toContain('Player-agency guard');
+	});
+
+	it('keeps direct NPC and environment momentum unchanged', () => {
+		const direct = plotMomentumSchema.parse({
+			next_beat: {
+				...validNextBeat.next_beat,
+				critical_path: {
+					...validNextBeat.next_beat.critical_path,
+					path_c: {
+						type: 'action_small_scale',
+						description: 'A messenger knocks at the vault door. A horse screams in the stable.',
+						action: true,
+					},
+				},
+				next_turn_strategy: {
+					recommended_path: 'path_c',
+					rationale: 'A small interruption preserves pressure.',
+				},
+			},
+		});
+
+		const guarded = applyPlotMomentumAgencyGuard(direct);
+		expect(guarded.next_beat.critical_path.path_c.description).toBe('A messenger knocks at the vault door. A horse screams in the stable.');
+		expect(guarded.next_beat.critical_path.path_c.action).toBe(true);
+		expect(guarded.next_beat.next_turn_strategy.rationale).toBe('A small interruption preserves pressure.');
+	});
+});
+
+describe('strategicWorldFrameSchema', () => {
+	it('accepts a strategic frame with scheme directives and clocks', () => {
+		const parsed = strategicWorldFrameSchema.parse({
+			arcNumber: 4,
+			trigger: 'arc_created',
+			chapterRange: { from: 16, to: 20 },
+			continuityAssessment: {
+				summary: 'Border trade pressure is unresolved.',
+				unresolvedContinuityRisks: ['Free Companies have not reacted.'],
+				staleThreads: [],
+				contradictionsToReview: [],
+			},
+			worldMood: {
+				politicalTemperature: 'volatile',
+				economicPressure: 'scarcity',
+				socialPressure: 'anxious',
+			},
+			publicSummary: 'The western grain roads are politically decisive.',
+			hiddenStrategicSummary: 'The Synod is engineering dependence on escorts.',
+			mainPlots: [{
+				title: 'Control of the Western Grain Roads',
+				kind: 'faction_plot',
+				pressure: 'high',
+				summary: 'Several powers maneuver over food movement.',
+				linkedSchemeIds: ['scheme_synod'],
+				linkedFactionGoalIds: ['goal_synod'],
+				linkedThreadIds: ['thread_grain'],
+				expectedPayoff: 'this_arc',
+				playerAgency: 'reactive',
+			}],
+			schemeDirectives: [{
+				type: 'advance_scheme',
+				schemeId: 'scheme_synod',
+				progressDelta: 12,
+				visibleEffects: ['Caravan prices rise.'],
+				hiddenEffects: ['Bribed captains steer trade.'],
+				nextMoves: ['Pressure merchants into escort contracts.'],
+				linkedFactionGoalIds: ['goal_synod'],
+				linkedThreadIds: ['thread_grain'],
+				linkedWorldEventIds: [],
+				evidenceRefs: [{ sourceType: 'arc', label: 'Arc 3 summary' }],
+				confidence: 0.82,
+				reason: 'No rival has disrupted the plan.',
+			}],
+			strategicClocks: [{
+				id: 'clock_synod_grain',
+				name: 'The Synod Secures the Grain Roads',
+				ownerFactionName: 'Iron Synod',
+				progress: 55,
+				velocity: 'steady',
+				goal: 'Control food movement before winter.',
+				visibleToPlayer: false,
+				tickTriggers: ['player ignores merchant disappearances'],
+				stallTriggers: ['player exposes staged attacks'],
+				completionConsequences: ['Food prices become politically controlled.'],
+				currentPhase: 'Merchants begin accepting Synod escorts.',
+			}],
+			factionOperations: [{
+				id: 'op_synod_escort_contracts',
+				factionName: 'Iron Synod',
+				operation: 'Pressure river merchants into accepting armed escort contracts.',
+				objective: 'Control grain movement without announcing a blockade.',
+				actionType: 'economic',
+				target: 'Western grain roads',
+				urgency: 'urgent',
+				visibility: 'secret',
+				timeHorizon: 'next_few_turns',
+				triggerConditions: ['player ignores missing caravans'],
+				stallConditions: ['player exposes staged attacks'],
+				visibleSignals: ['Escort prices rise', 'Merchants complain about delays'],
+				hiddenSteps: ['Bribe two caravan masters'],
+				linkedClockIds: ['clock_synod_grain'],
+				linkedSchemeIds: ['scheme_synod'],
+				evidenceRefs: [{ sourceType: 'faction', label: 'Iron Synod goals' }],
+				confidence: 0.86,
+			}],
+			warPressureCard: {
+				phase: 'mobilization',
+				mainFactions: ['Iron Synod', 'River League'],
+				warAims: ['Control the grain roads'],
+				frontsOrTheaters: ['Western grain roads'],
+				importantSchemes: ['The Synod Secures the Grain Roads'],
+				visibleSigns: ['Escort prices rise'],
+				hiddenFacts: ['Bribed captains are steering trade'],
+				nextEscalationIfIgnored: 'Merchants accept Synod escorts as permanent protection.',
+				playerInterventionPoints: ['Expose staged attacks'],
+			},
+			narratorPromptCard: 'Merchants are frightened and food prices are rising.',
+			fastWorldSimInstructions: 'Advance road pressure through prices and missing caravans.',
+		});
+
+		expect(parsed.schemeDirectives).toHaveLength(1);
+		expect(parsed.strategicClocks[0].progress).toBe(55);
+		expect(parsed.warPressureCard?.phase).toBe('mobilization');
+		expect(parsed.factionOperations[0]).toMatchObject({
+			factionName: 'Iron Synod',
+			actionType: 'economic',
+			urgency: 'urgent',
+			timeHorizon: 'next_few_turns',
+		});
+	});
+
+	it('normalizes compact strategic brain output from loose JSON mode', () => {
+		const parsed = strategicWorldFrameSchema.parse({
+			arcNumber: 1,
+			globalPressureLevel: 85,
+			narratorPromptCard: 'CURRENT FOCUS: Aurion and Vaelar are preparing military enforcement.',
+			fastWorldSimInstructions: 'HOUSE BALAERYS: Transitioning to a war footing.',
+			mainPlots: [{
+				name: 'The Iron Leash',
+				pressure: 85,
+				summary: 'The debt trap is springing shut.',
+			}],
+			subplots: [{
+				name: 'Elephant Obstruction',
+				pressure: 'urgent',
+				summary: 'Guild regulations are slowing Balaerys logistics.',
+			}],
+			schemeDirectives: [{
+				id: 'sch_westeros_blockade',
+				type: 'create',
+				name: 'The Crimson Blockade',
+				factionId: '6448b5b4',
+				targetId: 'c55edf86',
+				description: 'Deploy the Volantene fleet to blockade Lannisport and Blackwater Bay.',
+				priority: 10,
+				progress: 10,
+				visibleEffects: 'Harbor crews begin counting hulls.',
+				hiddenEffects: 'Tiger captains receive sealed blockade orders.',
+				confidence: 85,
+			}],
+			plotUpdates: [{
+				id: 'plt_iron_throne_debt',
+				name: 'The Iron Leash',
+				status: 'active',
+				pressure: 85,
+				summary: 'The financial trap is springing shut.',
+			}],
+			backgroundFactionMoves: [{
+				faction: 'House Balaerys',
+				move: 'Send sealed fleet orders to allied captains.',
+				goal: 'Prepare a blockade without public commitment.',
+				type: 'fleet logistics',
+				priority: 75,
+				horizon: 'next_tick',
+				visibleEffects: 'Dock scribes start counting hulls.',
+				hiddenEffects: ['Captains receive coded harbor routes.'],
+				confidence: 80,
+			}],
+			warPressure: {
+				phase: 'fleet mobilization',
+				mainFactions: ['House Balaerys', 'Iron Throne'],
+				warAims: ['Force debt compliance'],
+				frontsOrTheaters: ['Blackwater Bay'],
+				importantSchemes: ['The Crimson Blockade'],
+				visibleSigns: ['Dock scribes count hulls'],
+				hiddenFacts: ['Sealed routes are already drafted'],
+				nextEscalationIfIgnored: 'The fleet closes the bay.',
+				playerInterventionPoints: ['Intercept sealed orders'],
+			},
+			canonPatchSuggestions: [{
+				entityId: 'Aurion_Balaerys',
+				field: 'assets',
+				newValue: 'Three live dragons roosting in a remote mountain cavern.',
+				reason: 'Player explicitly narrated the dragons roosting.',
+				confidence: 90,
+				evidenceRefs: ['Raw entry: dragons make deep caverns.'],
+			}],
+		});
+
+		expect(parsed.worldMood.politicalTemperature).toBe('war');
+		expect(parsed.warPressureCard?.phase).toBe('fleet mobilization');
+		expect(parsed.mainPlots[0].title).toBe('The Iron Leash');
+		expect(parsed.mainPlots[0].pressure).toBe('critical');
+		expect(parsed.subplots[0].pressure).toBe('high');
+		expect(parsed.schemeDirectives[0]).toMatchObject({
+			type: 'create_scheme',
+			title: 'The Crimson Blockade',
+			ownerName: '6448b5b4',
+			goal: 'Deploy the Volantene fleet to blockade Lannisport and Blackwater Bay.',
+			progressDelta: 10,
+			visibleEffects: ['Harbor crews begin counting hulls.'],
+			hiddenEffects: ['Tiger captains receive sealed blockade orders.'],
+			confidence: 0.85,
+		});
+		expect(parsed.factionOperations[0]).toMatchObject({
+			factionName: 'House Balaerys',
+			operation: 'Send sealed fleet orders to allied captains.',
+			actionType: 'military',
+			urgency: 'urgent',
+			timeHorizon: 'next_tick',
+			visibleSignals: ['Dock scribes start counting hulls.'],
+		});
+		expect(parsed.canonPatchSuggestions[0].type).toBe('custom');
+		expect(parsed.canonPatchSuggestions[0].confidence).toBe(0.9);
+		expect(parsed.canonPatchSuggestions[0].evidenceRefs[0].label).toBe('Raw entry: dragons make deep caverns.');
+	});
+});
+
+describe('wikiLintResultSchema', () => {
+	it('requires coverage, evidence, confidence, and entry ids', () => {
+		const parsed = wikiLintResultSchema.parse({
+			coverage: {
+				entryCount: 2,
+				relationshipCount: 1,
+				chapterCount: 3,
+				allEntriesIncluded: true,
+				notes: 'All active entries were included.',
+			},
+			contradictions: [{
+				entryId: 'entry_house',
+				entryName: 'House Veyr',
+				issue: 'The description says the house is extinct, but state lists active members.',
+				conflictingEntryId: null,
+				conflictsWith: 'House Veyr state.knownMembers',
+				severity: 'major',
+				evidence: ['entry_house desc/state'],
+				confidence: 0.91,
+			}],
+			staleClaims: [],
+			orphans: [],
+			missingEntries: [],
+			gapSuggestions: [],
+			textFixes: [{
+				entryId: 'entry_house',
+				entryName: 'House Veyr',
+				field: 'description',
+				originalText: 'extict',
+				correctedText: 'extinct',
+				reason: 'Spelling fix.',
+				evidence: ['entry_house description'],
+				confidence: 1,
+				safeToAutoApply: true,
+			}],
+			summary: 'One contradiction and one safe text fix.',
+		});
+
+		expect(parsed.coverage.allEntriesIncluded).toBe(true);
+		expect(parsed.contradictions[0].entryId).toBe('entry_house');
+	});
+
+	it('rejects no-op text fixes', () => {
+		expect(() => wikiTextFixSchema.parse({
+			entryId: 'entry_house',
+			entryName: 'House Veyr',
+			field: 'description',
+			originalText: 'unchanged',
+			correctedText: 'unchanged',
+			reason: 'No change.',
+			evidence: ['entry_house description'],
+			confidence: 0.5,
+			safeToAutoApply: true,
+		})).toThrow();
 	});
 });
 
@@ -501,11 +842,42 @@ describe('entryRefinementResultSchema', () => {
 			bio: 'Born in Pyke, raised at sea.',
 			motivations: ['Reclaim her birthright', 'Avenge her father'],
 			personality: 'Steely and quiet.',
+			currentDisposition: 'wary but loyal',
+			personalOpinion: 'Trusts the player after the ransom was paid.',
+			pressures: ['father has gambling debts'],
+			factionTags: ['House Greyjoy'],
+			knownFacts: ['The player spared her brother.'],
+			relationshipLevel: 35,
+			relationshipStatus: 'trusted ally',
 			reasoning: 'Character context expanded.',
 		};
 		const parsed = entryRefinementResultSchema.parse(data);
 		expect(parsed.bio).toBe('Born in Pyke, raised at sea.');
 		expect(parsed.motivations).toHaveLength(2);
+		expect(parsed.relationshipLevel).toBe(35);
+	});
+
+	it('accepts faction operational state fields', () => {
+		const data = {
+			description: 'Old text plus the port blockade.',
+			playerStanding: -45,
+			factionStatus: 'hostile',
+			knownMembers: ['Lord Harlaw', 'Asha'],
+			goals: [{
+				description: 'Break the river blockade',
+				priority: 8,
+				progress: 25,
+				type: 'military',
+				deadline: 'before winter',
+			}],
+			resources: { military: 70, wealth: 45, influence: 55, information: 35, morale: 60 },
+			disposition: 'aggressive',
+			territory: ['Pyke', 'Lordsport'],
+			reasoning: 'Faction state expanded.',
+		};
+		const parsed = entryRefinementResultSchema.parse(data);
+		expect(parsed.goals?.[0].description).toBe('Break the river blockade');
+		expect(parsed.resources?.military).toBe(70);
 	});
 
 	it('accepts all optional fields omitted except reasoning', () => {

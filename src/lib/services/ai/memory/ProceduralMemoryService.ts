@@ -21,6 +21,7 @@ import {
 } from '$lib/services/database';
 import { tfidfSimilarity } from '../embeddings/EmbeddingService';
 import type { ProceduralRule, RuleCategory, RuleMaturity, Chapter, Arc, Entry } from '$lib/types';
+import { buildWarMemoryContinuityBlock } from '../context/warDoctrine';
 
 const log = createLogger('ProceduralMemory');
 
@@ -125,6 +126,10 @@ export class ProceduralMemoryService extends BaseAIService {
 		const system = `You are a narrative pattern analyst for a ${mode} interactive fiction story.
 
 Your job is to extract DURABLE RULES and PATTERNS from the story so far — things the narrator should remember and apply consistently in future scenes.
+
+Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.
+
+${buildWarMemoryContinuityBlock()}
 
 ═══ EXISTING RULES ═══
 ${existingRulesBlock || '(none yet)'}

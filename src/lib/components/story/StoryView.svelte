@@ -42,6 +42,7 @@
 	let characterDescriptionDraft = $state('');
 	let characterTraitsDraft = $state('');
 	let reputationDraft = $state('');
+	let playerLedgerDraft = $state('');
 	let confirmingEntryDeleteId = $state<string | null>(null);
 	let confirmingDeleteFromId = $state<string | null>(null);
 	let messageControlError = $state<string | null>(null);
@@ -66,6 +67,7 @@
 		characterDescriptionDraft = protag?.description ?? '';
 		characterTraitsDraft = protag?.traits?.join(', ') ?? '';
 		reputationDraft = story.currentStory?.playerReputation ?? '';
+		playerLedgerDraft = story.currentStory?.playerLedger ?? '';
 		editorTab = 'story';
 		headerEditorOpen = true;
 	}
@@ -81,6 +83,9 @@
 		}
 		if (reputationDraft !== (story.currentStory?.playerReputation ?? '')) {
 			await story.updatePlayerReputation(reputationDraft);
+		}
+		if (playerLedgerDraft !== (story.currentStory?.playerLedger ?? '')) {
+			await story.updatePlayerLedger(playerLedgerDraft);
 		}
 		const traits = characterTraitsDraft.split(/[,;\n]/).map(t => t.trim()).filter(Boolean);
 		if (characterNameDraft.trim()) {
@@ -830,10 +835,24 @@
 					></textarea>
 				</div>
 
+				<div class="space-y-1.5">
+					<label for="player-ledger-input" class="text-xs font-medium text-[var(--text-muted)]">Player Ledger</label>
+					<p class="text-[10px] text-[var(--text-muted)]/80 leading-relaxed">
+						Income, assets, holdings, debts, payroll, claims, stores, ships, troops under pay, and regular expenses. The narrator sees this as its own prompt section.
+					</p>
+					<textarea
+						id="player-ledger-input"
+						bind:value={playerLedgerDraft}
+						placeholder={"Coin: ...\nIncome: ...\nAssets and holdings: ...\nDebts owed: ...\nDebts due: ...\nRegular expenses: ..."}
+						rows="8"
+						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+					></textarea>
+				</div>
+
 				<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-muted)]">
 					This is the live protagonist record used in prompts. Update age, injuries, identity changes, titles, or appearance here when long play drifts.
 				</div>
-				{#if characterNameDraft !== (story.protagonist?.name ?? '') || characterDescriptionDraft !== (story.protagonist?.description ?? '') || characterTraitsDraft !== (story.protagonist?.traits?.join(', ') ?? '') || reputationDraft !== (story.currentStory?.playerReputation ?? '')}
+				{#if characterNameDraft !== (story.protagonist?.name ?? '') || characterDescriptionDraft !== (story.protagonist?.description ?? '') || characterTraitsDraft !== (story.protagonist?.traits?.join(', ') ?? '') || reputationDraft !== (story.currentStory?.playerReputation ?? '') || playerLedgerDraft !== (story.currentStory?.playerLedger ?? '')}
 					<div class="text-right text-[10px] text-purple-400">Unsaved changes</div>
 				{/if}
 				{/if}

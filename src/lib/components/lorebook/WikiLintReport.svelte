@@ -37,7 +37,7 @@
 	const safeFixCount = $derived.by(() => {
 		if (!result) return 0;
 		return result.missingEntries.filter(entry => !fixedKeys.has(missingKey(entry))).length +
-			result.textFixes.filter(fix => !fixedKeys.has(textFixKey(fix))).length;
+			result.textFixes.filter(fix => fix.safeToAutoApply && !fixedKeys.has(textFixKey(fix))).length;
 	});
 
 	function missingKey(item: WikiMissingEntry): string {
@@ -45,7 +45,7 @@
 	}
 
 	function textFixKey(item: WikiTextFix): string {
-		return `text:${item.entryName}:${item.field}:${item.originalText}`;
+		return `text:${item.entryId}:${item.field}:${item.originalText}`;
 	}
 
 	function markFixed(key: string) {
@@ -99,6 +99,7 @@
 			}
 			if (onApplyTextFix) {
 				for (const fix of result.textFixes) {
+					if (!fix.safeToAutoApply) continue;
 					const key = textFixKey(fix);
 					if (fixedKeys.has(key)) continue;
 					await onApplyTextFix(fix);
@@ -123,6 +124,7 @@
 				<h3 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Wiki Health Check</h3>
 				{#if result}
 					<span class="text-xs text-[var(--text-muted)]">· {totalIssues} item{totalIssues === 1 ? '' : 's'}</span>
+					<span class="text-xs text-[var(--text-muted)]">Â· {result.coverage.entryCount} entries audited</span>
 				{/if}
 			</div>
 			<div class="flex items-center gap-2">
@@ -155,6 +157,10 @@
 				</div>
 			{:else if result}
 				<p class="text-sm leading-relaxed text-[var(--text-primary)]">{result.summary}</p>
+				<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-[10px] leading-relaxed text-[var(--text-muted)]">
+					All entries included: {result.coverage.allEntriesIncluded ? 'yes' : 'no'} -
+					Entries: {result.coverage.entryCount} - Relationships: {result.coverage.relationshipCount} - Chapters: {result.coverage.chapterCount}
+				</div>
 
 				{#if fixError}
 					<div class="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-xs text-rose-300">
@@ -256,6 +262,9 @@
 											<div class="flex items-baseline gap-2">
 												<span class="font-semibold text-[var(--text-primary)]">{fix.entryName}</span>
 												<span class="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">{fix.field}</span>
+												{#if !fix.safeToAutoApply}
+													<span class="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">review</span>
+												{/if}
 											</div>
 											<p class="mt-1 text-[var(--text-muted)] leading-relaxed">{fix.reason}</p>
 											<div class="mt-1 grid gap-1 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 font-mono text-[10px]">
@@ -263,7 +272,7 @@
 												<div class="text-emerald-300/80">+ {fix.correctedText}</div>
 											</div>
 										</div>
-										{#if onApplyTextFix}
+										{#if onApplyTextFix && fix.safeToAutoApply}
 											<button
 												onclick={() => applyTextFix(fix)}
 												disabled={fixing || fixedKeys.has(key)}

@@ -1,12 +1,213 @@
 # MTHERIOS ARCHITECTURE & CODEBASE DOCUMENTATION
 
-This is a comprehensive reference document for the entire Mtherios interactive fiction engine. Mtherios is a browser-based, IndexedDB-backed interactive fiction system with a full AI-driven living world simulation.
+This document explains the current Mtherios architecture and then keeps the
+older file-by-file reference below for deeper orientation. When the summary and
+the older reference disagree, prefer the summary and then verify against the
+source code.
+
+Mtherios is a SvelteKit interactive fiction engine that turns player actions
+and AI narration into durable simulated world state. It can run local-first in
+the browser through IndexedDB, and it also has an optional backend-backed canon
+path using Postgres and Drizzle.
+
+---
+
+## Current Architecture Summary
+
+The project has four main layers:
+
+1. UI layer: Svelte components for story play, lorebook editing, settings,
+   onboarding, world inspection, and import/export.
+2. Local state layer: Svelte stores and IndexedDB records for active story
+   state, settings, transcript entries, lorebook entries, world records, and
+   generated assets.
+3. AI orchestration layer: prompt assembly, prompt budgeting, retrieval,
+   narrative generation, structured tool schemas, world-state extraction, and
+   background AI services.
+4. Backend canon layer: optional server-side story state, memory retrieval,
+   turn processing, validation, state patches, sync operations, and canonical
+   records.
+
+The core canon model is:
+
+```text
+transcript evidence -> AI proposes structured changes -> code validates and merges -> durable canon
+```
+
+For local-only stories, IndexedDB is the working source of truth. For
+backend-backed stories, the backend database is the source of truth and
+IndexedDB is a local/offline cache.
+
+## Local Turn Flow
+
+The local browser-first path is centered on `ActionInput.svelte` and
+`story.svelte.ts`.
+
+1. The player submits an action.
+2. `story.buildStateSnapshot()` gathers typed state for the current scene.
+3. `story.buildOrchestratorSystemBlocks()` assembles stable and dynamic prompt
+   sections.
+4. `ContextBudgetService` caps dynamic prompt sections by token budget.
+5. The narrative model streams the response.
+6. Inline tool calls or the post-stream extractor produce `update_world_state`
+   payloads.
+7. `src/lib/services/ai/tools/executor.ts` applies validated changes to
+   IndexedDB.
+8. Background work can update summaries, procedural memory, plot momentum,
+   world simulation, embeddings, and lorebook state.
+
+Important local records include stories, entries, characters, locations, items,
+lorebook entries, relationships, conversations, agreements, rumors, faction
+actions, schemes, story threads, chapters, arcs, procedural rules, images, and
+the player ledger.
+
+## Backend Turn Flow
+
+The backend-backed path is centered on `/api/turn` and the server turn
+orchestrator.
+
+1. The browser calls `story.submitBackendTurn()`.
+2. `/api/turn` routes to `src/lib/server/turn/orchestrator.ts`.
+3. The backend writes the player entry and updates client-supplied metadata
+   such as player reputation and player ledger.
+4. `src/lib/server/memory/retrieval.ts` builds a compact memory packet.
+5. `src/lib/server/turn/context.ts` loads entities, factions, memberships,
+   resources, goals, agreements, threads, events, beliefs, chapters, and arcs.
+6. `src/lib/server/turn/promptPacket.ts` builds a budgeted server prompt.
+7. The model generates narration.
+8. `buildStateExtractionPrompt()` asks for structured changes.
+9. `src/lib/server/turn/patchValidator.ts` validates, merges, and persists
+   canonical changes.
+10. The response sends entries, patch IDs, memory IDs, sync changes, and
+    warnings back to the browser.
+
+Backend writes favor canonical tables over prose-only memory. Examples include
+entities, entity aliases, faction memberships, faction resources, faction goals,
+relationships, agreements, story threads, story events, NPC beliefs, memory
+nodes, and state patches.
+
+## Prompt And Memory Architecture
+
+Prompt cost is managed by ranked sections instead of dumping everything.
+
+Major prompt inputs:
+
+- Current scene: protagonist, present characters, current location, equipped
+  items, time, visible meters.
+- Player reputation and player ledger.
+- Relevant factions and faction pressure.
+- Wiki/lorebook context.
+- Actor belief limits.
+- Agreements and obligations.
+- Open plot ledger, schemes, threads, and recent events.
+- Selected chapter and arc memory.
+- Backend memory packets.
+- Procedural narrative rules.
+- Final narration constraints.
+
+Important files:
+
+- `src/lib/services/ai/context/ContextBudgetService.ts`
+- `src/lib/services/ai/context/storyMemorySelector.ts`
+- `src/lib/services/ai/context/narratorOverview.ts`
+- `src/lib/stores/story.svelte.ts`
+- `src/lib/server/turn/promptPacket.ts`
+- `src/lib/server/memory/ranking.ts`
+- `src/lib/server/memory/retrieval.ts`
+
+## Living World State
+
+The living world is represented as queryable records rather than only narration
+text.
+
+Key systems:
+
+- Factions: resources, goals, territory, disposition, player standing,
+  membership, aliases, and inter-faction relations.
+- Agreements: promises, debts, oaths, treaties, marriages, bargains,
+  fulfillment, breakage, expiry, and player removal/archive.
+- Player ledger: coin, income, assets, holdings, payroll, claims, debts, stores,
+  ships, paid troops, and recurring expenses.
+- Actor beliefs: what specific NPCs know or believe, with perception limits.
+- Story threads and schemes: long-running open problems or plans.
+- Events and memory nodes: source-linked consequences that can be retrieved
+  later.
+- Chapters and arcs: long-term memory summaries selected by relevance,
+  recency, resurfacing, and pins.
+
+## Important Architectural Boundaries
+
+- Do not treat the transcript as final truth. It is evidence that can produce
+  structured records.
+- Do not let AI output write directly to state without schema validation and
+  merge logic.
+- Keep prompt additions budgeted. Always-on prose is recurring cost.
+- Keep local and backend canon paths aligned, but remember that backend-backed
+  stories should resolve toward backend truth.
+- Avoid committing local story artifacts, prompt scratch files, provider
+  secrets, API keys, or generated personal media.
+
+## Practical File Map
+
+- `src/lib/components/story/ActionInput.svelte`: player input and generation
+  orchestration.
+- `src/lib/components/story/StoryView.svelte`: main story surface and story
+  controls.
+- `src/lib/components/story/WorldDrawer.svelte`: visible world-state drawer.
+- `src/lib/stores/story.svelte.ts`: central local story store and prompt
+  assembly.
+- `src/lib/stores/settings.svelte.ts`: provider, model, service, and UI
+  settings.
+- `src/lib/services/database.ts`: IndexedDB schema and local CRUD.
+- `src/lib/services/ai/tools/schemas.ts`: structured AI tool schemas.
+- `src/lib/services/ai/tools/executor.ts`: local application of tool output.
+- `src/lib/services/ai/generation/WorldSimulationService.ts`: off-screen world
+  movement and plot momentum support.
+- `src/lib/server/db/schema.ts`: backend Postgres schema.
+- `src/lib/server/turn/orchestrator.ts`: backend turn pipeline.
+- `src/lib/server/turn/promptPacket.ts`: backend prompt assembly.
+- `src/lib/server/turn/patchValidator.ts`: backend structured update merge
+  logic.
+- `src/lib/server/memory/canonical.ts`: backend import, sync, and canonical
+  story operations.
+
+## How To Validate
+
+Use these commands before publishing meaningful architecture or behavior
+changes:
+
+```sh
+npm run check
+npm run test
+npm run build
+```
+
+For backend work:
+
+```sh
+npm run backend:up
+npm run backend:migrate
+npm run backend:health
+npm run dev:backend
+```
+
+---
+
+## Older File-By-File Reference
+
+The following reference is still useful for orientation, but it began as a
+local-first snapshot. Some names and responsibilities have shifted toward the
+tool/orchestrator/backend-canon architecture described above.
 
 ---
 
 ### FILE 1: `src/lib/stores/story.svelte.ts`
 
-**What it does:** Central reactive store managing the active story state including entries, characters, locations, items, lorebook entries, and world state. Handles conversation history building, system prompt construction, and context statistics.
+**What it does:** Central reactive store managing the active local story state
+including transcript entries, characters, locations, items, lorebook entries,
+relationships, agreements, rumors, schemes, story threads, chapters, arcs,
+player reputation, player ledger, prompt construction, context statistics, and
+backend sync/mirroring.
 
 **Exports:**
 - `story` (singleton StoryStore instance)
@@ -21,20 +222,45 @@ This is a comprehensive reference document for the entire Mtherios interactive f
 - `clearPresenceForCharacters(characterNames)` - Removes lastSeenLocation (departed/dead)
 - `addOrUpdateLocation(name, description, current)` - Creates or updates a location; ensures only one location is current
 - `addOrUpdateItem(name, description, quantity, equipped, location)` - Creates or updates an item
-- `buildSystemPrompt(contextBlock)` - Constructs the full system prompt for narrative generation with role rules, genre instructions, and assembled context
+- `buildStateSnapshot(currentActionText)` - Builds typed scene/world state for
+  prompt assembly, retrieval, world simulation, and classifier/extractor context
+- `buildSystemPrompt(snapshot)` - Constructs the full system prompt for
+  narrative generation from budgeted sections
+- `buildOrchestratorSystemBlocks(snapshot, opts)` - Splits prompt material into
+  stable and dynamic blocks for provider-aware generation
 - `buildConversationMessages()` - Builds alternating user/assistant messages from entries, scaled to 60% of model context window
 - `buildUserPrompt(currentAction)` - Wraps user action for generation
 - `getContextStats(tierUsage)` - Reports system, context, history, and total token estimates
+- `submitBackendTurn(request)` - Sends a turn to backend canon and mirrors
+  returned entries/sync metadata locally
+- `applyAgreementChanges(changes)` - Applies structured agreement lifecycle
+  updates
+- `removeAgreement(id)` - Removes a local agreement and queues backend archive
+  correction when applicable
+- `updatePlayerLedger(playerLedger)` - Updates durable player material-state
+  prompt context
 
-**Reads:** Database (getStory, getStoryEntries, getCharacters, getLocations, getItems, getLorebookEntries, etc.), settings (narrativeSettings, contextBudget), ContextAssembler (getModelContextWindow)
+**Reads:** Database (getStory, getStoryEntries, getCharacters, getLocations,
+getItems, getLorebookEntries, getAgreements, getRumors, getSchemes,
+getStoryThreads, etc.), settings (service configs, UI settings, context budget),
+prompt budget helpers, retrieval helpers, and backend memory helpers.
 
-**Writes:** Database (createStoryEntry, createCharacter, updateCharacter, createLocation, updateLocation, createItem, updateItem, updateStory), story entries added to this.entries array, characters/locations/items updates merged into reactive state
+**Writes:** Database records for entries, characters, locations, items, story
+metadata, meters, agreements, world events, images, and local cache state. It
+also queues backend sync operations for backend-backed stories.
 
-**Connections:** Called by StoryView component during generation pipeline; called by ActionInput for action submission. Reads from settings store. Provides entries/characters/locations to ClassifierService, MemoryService, WorldSimulationService, other AI services.
+**Connections:** Called by `ActionInput.svelte` during local and backend turn
+submission. Used by `StoryView.svelte` and `WorldDrawer.svelte` for story
+controls and world inspection. Provides snapshots to narrative generation,
+world simulation, retrieval, and structured update extraction.
 
 **Notable patterns:**
 - POV/tense/mode-adaptive system prompts with role tags ({{user}}, {{char}}, {{world}})
-- Character classification merges (trait deduplication with Set)
+- Budgeted dynamic prompt sections with `ContextBudgetService`
+- Backend memory packet support when a story has `serverStoryId`
+- Character and lorebook updates merge aliases, faction tags, pressures, and
+  relationships instead of relying only on exact names
+- Player reputation and player ledger are separate durable prompt sections
 - Location current-exclusivity logic (only one location can be current at a time)
 - Conversation history token budget: 60% of model context window, 2/3 of user budget
 - Inherited entries logic: entries on null branchId are "main branch" (legacy stories)

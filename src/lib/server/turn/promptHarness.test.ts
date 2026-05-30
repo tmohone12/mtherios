@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { MemoryNode, RetrievedMemoryPacket } from '$lib/contracts/memory';
 import type { TurnContext } from './context';
 import { buildPromptHarnessReport, evaluatePromptHarness } from './promptHarness';
+import { buildStateExtractionPrompt } from './promptPacket';
 
 const now = '2026-05-23T12:00:00.000Z';
+const STATE_TAXONOMY = 'Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.';
 
 function row<T extends Record<string, unknown>>(value: T): T & { serverVersion: number; createdAt: string; updatedAt: string } {
 	return {
@@ -48,6 +50,42 @@ function faction(id: string, name: string, overrides: Record<string, unknown> = 
 		sourceEntryIds: [],
 		sourceEventIds: [],
 		sourcePatchIds: [],
+		...overrides,
+	});
+}
+
+function chapter(number: number, title: string, sceneOutcome: string, overrides: Record<string, unknown> = {}) {
+	return row({
+		id: `chapter_${number}`,
+		storyId: 'story_balaerys',
+		number,
+		title,
+		sceneOutcome,
+		irreversibleChanges: [],
+		npcKnowledgeChanges: [],
+		promisesDebtsOaths: [],
+		discoveredClues: [],
+		relationshipChanges: [],
+		factionChanges: [],
+		openThreads: [],
+		sourceEntryIds: [],
+		sourceEventIds: [],
+		metadata: {},
+		...overrides,
+	});
+}
+
+function arc(number: number, title: string, summary: string, overrides: Record<string, unknown> = {}) {
+	return row({
+		id: `arc_${number}`,
+		storyId: 'story_balaerys',
+		number,
+		title,
+		summary,
+		chapterIds: [],
+		sourceEventIds: [],
+		openThreadIds: [],
+		metadata: {},
 		...overrides,
 	});
 }
@@ -164,6 +202,8 @@ function baseContext(overrides: Partial<TurnContext> = {}): TurnContext {
 		threads: [],
 		events: [],
 		beliefs: [],
+		chapters: [],
+		arcs: [],
 		...overrides,
 	} as unknown as TurnContext;
 }
@@ -173,6 +213,17 @@ function failedLabels(findings: ReturnType<typeof evaluatePromptHarness>): strin
 }
 
 describe('turn prompt harness', () => {
+	it('keeps the state taxonomy in server narration and extraction prompts', () => {
+		const report = buildPromptHarnessReport({
+			name: 'state-taxonomy',
+			playerText: 'I ask which faction is moving next.',
+			ctx: baseContext(),
+		});
+
+		expect(report.system).toContain(STATE_TAXONOMY);
+		expect(buildStateExtractionPrompt('I listen.', 'A messenger reports a confirmed levy.')).toContain(STATE_TAXONOMY);
+	});
+
 	it('builds a Balaerys nameday prompt with Volantene context', () => {
 		const oldBlood = memoryNode('mem_old_blood', 'Old Blood Etiquette', 'Invitations, seating, and marriage memory are weapons inside the Black Walls.');
 		const household = memoryNode('mem_household', 'Volantene Household Hierarchy', 'Family elders, slave scribes, guards, and informants shape every great manse.');
@@ -188,7 +239,7 @@ describe('turn prompt harness', () => {
 		});
 
 		const findings = evaluatePromptHarness(report, {
-			systemIncludes: ['server-side narrator', '1 Volantene honor = 1 gold dragon', 'Bayesian social prior', '296 AC', '15th day of the 8th moon'],
+			systemIncludes: ['server-side narrator', 'Text Adventure GM Overview', 'Player agency and observability override', 'Magic and dragons override', '1 Volantene honor = 1 gold dragon', 'Bayesian social prior', '296 AC', '15th day of the 8th moon'],
 			promptIncludes: [
 				'The Crimson Spire',
 				'Balaerys Heir',
@@ -205,6 +256,54 @@ describe('turn prompt harness', () => {
 
 		expect(failedLabels(findings)).toEqual([]);
 		expect(report.retrievedMemoryIds).toEqual(['mem_old_blood', 'mem_household']);
+	});
+
+	it('adds selected story memory buckets from chapters and arcs', () => {
+		const report = buildPromptHarnessReport({
+			name: 'story-memory-selector',
+			playerText: 'I ask whether the Velaryon envoy can be trusted after the harbor trouble.',
+			ctx: baseContext({
+				chapters: [
+					chapter(1, 'House Law', 'House Balaerys standing begins at one hundred inside its own halls.', {
+						metadata: { pinned: true },
+					}),
+					chapter(2, 'A Dockside Warning', 'A forgotten dock riot taught the household that bravos follow coin before honor.'),
+					chapter(3, 'The Velaryon Debt', 'The Velaryon envoy privately owed Balaerys a favor after a rescued sailor carried proof of their innocence.', {
+						promisesDebtsOaths: ['Velaryon favor remains unpaid'],
+						openThreads: ['Velaryon debt'],
+					}),
+					chapter(4, 'Quiet Ledgers', 'The factor found a gap in a pearl shipment ledger.'),
+					chapter(5, 'Guest Knives', 'A lesser cousin insulted the heir but did not draw steel.'),
+					chapter(6, 'Harbor Rumors', 'Rumors spread that the harbor trouble was paid for by a rival counting-house.'),
+					chapter(7, 'Vaelar Rescued', 'The heir saved Triarch Vaelar from a public embarrassment, earning loyal silence from two guards.'),
+					chapter(8, 'Nameday Pressure', 'The nameday court now watches who speaks first to the heir.'),
+				],
+				arcs: [
+					arc(1, 'The First Debt', 'The opening arc established that favors, dockside violence, and family standing shape every later offer.'),
+				],
+			}),
+			retrieved: packet('Velaryon envoy harbor favor Balaerys', []),
+			options: {
+				sceneEntityIds: ['pc_balaerys', 'npc_vaelar'],
+				storyMemoryTokenBudget: 1400,
+			},
+		});
+
+		const findings = evaluatePromptHarness(report, {
+			promptIncludes: [
+				'=== SELECTED STORY MEMORY ===',
+				'[PINNED CANON]',
+				'[RECENT CONSEQUENCE CHAIN]',
+				'[RELEVANT CALLBACKS]',
+				'[RESURFACED OLD CONSEQUENCES]',
+				'The Velaryon Debt',
+				'Velaryon favor remains unpaid',
+				'saved Triarch Vaelar',
+			],
+			maxTotalBeforeGenerationTokens: 2600,
+		});
+
+		expect(failedLabels(findings)).toEqual([]);
 	});
 
 	it('keeps actor belief limits visible for secret-knowledge scenarios', () => {
@@ -240,7 +339,13 @@ describe('turn prompt harness', () => {
 		});
 
 		const findings = evaluatePromptHarness(report, {
-			systemIncludes: ['never make a present NPC act on secret canon unless their belief packet'],
+			systemIncludes: [
+				'NPCs are not readers of the story file',
+				'How does this NPC know?',
+				'Never let NPCs share one group mind',
+				'Plot momentum is advisory, not a command queue',
+				'Magical knowledge still obeys NPC knowledge rules',
+			],
 			promptIncludes: [
 				'Actor belief limits',
 				'Lady Saera believes kitchen servants saw the heir meet Drazen Vhassar before dawn.',

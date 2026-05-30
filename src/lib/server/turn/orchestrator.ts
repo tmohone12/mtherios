@@ -1,6 +1,6 @@
 import { desc, eq } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
-import { storyEntries, syncOps } from '$lib/server/db/schema';
+import { stories, storyEntries, syncOps } from '$lib/server/db/schema';
 import { turnRequestSchema, type TurnResponse } from '$lib/contracts/memory';
 import { bumpStoryVersion, getSyncChanges } from '$lib/server/memory/canonical';
 import { retrieveMemoryPacket } from '$lib/server/memory/retrieval';
@@ -89,6 +89,25 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		updatedAt: createdAt,
 	}).onConflictDoNothing();
 
+	const clientMetadataPatch: Record<string, unknown> = {};
+	if (request.clientContext?.playerReputation !== undefined) {
+		clientMetadataPatch.playerReputation = request.clientContext.playerReputation;
+	}
+	if (request.clientContext?.playerLedger !== undefined) {
+		clientMetadataPatch.playerLedger = request.clientContext.playerLedger;
+	}
+	if (Object.keys(clientMetadataPatch).length > 0) {
+		const [story] = await db.select().from(stories).where(eq(stories.id, request.storyId)).limit(1);
+		const metadata = story?.metadata && typeof story.metadata === 'object'
+			? story.metadata as Record<string, unknown>
+			: {};
+		await db.update(stories).set({
+			metadata: { ...metadata, ...clientMetadataPatch },
+			serverVersion: turnVersion,
+			updatedAt: createdAt,
+		}).where(eq(stories.id, request.storyId));
+	}
+
 	const retrievalRequest = {
 		storyId: request.storyId,
 		query: request.playerText,
@@ -104,6 +123,13 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 	const prompt = buildServerTurnPrompt(ctx, retrieved, playerEntryId, {
 		currentFactionId: request.clientContext?.currentFactionId ?? null,
 		sceneEntityIds: request.clientContext?.sceneEntityIds ?? [],
+	});
+	console.info('[server-turn] prompt token usage', {
+		storyId: request.storyId,
+		clientTurnId: request.clientTurnId,
+		totalBeforeGeneration: prompt.usage.totalBeforeGeneration,
+		sections: prompt.usage.sectionTokens,
+		dropped: prompt.usage.dropped,
 	});
 
 	let narration = '';

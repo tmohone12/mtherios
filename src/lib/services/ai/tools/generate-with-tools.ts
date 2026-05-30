@@ -11,6 +11,7 @@ import { GM_TOOLS, worldStateUpdateSchema, type WorldStateUpdate } from './schem
 import { executeToolCall, runSchemeEvaluation } from './executor';
 import { runBackgroundJobs } from '$lib/services/ai/background/runner';
 import { settings } from '$lib/stores/settings.svelte';
+import { buildWarExtractionRulesBlock } from '$lib/services/ai/context/warDoctrine';
 
 const WORLD_UPDATE_TOOLS = GM_TOOLS.filter(tool => tool.function.name === 'update_world_state');
 
@@ -32,7 +33,9 @@ export async function executeWorldUpdate(
 	try {
 		const classifierConfig = settings.getServiceConfig('classifier');
 
-		const systemPrompt = `You are a world state tracker for an interactive fiction game. Your job is to analyze a narrative passage and extract ALL state changes that occurred. Be thorough — anything not recorded here is forgotten.`;
+		const systemPrompt = `You are a world state tracker for an interactive fiction game. Your job is to analyze a narrative passage and extract ALL state changes that occurred. Be thorough — anything not recorded here is forgotten.
+
+${buildWarExtractionRulesBlock()}`;
 
 		const userPrompt = `You just narrated the following scene:
 
@@ -58,6 +61,8 @@ CHARACTERS:
 - Status: 'active' for present and engaged; 'inactive' for alive but off-screen; 'departed' for "left the scene this turn" (system will mark inactive); 'deceased' for died this turn.
 - \`present: true\` for characters in the immediate scene; \`present: false\` for characters who left this turn or aren't visible. The system uses this to track who's actually around.
 - Include descriptions/traits/relationships only when they changed or were newly revealed.
+- Include \`aliases\` when the scene uses titles, epithets, house styles, or alternate names for an existing person.
+- Include \`faction_tags\` when a character visibly belongs to, serves, leads, commands, publicly represents, or is sworn to a faction. Use faction names or ids already present in context where possible.
 - NOTE: Characters listed here update RUNTIME tracking only. They do NOT automatically create lorebook entries anymore. If a character is significant enough to track long-term, you must ALSO emit them in \`lorebook_entries\` below.
 
 LOREBOOK ENTRIES (new — explicit creation):
@@ -66,12 +71,14 @@ LOREBOOK ENTRIES (new — explicit creation):
 - Write rich descriptions: 2–5 sentences based ONLY on what was established in the scene.
 - Include \`aliases\` (alternate names, titles, epithets) and \`keywords\` (3–5 terms for context retrieval).
 - Use \`hidden_info\` for secrets the protagonist does NOT know yet.
+- For character lorebook entries, put durable faction ties in \`state_overrides.factionTags\` when established.
 - Set \`injection_mode\` to \`always\` for entries that should be injected every turn (e.g., the protagonist themselves, core factions). Use \`keyword\` for everything else.
 - Do not create a new lorebook entry for a known entity under a slightly different title. Use aliases/keywords and relationships instead.
 - Skip unnamed, generic elements ("a guard", "the tavern", "some coins").
 FACTION GUIDANCE:
+- Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.
 - For FACTION entries, include \`known_members\`, \`faction_goals\`, \`faction_resources\`, \`faction_disposition\`, and \`territory\` when the scene or existing state gives enough evidence.
-- Also emit relationships such as member-of, leader-of, serves, allied-with, or enemy-of when a character/faction connection is established or changes.
+- Also emit character \`faction_tags\` plus relationships such as member-of, leader-of, serves, allied-with, or enemy-of when a character/faction connection is established or changes.
 - Faction resources are relative 0-100 scores: military, wealth, influence, information, morale. Unknown scores should be omitted rather than invented.
 - Faction goals should be concrete and actionable: what they want, why now, and whether progress changed.
 - This preset uses A Song of Ice and Fire-style Known World political rules. Track Westerosi houses, bannermen, wards, hostages, bastardy, marriages, betrothals, oaths, guest right, succession claims, ravens, maesters, septons, religious pressure, debts, and scandal when they matter; also track Essosi free cities, merchant princes, magisters, triarchs, banks, guilds, sellsails, mercenary companies, red priests, slave economies, courtesans, and trade rivalries when the scene points east.
@@ -84,6 +91,7 @@ OTHER STATE:
 - Significant story beats or plot events
 - Meter changes (sanity, morality, reputation, hunger, suspicion, etc.) — invent meters as the fiction calls for them, adjust existing ones with signed deltas. Current values are listed under "Meters:" in the snapshot.
 - Player reputation — if public standing, titles, scandals, fear, fame, criminal status, or rumor around the protagonist changed, emit \`player_reputation\` as a compact full replacement. Omit it when unchanged.
+- Player ledger — if coin, income, assets, holdings, payroll, debts, claims, stores, ships, troops under pay, or regular expenses materially changed, emit \`player_ledger\` as a compact full replacement. Preserve existing player-written ledger notes; omit it when unchanged.
 - Agreement changes — treaties, oaths, debts, promises, marriages, bonds, contracts, vassalage, and bargains with supernatural entities. Use action=create when a new commitment is sworn; action=break when someone violates it (auto-emits a timeline event); action=fulfill when it's paid; action=update to revise terms. Active agreements are listed under "Active agreements:" in the snapshot with their ids.
 
 Be thorough and accurate. Only include entities that actually changed or appeared in the scene.`;

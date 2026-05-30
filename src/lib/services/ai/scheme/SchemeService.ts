@@ -35,6 +35,7 @@ import {
 	type SchemeStageInput,
 } from '$lib/services/ai/sdk/schemas/scheme';
 import type { WorldStateUpdate } from '$lib/services/ai/tools/schemas';
+import { buildWarSchemeRulesBlock } from '$lib/services/ai/context/warDoctrine';
 
 // ── Tunables ──
 const PRESSURE_PER_STAGE = 15; // climbs as schemes mature
@@ -85,7 +86,12 @@ export async function evaluate(
 		`character-driven — only create schemes when the player did something that genuinely ` +
 		`warrants response from a specific antagonist. Use the latest narrative and current ` +
 		`state snapshot as evidence; do not create a scheme from genre vibes, outside canon, or ` +
-		`a random desire for a twist. Escalate existing schemes only when this turn touches their ` +
+		`a random desire for a twist. Faction goals define why a faction fights; schemes define ` +
+		`how they try to win; story threads define how the war becomes player-facing plot; ` +
+		`world events record what actually happened. Do not convert every faction goal or ` +
+		`world event into a scheme; schemes are executable plans with an owner and trigger. ` +
+		`${buildWarSchemeRulesBlock()} ` +
+		`Escalate existing schemes only when this turn touches their ` +
 		`owner, target, goal, or trigger. Quiet turns and positive-only developments warrant no ` +
 		`action — return empty arrays and let the world breathe.`;
 
@@ -375,6 +381,10 @@ export async function declarePlayerScheme(
 		`You structure free-text player plans into multi-stage schemes for an interactive ` +
 		`fiction game. The player describes what they want to do; you break it into 2-6 ` +
 		`concrete stages, each with an obstacle or prerequisite the player must work through. ` +
+		`Faction goals define why a faction fights; schemes define how they try to win; ` +
+		`story threads define how the war becomes player-facing plot; world events record ` +
+		`what actually happened. ` +
+		`${buildWarSchemeRulesBlock()} ` +
 		`Stages should be ACTIONABLE — things the player will do in-fiction. The narrator ` +
 		`will surface each stage as an opportunity or obstacle, not as guaranteed success.`;
 

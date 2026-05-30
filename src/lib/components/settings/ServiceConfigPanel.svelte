@@ -4,6 +4,7 @@
 	import { story } from '$lib/stores/story.svelte';
 	import { getProceduralRules, deleteProceduralRule } from '$lib/services/database';
 	import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
+	import { buildStrategicWorldBrainSystemPrompt } from '$lib/services/ai/context/strategicWorldBrainInput';
 	import type { APIProfile, ProviderType } from '$lib/types';
 
 	interface Props {
@@ -191,6 +192,57 @@
 	const hasChanges = $derived(
 		Object.keys(editingConfigs).length > 0 || Object.keys(editingProfileModels).length > 0
 	);
+
+	const PROMPT_PREVIEWS: Record<string, string> = {
+		strategicWorldBrain: buildStrategicWorldBrainSystemPrompt(),
+		worldSimulation: [
+			'You are a living-world engine.',
+			'Read chapters, arcs, faction dossiers, character dossiers, schemes, agreements, and strategic world frames.',
+			'Move the world in the background through factionActions, rumors, resource pressure, relationship shifts, and plot momentum.',
+			'Use strategic frames as forward pressure. Prefer due or urgent faction operations. Preserve player agency.',
+		].join('\n'),
+		classifier: [
+			'You are a world state tracker for an interactive fiction game.',
+			'Extract all state changes from the narrated scene.',
+			'Create or deepen durable lorebook entries for significant NPCs, factions, places, items, concepts, and events.',
+			'Do not duplicate known entities under titles; use aliases, relationships, and state updates.',
+		].join('\n'),
+		loreManagement: [
+			'Review chapters and arcs to create, update, merge, or archive lorebook entries.',
+			'Prefer canonical entities, aliases, and structured state over duplicate names.',
+			'For factions, maintain known members, goals, resources, disposition, territory, and relationships.',
+		].join('\n'),
+		entryRefinement: [
+			'Refine one lorebook entry while preserving continuity.',
+			'Return improved description, hidden info, aliases, keywords, and type-specific state.',
+			'For characters, preserve motivations, pressures, facts, secrets, opinions, and faction ties.',
+			'For factions, preserve goals, resources, members, territory, disposition, and standing.',
+		].join('\n'),
+		proceduralMemory: [
+			'Extract durable narrative rules from story behavior.',
+			'Keep rules specific, testable, and reusable; retire rules contradicted by later canon.',
+		].join('\n'),
+		memory: [
+			'Summarize chapters and retrieve high-signal memory for continuity.',
+			'Preserve causality, unresolved threads, character choices, faction consequences, and location/time facts.',
+		].join('\n'),
+		arcCondensation: [
+			'Condense chapters into arc-level memory.',
+			'Track key plot points, unresolved threads, character arcs, faction pressure, and emotional progression.',
+		].join('\n'),
+		wikiLint: [
+			'Inspect lorebook health.',
+			'Flag contradictions, duplicate entities, stale state, orphan entries, missing relationships, and retrieval gaps.',
+		].join('\n'),
+	};
+
+	function getBasePromptPreview(serviceId: string): string {
+		return PROMPT_PREVIEWS[serviceId] ?? [
+			`${SERVICE_DEFINITIONS[serviceId]?.label ?? serviceId} has a built-in service prompt generated at runtime.`,
+			'Leaving the override blank uses that built-in prompt.',
+			'Typing here replaces the built-in prompt for this service.',
+		].join('\n');
+	}
 </script>
 
 <div class="space-y-4">
@@ -310,6 +362,7 @@
 							{@const isServiceExpanded = expandedService === serviceId}
 							{@const serviceModelOptions = modelOptionsForProfileProvider(getServiceProfileId(serviceId))}
 							{@const visibleServiceModels = filterModelOptions(serviceModelOptions, serviceModelSearch[serviceId] ?? '')}
+							{@const basePromptPreview = getBasePromptPreview(serviceId)}
 
 							<div>
 								<button class="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-[rgba(212,168,83,0.02)]"
@@ -417,12 +470,16 @@
 
 										<!-- System Prompt Override -->
 										<div class="space-y-1">
-											<label for="service-prompt-{serviceId}" class="text-[10px] text-[var(--text-muted)]">System Prompt Override</label>
+											<label for="service-prompt-{serviceId}" class="text-[10px] text-[var(--text-muted)]">System Prompt Override <span class="opacity-60">(replaces built-in)</span></label>
 											<textarea id="service-prompt-{serviceId}" value={config.systemPromptOverride}
 												oninput={(e) => updateConfig(serviceId, { systemPromptOverride: (e.target as HTMLTextAreaElement).value })}
-												placeholder="Leave empty for built-in prompt..."
-												rows="3"
+												placeholder={basePromptPreview}
+												rows={config.systemPromptOverride ? 6 : 4}
 												class="w-full resize-none rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"></textarea>
+											<div class="max-h-44 overflow-y-auto rounded-lg border border-dashed border-[var(--border-secondary)] bg-[var(--bg-primary)]/40 px-2.5 py-2">
+												<div class="mb-1 font-mono text-[9px] uppercase tracking-widest text-[var(--text-muted)]/70">Built-in base prompt reference</div>
+												<pre class="whitespace-pre-wrap font-mono text-[10px] leading-relaxed text-[var(--text-muted)]/65">{basePromptPreview}</pre>
+											</div>
 										</div>
 
 										<!-- Reset service -->

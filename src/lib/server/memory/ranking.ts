@@ -65,9 +65,21 @@ export function buildMemoryPacket(
 
 	const selected: MemoryNode[] = [];
 	let tokenEstimate = 0;
-	const maxNodes = Math.min(10, Math.max(6, Math.ceil(request.tokenBudget / 160)));
+	const topScore = scored[0]?.score ?? 0;
+	const strongScoreFloor = Math.max(3.5, topScore * 0.35);
+	const maxNodes = Math.min(8, Math.max(4, Math.ceil(request.tokenBudget / 190)));
+	let droppedLowScore = 0;
 
 	for (const node of scored) {
+		const score = node.score ?? 0;
+		if (selected.length >= 4 && score < strongScoreFloor) {
+			droppedLowScore += 1;
+			continue;
+		}
+		if (selected.length >= 5 && tokenEstimate > request.tokenBudget * 0.65 && score < topScore * 0.55) {
+			droppedLowScore += 1;
+			continue;
+		}
 		const line = renderMemoryLine(node);
 		const lineTokens = estimateTokens(line);
 		if (selected.length >= maxNodes) break;
@@ -92,6 +104,7 @@ export function buildMemoryPacket(
 			`candidates=${nodes.length}`,
 			`selected=${selected.length}`,
 			`budget=${request.tokenBudget}`,
+			`droppedLowScore=${droppedLowScore}`,
 		],
 	};
 }

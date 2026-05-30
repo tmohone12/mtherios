@@ -13,6 +13,7 @@ import {
 import { createLogger } from '../core/config';
 import { countTokens } from '$lib/utils/tokens';
 import type { Chapter, Arc, StoryEntry } from '$lib/types';
+import { buildWarMemoryContinuityBlock } from '../context/warDoctrine';
 
 const log = createLogger('Memory');
 
@@ -82,6 +83,10 @@ export class MemoryService extends BaseAIService {
 		const system = `You are a chapter summarizer for a ${mode} interactive fiction story (${pov} person, ${tense} tense).
 
 Your summary must capture everything a future AI narrator needs to maintain story continuity without re-reading the original text. You are the MEMORY of this story. If you forget it, the story forgets it.
+
+Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.
+
+${buildWarMemoryContinuityBlock()}
 
 ${arcContext}${prevContext ? `═══ PREVIOUS CHAPTERS ═══\n${prevContext}\n` : ''}${beatsContext}═══ WHAT TO CAPTURE (priority order) ═══
 

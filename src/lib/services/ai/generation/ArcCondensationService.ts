@@ -10,6 +10,7 @@ import { BaseAIService } from '../BaseAIService';
 import { arcSummarySchema, type ArcSummary } from '../sdk/schemas/arc';
 import { createLogger } from '../core/config';
 import type { Chapter, Arc } from '$lib/types';
+import { buildWarMemoryContinuityBlock } from '../context/warDoctrine';
 
 const log = createLogger('ArcCondensation');
 
@@ -81,6 +82,10 @@ ${recentArcs.map(a => {
 		const system = `You are a narrative arc summarizer for a ${mode} interactive fiction story (${pov} person, ${tense} tense).
 
 You are condensing ${chapters.length} chapters into a single ARC SUMMARY. This arc summary replaces the individual chapter summaries in the narrator's memory, so it MUST preserve all critical continuity information. A weak arc summary will cause the narrator to forget stakes, repeat beats, or flatten characters.
+
+Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.
+
+${buildWarMemoryContinuityBlock()}
 
 ${priorArcContext}
 

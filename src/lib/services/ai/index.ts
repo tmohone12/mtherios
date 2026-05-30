@@ -20,6 +20,7 @@ export { LoreManagementService } from './lorebook/LoreManagementService';
 export { EntryRefinementService } from './lorebook/EntryRefinementService';
 export { ImageGenerationService } from './image/ImageGenerationService';
 export { WorldSimulationService } from './generation/WorldSimulationService';
+export { StrategicWorldBrainService } from './generation/StrategicWorldBrainService';
 export { ArcCondensationService } from './generation/ArcCondensationService';
 export { ProceduralMemoryService } from './memory/ProceduralMemoryService';
 export { EmbeddingService } from './embeddings/EmbeddingService';
@@ -36,6 +37,7 @@ import { LoreManagementService } from './lorebook/LoreManagementService';
 import { EntryRefinementService } from './lorebook/EntryRefinementService';
 import { ImageGenerationService } from './image/ImageGenerationService';
 import { WorldSimulationService } from './generation/WorldSimulationService';
+import { StrategicWorldBrainService } from './generation/StrategicWorldBrainService';
 import { ArcCondensationService } from './generation/ArcCondensationService';
 import { ProceduralMemoryService } from './memory/ProceduralMemoryService';
 import { EmbeddingService } from './embeddings/EmbeddingService';
@@ -51,6 +53,7 @@ let _loreManagement: LoreManagementService;
 let _entryRefinement: EntryRefinementService;
 let _imageGen: ImageGenerationService;
 let _worldSim: WorldSimulationService;
+let _strategicWorldBrain: StrategicWorldBrainService;
 let _arcCondensation: ArcCondensationService;
 let _proceduralMemory: ProceduralMemoryService;
 let _embeddings: EmbeddingService;
@@ -67,6 +70,7 @@ export const ai = {
 	get entryRefinement() { return _entryRefinement ??= new EntryRefinementService(); },
 	get imageGen() { return _imageGen ??= new ImageGenerationService(); },
 	get worldSim() { return _worldSim ??= new WorldSimulationService(); },
+	get strategicWorldBrain() { return _strategicWorldBrain ??= new StrategicWorldBrainService(); },
 	get arcCondensation() { return _arcCondensation ??= new ArcCondensationService(); },
 	get proceduralMemory() { return _proceduralMemory ??= new ProceduralMemoryService(); },
 	get embeddings() { return _embeddings ??= new EmbeddingService(); },

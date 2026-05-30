@@ -3,6 +3,7 @@ import { countTokens, truncateToTokenBudget } from '$lib/utils/tokens';
 export type PromptSectionKey =
 	| 'characters'
 	| 'playerReputation'
+	| 'playerLedger'
 	| 'factions'
 	| 'lore'
 	| 'episodicMemory'
@@ -10,11 +11,13 @@ export type PromptSectionKey =
 	| 'plotLedger'
 	| 'conversationMemory'
 	| 'backendMemory'
+	| 'storyMemory'
 	| 'arcs'
 	| 'chapters'
 	| 'chapterIntro'
 	| 'entryHistory'
 	| 'livingWorld'
+	| 'strategicPressure'
 	| 'schemes'
 	| 'plotMomentum'
 	| 'finalInstructions';
@@ -45,6 +48,7 @@ interface SectionBudget {
 export const DEFAULT_PROMPT_SECTION_BUDGETS: Record<PromptSectionKey, SectionBudget> = {
 	characters: { maxTokens: 1800, minTokens: 500, priority: 5 },
 	playerReputation: { maxTokens: 300, minTokens: 80, priority: 5 },
+	playerLedger: { maxTokens: 520, minTokens: 120, priority: 5 },
 	factions: { maxTokens: 900, minTokens: 180, priority: 2 },
 	lore: { maxTokens: 1600, minTokens: 300, priority: 4 },
 	episodicMemory: { maxTokens: 1600, minTokens: 260, priority: 5 },
@@ -52,11 +56,13 @@ export const DEFAULT_PROMPT_SECTION_BUDGETS: Record<PromptSectionKey, SectionBud
 	plotLedger: { maxTokens: 720, minTokens: 160, priority: 5 },
 	conversationMemory: { maxTokens: 520, minTokens: 120, priority: 4 },
 	backendMemory: { maxTokens: 1200, minTokens: 280, priority: 5 },
+	storyMemory: { maxTokens: 1800, minTokens: 420, priority: 5 },
 	arcs: { maxTokens: 2600, minTokens: 600, priority: 5 },
 	chapters: { maxTokens: 2200, minTokens: 600, priority: 5 },
 	chapterIntro: { maxTokens: 300, minTokens: 120, priority: 4 },
 	entryHistory: { maxTokens: 160, minTokens: 80, priority: 5 },
 	livingWorld: { maxTokens: 1200, minTokens: 260, priority: 4 },
+	strategicPressure: { maxTokens: 1000, minTokens: 180, priority: 4 },
 	schemes: { maxTokens: 700, minTokens: 160, priority: 3 },
 	plotMomentum: { maxTokens: 900, minTokens: 220, priority: 4 },
 	finalInstructions: { maxTokens: 420, minTokens: 220, priority: 5 },

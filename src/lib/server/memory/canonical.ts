@@ -116,7 +116,10 @@ export async function createBackendStory(input: unknown) {
 		clientStoryId: request.clientStoryId ?? null,
 		title: request.title,
 		description: request.description ?? null,
-		metadata: { playerReputation: request.playerReputation ?? null },
+		metadata: {
+			playerReputation: request.playerReputation ?? null,
+			playerLedger: request.playerLedger ?? null,
+		},
 		createdAt,
 		updatedAt: createdAt,
 	}).returning();
@@ -457,6 +460,7 @@ export async function importIndexedDbBundle(input: unknown) {
 			importedFrom: 'indexeddb',
 			importedAt: insertedAt,
 			playerReputation: asNullableString(legacyStory.playerReputation),
+			playerLedger: asNullableString(legacyStory.playerLedger),
 		},
 		createdAt: insertedAt,
 		updatedAt: insertedAt,
@@ -658,10 +662,11 @@ export async function applySyncOperation(raw: unknown): Promise<{ op: SyncOperat
 
 	if (op.type === 'state_correction') {
 		const patchId = id('patch');
+		const correctionOperations = asArray<Record<string, unknown>>(op.payload.operations);
 		await db.insert(statePatches).values({
 			id: patchId,
 			storyId: op.storyId,
-			operations: asArray<Record<string, unknown>>(op.payload.operations),
+			operations: correctionOperations,
 			reason: asString(op.payload.reason, 'Player correction'),
 			status: 'needs_repair',
 			validationWarnings: ['Queued for deterministic review before canon merge.'],
@@ -689,6 +694,34 @@ export async function applySyncOperation(raw: unknown): Promise<{ op: SyncOperat
 			updatedAt: createdAt,
 		});
 		eventIds.push(eventId);
+
+		for (const operation of correctionOperations) {
+			const operationName = asString(operation.op);
+			const path = asString(operation.path);
+			if (operationName === 'archive' && path.startsWith('/agreements/')) {
+				const agreementId = path.split('/')[2] ?? asNullableString(asRecord(operation.value).id);
+				if (agreementId) {
+					await db.update(agreements).set({
+						status: 'archived',
+						serverVersion,
+						updatedAt: createdAt,
+					}).where(and(eq(agreements.storyId, op.storyId), eq(agreements.id, agreementId)));
+				}
+			}
+
+			if (operationName === 'replace' && (path === '/stories/playerReputation' || path === '/stories/playerLedger')) {
+				const [story] = await db.select().from(stories).where(eq(stories.id, op.storyId)).limit(1);
+				const metadata = story?.metadata && typeof story.metadata === 'object'
+					? story.metadata as Record<string, unknown>
+					: {};
+				const key = path === '/stories/playerLedger' ? 'playerLedger' : 'playerReputation';
+				await db.update(stories).set({
+					metadata: { ...metadata, [key]: asNullableString(operation.value) },
+					serverVersion,
+					updatedAt: createdAt,
+				}).where(eq(stories.id, op.storyId));
+			}
+		}
 	}
 
 	if (op.type === 'create_entry') {
