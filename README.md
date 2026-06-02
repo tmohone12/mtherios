@@ -111,6 +111,16 @@ npm run app:start
 
 Runtime defaults live in [mtherios.config.example.json](mtherios.config.example.json). Copy it to `mtherios.config.json` when you want to change ports, the syncable data root, Qdrant URL, the default Obsidian vault path, wiki embedding model, story-vault auto-indexing, terminal memory cadence (`chapterThreshold`, `postChapterBuffer`, `chaptersPerArc`), or backend memory embeddings. Backend memory embeddings are disabled until `memoryEmbeddingProvider` and `memoryEmbeddingModel` are set, and the model must produce the configured `memoryEmbeddingDimensions` for the Postgres `memory_nodes.embedding` column.
 
+## Generation Benchmark
+
+With the app server running, benchmark terminal-owned generation jobs:
+
+```sh
+npm run bench:generation -- --story-id <server-story-id> --mode jobs --limit 10
+```
+
+Use `--mode world-sim` to force a manual terminal world tick, or `--mode turn --player-text "..."` to time a representative `/api/turn` request. The benchmark prints total duration, per-phase job timings when the endpoint returns them, model/API call count when API-call logs are available, and job completion counts. Structured phase logs are emitted as JSON unless `MTHERIOS_GENERATION_TIMING=off`; bounded backend generation concurrency defaults to 4 and can be changed with `MTHERIOS_GENERATION_CONCURRENCY`.
+
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full codebase documentation including data flows, type definitions, service internals, and design decisions.

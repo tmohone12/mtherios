@@ -14,6 +14,8 @@ import { getStoryVaultStatus, materializeStoryVault, writeStoryVaultLintReport }
 import { indexWiki, lintWiki } from '$lib/server/wiki/wikiCore';
 import { claimBackendJobs, markBackendJobComplete, markBackendJobFailed, type BackendJobType } from './outbox';
 import { indexCanonicalRecords } from '$lib/server/engine/canonicalSearch';
+import { createTimingRecorder, type TimingEntry, type TimingRecorder } from '$lib/server/performance/timing';
+import { mapWithConcurrency, readGenerationConcurrency } from '$lib/server/performance/concurrency';
 
 type BackendJobRow = typeof backendJobs.$inferSelect;
 type ArcRow = typeof arcs.$inferSelect;
@@ -21,6 +23,15 @@ type ChapterRow = typeof chapters.$inferSelect;
 type FactionRow = typeof factions.$inferSelect;
 type StoryEntryRow = typeof storyEntries.$inferSelect;
 type StoryEventRow = typeof storyEvents.$inferSelect;
+
+export interface BackendJobTimingReport {
+	jobId: string;
+	storyId: string;
+	type: string;
+	status: 'completed' | 'failed';
+	durationMs: number;
+	phases: TimingEntry[];
+}
 
 export interface BackendJobPreview {
 	id: string;
@@ -72,6 +83,24 @@ function nowIso(): string {
 
 function id(prefix = 'job'): string {
 	return `${prefix}_${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
+}
+
+async function timePhase<T>(
+	recorder: TimingRecorder | undefined,
+	phase: string,
+	metadata: Record<string, unknown>,
+	fn: () => Promise<T>,
+): Promise<T> {
+	return recorder ? recorder.time(phase, metadata, fn) : fn();
+}
+
+function timePhaseSync<T>(
+	recorder: TimingRecorder | undefined,
+	phase: string,
+	metadata: Record<string, unknown>,
+	fn: () => T,
+): T {
+	return recorder ? recorder.timeSync(phase, metadata, fn) : fn();
 }
 
 function asStringArray(value: unknown): string[] {
@@ -390,27 +419,28 @@ async function upsertFactionPressureMemoryNode(input: {
 	});
 }
 
-async function updateFactionPressure(job: BackendJobRow): Promise<Record<string, unknown>> {
+async function updateFactionPressure(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const payload = asRecord(job.payload);
 	const eventIds = asStringArray(payload.eventIds);
-	const rows = await loadEventRows(job.storyId, eventIds);
+	const rows = await timePhase(recorder, 'job.update_faction_pressure.load_events', { eventIds: eventIds.length }, () => loadEventRows(job.storyId, eventIds));
 	if (rows.length === 0) {
 		return { updatedFactions: 0, eventCount: 0, reason: 'no_events' };
 	}
 
-	const factionRows = await getDb()
-		.select()
-		.from(factions)
-		.where(eq(factions.storyId, job.storyId))
-		.orderBy(asc(factions.name));
+	const factionRows = await timePhase(recorder, 'job.update_faction_pressure.load_factions', {}, () => getDb()
+			.select()
+			.from(factions)
+			.where(eq(factions.storyId, job.storyId))
+			.orderBy(asc(factions.name)));
 	if (factionRows.length === 0) {
 		return { updatedFactions: 0, eventCount: rows.length, reason: 'no_factions' };
 	}
 
 	const now = nowIso();
-	const changes: Array<Record<string, unknown>> = [];
-	let serverVersion: number | null = null;
-	for (const faction of factionRows) {
+	const changedFactions = timePhaseSync(recorder, 'job.update_faction_pressure.match_factions', {
+		events: rows.length,
+		factions: factionRows.length,
+	}, () => factionRows.map((faction) => {
 		const existingSourceEventIds = asStringArray(faction.sourceEventIds);
 		const alreadySeen = new Set(existingSourceEventIds);
 		const matchedRows = rows
@@ -419,16 +449,40 @@ async function updateFactionPressure(job: BackendJobRow): Promise<Record<string,
 		const reasons = matchedRows
 			.map((row) => pressureReason(row, now))
 			.filter((reason) => reason.delta > 0);
-		if (reasons.length === 0) continue;
+		if (reasons.length === 0) return null;
 
-		if (serverVersion == null) {
-			serverVersion = await bumpStoryVersion(job.storyId);
-		}
 		const metadata = asRecord(faction.metadata);
 		const recentReasons = [...recentPressureReasons(metadata), ...reasons].slice(-12);
 		const delta = reasons.reduce((total, reason) => total + reason.delta, 0);
 		const pressure = clamp(faction.pressure + delta, 0, 100);
 		const sourceEventIds = uniqueStrings([...existingSourceEventIds, ...reasons.map((reason) => reason.eventId)]);
+		return { faction, metadata, recentReasons, reasons, delta, pressure, sourceEventIds };
+	}).filter((item): item is {
+		faction: FactionRow;
+		metadata: Record<string, unknown>;
+		recentReasons: FactionPressureReason[];
+		reasons: FactionPressureReason[];
+		delta: number;
+		pressure: number;
+		sourceEventIds: string[];
+	} => Boolean(item)));
+
+	if (changedFactions.length === 0) {
+		return {
+			updatedFactions: 0,
+			eventCount: rows.length,
+			changes: [],
+			reason: 'no_new_matching_events',
+		};
+	}
+
+	const serverVersion = await timePhase(recorder, 'job.update_faction_pressure.bump_version', {}, () => bumpStoryVersion(job.storyId));
+	const concurrency = readGenerationConcurrency();
+	const changes = await timePhase(recorder, 'job.update_faction_pressure.persist_factions', {
+		changedFactions: changedFactions.length,
+		concurrency,
+	}, () => mapWithConcurrency(changedFactions, concurrency, async (change) => {
+		const { faction, metadata, recentReasons, reasons, delta, pressure, sourceEventIds } = change;
 		await getDb().update(factions).set({
 			pressure,
 			sourceEventIds,
@@ -450,7 +504,7 @@ async function updateFactionPressure(job: BackendJobRow): Promise<Record<string,
 			now,
 			jobId: job.id,
 		});
-		changes.push({
+		return {
 			factionId: faction.id,
 			name: faction.name,
 			previousPressure: faction.pressure,
@@ -458,8 +512,8 @@ async function updateFactionPressure(job: BackendJobRow): Promise<Record<string,
 			delta,
 			eventIds: reasons.map((reason) => reason.eventId),
 			reasons: reasons.map((reason) => reason.reason),
-		});
-	}
+		};
+	}));
 
 	return {
 		updatedFactions: changes.length,
@@ -559,19 +613,22 @@ async function upsertWorldTickMemoryNode(input: {
 	});
 }
 
-async function evaluateWorldSimTick(job: BackendJobRow): Promise<Record<string, unknown>> {
+async function evaluateWorldSimTick(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const payload = asRecord(job.payload);
 	const force = payload.force === true;
 	const minimumPressure = force ? 45 : 70;
-	const factionRows = await getDb()
+	const factionRows = await timePhase(recorder, 'job.evaluate_world_sim_tick.load_factions', { minimumPressure, force }, () => getDb()
 		.select()
 		.from(factions)
 		.where(eq(factions.storyId, job.storyId))
 		.orderBy(desc(factions.pressure), asc(factions.name))
-		.limit(12);
-	const candidates = factionRows
+		.limit(12));
+	const candidates = timePhaseSync(recorder, 'job.evaluate_world_sim_tick.select_candidates', {
+		factions: factionRows.length,
+		minimumPressure,
+	}, () => factionRows
 		.filter((faction) => faction.pressure >= minimumPressure)
-		.slice(0, 3);
+		.slice(0, 3));
 	if (candidates.length === 0) {
 		return {
 			createdEvents: 0,
@@ -581,9 +638,11 @@ async function evaluateWorldSimTick(job: BackendJobRow): Promise<Record<string, 
 	}
 
 	const now = nowIso();
-	const created: Array<Record<string, unknown>> = [];
-	let serverVersion: number | null = null;
-	for (const faction of candidates) {
+	const concurrency = readGenerationConcurrency();
+	const cacheChecks = await timePhase(recorder, 'job.evaluate_world_sim_tick.cache_check', {
+		candidates: candidates.length,
+		concurrency,
+	}, () => mapWithConcurrency(candidates, concurrency, async (faction) => {
 		const pressureBand = Math.floor(faction.pressure / 10);
 		const eventId = stableId('event_world_tick', [job.storyId, faction.id, String(pressureBand)]);
 		const [existing] = await getDb()
@@ -591,11 +650,31 @@ async function evaluateWorldSimTick(job: BackendJobRow): Promise<Record<string, 
 			.from(storyEvents)
 			.where(and(eq(storyEvents.storyId, job.storyId), eq(storyEvents.id, eventId)))
 			.limit(1);
-		if (existing) continue;
+		return existing ? null : { faction, pressureBand, eventId };
+	}));
+	const toCreate = cacheChecks.filter((item): item is {
+		faction: FactionRow;
+		pressureBand: number;
+		eventId: string;
+	} => Boolean(item));
+	recorder?.record('job.evaluate_world_sim_tick.cache_summary', 0, {
+		hits: candidates.length - toCreate.length,
+		misses: toCreate.length,
+	});
+	if (toCreate.length === 0) {
+		return {
+			createdEvents: 0,
+			minimumPressure,
+			events: [],
+			reason: 'no_new_pressure_bands',
+		};
+	}
 
-		if (serverVersion == null) {
-			serverVersion = await bumpStoryVersion(job.storyId);
-		}
+	const serverVersion = await timePhase(recorder, 'job.evaluate_world_sim_tick.bump_version', {}, () => bumpStoryVersion(job.storyId));
+	const created = await timePhase(recorder, 'job.evaluate_world_sim_tick.persist_ticks', {
+		createCount: toCreate.length,
+		concurrency,
+	}, () => mapWithConcurrency(toCreate, concurrency, async ({ faction, pressureBand, eventId }) => {
 		const metadata = asRecord(faction.metadata);
 		const reasons = recentPressureReasons(metadata);
 		const title = `${faction.name} converts pressure into motion`;
@@ -650,21 +729,20 @@ async function evaluateWorldSimTick(job: BackendJobRow): Promise<Record<string, 
 			serverVersion,
 			updatedAt: now,
 		}).where(and(eq(factions.storyId, job.storyId), eq(factions.id, faction.id)));
-		created.push({
+		return {
 			eventId,
 			factionId: faction.id,
 			name: faction.name,
 			pressureBefore: faction.pressure,
 			pressureAfter: remainingPressure,
 			urgency: pressureUrgency(faction.pressure),
-		});
-	}
+		};
+	}));
 
 	return {
 		createdEvents: created.length,
 		minimumPressure,
 		events: created,
-		...(created.length === 0 ? { reason: 'no_new_pressure_bands' } : {}),
 	};
 }
 
@@ -885,13 +963,16 @@ async function upsertChapterMemoryNode(input: {
 	});
 }
 
-async function createChapterCheckpoint(job: BackendJobRow): Promise<Record<string, unknown>> {
+async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const payload = asRecord(job.payload);
 	const config = getServerMemoryConfig();
 	const threshold = Math.max(1, asNumber(payload.chapterThreshold, config.chapterThreshold));
 	const buffer = Math.max(0, asNumber(payload.postChapterBuffer, config.postChapterBuffer));
-	const { chapter: previousChapter, endPosition } = await lastChapterBoundary(job.storyId);
-	const entries = await loadEntriesAfter(job.storyId, endPosition, threshold + buffer);
+	const { chapter: previousChapter, endPosition } = await timePhase(recorder, 'job.summarize_chapter.load_boundary', {}, () => lastChapterBoundary(job.storyId));
+	const entries = await timePhase(recorder, 'job.summarize_chapter.load_entries', {
+		endPosition,
+		limit: threshold + buffer,
+	}, () => loadEntriesAfter(job.storyId, endPosition, threshold + buffer));
 	const eligible = buffer > 0 ? entries.slice(0, Math.max(0, entries.length - buffer)) : entries;
 	if (eligible.length < threshold) {
 		return {
@@ -908,15 +989,22 @@ async function createChapterCheckpoint(job: BackendJobRow): Promise<Record<strin
 	const first = chapterEntries[0];
 	const last = chapterEntries[chapterEntries.length - 1];
 	const sourceEntryIds = chapterEntries.map((entry) => entry.id);
-	const events = await loadEventsForEntries(job.storyId, sourceEntryIds);
+	const events = await timePhase(recorder, 'job.summarize_chapter.load_events', {
+		sourceEntryIds: sourceEntryIds.length,
+	}, () => loadEventsForEntries(job.storyId, sourceEntryIds));
 	const sourceEventIds = events.map((event) => event.id);
 	const threadIds = uniqueStrings(events.flatMap((event) => asStringArray(event.threadIds)));
 	const number = (previousChapter?.number ?? 0) + 1;
 	const chapterId = stableId('chapter', [first.id, last.id]);
-	const title = deriveChapterTitle(number, chapterEntries, events);
-	const summary = buildChapterSummary(chapterEntries, events);
+	const { title, summary } = timePhaseSync(recorder, 'job.summarize_chapter.build_summary', {
+		entries: chapterEntries.length,
+		events: events.length,
+	}, () => ({
+		title: deriveChapterTitle(number, chapterEntries, events),
+		summary: buildChapterSummary(chapterEntries, events),
+	}));
 	const now = nowIso();
-	const serverVersion = await bumpStoryVersion(job.storyId);
+	const serverVersion = await timePhase(recorder, 'job.summarize_chapter.bump_version', {}, () => bumpStoryVersion(job.storyId));
 	const irreversibleChanges = events
 		.filter((event) => ['death', 'injury', 'reveal', 'betrayal'].includes(event.type))
 		.map((event) => event.title);
@@ -927,7 +1015,7 @@ async function createChapterCheckpoint(job: BackendJobRow): Promise<Record<strin
 		.filter((event) => event.type === 'faction_move')
 		.map((event) => event.title);
 
-	const [chapter] = await getDb().insert(chapters).values({
+	const [chapter] = await timePhase(recorder, 'job.summarize_chapter.persist_chapter', {}, () => getDb().insert(chapters).values({
 		id: chapterId,
 		storyId: job.storyId,
 		number,
@@ -971,9 +1059,9 @@ async function createChapterCheckpoint(job: BackendJobRow): Promise<Record<strin
 			serverVersion,
 			updatedAt: now,
 		},
-	}).returning();
+	}).returning());
 
-	await upsertChapterMemoryNode({
+	await timePhase(recorder, 'job.summarize_chapter.persist_memory_node', {}, () => upsertChapterMemoryNode({
 		storyId: job.storyId,
 		chapterId,
 		title,
@@ -984,7 +1072,7 @@ async function createChapterCheckpoint(job: BackendJobRow): Promise<Record<strin
 		serverVersion,
 		now,
 		jobId: job.id,
-	});
+	}));
 
 	const chapterScopedJob = {
 		...job,
@@ -996,9 +1084,16 @@ async function createChapterCheckpoint(job: BackendJobRow): Promise<Record<strin
 			serverVersion,
 		},
 	};
-	const factionPressure = await updateFactionPressure(chapterScopedJob);
-	const worldTick = await evaluateWorldSimTick(chapterScopedJob);
-	const arc = await rollupArc(job);
+	const [{ factionPressure, worldTick }, arc] = await timePhase(recorder, 'job.summarize_chapter.post_chapter_parallel', {
+		branches: 2,
+	}, () => Promise.all([
+		(async () => {
+			const factionPressure = await updateFactionPressure(chapterScopedJob, recorder);
+			const worldTick = await evaluateWorldSimTick(chapterScopedJob, recorder);
+			return { factionPressure, worldTick };
+		})(),
+		rollupArc(job, recorder),
+	]));
 	return {
 		created: true,
 		chapterId: chapter.id,
@@ -1073,15 +1168,15 @@ async function upsertArcMemoryNode(input: {
 	});
 }
 
-async function rollupArc(job: BackendJobRow): Promise<Record<string, unknown>> {
+async function rollupArc(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const payload = asRecord(job.payload);
 	const config = getServerMemoryConfig();
 	const chaptersPerArc = Math.max(1, asNumber(payload.chaptersPerArc, config.chaptersPerArc));
 	const db = getDb();
-	const [chapterRows, arcRows] = await Promise.all([
+	const [chapterRows, arcRows] = await timePhase(recorder, 'job.rollup_arc.load_context', { chaptersPerArc }, () => Promise.all([
 		db.select().from(chapters).where(eq(chapters.storyId, job.storyId)).orderBy(asc(chapters.number)).limit(500),
 		db.select().from(arcs).where(eq(arcs.storyId, job.storyId)).orderBy(asc(arcs.number)).limit(200),
-	]);
+	]));
 	const covered = new Set(arcRows.flatMap((arc) => asStringArray(arc.chapterIds)));
 	const uncovered = chapterRows.filter((chapter) => !covered.has(chapter.id));
 	if (uncovered.length < chaptersPerArc) {
@@ -1105,9 +1200,11 @@ async function rollupArc(job: BackendJobRow): Promise<Record<string, unknown>> {
 	const sourceEventIds = uniqueStrings(arcChapters.flatMap((chapter) => asStringArray(chapter.sourceEventIds)));
 	const openThreadIds = uniqueStrings(arcChapters.flatMap((chapter) => asStringArray(chapter.openThreads)));
 	const now = nowIso();
-	const serverVersion = await bumpStoryVersion(job.storyId);
+	const serverVersion = await timePhase(recorder, 'job.rollup_arc.bump_version', {}, () => bumpStoryVersion(job.storyId));
 
-	const [arc] = await db.insert(arcs).values({
+	const [arc] = await timePhase(recorder, 'job.rollup_arc.persist_arc', {
+		chapterCount: arcChapters.length,
+	}, () => db.insert(arcs).values({
 		id: arcId,
 		storyId: job.storyId,
 		number,
@@ -1138,9 +1235,9 @@ async function rollupArc(job: BackendJobRow): Promise<Record<string, unknown>> {
 			serverVersion,
 			updatedAt: now,
 		},
-	}).returning();
+	}).returning());
 
-	await upsertArcMemoryNode({
+	await timePhase(recorder, 'job.rollup_arc.persist_memory_node', {}, () => upsertArcMemoryNode({
 		storyId: job.storyId,
 		arcId,
 		title,
@@ -1151,7 +1248,7 @@ async function rollupArc(job: BackendJobRow): Promise<Record<string, unknown>> {
 		serverVersion,
 		now,
 		jobId: job.id,
-	});
+	}));
 
 	return {
 		created: true,
@@ -1161,11 +1258,11 @@ async function rollupArc(job: BackendJobRow): Promise<Record<string, unknown>> {
 	};
 }
 
-async function syncStoryVault(job: BackendJobRow): Promise<Record<string, unknown>> {
+async function syncStoryVault(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const payload = asRecord(job.payload);
 	const config = getMtheriosAppConfig();
 	const requestedVersion = asNumber(payload.serverVersion, 0);
-	const beforeStatus = await getStoryVaultStatus(job.storyId, config);
+	const beforeStatus = await timePhase(recorder, 'job.sync_story_vault.status_before', { requestedVersion }, () => getStoryVaultStatus(job.storyId, config));
 	const alreadyFresh = beforeStatus.exists &&
 		beforeStatus.vaultFresh &&
 		(requestedVersion <= 0 || (beforeStatus.manifestVersion ?? 0) >= requestedVersion);
@@ -1175,33 +1272,38 @@ async function syncStoryVault(job: BackendJobRow): Promise<Record<string, unknow
 			collection: beforeStatus.collection,
 			counts: beforeStatus.manifest?.counts ?? {},
 		}
-		: await materializeStoryVault({
+		: await timePhase(recorder, 'job.sync_story_vault.materialize', { clean: payload.clean !== false }, () => materializeStoryVault({
 			storyId: job.storyId,
 			clean: payload.clean !== false,
-		});
+		}));
 	const shouldIndex = payload.index === true || config.wikiAutoIndexStoryVaults;
 	const indexed = shouldIndex
-		? await indexWiki({
+		? await timePhase(recorder, 'job.sync_story_vault.index', {
+			recreate: payload.recreate === true,
+			dryRun: payload.dryRun === true,
+		}, () => indexWiki({
 			storyId: job.storyId,
 			recreate: payload.recreate === true,
 			dryRun: payload.dryRun === true,
 			provider: typeof payload.provider === 'string' ? payload.provider : null,
 			model: typeof payload.model === 'string' ? payload.model : null,
-		})
+		}))
 		: null;
 	const shouldLint = payload.lint === true || config.wikiAutoLintStoryVaults;
 	const lintReport = shouldLint
-		? await lintWiki({
+		? await timePhase(recorder, 'job.sync_story_vault.lint', {
+			thinChars: asNumber(payload.thinChars, 240),
+		}, () => lintWiki({
 			storyId: job.storyId,
 			thinChars: asNumber(payload.thinChars, 240),
 			orphanLayer: payload.orphanLayer === 'all' ? 'all' : 'derived',
-		})
+		}))
 		: null;
 	const linted = lintReport
-		? await writeStoryVaultLintReport({ storyId: job.storyId, report: lintReport }, config)
+		? await timePhase(recorder, 'job.sync_story_vault.write_lint_report', {}, () => writeStoryVaultLintReport({ storyId: job.storyId, report: lintReport }, config))
 		: null;
 
-	const status = await getStoryVaultStatus(job.storyId, config);
+	const status = await timePhase(recorder, 'job.sync_story_vault.status_after', {}, () => getStoryVaultStatus(job.storyId, config));
 	return {
 		storyId: job.storyId,
 		vaultPath: vault.vaultPath,
@@ -1224,28 +1326,79 @@ async function indexCanonicalRecordsJob(job: BackendJobRow): Promise<Record<stri
 	});
 }
 
-async function processBackendJob(job: BackendJobRow): Promise<Record<string, unknown>> {
+async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const type = job.type as BackendJobType;
-	switch (type) {
-		case 'create_memory_nodes_from_events':
-		case 'rebuild_retrieval_projection':
-			return { materializedEventMemories: await createMemoryNodesFromEvents(job) };
-		case 'update_faction_pressure':
-			return updateFactionPressure(job);
-		case 'embed_memory_nodes':
-			return embedMemoryNodes(job);
-		case 'summarize_chapter':
-			return createChapterCheckpoint(job);
-		case 'rollup_arc':
-			return rollupArc(job);
-		case 'evaluate_world_sim_tick':
-			return evaluateWorldSimTick(job);
-		case 'index_canonical_records':
-			return indexCanonicalRecordsJob(job);
-		case 'sync_story_vault':
-			return syncStoryVault(job);
-		default:
-			throw new Error(`Unknown backend job type: ${job.type}`);
+	return timePhase(recorder, `job.${type}.total`, {
+		attemptCount: job.attemptCount,
+		maxAttempts: job.maxAttempts,
+	}, async () => {
+		switch (type) {
+			case 'create_memory_nodes_from_events':
+			case 'rebuild_retrieval_projection':
+				return { materializedEventMemories: await createMemoryNodesFromEvents(job) };
+			case 'update_faction_pressure':
+				return updateFactionPressure(job, recorder);
+			case 'embed_memory_nodes':
+				return embedMemoryNodes(job);
+			case 'summarize_chapter':
+				return createChapterCheckpoint(job, recorder);
+			case 'rollup_arc':
+				return rollupArc(job, recorder);
+			case 'evaluate_world_sim_tick':
+				return evaluateWorldSimTick(job, recorder);
+			case 'index_canonical_records':
+				return indexCanonicalRecordsJob(job);
+			case 'sync_story_vault':
+				return syncStoryVault(job, recorder);
+			default:
+				throw new Error(`Unknown backend job type: ${job.type}`);
+		}
+	});
+}
+
+function jobTimingReport(job: BackendJobRow, status: BackendJobTimingReport['status'], phases: TimingEntry[]): BackendJobTimingReport {
+	const total = [...phases].reverse().find((phase) => phase.phase === `job.${job.type}.total`)?.durationMs
+		?? phases.reduce((sum, phase) => sum + phase.durationMs, 0);
+	return {
+		jobId: job.id,
+		storyId: job.storyId,
+		type: job.type,
+		status,
+		durationMs: total,
+		phases,
+	};
+}
+
+async function runClaimedJob(job: BackendJobRow): Promise<{
+	completed: boolean;
+	result?: Record<string, unknown>;
+	error?: string;
+	timing: BackendJobTimingReport;
+}> {
+	const recorder = createTimingRecorder({
+		pipeline: 'backend.generation.jobs',
+		metadata: {
+			jobId: job.id,
+			storyId: job.storyId,
+			jobType: job.type,
+		},
+	});
+	try {
+		const result = await processBackendJob(job, recorder);
+		await timePhase(recorder, 'job.mark_complete', {}, () => markBackendJobComplete(job.id));
+		return {
+			completed: true,
+			result,
+			timing: jobTimingReport(job, 'completed', recorder.timings),
+		};
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		await timePhase(recorder, 'job.mark_failed', { error: message }, () => markBackendJobFailed(job.id, error));
+		return {
+			completed: false,
+			error: message,
+			timing: jobTimingReport(job, 'failed', recorder.timings),
+		};
 	}
 }
 
@@ -1253,22 +1406,31 @@ export async function runDueBackendJobs(workerId = `worker_${Date.now()}`, limit
 	claimed: number;
 	completed: number;
 	failed: Array<{ jobId: string; error: string }>;
+	timings: BackendJobTimingReport[];
 }> {
 	const jobs = await claimBackendJobs(workerId, limit, storyId);
 	const failed: Array<{ jobId: string; error: string }> = [];
+	const timings: BackendJobTimingReport[] = [];
 	let completed = 0;
+	const byStory = new Map<string, BackendJobRow[]>();
 	for (const job of jobs) {
-		try {
-			await processBackendJob(job);
-			await markBackendJobComplete(job.id);
-			completed += 1;
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			await markBackendJobFailed(job.id, error);
-			failed.push({ jobId: job.id, error: message });
-		}
+		const group = byStory.get(job.storyId) ?? [];
+		group.push(job);
+		byStory.set(job.storyId, group);
 	}
-	return { claimed: jobs.length, completed, failed };
+	const concurrency = readGenerationConcurrency();
+	await mapWithConcurrency([...byStory.values()], concurrency, async (storyJobs) => {
+		for (const job of storyJobs) {
+			const result = await runClaimedJob(job);
+			timings.push(result.timing);
+			if (result.completed) {
+				completed += 1;
+			} else {
+				failed.push({ jobId: job.id, error: result.error ?? 'unknown error' });
+			}
+		}
+	});
+	return { claimed: jobs.length, completed, failed, timings };
 }
 
 export async function runBackendJobNow(jobId: string, workerId = `manual_${Date.now()}`): Promise<{
@@ -1276,6 +1438,7 @@ export async function runBackendJobNow(jobId: string, workerId = `manual_${Date.
 	completed: boolean;
 	result?: Record<string, unknown>;
 	error?: string;
+	timings?: BackendJobTimingReport;
 }> {
 	const claimedAt = nowIso();
 	const [job] = await getDb().update(backendJobs).set({
@@ -1287,15 +1450,14 @@ export async function runBackendJobNow(jobId: string, workerId = `manual_${Date.
 	}).where(eq(backendJobs.id, jobId)).returning();
 	if (!job) throw new Error(`Backend job not found: ${jobId}`);
 
-	try {
-		const result = await processBackendJob(job);
-		await markBackendJobComplete(job.id);
-		return { jobId: job.id, completed: true, result };
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		await markBackendJobFailed(job.id, error);
-		return { jobId: job.id, completed: false, error: message };
-	}
+	const result = await runClaimedJob(job);
+	return {
+		jobId: job.id,
+		completed: result.completed,
+		result: result.result,
+		error: result.error,
+		timings: result.timing,
+	};
 }
 
 export async function getBackendJobStats(storyId?: string | null): Promise<BackendJobStats> {

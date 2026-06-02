@@ -40,6 +40,7 @@
 		"wiki:page": "node scripts/wiki-core/page.mjs",
 		"wiki:write": "node scripts/wiki-core/write.mjs",
 		"wiki:lint": "node scripts/wiki-core/lint.mjs",
+		"bench:generation": "node scripts/bench-generation.mjs",
 		"test": "vitest run",
 		"test:watch": "vitest"
 	},

@@ -18,6 +18,7 @@ import { applyValidatedTurnUpdate, parseTurnUpdate } from './patchValidator';
 import { requireResolvedServiceProfile, resolveServiceGeneration } from '$lib/server/engine/llmSettings';
 import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
 import { buildTurnDebugSnapshot } from './debugSnapshot';
+import { createTimingRecorder } from '$lib/server/performance/timing';
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -197,18 +198,34 @@ async function existingTurn(storyId: string, clientTurnId: string): Promise<Turn
 
 export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 	const request = turnRequestSchema.parse(input);
-	const existing = await existingTurn(request.storyId, request.clientTurnId);
-	if (existing) return existing;
+	const recorder = createTimingRecorder({
+		pipeline: 'backend.turn.generation',
+		metadata: {
+			storyId: request.storyId,
+			clientTurnId: request.clientTurnId,
+		},
+	});
+	recorder.record('turn.request_start', 0, {
+		localVersion: request.localVersion,
+		hasClientContext: Boolean(request.clientContext),
+	});
+	const existing = await recorder.time('turn.idempotency_check', {}, () => existingTurn(request.storyId, request.clientTurnId));
+	if (existing) {
+		recorder.record('turn.response_cached', 0, { serverVersion: existing.serverVersion });
+		return existing;
+	}
 
 	const db = getDb();
 	const createdAt = nowIso();
 	const playerEntryId = `entry_${request.clientTurnId}`;
 	const assistantEntryId = `narration_${request.clientTurnId}`;
 	const warnings: string[] = [];
-	const narrativeService = await resolveServiceGeneration('narrative');
+	const [narrativeService, classifierService] = await recorder.time('turn.service_config', {}, () => Promise.all([
+		resolveServiceGeneration('narrative'),
+		resolveServiceGeneration('classifier'),
+	]));
 	const narrativeProfile = requireResolvedServiceProfile('narrative', narrativeService);
 	const narrativeGeneration = narrativeService.generation;
-	const classifierService = await resolveServiceGeneration('classifier');
 	const classifierProfile = classifierService.profile ?? narrativeProfile;
 	const classifierGeneration = classifierService.profile
 		? {
@@ -242,22 +259,57 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		currentFactionId: request.clientContext?.currentFactionId ?? null,
 		tokenBudget: memoryTokenBudget,
 	};
-	const retrieved = await retrieveMemoryPacket(retrievalRequest);
-	const ctx = await loadTurnContext(request.storyId, request.clientContext?.presentNpcIds ?? []);
+	const wikiContextTask = recorder.time('turn.wiki_context', {
+		limit: WIKI_CONTEXT_LIMIT,
+		pageLimit: WIKI_CONTEXT_PAGE_LIMIT,
+		maxChars: WIKI_CONTEXT_MAX_CHARS,
+	}, async () => {
+		try {
+			return { ok: true as const, value: await loadServerWikiContext(request.storyId, request.playerText) };
+		} catch (error) {
+			return { ok: false as const, error };
+		}
+	});
+	const [retrieved, ctx, wikiResult] = await recorder.time('turn.context_assembly', {
+		parallel: true,
+		memoryTokenBudget,
+	}, () => Promise.all([
+		recorder.time('turn.memory_retrieval', {
+			tokenBudget: memoryTokenBudget,
+			sceneEntityIds: retrievalRequest.sceneEntityIds.length,
+			presentNpcIds: retrievalRequest.presentNpcIds.length,
+			threadIds: retrievalRequest.threadIds.length,
+		}, () => retrieveMemoryPacket(retrievalRequest)),
+		recorder.time('turn.context_load', {
+			presentNpcIds: request.clientContext?.presentNpcIds?.length ?? 0,
+		}, () => loadTurnContext(request.storyId, request.clientContext?.presentNpcIds ?? [])),
+		wikiContextTask,
+	]));
 	let wikiContext: ServerWikiContext | null = null;
-	try {
-		wikiContext = await loadServerWikiContext(request.storyId, request.playerText);
+	if (wikiResult.ok) {
+		wikiContext = wikiResult.value;
 		if (wikiContext.semanticError) warnings.push(`Terminal wiki semantic search warning: ${wikiContext.semanticError}`);
-	} catch (error) {
+	} else {
+		const error = wikiResult.error;
 		warnings.push(`Terminal wiki context unavailable: ${error instanceof Error ? error.message : String(error)}`);
 	}
-	const prompt = buildServerTurnPrompt(ctx, retrieved, playerEntryId, {
+	const prompt = recorder.timeSync('turn.prompt_assembly', {
+		retrievedMemoryNodes: retrieved.nodes.length,
+		wikiContextChars: wikiContext?.markdown.length ?? 0,
+		...turnContextCounts(ctx),
+	}, () => buildServerTurnPrompt(ctx, retrieved, playerEntryId, {
 		currentFactionId: request.clientContext?.currentFactionId ?? null,
 		sceneEntityIds: request.clientContext?.sceneEntityIds ?? [],
 		wikiContextMarkdown: wikiContext?.markdown ?? null,
-	});
+	}));
 	const narrativeSystem = narrativeService.systemPromptOverride?.trim() || prompt.system;
 	const narrativePrompt = `${prompt.prompt}\n\nPlayer action:\n${request.playerText}`;
+	recorder.record('turn.prompt_payload', 0, {
+		systemChars: narrativeSystem.length,
+		promptChars: narrativePrompt.length,
+		messageCount: prompt.messages.length,
+		messageChars: prompt.messages.reduce((sum, message) => sum + message.content.length, 0),
+	});
 	const narrativeDebugBase = {
 		kind: 'narration' as const,
 		playerText: request.playerText,
@@ -282,6 +334,18 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		});
 		narration = result.text;
 		generationTimings.push(timingFromResult('turn.narration', 'narrative', result, 'success'));
+		recorder.record('turn.llm.narration', result.durationMs, {
+			serviceId: 'narrative',
+			model: result.model,
+			status: 'success',
+			promptChars: result.promptChars,
+			responseChars: result.responseChars,
+			requestTokens: result.usage.requestTokens,
+			responseTokens: result.usage.responseTokens,
+			totalTokens: result.usage.totalTokens,
+			maxOutputTokens: narrativeGeneration.maxTokens,
+			retryCount: 0,
+		});
 		await logGenerationCall({
 			storyId: request.storyId,
 			clientTurnId: request.clientTurnId,
@@ -304,6 +368,19 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		const failedResult = generationErrorResult(error);
 		if (failedResult) {
 			generationTimings.push(timingFromResult('turn.narration', 'narrative', failedResult, 'error'));
+			recorder.record('turn.llm.narration', failedResult.durationMs, {
+				serviceId: 'narrative',
+				model: failedResult.model,
+				status: 'error',
+				promptChars: failedResult.promptChars,
+				responseChars: failedResult.responseChars ?? null,
+				requestTokens: failedResult.usage?.requestTokens ?? null,
+				responseTokens: failedResult.usage?.responseTokens ?? null,
+				totalTokens: failedResult.usage?.totalTokens ?? null,
+				maxOutputTokens: narrativeGeneration.maxTokens,
+				retryCount: 0,
+				statusCode: failedResult.statusCode ?? null,
+			});
 			await logGenerationCall({
 				storyId: request.storyId,
 				clientTurnId: request.clientTurnId,
@@ -327,55 +404,61 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		throw new Error('Terminal narrative generation returned an empty response. No backend turn was persisted.');
 	}
 
-	const position = await nextEntryPosition(request.storyId);
-	const turnVersion = await bumpStoryVersion(request.storyId);
+	const [position, turnVersion] = await recorder.time('turn.persistence.allocate_position_version', {}, () => Promise.all([
+		nextEntryPosition(request.storyId),
+		bumpStoryVersion(request.storyId),
+	]));
 
-	await db.insert(syncOps).values({
-		id: `turn_${request.clientTurnId}`,
-		storyId: request.storyId,
-		type: 'turn_command',
-		payload: { playerText: request.playerText, clientContext: request.clientContext ?? null },
-		clientVersion: request.localVersion,
-		status: 'applied',
-		createdAt,
-	}).onConflictDoNothing();
-
-	await db.insert(storyEntries).values({
-		id: playerEntryId,
-		storyId: request.storyId,
-		type: 'user_action',
-		content: request.playerText,
-		position,
-		parentId: null,
-		branchId: null,
-		metadata: { clientTurnId: request.clientTurnId, source: 'server_turn' },
-		serverVersion: turnVersion,
-		createdAt,
-		updatedAt: createdAt,
-	}).onConflictDoNothing();
-
-	await db.insert(storyEntries).values({
-		id: assistantEntryId,
-		storyId: request.storyId,
-		type: 'narration',
-		content: narration,
-		position: position + 1,
-		parentId: playerEntryId,
-		branchId: null,
-		metadata: {
-			clientTurnId: request.clientTurnId,
-			source: 'server_turn',
-			retrievedMemoryIds: retrieved.nodes.map((node) => node.id),
-			wikiContextCitations: wikiContext?.citations ?? [],
-			wikiContextPageCount: wikiContext?.pageCount ?? 0,
-			wikiContextSeedCount: wikiContext?.seedCount ?? 0,
-			generationTimings,
-			memoryTokenBudget,
-		},
-		serverVersion: turnVersion,
-		createdAt,
-		updatedAt: createdAt,
-	}).onConflictDoNothing();
+	await recorder.time('turn.persistence.entries', {
+		writes: 3,
+		narrationChars: narration.length,
+		playerTextChars: request.playerText.length,
+	}, () => Promise.all([
+		db.insert(syncOps).values({
+			id: `turn_${request.clientTurnId}`,
+			storyId: request.storyId,
+			type: 'turn_command',
+			payload: { playerText: request.playerText, clientContext: request.clientContext ?? null },
+			clientVersion: request.localVersion,
+			status: 'applied',
+			createdAt,
+		}).onConflictDoNothing(),
+		db.insert(storyEntries).values({
+			id: playerEntryId,
+			storyId: request.storyId,
+			type: 'user_action',
+			content: request.playerText,
+			position,
+			parentId: null,
+			branchId: null,
+			metadata: { clientTurnId: request.clientTurnId, source: 'server_turn' },
+			serverVersion: turnVersion,
+			createdAt,
+			updatedAt: createdAt,
+		}).onConflictDoNothing(),
+		db.insert(storyEntries).values({
+			id: assistantEntryId,
+			storyId: request.storyId,
+			type: 'narration',
+			content: narration,
+			position: position + 1,
+			parentId: playerEntryId,
+			branchId: null,
+			metadata: {
+				clientTurnId: request.clientTurnId,
+				source: 'server_turn',
+				retrievedMemoryIds: retrieved.nodes.map((node) => node.id),
+				wikiContextCitations: wikiContext?.citations ?? [],
+				wikiContextPageCount: wikiContext?.pageCount ?? 0,
+				wikiContextSeedCount: wikiContext?.seedCount ?? 0,
+				generationTimings,
+				memoryTokenBudget,
+			},
+			serverVersion: turnVersion,
+			createdAt,
+			updatedAt: createdAt,
+		}).onConflictDoNothing(),
+	]));
 
 	let rawUpdate: unknown = { update: worldStateUpdateSchema.parse({}) };
 	if (classifierProfile) {
@@ -392,6 +475,19 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 				responseFormat: 'json_object',
 			});
 			generationTimings.push(timingFromResult('turn.state_extraction', 'classifier', extractionResult, 'success'));
+			recorder.record('turn.llm.state_extraction', extractionResult.durationMs, {
+				serviceId: 'classifier',
+				model: extractionResult.model,
+				status: 'success',
+				promptChars: extractionResult.promptChars,
+				responseChars: extractionResult.responseChars,
+				requestTokens: extractionResult.usage.requestTokens,
+				responseTokens: extractionResult.usage.responseTokens,
+				totalTokens: extractionResult.usage.totalTokens,
+				maxOutputTokens: classifierGeneration.maxTokens,
+				responseFormat: 'json_object',
+				retryCount: 0,
+			});
 			await logGenerationCall({
 				storyId: request.storyId,
 				clientTurnId: request.clientTurnId,
@@ -416,6 +512,20 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 			const failedResult = generationErrorResult(error);
 			if (failedResult) {
 				generationTimings.push(timingFromResult('turn.state_extraction', 'classifier', failedResult, 'error'));
+				recorder.record('turn.llm.state_extraction', failedResult.durationMs, {
+					serviceId: 'classifier',
+					model: failedResult.model,
+					status: 'error',
+					promptChars: failedResult.promptChars,
+					responseChars: failedResult.responseChars ?? null,
+					requestTokens: failedResult.usage?.requestTokens ?? null,
+					responseTokens: failedResult.usage?.responseTokens ?? null,
+					totalTokens: failedResult.usage?.totalTokens ?? null,
+					maxOutputTokens: classifierGeneration.maxTokens,
+					responseFormat: 'json_object',
+					retryCount: 0,
+					statusCode: failedResult.statusCode ?? null,
+				});
 				await logGenerationCall({
 					storyId: request.storyId,
 					clientTurnId: request.clientTurnId,
@@ -441,9 +551,11 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		}
 	}
 
-	const parsedUpdate = parseTurnUpdate(rawUpdate);
+	const parsedUpdate = recorder.timeSync('turn.validation.parse_update', {}, () => parseTurnUpdate(rawUpdate));
 	warnings.push(...parsedUpdate.warnings);
-	const applied = await applyValidatedTurnUpdate({
+	const applied = await recorder.time('turn.validation.apply_update', {
+		parseWarnings: parsedUpdate.warnings.length,
+	}, () => applyValidatedTurnUpdate({
 		storyId: request.storyId,
 		playerEntryId,
 		assistantEntryId,
@@ -453,17 +565,26 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		retrievedMemoryIds: retrieved.nodes.map((node) => node.id),
 		serverVersion: turnVersion,
 		memorySettings,
-	});
+	}));
 	warnings.push(...applied.warnings);
 
-	const entries = await db
-		.select()
-		.from(storyEntries)
-		.where(eq(storyEntries.storyId, request.storyId))
-		.orderBy(desc(storyEntries.position))
-		.limit(2);
-	const syncChanges = await getSyncChanges(request.storyId, request.localVersion);
+	const [entries, syncChanges] = await recorder.time('turn.final_response.readback', {
+		localVersion: request.localVersion,
+	}, () => Promise.all([
+		db
+			.select()
+			.from(storyEntries)
+			.where(eq(storyEntries.storyId, request.storyId))
+			.orderBy(desc(storyEntries.position))
+			.limit(2),
+		getSyncChanges(request.storyId, request.localVersion),
+	]));
 	const maxVersion = syncChanges.reduce((max, change) => Math.max(max, change.version), turnVersion);
+	recorder.record('turn.final_response.serialize', 0, {
+		syncChanges: syncChanges.length,
+		warnings: warnings.length,
+		phaseCount: recorder.timings.length,
+	});
 
 	return {
 		narration,
