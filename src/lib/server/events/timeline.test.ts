@@ -6,6 +6,7 @@ import {
 	buildScheduledTimelineEventInsert,
 	loadGmTimelineBrief,
 	promoteDueTimelineEvents,
+	scheduleTimelineEvent,
 	selectDueTimelineEvents,
 } from './timeline';
 
@@ -81,12 +82,28 @@ describe('timeline selection helpers', () => {
 		expect(selected.map(item => item.id)).toEqual(['due_without_turn']);
 	});
 
-	it('creates actor and target links without duplicates and lets actor role win', () => {
+	it('does not create npc links from generic actor and target entity ids by default', () => {
 		const links = buildNpcEventLinksForEvent({
 			storyId: 'story_1',
 			eventId: 'event_scheme',
-			actorEntityIds: ['npc_anya', 'npc_borin'],
-			targetEntityIds: ['npc_borin', 'npc_cass'],
+			actorEntityIds: ['faction_river_guard', 'thread_border_war'],
+			targetEntityIds: ['location_gatehouse', 'faction_marsh_court'],
+			visibility: 'player_known',
+			sourceEntryIds: [],
+			sourcePatchIds: [],
+			serverVersion: 1,
+			now,
+		});
+
+		expect(links).toEqual([]);
+	});
+
+	it('creates explicit actor and target npc links without duplicates and lets actor role win', () => {
+		const links = buildNpcEventLinksForEvent({
+			storyId: 'story_1',
+			eventId: 'event_scheme',
+			actorNpcEntityIds: ['npc_anya', 'npc_borin'],
+			targetNpcEntityIds: ['npc_borin', 'npc_cass'],
 			visibility: 'player_known',
 			sourceEntryIds: [],
 			sourcePatchIds: [],
@@ -167,15 +184,51 @@ describe('timeline selection helpers', () => {
 		});
 	});
 
+	it('uses current world time when scheduled insert world time is omitted', () => {
+		const insert = buildScheduledTimelineEventInsert({
+			storyId: 'story_1',
+			type: 'rumor',
+			title: 'Rumor arrives',
+			body: 'A rumor reaches court after a delay.',
+			currentTurn: 10,
+			currentWorldTime: '17th day of the 9th moon',
+			delayTurns: 1,
+			now,
+		});
+
+		expect(insert.worldTime).toBe('17th day of the 9th moon');
+	});
+
 	it('accepts plan-compatible loader and promotion signatures at compile time', () => {
 		const loadInput = {
 			storyId: 'story_1',
 			sceneEntityIds: ['npc_cass'],
+			currentTurn: 7,
 		} satisfies Parameters<typeof loadGmTimelineBrief>[0];
 		const promoteInput = ['story_1', 5] satisfies Parameters<typeof promoteDueTimelineEvents>;
 
 		expect(loadInput.sceneEntityIds).toEqual(['npc_cass']);
+		expect(loadInput.currentTurn).toBe(7);
 		expect(promoteInput).toEqual(['story_1', 5]);
+	});
+
+	it('accepts scheduled timeline input with explicit npc ids at compile time', () => {
+		const scheduleInput = {
+			storyId: 'story_1',
+			type: 'scheme',
+			title: 'Gatehouse pressure',
+			body: 'A faction tests the gatehouse through named agents.',
+			currentTurn: 5,
+			delayTurns: 2,
+			now,
+			actorEntityIds: ['faction_river_guard'],
+			targetEntityIds: ['location_gatehouse'],
+			actorNpcEntityIds: ['npc_anya'],
+			targetNpcEntityIds: ['npc_borin'],
+		} satisfies Parameters<typeof scheduleTimelineEvent>[0];
+
+		expect(scheduleInput.actorNpcEntityIds).toEqual(['npc_anya']);
+		expect(scheduleInput.targetNpcEntityIds).toEqual(['npc_borin']);
 	});
 
 	it('builds a due promotion patch without mutating occurred turn', () => {

@@ -37,8 +37,8 @@ export function selectDueTimelineEvents(events: StoryEventRow[], currentTurn: nu
 export function buildNpcEventLinksForEvent(input: {
 	storyId: string;
 	eventId: string;
-	actorEntityIds: string[];
-	targetEntityIds: string[];
+	actorEntityIds?: string[];
+	targetEntityIds?: string[];
 	actorNpcEntityIds?: string[];
 	targetNpcEntityIds?: string[];
 	visibility: MemoryVisibility | string;
@@ -48,9 +48,8 @@ export function buildNpcEventLinksForEvent(input: {
 	now: string;
 }): NpcEventLinkInsert[] {
 	const byNpc = new Map<string, NpcEventLinkRole>();
-	// Task 6 compatibility: patchValidator currently passes character IDs through actor/target entity IDs.
-	const actorNpcEntityIds = input.actorNpcEntityIds ?? input.actorEntityIds ?? [];
-	const targetNpcEntityIds = input.targetNpcEntityIds ?? input.targetEntityIds ?? [];
+	const actorNpcEntityIds = input.actorNpcEntityIds ?? [];
+	const targetNpcEntityIds = input.targetNpcEntityIds ?? [];
 
 	for (const npcEntityId of actorNpcEntityIds) {
 		if (npcEntityId) byNpc.set(npcEntityId, 'actor');
@@ -93,6 +92,7 @@ export function buildScheduledTimelineEventInsert(input: {
 	threadIds?: string[];
 	visibility?: MemoryVisibility;
 	worldTime?: string | null;
+	currentWorldTime?: string | null;
 	memoryImpact?: Record<string, unknown>;
 	sourceEntryIds?: string[];
 	sourcePatchIds?: string[];
@@ -118,7 +118,7 @@ export function buildScheduledTimelineEventInsert(input: {
 		createdTurn: input.currentTurn,
 		occurredTurn: null,
 		scheduledTurn: input.currentTurn + delayTurns,
-		worldTime: input.worldTime ?? null,
+		worldTime: input.worldTime ?? input.currentWorldTime ?? null,
 		memoryImpact: input.memoryImpact ?? {},
 		sourceEntryIds: input.sourceEntryIds ?? [],
 		sourcePatchIds: input.sourcePatchIds ?? [],
@@ -199,6 +199,7 @@ export function buildGmTimelineBrief(input: {
 
 export async function loadGmTimelineBrief(input: {
 	storyId: string;
+	currentTurn?: number;
 	presentNpcIds?: string[];
 	sceneEntityIds?: string[];
 	includeSecret?: boolean;
@@ -222,7 +223,7 @@ export async function loadGmTimelineBrief(input: {
 
 	return buildGmTimelineBrief({
 		...input,
-		currentTurn: story.currentTurn,
+		currentTurn: input.currentTurn ?? story.currentTurn,
 		currentWorldTime: story.currentWorldTime,
 		events: eventRows,
 		npcLinks: linkRows,
@@ -243,8 +244,6 @@ export async function scheduleTimelineEvent(input: Parameters<typeof buildSchedu
 		const links = buildNpcEventLinksForEvent({
 			storyId: row.storyId,
 			eventId: row.id,
-			actorEntityIds: row.actorEntityIds ?? [],
-			targetEntityIds: row.targetEntityIds ?? [],
 			actorNpcEntityIds: input.actorNpcEntityIds,
 			targetNpcEntityIds: input.targetNpcEntityIds,
 			visibility: row.visibility,
