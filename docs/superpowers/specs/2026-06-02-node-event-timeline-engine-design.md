@@ -149,6 +149,10 @@ npc {
   factionIds
   locationId
   status
+  appearance
+  personalityDescriptors
+  voice
+  mannerisms
   publicProfile
   privateProfile
   goals
@@ -160,6 +164,8 @@ npc {
   knowledgeState
 }
 ```
+
+Because this remains a text RPG, NPC records must preserve portrayal as durable canon, not loose prompt flavor. `appearance` should capture visible looks, clothing, build, age cues, scars, heraldry, weapons, and other readable physical signals. `personalityDescriptors`, `voice`, and `mannerisms` should capture how the character behaves and speaks. These fields are initial canon descriptors; changes to them should cite events or source entries when they represent character development rather than simple clarification.
 
 Validation rule: if an NPC belief, relationship, disposition, or loyalty changes, the update must cite an event or source entry. If no evidence exists, the change should remain a proposal or warning rather than canon.
 
@@ -177,6 +183,7 @@ world_blueprint {
   calendar
   rules
   seedPrompt
+  characterStyleGuide
   desiredFactions
   desiredNpcs
   desiredLocations
@@ -188,7 +195,7 @@ Creation flow:
 
 ```text
 create world
--> create factions, locations, NPCs, and relationships
+-> create factions, locations, NPCs with personality and appearance descriptors, and relationships
 -> seed initial public events
 -> seed hidden plans and scheduled events
 -> create first scene
@@ -256,7 +263,7 @@ Move browser AI/world services into server engine modules. Browser services beco
 
 ### Phase 3: World Creation
 
-Add a world creation API that creates factions, locations, NPCs, initial relationships, seed events, hidden plans, and the first playable scene.
+Add a world creation API that creates factions, locations, NPCs with personality and appearance descriptors, initial relationships, seed events, hidden plans, and the first playable scene.
 
 ### Phase 4: Memory Demotion
 
@@ -285,7 +292,8 @@ The first implementation plan should focus on a narrow but meaningful slice:
 2. Add a server event query service.
 3. Add delayed-event scheduling and due-event promotion.
 4. Change `/api/turn` prompt assembly to use a compact GM brief from event queries.
-5. Add focused tests for scheduling, due queries, NPC event links, and prompt packet size.
+5. Preserve NPC appearance, personality, voice, and mannerism descriptors in event-linked server state.
+6. Add focused tests for scheduling, due queries, NPC event links, descriptor retention, and prompt packet size.
 
 This target moves the app toward the requested end state without replacing the entire web server first.
 
@@ -298,6 +306,7 @@ The current defaults are:
 - Time is turn-first with optional world calendar fields.
 - Due events use a hybrid canon model: low-risk auto-commit, high-impact proposals.
 - NPC memory is event-linked and evidence-backed.
+- NPC portrayal keeps appearance, personality, voice, and mannerism descriptors as first-class text-RPG state.
 - Memory nodes, wiki, and Qdrant are projections.
 
 These defaults should be changed before implementation only if the project needs a hard Express migration first, pure auto-commit world simulation, or hidden events that cannot exist until revealed.
