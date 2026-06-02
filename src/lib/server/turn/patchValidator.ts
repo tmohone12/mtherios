@@ -139,6 +139,14 @@ function makeOperations(update: WorldStateUpdate): Array<Record<string, unknown>
 	return operations;
 }
 
+function advanceWorldTime(currentWorldTime: string | null, timeDelta: string | null | undefined): string | null {
+	const delta = typeof timeDelta === 'string' ? timeDelta.trim() : '';
+	if (!delta) return currentWorldTime;
+	if (!currentWorldTime) return delta;
+	if (currentWorldTime === delta) return currentWorldTime;
+	return `${currentWorldTime}; ${delta}`;
+}
+
 function timelineDefaults(input: {
 	currentTurn: number;
 	currentWorldTime: string | null;
@@ -201,6 +209,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 
 		const currentTurn = story.currentTurn ?? 0;
 		const currentWorldTime = story.currentWorldTime ?? null;
+		const nextWorldTime = advanceWorldTime(currentWorldTime, input.update.time_delta);
 		const insertNpcLinksForEvent = async (event: {
 			eventId: string;
 			actorNpcEntityIds?: string[];
@@ -255,7 +264,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			type: 'scene_transition',
 			title: 'Turn resolved',
 			body: input.narration.replace(/\s+/g, ' ').slice(0, 500),
-			...timelineDefaults({ currentTurn, currentWorldTime }),
+			...timelineDefaults({ currentTurn, currentWorldTime: nextWorldTime }),
 			visibility: 'player_known',
 			sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
 			sourcePatchIds: [patchId],
@@ -481,7 +490,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				type: 'agreement',
 				title: `${agreement.action} agreement`,
 				body: agreement.terms ?? agreement.reason ?? `${agreement.action} ${agreement.category ?? 'agreement'}`,
-				...timelineDefaults({ currentTurn, currentWorldTime }),
+				...timelineDefaults({ currentTurn, currentWorldTime: nextWorldTime }),
 				visibility,
 				sourceEntryIds: [input.assistantEntryId],
 				sourcePatchIds: [patchId],
@@ -527,7 +536,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				type: 'reveal',
 				title: beat.title,
 				body: beat.description,
-				...timelineDefaults({ currentTurn, currentWorldTime }),
+				...timelineDefaults({ currentTurn, currentWorldTime: nextWorldTime }),
 				visibility: 'player_known',
 				sourceEntryIds: [input.assistantEntryId],
 				sourcePatchIds: [patchId],
@@ -566,6 +575,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 
 		await tx.update(stories).set({
 			currentTurn: currentTurn + 1,
+			currentWorldTime: nextWorldTime,
 			serverVersion: input.serverVersion,
 			updatedAt: createdAt,
 		}).where(eq(stories.id, input.storyId));

@@ -250,9 +250,10 @@ export function buildServerTurnPrompt(
 	const playerReputation = typeof metadata.playerReputation === 'string' ? metadata.playerReputation : '';
 	const wikiContextMarkdown = compactBlock(options.wikiContextMarkdown, WIKI_CONTEXT_CHAR_LIMIT);
 	const currentLocation = ctx.entities.find((entity) => entity.type === 'location' && (entity.state as Record<string, unknown> | null)?.current === true);
+	const sceneEntityIds = new Set(options.sceneEntityIds ?? []);
 	const presentEntities = ctx.entities.filter((entity) => {
 		const state = entity.state as Record<string, unknown> | null;
-		return state?.present === true || state?.current === true || entity.id === currentLocation?.id;
+		return state?.present === true || state?.current === true || entity.id === currentLocation?.id || sceneEntityIds.has(entity.id);
 	}).slice(0, PRESENT_ENTITY_LIMIT);
 	const presentEntityIds = new Set(presentEntities.map((entity) => entity.id));
 	const entityNameById = new Map(ctx.entities.map((entity) => [entity.id, entity.name]));

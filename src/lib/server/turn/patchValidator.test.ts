@@ -22,6 +22,7 @@ const storyRow = {
 	currentWorldTime: 'Twilight of Ashes',
 	metadata: { campaignTone: 'wary' },
 };
+type TestStoryRow = Omit<typeof storyRow, 'currentWorldTime'> & { currentWorldTime: string | null };
 
 const entityRows = [
 	{ id: 'entity_valen', storyId: 'story_1', type: 'character', name: 'Valen' },
@@ -29,7 +30,7 @@ const entityRows = [
 	{ id: 'entity_watch', storyId: 'story_1', type: 'faction', name: 'The Watch' },
 ];
 
-function createDbMock(options: { story?: typeof storyRow | null } = {}) {
+function createDbMock(options: { story?: TestStoryRow | null } = {}) {
 	type DbSource = 'root' | 'tx';
 	const insertCalls: Array<{ source: DbSource; table: unknown; value: unknown }> = [];
 	const updateCalls: Array<{ source: DbSource; table: unknown; value: Record<string, unknown> }> = [];
@@ -151,6 +152,7 @@ describe('applyValidatedTurnUpdate', () => {
 					significance: 'major',
 				},
 			],
+			time_delta: 'one hour after the oath',
 		});
 
 		const result = await applyValidatedTurnUpdate({
@@ -192,7 +194,7 @@ describe('applyValidatedTurnUpdate', () => {
 				createdTurn: 7,
 				occurredTurn: 7,
 				scheduledTurn: null,
-				worldTime: 'Twilight of Ashes',
+				worldTime: 'Twilight of Ashes; one hour after the oath',
 				locationIds: [],
 				factionIds: [],
 				memoryImpact: {},
@@ -246,6 +248,7 @@ describe('applyValidatedTurnUpdate', () => {
 		});
 		expect(turnUpdate).toMatchObject({
 			currentTurn: 8,
+			currentWorldTime: 'Twilight of Ashes; one hour after the oath',
 			serverVersion: 12,
 			updatedAt: expect.any(String),
 		});
@@ -258,6 +261,45 @@ describe('applyValidatedTurnUpdate', () => {
 			patchIds: [patchInsert.id],
 			serverVersion: 12,
 		}));
+	});
+
+	it('uses time_delta as the event and story clock when the story has no current world time', async () => {
+		const { db, insertCalls, storyUpdates } = createDbMock({
+			story: { ...storyRow, currentWorldTime: null },
+		});
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			time_delta: 'Dawn after the fire',
+		});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Ash light finds the courtyard.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 12,
+		});
+
+		const eventInserts = insertCalls
+			.filter(call => call.table === storyEvents)
+			.map(call => call.value as Record<string, unknown>);
+		const turnUpdate = storyUpdates.find(updatePayload => updatePayload.currentTurn === 8);
+
+		expect(result.eventIds).toEqual(eventInserts.map(event => event.id));
+		expect(eventInserts).toHaveLength(1);
+		expect(eventInserts[0]).toMatchObject({
+			title: 'Turn resolved',
+			worldTime: 'Dawn after the fire',
+			createdTurn: 7,
+			occurredTurn: 7,
+		});
+		expect(turnUpdate).toMatchObject({
+			currentTurn: 8,
+			currentWorldTime: 'Dawn after the fire',
+		});
 	});
 
 	it('keeps persisted transaction results and reports projection enqueue warnings', async () => {

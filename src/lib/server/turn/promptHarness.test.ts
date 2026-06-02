@@ -401,6 +401,49 @@ describe('turn prompt harness', () => {
 		expect(failedLabels(findings)).toEqual([]);
 	});
 
+	it('includes scene-selected NPC portrayal even when the entity is not marked present', () => {
+		const report = buildPromptHarnessReport({
+			name: 'scene-entity-portrayal-without-present-flag',
+			playerText: 'I study Lady Zarela before answering her terms.',
+			ctx: baseContext({
+				entities: [
+					entity('loc_crimson_spire', 'location', 'The Crimson Spire', 'The Balaerys manse inside the Black Walls.', { current: true }),
+					entity('pc_balaerys', 'character', 'Balaerys Heir', 'The watched young heir of House Balaerys.', { present: true }),
+					entity(
+						'npc_zarela',
+						'character',
+						'Lady Zarela Qhaedar',
+						'A rival Old Blood negotiator testing House Balaerys.',
+						{
+							appearance: 'ivory braid pins, a red lacquered fan, and watchful amber eyes',
+							personalityDescriptors: ['ceremonial', 'needle-sharp', 'patient enough to let a silence bleed'],
+							voice: 'soft, formal, and edged with ritual courtesy',
+							mannerisms: ['folds her fan once before naming a debt'],
+						},
+					),
+				],
+			}),
+			retrieved: packet('Old Blood negotiation posture', []),
+			options: {
+				sceneEntityIds: ['pc_balaerys', 'npc_zarela'],
+				maxFactions: 2,
+			},
+		});
+
+		const findings = evaluatePromptHarness(report, {
+			promptIncludes: [
+				'Lady Zarela Qhaedar',
+				'Appearance: ivory braid pins',
+				'Personality: ceremonial; needle-sharp; patient enough to let a silence bleed',
+				'Voice: soft, formal, and edged with ritual courtesy',
+				'Mannerisms: folds her fan once before naming a debt',
+			],
+			maxTotalBeforeGenerationTokens: 2400,
+		});
+
+		expect(failedLabels(findings)).toEqual([]);
+	});
+
 	it('labels secret GM timeline context as narrator-only', () => {
 		const gmBrief: GmTimelineBrief = {
 			storyId: 'story_balaerys',
