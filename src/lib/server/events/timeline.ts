@@ -6,6 +6,7 @@ import type {
 	MemoryVisibility,
 	NpcEventLinkRole,
 	StoryEventStatus,
+	StoryEventType,
 } from '$lib/contracts/memory';
 import { getDb } from '$lib/server/db/client';
 import { npcEventLinks, stories, storyEvents } from '$lib/server/db/schema';
@@ -38,6 +39,8 @@ export function buildNpcEventLinksForEvent(input: {
 	eventId: string;
 	actorEntityIds: string[];
 	targetEntityIds: string[];
+	actorNpcEntityIds?: string[];
+	targetNpcEntityIds?: string[];
 	visibility: MemoryVisibility | string;
 	sourceEntryIds: string[];
 	sourcePatchIds: string[];
@@ -45,12 +48,15 @@ export function buildNpcEventLinksForEvent(input: {
 	now: string;
 }): NpcEventLinkInsert[] {
 	const byNpc = new Map<string, NpcEventLinkRole>();
+	// Task 6 compatibility: patchValidator currently passes character IDs through actor/target entity IDs.
+	const actorNpcEntityIds = input.actorNpcEntityIds ?? input.actorEntityIds ?? [];
+	const targetNpcEntityIds = input.targetNpcEntityIds ?? input.targetEntityIds ?? [];
 
-	for (const npcEntityId of input.actorEntityIds ?? []) {
+	for (const npcEntityId of actorNpcEntityIds) {
 		if (npcEntityId) byNpc.set(npcEntityId, 'actor');
 	}
 
-	for (const npcEntityId of input.targetEntityIds ?? []) {
+	for (const npcEntityId of targetNpcEntityIds) {
 		if (npcEntityId && !byNpc.has(npcEntityId)) byNpc.set(npcEntityId, 'target');
 	}
 
@@ -73,7 +79,7 @@ export function buildNpcEventLinksForEvent(input: {
 export function buildScheduledTimelineEventInsert(input: {
 	id?: string;
 	storyId: string;
-	type: string;
+	type: StoryEventType;
 	title: string;
 	body: string;
 	currentTurn: number;
@@ -123,6 +129,16 @@ export function buildScheduledTimelineEventInsert(input: {
 		serverVersion: input.serverVersion ?? 1,
 		createdAt: input.now,
 		updatedAt: input.now,
+	};
+}
+
+export function buildDueTimelineEventPromotionPatch(now: string): {
+	status: 'due';
+	updatedAt: string;
+} {
+	return {
+		status: 'due',
+		updatedAt: now,
 	};
 }
 
@@ -213,28 +229,36 @@ export async function loadGmTimelineBrief(input: {
 	});
 }
 
-export async function scheduleTimelineEvent(input: Parameters<typeof buildScheduledTimelineEventInsert>[0]): Promise<StoryEventRow> {
+export async function scheduleTimelineEvent(input: Parameters<typeof buildScheduledTimelineEventInsert>[0] & {
+	actorNpcEntityIds?: string[];
+	targetNpcEntityIds?: string[];
+}): Promise<StoryEventRow> {
 	const db = getDb();
 	const eventInsert = buildScheduledTimelineEventInsert(input);
-	const [row] = await db.insert(storyEvents).values(eventInsert).returning();
-	if (!row) throw new Error('Failed to schedule timeline event');
 
-	const links = buildNpcEventLinksForEvent({
-		storyId: row.storyId,
-		eventId: row.id,
-		actorEntityIds: row.actorEntityIds ?? [],
-		targetEntityIds: row.targetEntityIds ?? [],
-		visibility: row.visibility,
-		sourceEntryIds: row.sourceEntryIds ?? [],
-		sourcePatchIds: row.sourcePatchIds ?? [],
-		serverVersion: row.serverVersion,
-		now: input.now,
+	return db.transaction(async (tx) => {
+		const [row] = await tx.insert(storyEvents).values(eventInsert).returning();
+		if (!row) throw new Error('Failed to schedule timeline event');
+
+		const links = buildNpcEventLinksForEvent({
+			storyId: row.storyId,
+			eventId: row.id,
+			actorEntityIds: row.actorEntityIds ?? [],
+			targetEntityIds: row.targetEntityIds ?? [],
+			actorNpcEntityIds: input.actorNpcEntityIds,
+			targetNpcEntityIds: input.targetNpcEntityIds,
+			visibility: row.visibility,
+			sourceEntryIds: row.sourceEntryIds ?? [],
+			sourcePatchIds: row.sourcePatchIds ?? [],
+			serverVersion: row.serverVersion,
+			now: input.now,
+		});
+		if (links.length > 0) {
+			await tx.insert(npcEventLinks).values(links).onConflictDoNothing();
+		}
+
+		return row;
 	});
-	if (links.length > 0) {
-		await db.insert(npcEventLinks).values(links).onConflictDoNothing();
-	}
-
-	return row;
 }
 
 export async function promoteDueTimelineEvents(
@@ -244,11 +268,7 @@ export async function promoteDueTimelineEvents(
 ): Promise<StoryEventRow[]> {
 	return getDb()
 		.update(storyEvents)
-		.set({
-			status: 'due',
-			occurredTurn: currentTurn,
-			updatedAt: now,
-		})
+		.set(buildDueTimelineEventPromotionPatch(now))
 		.where(and(
 			eq(storyEvents.storyId, storyId),
 			eq(storyEvents.status, 'scheduled'),
@@ -327,11 +347,7 @@ function buildNpcTimelineEvents(input: {
 }
 
 function eventNpcIds(event: StoryEventRow, linkRows: NpcEventLinkRow[]): string[] {
-	return unique([
-		...(event.actorEntityIds ?? []),
-		...(event.targetEntityIds ?? []),
-		...linkRows.filter(link => link.eventId === event.id).map(link => link.npcEntityId),
-	]);
+	return unique(linkRows.filter(link => link.eventId === event.id).map(link => link.npcEntityId));
 }
 
 function compareNullableTurn(left: number | null, right: number | null): number {

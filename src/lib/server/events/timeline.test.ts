@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	buildDueTimelineEventPromotionPatch,
 	buildGmTimelineBrief,
 	buildNpcEventLinksForEvent,
 	buildScheduledTimelineEventInsert,
@@ -115,6 +116,32 @@ describe('timeline selection helpers', () => {
 		]);
 	});
 
+	it('uses explicit NPC ids for links and ignores generic actor and target entity ids', () => {
+		const links = buildNpcEventLinksForEvent({
+			storyId: 'story_1',
+			eventId: 'event_scheme',
+			actorEntityIds: ['faction_a', 'thread_border_war'],
+			targetEntityIds: ['location_gatehouse', 'faction_b'],
+			actorNpcEntityIds: ['npc_anya', 'npc_borin'],
+			targetNpcEntityIds: ['npc_borin', 'npc_cass'],
+			visibility: 'player_known',
+			sourceEntryIds: [],
+			sourcePatchIds: [],
+			serverVersion: 1,
+			now,
+		});
+
+		expect(links.map(item => [item.npcEntityId, item.role])).toEqual([
+			['npc_anya', 'actor'],
+			['npc_borin', 'actor'],
+			['npc_cass', 'target'],
+		]);
+		expect(links.map(item => item.npcEntityId)).not.toContain('faction_a');
+		expect(links.map(item => item.npcEntityId)).not.toContain('faction_b');
+		expect(links.map(item => item.npcEntityId)).not.toContain('location_gatehouse');
+		expect(links.map(item => item.npcEntityId)).not.toContain('thread_border_war');
+	});
+
 	it('creates a scheduled insert from current turn plus floored nonnegative delay metadata', () => {
 		const insert = buildScheduledTimelineEventInsert({
 			storyId: 'story_1',
@@ -149,6 +176,13 @@ describe('timeline selection helpers', () => {
 
 		expect(loadInput.sceneEntityIds).toEqual(['npc_cass']);
 		expect(promoteInput).toEqual(['story_1', 5]);
+	});
+
+	it('builds a due promotion patch without mutating occurred turn', () => {
+		expect(buildDueTimelineEventPromotionPatch(now)).toEqual({
+			status: 'due',
+			updatedAt: now,
+		});
 	});
 
 	it('builds due, recent, scheduled, and npc event slices with due statuses overridden', () => {
@@ -195,6 +229,34 @@ describe('timeline selection helpers', () => {
 				eventIds: ['future'],
 				summary: 'A quiet scheme',
 				visibility: 'player_known',
+			},
+		]);
+	});
+
+	it('derives brief npc ids from links only, not generic actor or target entity ids', () => {
+		const brief = buildGmTimelineBrief({
+			storyId: 'story_1',
+			currentTurn: 5,
+			currentWorldTime: null,
+			events: [
+				event({
+					id: 'faction_move',
+					status: 'committed',
+					occurredTurn: 4,
+					actorEntityIds: ['faction_a'],
+					targetEntityIds: ['location_gatehouse'],
+				}),
+			],
+			npcLinks: [
+				link({ eventId: 'faction_move', npcEntityId: 'npc_a', role: 'actor' }),
+			],
+			presentNpcIds: ['npc_a'],
+		});
+
+		expect(brief.recentEvents).toMatchObject([
+			{
+				id: 'faction_move',
+				npcEntityIds: ['npc_a'],
 			},
 		]);
 	});
