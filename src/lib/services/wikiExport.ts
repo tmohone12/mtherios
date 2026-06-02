@@ -18,7 +18,10 @@ import type {
 	Entry,
 	Chapter,
 	Story,
+	StoryEntry,
+	Arc,
 	EntryType,
+	EntryRelationship,
 	Agreement,
 	AgreementCategory,
 	FactionActionRecord,
@@ -27,6 +30,8 @@ import type {
 	Meter,
 	CharacterEntryState,
 	FactionEntryState,
+	Scheme,
+	StoryThread,
 } from '$lib/types';
 
 function slug(text: string, max = 60): string {
@@ -60,6 +65,19 @@ function firstSentence(text: string | null | undefined, max = 140): string {
 	if (!t) return '';
 	const first = t.split(/(?<=[.!?])\s/)[0] ?? t;
 	return first.length > max ? first.slice(0, max - 1) + '…' : first;
+}
+
+function compactText(text: string | null | undefined, max = 220): string {
+	if (!text) return '';
+	const t = text.replace(/\s+/g, ' ').trim();
+	if (!t) return '';
+	return t.length > max ? `${t.slice(0, max - 3)}...` : t;
+}
+
+function tableCell(text: string | null | undefined): string {
+	return compactText(text, 180)
+		.replace(/\|/g, '\\|')
+		.replace(/\n/g, '<br>');
 }
 
 const TYPE_FOLDERS: Record<EntryType, string> = {
@@ -97,9 +115,53 @@ function chapterFilename(chapter: Chapter): string {
 	return `${String(chapter.number).padStart(3, '0')}-${slug(chapter.title || `chapter-${chapter.number}`)}.md`;
 }
 
+function arcFilename(arc: Arc): string {
+	return `${String(arc.arcNumber).padStart(3, '0')}-${slug(arc.title || `arc-${arc.arcNumber}`)}.md`;
+}
+
+function storyEntrySourceFilename(entry: StoryEntry): string {
+	const type = entry.type.replace(/_/g, '-');
+	const suffix = entry.id ? `--${entry.id.slice(0, 8)}` : '';
+	return `${String(entry.position).padStart(6, '0')}-${type}${suffix}.md`;
+}
+
+function entryNeedles(entry: Entry): string[] {
+	return [entry.name, ...(entry.aliases ?? [])]
+		.map((name) => name?.trim())
+		.filter((name): name is string => !!name);
+}
+
+function mentionsAny(text: string, needles: string[]): boolean {
+	if (!text || needles.length === 0) return false;
+	return needles.some((needle) => {
+		const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		return new RegExp(`(?<![\\w])${escaped}(?![\\w])`, 'i').test(text);
+	});
+}
+
+function chaptersForEntry(entry: Entry, chapters: Chapter[]): Chapter[] {
+	const needles = entryNeedles(entry);
+	return chapters
+		.filter((chapter) => {
+			const directNames = [...(chapter.characters ?? []), ...(chapter.locations ?? [])];
+			if (directNames.some((name) => needles.some((needle) => name.toLowerCase() === needle.toLowerCase()))) {
+				return true;
+			}
+			const haystack = [
+				chapter.title ?? '',
+				chapter.summary ?? '',
+				...(chapter.keywords ?? []),
+				...(chapter.plotThreads ?? []),
+			].join('\n');
+			return mentionsAny(haystack, needles);
+		})
+		.sort((a, b) => a.number - b.number);
+}
+
 function renderEntryMarkdown(
 	entry: Entry,
 	allEntries: Entry[],
+	chapters: Chapter[],
 	agreements: Agreement[],
 	worldEvents: WorldEvent[],
 	rumors: RumorRecord[],
@@ -243,6 +305,16 @@ function renderEntryMarkdown(
 		parts.push('');
 	}
 
+	const sourceChapters = chaptersForEntry(entry, chapters);
+	if (sourceChapters.length > 0) {
+		parts.push('## Source Trail');
+		for (const ch of sourceChapters.slice(-12)) {
+			const title = ch.title || `Chapter ${ch.number}`;
+			parts.push(`- [Chapter ${ch.number}: ${title}](../../chapters/${chapterFilename(ch)})`);
+		}
+		parts.push('');
+	}
+
 	if (entry.hiddenInfo?.trim()) {
 		parts.push('## GM Notes', toObsidianLinks(entry.hiddenInfo.trim(), allEntries, entry.id), '');
 	}
@@ -271,7 +343,305 @@ function renderChapterMarkdown(chapter: Chapter, allEntries: Entry[]): string {
 	return parts.join('\n');
 }
 
-function renderIndexMarkdown(entries: Entry[], chapters: Chapter[]): string {
+function renderArcMarkdown(arc: Arc, chapters: Chapter[]): string {
+	const sourceChapters = chapters
+		.filter((chapter) => arc.chapterIds.includes(chapter.id))
+		.sort((a, b) => a.number - b.number);
+	const fm = frontmatter({
+		arcNumber: arc.arcNumber,
+		title: arc.title,
+		chapterRange: arc.chapterRange,
+		created: new Date(arc.createdAt).toISOString(),
+	});
+	const parts: string[] = [fm, `# Arc ${arc.arcNumber}: ${arc.title}\n`];
+	parts.push(`*Chapters:* ${arc.chapterRange}\n`);
+	if (arc.summary?.trim()) parts.push('## Summary', arc.summary.trim(), '');
+	if (arc.keyPlotPoints?.length) {
+		parts.push('## Key Plot Points');
+		for (const point of arc.keyPlotPoints) parts.push(`- ${point}`);
+		parts.push('');
+	}
+	if (arc.characterArcs?.length) {
+		parts.push('## Character Arcs');
+		for (const row of arc.characterArcs) parts.push(`- **[[${row.name}]]**: ${row.development}`);
+		parts.push('');
+	}
+	if (arc.unresolvedThreads?.length) {
+		parts.push('## Open Threads');
+		for (const thread of arc.unresolvedThreads) parts.push(`- ${thread}`);
+		parts.push('');
+	}
+	if (arc.emotionalProgression?.trim()) parts.push('## Emotional Progression', arc.emotionalProgression.trim(), '');
+	if (sourceChapters.length > 0) {
+		parts.push('## Source Chapters');
+		for (const ch of sourceChapters) {
+			const title = ch.title || `Chapter ${ch.number}`;
+			parts.push(`- [Chapter ${ch.number}: ${title}](../chapters/${chapterFilename(ch)})`);
+		}
+		parts.push('');
+	}
+	return parts.join('\n');
+}
+
+function renderArcsIndex(arcs: Arc[]): string {
+	if (arcs.length === 0) return '';
+	const lines: string[] = ['# Arcs', ''];
+	lines.push(`*${arcs.length} condensed narrative arc${arcs.length === 1 ? '' : 's'}*`, '');
+	for (const arc of [...arcs].sort((a, b) => a.arcNumber - b.arcNumber)) {
+		lines.push(`- [Arc ${arc.arcNumber}: ${arc.title}](${arcFilename(arc)}) - chapters ${arc.chapterRange}`);
+	}
+	return lines.join('\n') + '\n';
+}
+
+function renderRelationshipIndex(relationships: EntryRelationship[], entries: Entry[]): string {
+	if (relationships.length === 0) return '';
+	const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+	const lines: string[] = ['# Relationship Graph', ''];
+	lines.push(`*${relationships.length} recorded relationship${relationships.length === 1 ? '' : 's'}*`, '');
+	lines.push('| Source | Relation | Target | Strength | Notes |', '|---|---|---|---:|---|');
+	for (const rel of [...relationships].sort((a, b) => b.strength - a.strength)) {
+		const source = entryById.get(rel.sourceEntryId);
+		const target = entryById.get(rel.targetEntryId);
+		if (!source || !target) continue;
+		lines.push(
+			`| [[${source.name}]] | ${rel.type}${rel.bidirectional ? ' (bidirectional)' : ''} | [[${target.name}]] | ${rel.strength} | ${tableCell(rel.label)} |`,
+		);
+	}
+	return lines.join('\n') + '\n';
+}
+
+function renderStoryEntrySourceMarkdown(entry: StoryEntry): string {
+	const fm = frontmatter({
+		kind: 'raw_source',
+		sourceType: 'story_entry',
+		entryType: entry.type,
+		position: entry.position,
+		branchId: entry.branchId,
+		created: new Date(entry.createdAt).toISOString(),
+		metadata: entry.metadata ?? null,
+	});
+	const title = `Turn ${entry.position}: ${entry.type.replace(/_/g, ' ')}`;
+	const content = entry.content.length > 0 ? entry.content : '(empty source)';
+	return `${fm}# ${title}\n\n${content}\n`;
+}
+
+function renderRawReadme(story: Story): string {
+	const fm = frontmatter({
+		story: story.title,
+		layer: 'raw_sources',
+	});
+	return `${fm}# Raw Sources
+
+This folder is the immutable source layer for the story wiki.
+
+Rules for LLM maintainers:
+
+- Do not edit files in \`raw/\` when maintaining the wiki.
+- Read raw files to verify claims, resolve contradictions, or rebuild derived pages.
+- Put synthesis, entity pages, comparisons, and maintenance notes outside \`raw/\`.
+- When a derived page depends on a raw source, link the relevant transcript entry, chapter, or arc from a Source Trail section.
+
+The compiled wiki can change. The raw layer should remain a stable record of what happened.
+`;
+}
+
+function renderRawIndexMarkdown(storyEntries: StoryEntry[], chapters: Chapter[]): string {
+	const lines: string[] = ['# Raw Source Index', ''];
+	lines.push(`*${storyEntries.length} transcript entries - ${chapters.length} chapter summaries*`, '');
+
+	if (storyEntries.length > 0) {
+		lines.push('## Transcript Entries', '');
+		lines.push('| Turn | Type | Created | Source | Preview |', '|---:|---|---|---|---|');
+		for (const entry of [...storyEntries].sort((a, b) => a.position - b.position)) {
+			lines.push(
+				`| ${entry.position} | ${entry.type} | ${new Date(entry.createdAt).toISOString()} | [open](transcript/${storyEntrySourceFilename(entry)}) | ${tableCell(entry.content)} |`,
+			);
+		}
+		lines.push('');
+	}
+
+	if (chapters.length > 0) {
+		lines.push('## Chapter Summaries', '');
+		for (const ch of [...chapters].sort((a, b) => a.number - b.number)) {
+			const title = ch.title || `Chapter ${ch.number}`;
+			lines.push(`- [Chapter ${ch.number}: ${title}](../chapters/${chapterFilename(ch)})`);
+		}
+		lines.push('');
+	}
+
+	return lines.join('\n') + '\n';
+}
+
+function renderAgentSchemaMarkdown(
+	story: Story,
+	counts: {
+		entryCount: number;
+		chapterCount: number;
+		arcCount: number;
+		rawSourceCount: number;
+		relationshipCount: number;
+	},
+): string {
+	return `# Mtherios Wiki Maintainer Schema
+
+You are maintaining an LLM-generated Mtherios story wiki. Treat this vault as a persistent knowledge base that compounds over time.
+
+## Layers
+
+- \`raw/\`: immutable source files. Read these for evidence. Do not rewrite them during wiki maintenance.
+- \`wiki/\`, \`chapters/\`, \`arcs/\`, \`agreements/\`, and top-level summary pages: derived wiki pages. The LLM may update these when new evidence arrives.
+- \`index.md\`: content catalog. Update it whenever pages are added, renamed, archived, or substantially changed.
+- \`log.md\`: chronological maintenance and story record. Append entries using \`## [YYYY-MM-DD] kind | title\`.
+- \`AGENTS.md\`: this schema. Update only when the wiki workflow or conventions intentionally change.
+
+## Story Scope
+
+- Title: ${story.title}
+- Mode: ${story.mode}
+- Genre: ${story.genre ?? 'unspecified'}
+- Current export contains ${counts.entryCount} wiki entries, ${counts.chapterCount} chapters, ${counts.arcCount} arcs, ${counts.rawSourceCount} raw transcript sources, and ${counts.relationshipCount} relationship edges.
+
+## Page Conventions
+
+- Use Obsidian wikilinks for entities: \`[[Name]]\` or \`[[Name|alias]]\`.
+- Keep public/protagonist-known facts in the main body of entity pages.
+- Keep narrator-only information under \`## GM Notes\`.
+- Add or preserve \`## Source Trail\` on derived pages when a claim depends on specific chapters, arcs, or raw transcript entries.
+- Prefer concise factual synthesis over transcript-like retelling.
+- Contradictions should be called out explicitly instead of silently overwritten.
+
+## Ingest Workflow
+
+1. Read the new raw source or newly generated chapter/arc summary.
+2. Identify entities, concepts, events, agreements, faction moves, rumors, and unresolved threads.
+3. Create or update the affected pages across \`wiki/\`, \`chapters/\`, \`arcs/\`, and top-level summaries.
+4. Update \`index.md\` and append \`log.md\`.
+5. If evidence contradicts old claims, either revise the claim with a source note or add a contradiction note for follow-up.
+
+## Query Workflow
+
+1. Read \`index.md\` first.
+2. Open the relevant wiki pages, source trails, chapters, arcs, and raw entries as needed.
+3. Answer with citations to wiki pages or raw source paths.
+4. If the answer becomes reusable synthesis, file it back into the wiki and update \`index.md\` and \`log.md\`.
+
+## Lint Workflow
+
+Periodically check for stale claims, contradictions, orphan pages, thin high-importance concepts, missing cross-links, and source gaps. Prefer small targeted fixes that keep the wiki trustworthy.
+`;
+}
+
+function renderSynthesisMarkdown(
+	story: Story,
+	entries: Entry[],
+	chapters: Chapter[],
+	arcs: Arc[],
+	agreements: Agreement[],
+	rumors: RumorRecord[],
+	worldEvents: WorldEvent[],
+	factionActions: FactionActionRecord[],
+	schemes: Scheme[],
+	storyThreads: StoryThread[],
+): string {
+	const fm = frontmatter({
+		title: story.title,
+		kind: 'compiled_synthesis',
+		updated: new Date().toISOString(),
+	});
+	const lines: string[] = [fm, `# ${story.title} Synthesis`, ''];
+	if (story.description?.trim()) lines.push(story.description.trim(), '');
+
+	lines.push('## Current Shape', '');
+	lines.push(`- Mode: ${story.mode}`);
+	lines.push(`- Genre: ${story.genre ?? 'unspecified'}`);
+	lines.push(`- Wiki entries: ${entries.length}`);
+	lines.push(`- Chapters: ${chapters.length}`);
+	lines.push(`- Arcs: ${arcs.length}`);
+	lines.push(`- Active agreements: ${agreements.filter((a) => a.status === 'active').length}`);
+	lines.push(`- Active rumors: ${rumors.filter((r) => r.status !== 'stale' && r.status !== 'debunked').length}`);
+	lines.push('');
+
+	const recentArcs = [...arcs].sort((a, b) => b.arcNumber - a.arcNumber).slice(0, 5);
+	if (recentArcs.length > 0) {
+		lines.push('## Recent Arc Synthesis', '');
+		for (const arc of recentArcs) {
+			lines.push(`- [Arc ${arc.arcNumber}: ${arc.title}](arcs/${arcFilename(arc)}) - ${compactText(arc.summary, 220)}`);
+		}
+		lines.push('');
+	}
+
+	const factions = entries
+		.filter((entry) => entry.type === 'faction')
+		.map((entry) => {
+			const state = entry.state as FactionEntryState | null;
+			const resources = state?.resources;
+			const resourceScore = resources
+				? resources.military + resources.wealth + resources.influence + resources.information + resources.morale
+				: 0;
+			const actionScore = factionActions.some((action) => action.factionName.toLowerCase() === entry.name.toLowerCase()) ? 100 : 0;
+			return {
+				entry,
+				score: Math.abs(state?.playerStanding ?? 0) + resourceScore / 5 + actionScore + (state?.goals?.length ?? 0) * 10,
+				state,
+			};
+		})
+		.sort((a, b) => b.score - a.score)
+		.slice(0, 10);
+	if (factions.length > 0) {
+		lines.push('## Power Centers', '');
+		for (const row of factions) {
+			const bits = [
+				row.state?.status ? `status ${row.state.status}` : '',
+				typeof row.state?.playerStanding === 'number' ? `standing ${row.state.playerStanding}` : '',
+				row.state?.disposition ? row.state.disposition : '',
+			].filter(Boolean).join(', ');
+			lines.push(`- [[${row.entry.name}]]${bits ? ` - ${bits}` : ''}`);
+		}
+		lines.push('');
+	}
+
+	const activeSchemes = schemes.filter((scheme) => !['resolved', 'foiled', 'abandoned'].includes(scheme.status));
+	const openThreads = storyThreads.filter((thread) => ['open', 'imminent', 'stalled'].includes(thread.status));
+	const unresolvedArcThreads = recentArcs.flatMap((arc) => arc.unresolvedThreads ?? []);
+	if (activeSchemes.length > 0 || openThreads.length > 0 || unresolvedArcThreads.length > 0) {
+		lines.push('## Open Pressures', '');
+		for (const scheme of activeSchemes.slice(0, 8)) {
+			lines.push(`- **${scheme.ownerName}**: ${scheme.goal} (${scheme.status}, pressure ${scheme.pressure})`);
+		}
+		for (const thread of openThreads.slice(0, 8)) {
+			lines.push(`- **${thread.significance} thread**: ${thread.description} (${thread.status})`);
+		}
+		for (const thread of unresolvedArcThreads.slice(0, 8)) lines.push(`- ${thread}`);
+		lines.push('');
+	}
+
+	const recentEvents = [...worldEvents]
+		.sort((a, b) => (b.appliedAt ?? b.createdAt) - (a.appliedAt ?? a.createdAt))
+		.slice(0, 8);
+	if (recentEvents.length > 0) {
+		lines.push('## Recent Consequences', '');
+		for (const event of recentEvents) {
+			lines.push(`- **${event.name}** (${event.severity}): ${compactText(event.description, 180)}`);
+		}
+		lines.push('');
+	}
+
+	lines.push('## Maintenance Prompts', '');
+	lines.push('- Which high-importance entities lack source trails?');
+	lines.push('- Which faction goals no longer match recent chapter evidence?');
+	lines.push('- Which rumors should mature, go stale, or be debunked?');
+	lines.push('- Which reusable analysis from recent queries should be filed as a wiki page?');
+
+	return lines.join('\n') + '\n';
+}
+
+function renderIndexMarkdown(
+	entries: Entry[],
+	chapters: Chapter[],
+	arcs: Arc[],
+	relationshipCount: number,
+	rawSourceCount: number,
+): string {
 	const buckets: Record<EntryType, Entry[]> = {
 		character: [], location: [], item: [], faction: [], concept: [], event: [],
 	};
@@ -281,6 +651,14 @@ function renderIndexMarkdown(entries: Entry[], chapters: Chapter[]): string {
 	}
 
 	const lines: string[] = ['# Wiki Index', ''];
+	lines.push(`*Vault scope: ${arcs.length} arcs - ${rawSourceCount} raw sources - ${relationshipCount} relationships*`, '');
+	lines.push('## Core Pages', '');
+	lines.push('- [Synthesis](synthesis.md)');
+	lines.push('- [Raw Source Index](raw/index.md)');
+	lines.push('- [Log](log.md)');
+	lines.push('- [Maintainer Schema](AGENTS.md)');
+	if (relationshipCount > 0) lines.push('- [Relationship Graph](relationships.md)');
+	lines.push('');
 	lines.push(`*${entries.length} entries · ${chapters.length} chapters · generated ${new Date().toLocaleString()}*`, '');
 
 	for (const t of Object.keys(buckets) as EntryType[]) {
@@ -300,6 +678,15 @@ function renderIndexMarkdown(entries: Entry[], chapters: Chapter[]): string {
 		for (const ch of sorted) {
 			lines.push(`- [Chapter ${ch.number}: ${ch.title}](chapters/${chapterFilename(ch)})`);
 		}
+		lines.push('');
+	}
+
+	if (arcs.length > 0) {
+		lines.push('## Arcs', '');
+		const sorted = [...arcs].sort((a, b) => a.arcNumber - b.arcNumber);
+		for (const arc of sorted) {
+			lines.push(`- [Arc ${arc.arcNumber}: ${arc.title}](arcs/${arcFilename(arc)}) - chapters ${arc.chapterRange}`);
+		}
 	}
 
 	return lines.join('\n') + '\n';
@@ -308,6 +695,7 @@ function renderIndexMarkdown(entries: Entry[], chapters: Chapter[]): string {
 function renderLogMarkdown(
 	entries: Entry[],
 	chapters: Chapter[],
+	arcs: Arc[],
 	worldEvents: WorldEvent[],
 	agreements: Agreement[],
 	factionActions: FactionActionRecord[],
@@ -320,6 +708,12 @@ function renderLogMarkdown(
 		rows.push({
 			when: ch.createdAt,
 			line: `## [${fmtDate(ch.createdAt)}] chapter | Chapter ${ch.number}: ${ch.title}\n${ch.summary ? firstSentence(ch.summary, 200) : ''}`,
+		});
+	}
+	for (const arc of arcs) {
+		rows.push({
+			when: arc.createdAt,
+			line: `## [${fmtDate(arc.createdAt)}] arc | Arc ${arc.arcNumber}: ${arc.title}\nChapters ${arc.chapterRange}. ${firstSentence(arc.summary, 220)}`,
 		});
 	}
 	for (const ev of worldEvents) {
@@ -454,6 +848,9 @@ function renderReadme(
 	story: Story,
 	entryCount: number,
 	chapterCount: number,
+	arcCount: number,
+	rawSourceCount: number,
+	relationshipCount: number,
 	agreementCount: number,
 	rumorCount: number,
 	meterCount: number,
@@ -472,6 +869,9 @@ ${story.description ?? ''}
 - **Genre:** ${story.genre ?? '—'}
 - **Wiki entries:** ${entryCount}
 - **Chapters:** ${chapterCount}
+- **Arcs:** ${arcCount}
+- **Raw sources:** ${rawSourceCount}
+- **Relationships:** ${relationshipCount}
 - **Agreements:** ${agreementCount}
 - **Active rumors:** ${rumorCount}
 - **Meters tracked:** ${meterCount}
@@ -480,6 +880,14 @@ ${story.description ?? ''}
 Open this folder as an Obsidian vault for the best browsing experience. Cross-references use \`[[Entry Name]]\` syntax.
 
 ## Structure
+
+Core LLM-maintained layers:
+
+- \`AGENTS.md\` - maintainer schema for future LLM/wiki-agent sessions.
+- \`synthesis.md\` - compiled high-level story and world-state snapshot.
+- \`raw/\` - immutable transcript source layer used to verify derived claims.
+- \`arcs/<n>-<title>.md\` - one file per condensed narrative arc.
+- \`relationships.md\` - relationship graph exported as a table when relationships exist.
 
 - \`index.md\` — categorized list of all entries.
 - \`log.md\` — chronological log of chapters, events, agreements, faction moves, and entries.
@@ -504,6 +912,11 @@ export async function downloadStoryAsWiki(storyId: string): Promise<void> {
 		getWorldEvents(storyId),
 	]);
 	const meters = data.story.meters ?? [];
+	const arcs = data.arcs ?? [];
+	const relationships = data.entryRelationships ?? [];
+	const storyEntries = data.storyEntries ?? [];
+	const schemes = data.schemes ?? [];
+	const storyThreads = data.storyThreads ?? [];
 
 	const zip = new JSZip();
 
@@ -513,30 +926,74 @@ export async function downloadStoryAsWiki(storyId: string): Promise<void> {
 			data.story,
 			data.lorebookEntries.length,
 			data.chapters.length,
+			arcs.length,
+			storyEntries.length,
+			relationships.length,
 			agreements.length,
 			rumors.filter((r) => r.status !== 'stale' && r.status !== 'debunked').length,
 			meters.length,
 		),
 	);
 
-	zip.file('index.md', renderIndexMarkdown(data.lorebookEntries, data.chapters));
+	zip.file(
+		'AGENTS.md',
+		renderAgentSchemaMarkdown(data.story, {
+			entryCount: data.lorebookEntries.length,
+			chapterCount: data.chapters.length,
+			arcCount: arcs.length,
+			rawSourceCount: storyEntries.length,
+			relationshipCount: relationships.length,
+		}),
+	);
+
+	zip.file(
+		'synthesis.md',
+		renderSynthesisMarkdown(
+			data.story,
+			data.lorebookEntries,
+			data.chapters,
+			arcs,
+			agreements,
+			rumors,
+			worldEvents,
+			factionActions,
+			schemes,
+			storyThreads,
+		),
+	);
+
+	zip.file('index.md', renderIndexMarkdown(data.lorebookEntries, data.chapters, arcs, relationships.length, storyEntries.length));
+	zip.file('raw/README.md', renderRawReadme(data.story));
+	zip.file('raw/index.md', renderRawIndexMarkdown(storyEntries, data.chapters));
+	for (const entry of storyEntries) {
+		zip.file(`raw/transcript/${storyEntrySourceFilename(entry)}`, renderStoryEntrySourceMarkdown(entry));
+	}
+	if (relationships.length > 0) zip.file('relationships.md', renderRelationshipIndex(relationships, data.lorebookEntries));
 
 	zip.file(
 		'log.md',
-		renderLogMarkdown(data.lorebookEntries, data.chapters, worldEvents, agreements, factionActions),
+		renderLogMarkdown(data.lorebookEntries, data.chapters, arcs, worldEvents, agreements, factionActions),
 	);
 
 	// Per-entry pages — enriched with reputation data
 	for (const e of data.lorebookEntries) {
 		zip.file(
 			entryRelPath(e),
-			renderEntryMarkdown(e, data.lorebookEntries, agreements, worldEvents, rumors, factionActions, meters),
+			renderEntryMarkdown(e, data.lorebookEntries, data.chapters, agreements, worldEvents, rumors, factionActions, meters),
 		);
 	}
 
 	// Per-chapter pages
 	for (const ch of data.chapters) {
 		zip.file(`chapters/${chapterFilename(ch)}`, renderChapterMarkdown(ch, data.lorebookEntries));
+	}
+
+	// Per-arc pages
+	if (arcs.length > 0) {
+		zip.file('arcs/index.md', renderArcsIndex(arcs));
+		for (const arc of arcs) {
+			zip.file(`arcs/${arcFilename(arc)}`, renderArcMarkdown(arc, data.chapters));
+		}
 	}
 
 	// Agreements: index + one file per row grouped by category

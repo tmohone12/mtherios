@@ -2,9 +2,9 @@
 
 ## What This Project Is
 
-Mtherios is a browser-based AI interactive fiction engine. It lets a player create and continue stories where the world reacts to their actions: characters remember events, locations and items change, factions move in the background, and the narrative can be guided by lorebook entries, world state, summaries, and AI-generated suggestions.
+Mtherios is a terminal-run AI interactive fiction engine with a browser frontend. It lets a player create and continue stories where the world reacts to their actions: characters remember events, locations and items change, factions move in the background, and the narrative can be guided by lorebook entries, world state, summaries, and AI-generated suggestions.
 
-The project is built as a SvelteKit single-page web app. It runs primarily in the browser and stores data locally in IndexedDB through Dexie, so it does not require a custom backend server for normal use. AI calls are made through OpenAI-compatible providers configured by the user.
+The project is built around a local Node app process started by `server.js`. That process initializes the data root, owns server environment, serves the SvelteKit frontend, exposes backend canon APIs, and brokers terminal-side wiki operations. IndexedDB remains as a browser cache and compatibility layer, while the story catalog, backend-bound turns, and large-world canon are moving to the server-owned local process plus a syncable data root.
 
 ## Main User Experience
 
@@ -24,7 +24,10 @@ As the story progresses, the app keeps track of:
 - SvelteKit and Svelte 5 for the frontend.
 - TypeScript for application logic and types.
 - TailwindCSS for styling.
-- Dexie.js and IndexedDB for local persistence.
+- Node/SvelteKit adapter for the terminal app process.
+- Postgres/pgvector for backend-bound canonical story state.
+- Qdrant for local semantic wiki search.
+- Dexie.js and IndexedDB for browser cache/offline compatibility.
 - Zod for AI response schema validation.
 - Vitest for unit tests.
 - OpenAI-compatible APIs for narrative generation, world simulation, embeddings, image generation, and supporting AI services.
@@ -33,7 +36,9 @@ The important npm scripts are:
 
 ```sh
 npm run dev
+npm run app:dev
 npm run build
+npm run app:start
 npm run check
 npm run test
 ```
@@ -97,9 +102,13 @@ The lorebook system is one of the central features. Lorebook entries can be impo
 
 The living-world layer expands this beyond simple notes. It tracks faction resources, faction actions, rumors, agreements, schemes, story threads, relationships, and events. These records help the app maintain continuity and let off-screen world activity influence future narration.
 
+The wiki export turns that state into an Obsidian-compatible knowledge base rather than a flat dump. Exported vaults now separate immutable raw transcript sources under `raw/` from the compiled wiki pages, include an `AGENTS.md` maintainer schema for future LLM sessions, and generate `index.md`, `log.md`, `synthesis.md`, arc pages, source trails, relationship tables, agreements, rumors, and meters. The intent is that the LLM can keep the wiki maintained over time while the raw source layer remains the evidence record.
+
+The first terminal-side wiki core lives under `scripts/wiki-core/`. It can materialize a backend-bound story into an Obsidian-style markdown vault under `data/vaults/stories/<storyId>`, index that generated vault into a story-specific Qdrant collection through a local embedding endpoint, then support semantic search plus exact search, wikilink traversal, and backlink traversal. Each generated story vault includes `.mtherios/story-vault.json`, which records the backend `serverVersion` used to generate the markdown and, after indexing, the Qdrant collection/version that is fresh. Server routes under `/api/wiki/*` wrap these tools so the frontend and future agents can use the same terminal-owned search brain. A `sync_story_vault` backend job is queued after turn/import projection so the markdown lore vault follows backend canon without the browser manually exporting a zip; search, follow, and index requests also self-heal missing or stale generated vaults before reading. Full Qdrant re-indexing can be enabled with `wikiAutoIndexStoryVaults`, but defaults off to avoid expensive whole-vault embedding work on every turn. Deleting a backend-bound story deletes backend canon first, then cleans up the generated vault and attempts to remove the story-specific Qdrant collection. The GM `search_wiki` tool now tries that terminal wiki first and includes linked/backlinked page neighborhoods in tool results, falling back to the browser lorebook cache only when the terminal wiki is unavailable or has no matching pages. Backend story memory has a separate optional embedding worker for Postgres `memory_nodes`; it is disabled until a matching-dimension embedding provider is configured. The same terminal job loop also updates faction pressure from canonical events, converts high-pressure factions into deterministic world-tick events, and writes compact faction memory nodes for retrieval.
+
 ## Local-First Design
 
-Mtherios is designed to run without a project-specific backend. Story data, settings, lore, images, embeddings, and world state are stored locally in IndexedDB. This makes the app portable and private by default, while still relying on external AI providers when generation is requested.
+Mtherios is being refactored from browser-first local storage into a terminal-owned local app. The data root can live in a synced folder, Postgres holds canonical large-story state, generated Obsidian markdown holds durable lore projections, and Qdrant is a rebuildable semantic index. The frontend now refreshes its story list from `/api/stories`, deletes backend-bound stories through the terminal process, and imports new or transferred stories into backend canon by default. IndexedDB remains useful as a frontend cache and offline command queue, but it is no longer the intended ceiling for large worlds. When a backend-bound story reconnects, queued commands are pushed before projection pulls or new backend turns, and server sync operation IDs make retries safe.
 
 ## How To Run It
 
@@ -107,7 +116,7 @@ Install dependencies and start the development server:
 
 ```sh
 npm install
-npm run dev
+npm run app:dev
 ```
 
 For validation:

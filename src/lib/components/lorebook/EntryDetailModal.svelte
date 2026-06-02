@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { X, Save, Trash2, Shield, ShieldOff, ArrowLeft, BookOpen, Sparkles, Loader2 } from 'lucide-svelte';
-	import { updateLorebookEntry, deleteLorebookEntry, getRelationshipsForEntry } from '$lib/services/database';
+	import { getRelationshipsForEntry } from '$lib/services/database';
 	import type { Entry, EntryType, EntryInjectionMode, EntryRelationship, CharacterEntryState, FactionEntryState, LocationEntryState, ItemEntryState, FactionGoal, FactionResources } from '$lib/types';
 	import { fade } from 'svelte/transition';
 	import { onMount, untrack } from 'svelte';
@@ -13,8 +13,8 @@
 		entry: Entry;
 		/** Full set of lorebook entries — used to resolve cross-references in the Wiki tab. */
 		allEntries?: Entry[];
-		onSave: (updated: Entry) => void;
-		onDelete: (id: string) => void;
+		onSave: (updated: Entry) => void | Promise<void>;
+		onDelete: (id: string) => void | Promise<void>;
 		onClose: () => void;
 		/** Click on a wiki cross-reference link. Parent should swap detailEntry. */
 		onNavigate?: (entryId: string) => void;
@@ -187,13 +187,11 @@
 			state: preparedState,
 			updatedAt: Date.now(),
 		};
-		await updateLorebookEntry(entry.id, updates);
-		onSave({ ...entry, ...updates } as Entry);
+		await onSave({ ...entry, ...updates } as Entry);
 	}
 
 	async function handleDelete() {
-		await deleteLorebookEntry(entry.id);
-		onDelete(entry.id);
+		await onDelete(entry.id);
 	}
 
 	async function handleRefineSubmit() {

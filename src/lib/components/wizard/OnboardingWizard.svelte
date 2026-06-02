@@ -4,9 +4,11 @@
 	import { onMount } from 'svelte';
 	import { uuid } from '$lib/utils/uuid';
 	import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
-	import { getSetting, setSetting, createStory, createCharacter, createLorebookEntry } from '$lib/services/database';
+	import { getSetting, setSetting, createStory } from '$lib/services/database';
 	import { convertToEntries, type ImportedEntry } from '$lib/services/lorebookImporter';
 	import { importStoryFromJson } from '$lib/services/storySync';
+	import { saveCanonicalCharacter, saveCanonicalLorebookEntry } from '$lib/services/canonicalWrites';
+	import { createBackendStoryShell } from '$lib/services/serverStories';
 	import { settings } from '$lib/stores/settings.svelte';
 	import LorebookImport from '$lib/components/lorebook/LorebookImport.svelte';
 	import type { Story, Character, Entry, StoryMode, APIProfile, ProviderType } from '$lib/types';
@@ -136,7 +138,7 @@
 		lorebookEntries = lorebookEntries.filter((_, i) => i !== index);
 	}
 
-	/** Save story + entities to DB, returns the storyId */
+	/** Save story + starting lore, preferring the backend daemon as canon. */
 	async function saveStoryToDb(): Promise<string> {
 		// Only save provider if we don't already have one
 		if (!hasExistingProfile) {
@@ -160,6 +162,35 @@
 
 		const storyId = uuid();
 		const now = Date.now();
+		const storySettings: Story['settings'] = {
+			pov: storyMode === 'adventure' ? 'second' : 'third',
+			tense: 'present',
+			tone: genre,
+			temperature: 1.0,
+			maxTokens: 8192,
+		};
+		let serverStoryId: string | null = null;
+		let serverVersion: number | null = null;
+		let syncStatus: Story['syncStatus'] = 'offline';
+
+		try {
+			const result = await createBackendStoryShell({
+				clientStoryId: storyId,
+				title: storyTitle || 'Untitled Chronicle',
+				description: worldDescription || null,
+				genre,
+				mode: storyMode,
+				settings: storySettings,
+				headerPrompt: null,
+				playerReputation: null,
+			});
+			serverStoryId = result.storyId;
+			serverVersion = result.serverVersion;
+			syncStatus = 'synced';
+		} catch (error) {
+			console.warn('[Onboarding] Backend story creation unavailable; creating an offline local story:', error);
+		}
+
 		const story: Story = {
 			id: storyId,
 			title: storyTitle || 'Untitled Chronicle',
@@ -169,13 +200,7 @@
 			mode: storyMode,
 			createdAt: now,
 			updatedAt: now,
-			settings: {
-				pov: storyMode === 'adventure' ? 'second' : 'third',
-				tense: 'present',
-				tone: genre,
-				temperature: 1.0,
-				maxTokens: 8192,
-			},
+			settings: storySettings,
 			memoryConfig: {
 				tokenThreshold: 16000,
 				chapterBuffer: 10,
@@ -190,6 +215,9 @@
 			currentBgImage: null,
 			headerPrompt: null,
 			playerReputation: null,
+			serverStoryId,
+			serverVersion,
+			syncStatus,
 			lastWorldSimDay: null,
 			compactedLore: null,
 			compactedLoreHistory: null,
@@ -199,8 +227,9 @@
 
 		// Create protagonist
 		if (protagonistName) {
+			const protagonistId = uuid();
 			const char: Character = {
-				id: uuid(),
+				id: protagonistId,
 				storyId,
 				branchId: null,
 				name: protagonistName,
@@ -212,7 +241,7 @@
 				visualDescriptors: {},
 				portrait: null,
 			};
-			await createCharacter(char);
+			await saveCanonicalCharacter(char, 'create');
 		}
 
 		// Create lorebook entries
@@ -248,7 +277,7 @@
 				updatedAt: now,
 				loreManagementBlacklisted: false,
 			};
-			await createLorebookEntry(lorebookEntry);
+			await saveCanonicalLorebookEntry(lorebookEntry, 'create');
 		}
 
 		// Write buffered file-imported entries with the real storyId
@@ -262,14 +291,14 @@
 					createdAt: now,
 					updatedAt: now,
 				} as Entry;
-				await createLorebookEntry(fullEntry);
+				await saveCanonicalLorebookEntry(fullEntry, 'create');
 			}
 		}
 
 		return storyId;
 	}
 
-	/** Save story to DB and finish onboarding */
+	/** Save story and finish onboarding */
 	async function beginStory() {
 		if (createdStoryId || saving) return;
 		saving = true;

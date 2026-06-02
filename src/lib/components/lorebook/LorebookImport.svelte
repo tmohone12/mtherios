@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Upload, FileJson, Check, AlertCircle, ChevronDown, ChevronUp, Trash2 } from 'lucide-svelte';
 	import { parseLorebook, getImportSummary, convertToEntries, type ImportedEntry, type LorebookImportResult } from '$lib/services/lorebookImporter';
-	import { createLorebookEntry } from '$lib/services/database';
+	import { saveCanonicalLorebookEntry } from '$lib/services/canonicalWrites';
 	import { uuid } from '$lib/utils/uuid';
 	import type { Entry } from '$lib/types';
 	import { fade } from 'svelte/transition';
@@ -127,7 +127,7 @@
 							updatedAt: fullEntry.updatedAt,
 						});
 						
-						await createLorebookEntry(fullEntry);
+						await saveCanonicalLorebookEntry(fullEntry, 'create');
 						successCount++;
 					} catch (entryErr) {
 						console.error('Failed to save lorebook entry:', entry.name, entryErr);

@@ -1,14 +1,17 @@
 <script lang="ts">
-	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search } from 'lucide-svelte';
+	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search, Database, RefreshCw, AlertTriangle } from 'lucide-svelte';
 	import { WORLD_SIM_DAY_INTERVAL, normalizeRelation } from '$lib/services/ai/tools/helpers';
 	import { maybeRunWorldSim } from '$lib/services/ai/tools/executor';
+	import { runBackendWorldSimTick } from '$lib/services/backendMemory';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { story } from '$lib/stores/story.svelte';
-	import { getChapters, getArcs, createArc } from '$lib/services/database';
+	import { getChapters, getArcs, getSyncOpsForStory } from '$lib/services/database';
+	import { saveCanonicalArc } from '$lib/services/canonicalWrites';
 	import { ai } from '$lib/services/ai';
 	import { uuid } from '$lib/utils/uuid';
 	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
-	import type { Arc, Entry, FactionActionRecord, FactionEntryState } from '$lib/types';
+	import { downloadStoryVaultArchive, fetchStoryVaultStatus, runStoryVaultJob, type StoryVaultStatus } from '$lib/services/storyVault';
+	import type { Arc, Entry, FactionActionRecord, FactionEntryState, Story, SyncOutboxOp } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import type { Chapter } from '$lib/types';
 
@@ -187,6 +190,15 @@
 	// Need at least 3 uncovered chapters to condense into an arc
 	const condensableChapters = $derived(uncoveredChapters.length >= 3 ? uncoveredChapters : []);
 
+	function applyBackendVersion(serverVersion: number | null) {
+		if (!serverVersion || !story.currentStory) return;
+		story.currentStory = {
+			...story.currentStory,
+			serverVersion,
+			syncStatus: 'synced',
+		};
+	}
+
 	async function generateArc() {
 		if (!story.currentStory || condensableChapters.length === 0) return;
 		generatingArc = true;
@@ -222,7 +234,7 @@
 				createdAt: Date.now(),
 			};
 
-			await createArc(arc);
+			applyBackendVersion(await saveCanonicalArc(arc, 'create'));
 			arcs = [...arcs, arc];
 			console.log(`Arc ${arcNumber} created: "${arc.title}" (chapters ${arc.chapterRange})`);
 		} catch (e) {
@@ -308,10 +320,20 @@
 	// Manual world-sim trigger ─────────────────────────────────────────
 	let runningWorldSim = $state(false);
 	const worldSimEnabled = $derived(settings.getServiceConfig('worldSimulation').enabled);
+	const backendWorldSim = $derived(Boolean(story.currentStory?.serverStoryId));
+	const canRunWorldSim = $derived(backendWorldSim || worldSimEnabled);
 	async function runWorldSimNow() {
-		if (runningWorldSim || !worldSimEnabled || !story.currentStory) return;
+		const current = story.currentStory;
+		if (runningWorldSim || !canRunWorldSim || !current) return;
 		runningWorldSim = true;
-		try { await maybeRunWorldSim({ force: true }); }
+		try {
+			if (current.serverStoryId) {
+				await runBackendWorldSimTick(current);
+				await story.pullBackendProjection();
+			} else {
+				await maybeRunWorldSim({ force: true });
+			}
+		}
 		catch (e) { console.error('[WorldDrawer] manual world sim failed:', e); }
 		runningWorldSim = false;
 	}
@@ -429,16 +451,204 @@
 
 	// Wiki export
 	let exportingWiki = $state(false);
+	let wikiVaultStatus = $state<StoryVaultStatus | null>(null);
+	let wikiVaultLoading = $state(false);
+	let wikiVaultAction = $state<'sync' | 'index' | 'lint' | null>(null);
+	let wikiVaultError = $state<string | null>(null);
+	let lastWikiVaultStatusKey = $state<string | null>(null);
+	let syncOutboxRows = $state<SyncOutboxOp[]>([]);
+	let syncOutboxLoading = $state(false);
+	let syncOutboxError = $state<string | null>(null);
+	let lastSyncOutboxKey = $state<string | null>(null);
+	let syncRepairAction = $state<string | null>(null);
+	const terminalStoryId = $derived(story.currentStory?.serverStoryId ?? null);
+	const localStoryId = $derived(story.currentStory?.id ?? null);
+	const wikiVaultStatusKey = $derived(terminalStoryId ? `${terminalStoryId}:${story.currentStory?.serverVersion ?? 0}` : null);
+	const syncOutboxKey = $derived(localStoryId && terminalStoryId
+		? `${localStoryId}:${story.currentStory?.syncStatus ?? 'synced'}:${story.currentStory?.serverVersion ?? 0}`
+		: null);
+	const wikiVaultCounts = $derived(wikiVaultStatus?.manifest?.counts ?? null);
+	const openSyncOps = $derived(syncOutboxRows.filter((op) => ['pending', 'pushing', 'rejected', 'needs_repair'].includes(op.status)));
+	const repairSyncOps = $derived(openSyncOps.filter((op) => op.status === 'needs_repair' || op.status === 'rejected'));
+	const pendingSyncOps = $derived(openSyncOps.filter((op) => op.status === 'pending' || op.status === 'pushing'));
 
 	async function handleExportWiki() {
 		if (!story.currentStory || exportingWiki) return;
 		exportingWiki = true;
 		try {
-			await downloadStoryAsWiki(story.currentStory.id);
+			if (terminalStoryId) {
+				await downloadStoryVaultArchive(terminalStoryId);
+				await refreshWikiVaultStatus(terminalStoryId);
+			} else {
+				await downloadStoryAsWiki(story.currentStory.id);
+			}
 		} catch (e) {
 			console.error('[Wiki Export] failed:', e);
 		}
 		exportingWiki = false;
+	}
+
+	$effect(() => {
+		const key = wikiVaultStatusKey;
+		const storyId = terminalStoryId;
+		if (!open) {
+			lastWikiVaultStatusKey = null;
+			return;
+		}
+		if (!storyId || !key) {
+			wikiVaultStatus = null;
+			wikiVaultError = null;
+			lastWikiVaultStatusKey = null;
+			return;
+		}
+		if (lastWikiVaultStatusKey !== key) {
+			lastWikiVaultStatusKey = key;
+			void refreshWikiVaultStatus(storyId);
+		}
+	});
+
+	$effect(() => {
+		const key = syncOutboxKey;
+		const storyId = localStoryId;
+		if (!open) {
+			lastSyncOutboxKey = null;
+			return;
+		}
+		if (!storyId || !key) {
+			syncOutboxRows = [];
+			syncOutboxError = null;
+			lastSyncOutboxKey = null;
+			return;
+		}
+		if (lastSyncOutboxKey !== key) {
+			lastSyncOutboxKey = key;
+			void refreshSyncOutbox(storyId);
+		}
+	});
+
+	async function refreshWikiVaultStatus(storyId = terminalStoryId) {
+		if (!storyId || wikiVaultLoading) return;
+		wikiVaultLoading = true;
+		wikiVaultError = null;
+		try {
+			wikiVaultStatus = await fetchStoryVaultStatus(storyId);
+		} catch (e) {
+			wikiVaultError = e instanceof Error ? e.message : 'Could not read terminal wiki status.';
+		}
+		wikiVaultLoading = false;
+	}
+
+	async function syncWikiVault(index: boolean, lint = false) {
+		const storyId = terminalStoryId;
+		if (!storyId || wikiVaultAction) return;
+		wikiVaultAction = lint ? 'lint' : index ? 'index' : 'sync';
+		wikiVaultError = null;
+		try {
+			const result = await runStoryVaultJob({ storyId, index, lint, runNow: true });
+			wikiVaultStatus = result.status;
+			lastWikiVaultStatusKey = wikiVaultStatusKey;
+		} catch (e) {
+			wikiVaultError = e instanceof Error ? e.message : 'Terminal wiki job failed.';
+		}
+		wikiVaultAction = null;
+	}
+
+	async function refreshSyncOutbox(storyId = localStoryId) {
+		if (!storyId || syncOutboxLoading) return;
+		syncOutboxLoading = true;
+		syncOutboxError = null;
+		try {
+			syncOutboxRows = await getSyncOpsForStory(storyId);
+		} catch (e) {
+			syncOutboxError = e instanceof Error ? e.message : 'Could not read local sync outbox.';
+		}
+		syncOutboxLoading = false;
+	}
+
+	async function retrySyncRepair(opId: string) {
+		if (syncRepairAction) return;
+		syncRepairAction = repairActionKey('retry', opId);
+		syncOutboxError = null;
+		try {
+			await story.retryBackendSyncRepair(opId);
+			await refreshSyncOutbox();
+		} catch (e) {
+			syncOutboxError = e instanceof Error ? e.message : 'Could not retry sync repair item.';
+		}
+		syncRepairAction = null;
+	}
+
+	async function discardSyncRepair(opId: string) {
+		if (syncRepairAction) return;
+		syncRepairAction = repairActionKey('discard', opId);
+		syncOutboxError = null;
+		try {
+			await story.discardBackendSyncRepair(opId);
+			await refreshSyncOutbox();
+		} catch (e) {
+			syncOutboxError = e instanceof Error ? e.message : 'Could not discard sync repair item.';
+		}
+		syncRepairAction = null;
+	}
+
+	function formatIso(value?: string | null): string {
+		if (!value) return 'never';
+		const time = Date.parse(value);
+		if (!Number.isFinite(time)) return 'unknown';
+		return new Date(time).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+	}
+
+	function formatTimeMs(value?: number | null): string {
+		if (!value) return 'unknown';
+		return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+	}
+
+	function syncStatusLabel(value?: Story['syncStatus']): string {
+		if (!value) return 'synced';
+		return value.replace('-', ' ');
+	}
+
+	function syncOpTitle(op: SyncOutboxOp): string {
+		if (op.type === 'turn_command') return 'Queued turn';
+		if (op.type === 'delete_entry') return 'Delete entry';
+		if (op.type === 'state_correction') return 'State correction';
+		return op.type.replaceAll('_', ' ');
+	}
+
+	function repairActionKey(action: 'retry' | 'discard', opId: string): string {
+		return `${action}:${opId}`;
+	}
+
+	function shortPath(value?: string | null): string {
+		if (!value) return '';
+		return value.split(/[\\/]/).filter(Boolean).slice(-3).join('/');
+	}
+
+	function vaultFreshText(status: StoryVaultStatus | null): string {
+		if (!status) return wikiVaultLoading ? 'Checking' : 'Unknown';
+		if (status.vaultFresh) return 'Fresh';
+		return status.exists ? 'Stale' : 'Missing';
+	}
+
+	function indexFreshText(status: StoryVaultStatus | null): string {
+		if (!status) return wikiVaultLoading ? 'Checking' : 'Unknown';
+		if (status.indexFresh) return 'Fresh';
+		return status.indexedVersion ? 'Stale' : 'Missing';
+	}
+
+	function lintFreshText(status: StoryVaultStatus | null): string {
+		if (!status) return wikiVaultLoading ? 'Checking' : 'Unknown';
+		if (!status.lint.exists) return 'Not run';
+		if (!status.lint.fresh) return 'Stale';
+		if (status.lint.ok === true) return 'Healthy';
+		if (status.lint.ok === false) return 'Issues';
+		return 'Recorded';
+	}
+
+	function lintHealthClass(status: StoryVaultStatus | null): string {
+		if (!status?.lint.exists) return 'text-[var(--text-muted)]';
+		if (!status.lint.fresh) return 'text-amber-400';
+		return status.lint.ok === false ? 'text-amber-400' : 'text-emerald-400';
 	}
 
 	const timelineRows = $derived.by(() => {
@@ -489,7 +699,7 @@
 			<div class="flex items-center gap-1">
 				<button onclick={handleExportWiki} disabled={exportingWiki || !story.currentStory}
 					class="rounded p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-amber-400 disabled:opacity-40"
-					title="Export wiki as Obsidian-compatible .zip">
+					title="Export agent-maintained Obsidian wiki vault">
 					{#if exportingWiki}<Loader2 class="h-4 w-4 animate-spin" />{:else}<FileArchive class="h-4 w-4" />{/if}
 				</button>
 				<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]" aria-label="Close world drawer">
@@ -520,20 +730,232 @@
 			</div>
 			{/if}
 
+			<!-- Terminal wiki vault -->
+			{#if backendWorldSim}
+			<div>
+				<div class="mb-2 flex items-center justify-between">
+					<div class="flex items-center gap-1.5">
+						<Database class="h-3.5 w-3.5 text-emerald-400" />
+						<span class="font-display text-[10px] tracking-wider uppercase text-emerald-400">Terminal Wiki</span>
+					</div>
+					<button
+						onclick={() => refreshWikiVaultStatus()}
+						disabled={wikiVaultLoading || Boolean(wikiVaultAction)}
+						class="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-emerald-400 disabled:opacity-40"
+						title="Refresh terminal wiki status"
+					>
+						<RefreshCw class="h-3.5 w-3.5 {wikiVaultLoading ? 'animate-spin' : ''}" />
+					</button>
+				</div>
+
+				<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2">
+					<div class="grid grid-cols-3 gap-2 text-[10px]">
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Vault</div>
+							<div class="{wikiVaultStatus?.vaultFresh ? 'text-emerald-400' : wikiVaultStatus?.exists ? 'text-amber-400' : 'text-rose-400'}">
+								{vaultFreshText(wikiVaultStatus)}
+							</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Qdrant</div>
+							<div class="{wikiVaultStatus?.indexFresh ? 'text-emerald-400' : wikiVaultStatus?.indexedVersion ? 'text-amber-400' : 'text-rose-400'}">
+								{indexFreshText(wikiVaultStatus)}
+							</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Health</div>
+							<div class="{lintHealthClass(wikiVaultStatus)}">
+								{lintFreshText(wikiVaultStatus)}
+							</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Database</div>
+							<div class="tabular-nums text-[var(--text-primary)]">v{wikiVaultStatus?.serverVersion ?? story.currentStory?.serverVersion ?? 0}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Indexed</div>
+							<div class="tabular-nums text-[var(--text-primary)]">v{wikiVaultStatus?.indexedVersion ?? '-'}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Issues</div>
+							<div class="tabular-nums text-[var(--text-primary)]">{wikiVaultStatus?.lint.issueCount ?? '-'}</div>
+						</div>
+					</div>
+
+					{#if wikiVaultCounts}
+						<div class="mt-2 flex flex-wrap gap-1">
+							<span class="rounded bg-[var(--bg-primary)] px-1.5 py-0.5 text-[9px] text-[var(--text-muted)]">{wikiVaultCounts.files ?? 0} files</span>
+							<span class="rounded bg-[var(--bg-primary)] px-1.5 py-0.5 text-[9px] text-[var(--text-muted)]">{wikiVaultCounts.entries ?? 0} entries</span>
+							<span class="rounded bg-[var(--bg-primary)] px-1.5 py-0.5 text-[9px] text-[var(--text-muted)]">{wikiVaultCounts.chapters ?? 0} chapters</span>
+						</div>
+					{/if}
+
+					<div class="mt-2 space-y-1 text-[10px] text-[var(--text-muted)]">
+						<div class="truncate" title={wikiVaultStatus?.vaultPath ?? ''}>
+							{shortPath(wikiVaultStatus?.vaultPath) || 'vault path pending'}
+						</div>
+						<div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+							<span>Generated {formatIso(wikiVaultStatus?.manifest?.generatedAt)}</span>
+							<span>Indexed {formatIso(wikiVaultStatus?.manifest?.index?.indexedAt)}</span>
+							<span>Linted {formatIso(wikiVaultStatus?.lint.lintedAt)}</span>
+						</div>
+					</div>
+
+					{#if wikiVaultError}
+						<div class="mt-2 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[10px] text-rose-300">
+							{wikiVaultError}
+						</div>
+					{/if}
+
+					<div class="mt-2 grid grid-cols-3 gap-2">
+						<button
+							onclick={() => syncWikiVault(false)}
+							disabled={Boolean(wikiVaultAction)}
+							class="flex items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2 py-1.5 text-[10px] text-emerald-400 transition-colors hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+							title="Regenerate the Obsidian vault from the terminal world database"
+						>
+							{#if wikiVaultAction === 'sync'}<Loader2 class="h-3 w-3 animate-spin" />{:else}<RefreshCw class="h-3 w-3" />{/if}
+							<span>Sync vault</span>
+						</button>
+						<button
+							onclick={() => syncWikiVault(true)}
+							disabled={Boolean(wikiVaultAction)}
+							class="flex items-center justify-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 text-[10px] text-cyan-400 transition-colors hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+							title="Regenerate the vault and refresh the Qdrant index"
+						>
+							{#if wikiVaultAction === 'index'}<Loader2 class="h-3 w-3 animate-spin" />{:else}<Database class="h-3 w-3" />{/if}
+							<span>Index Qdrant</span>
+						</button>
+						<button
+							onclick={() => syncWikiVault(false, true)}
+							disabled={Boolean(wikiVaultAction)}
+							class="flex items-center justify-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[10px] text-amber-400 transition-colors hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+							title="Regenerate the vault and write a deterministic lint report"
+						>
+							{#if wikiVaultAction === 'lint'}<Loader2 class="h-3 w-3 animate-spin" />{:else}<Activity class="h-3 w-3" />{/if}
+							<span>Lint</span>
+						</button>
+					</div>
+				</div>
+			</div>
+			{/if}
+
+			<!-- Terminal sync repair queue -->
+			{#if backendWorldSim}
+			<div>
+				<div class="mb-2 flex items-center justify-between">
+					<div class="flex items-center gap-1.5">
+						<AlertTriangle class="h-3.5 w-3.5 {repairSyncOps.length > 0 ? 'text-rose-400' : pendingSyncOps.length > 0 ? 'text-amber-400' : 'text-teal-400'}" />
+						<span class="font-display text-[10px] tracking-wider uppercase {repairSyncOps.length > 0 ? 'text-rose-400' : pendingSyncOps.length > 0 ? 'text-amber-400' : 'text-teal-400'}">
+							Terminal Sync
+						</span>
+					</div>
+					<button
+						onclick={() => refreshSyncOutbox()}
+						disabled={syncOutboxLoading}
+						class="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-teal-400 disabled:opacity-40"
+						title="Refresh local terminal sync outbox"
+					>
+						<RefreshCw class="h-3.5 w-3.5 {syncOutboxLoading ? 'animate-spin' : ''}" />
+					</button>
+				</div>
+				<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2">
+					<div class="grid grid-cols-3 gap-2 text-[10px]">
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Status</div>
+							<div class="{story.currentStory?.syncStatus === 'conflict' ? 'text-rose-400' : story.currentStory?.syncStatus === 'offline' ? 'text-amber-400' : 'text-teal-400'}">
+								{syncStatusLabel(story.currentStory?.syncStatus)}
+							</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Pending</div>
+							<div class="tabular-nums {pendingSyncOps.length > 0 ? 'text-amber-400' : 'text-[var(--text-primary)]'}">{pendingSyncOps.length}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Repair</div>
+							<div class="tabular-nums {repairSyncOps.length > 0 ? 'text-rose-400' : 'text-[var(--text-primary)]'}">{repairSyncOps.length}</div>
+						</div>
+					</div>
+
+					{#if syncOutboxError}
+						<div class="mt-2 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[10px] text-rose-300">
+							{syncOutboxError}
+						</div>
+					{/if}
+
+					{#if repairSyncOps.length > 0}
+						<div class="mt-2 space-y-1.5">
+							{#each repairSyncOps.slice(0, 3) as op}
+								<div class="rounded border border-rose-500/25 bg-rose-500/5 px-2 py-1.5">
+									<div class="flex items-center justify-between gap-2">
+										<span class="text-[10px] font-medium text-rose-300">{syncOpTitle(op)}</span>
+										<span class="text-[9px] tabular-nums text-[var(--text-muted)]">{formatTimeMs(op.repairCreatedAt ?? op.updatedAt)}</span>
+									</div>
+									<p class="mt-0.5 line-clamp-2 text-[10px] leading-snug text-[var(--text-muted)]" title={op.repairReason ?? op.error ?? ''}>
+										{op.repairReason ?? op.error ?? 'Terminal rejected this queued command.'}
+									</p>
+									<div class="mt-1.5 flex justify-end gap-1.5">
+										<button
+											onclick={() => retrySyncRepair(op.id)}
+											disabled={Boolean(syncRepairAction)}
+											class="flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-[9px] text-amber-300 transition-colors hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+											title="Put this command back in the terminal sync queue and try it now"
+										>
+											{#if syncRepairAction === repairActionKey('retry', op.id)}
+												<Loader2 class="h-3 w-3 animate-spin" />
+											{:else}
+												<RefreshCw class="h-3 w-3" />
+											{/if}
+											<span>Retry</span>
+										</button>
+										<button
+											onclick={() => discardSyncRepair(op.id)}
+											disabled={Boolean(syncRepairAction)}
+											class="flex items-center gap-1 rounded border border-rose-500/30 bg-rose-500/5 px-1.5 py-0.5 text-[9px] text-rose-300 transition-colors hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+											title="Discard this queued local command and keep terminal canon"
+										>
+											{#if syncRepairAction === repairActionKey('discard', op.id)}
+												<Loader2 class="h-3 w-3 animate-spin" />
+											{:else}
+												<X class="h-3 w-3" />
+											{/if}
+											<span>Discard</span>
+										</button>
+									</div>
+								</div>
+							{/each}
+							{#if repairSyncOps.length > 3}
+								<div class="text-[10px] text-[var(--text-muted)]">+{repairSyncOps.length - 3} more repair items</div>
+							{/if}
+						</div>
+					{:else if pendingSyncOps.length > 0}
+						<div class="mt-2 text-[10px] leading-relaxed text-[var(--text-muted)]">
+							{pendingSyncOps.length} queued command{pendingSyncOps.length === 1 ? '' : 's'} will push before the next backend turn or projection refresh.
+						</div>
+					{:else}
+						<div class="mt-2 text-[10px] text-[var(--text-muted)]">Local cache is caught up with terminal canon.</div>
+					{/if}
+				</div>
+			</div>
+			{/if}
+
 			<!-- Time + World-sim Cadence -->
-			{#if currentTime}
+			{#if currentTime || backendWorldSim}
 			<div>
 				<div class="mb-2 flex items-center justify-between">
 					<div class="flex items-center gap-1.5">
 						<Clock class="h-3.5 w-3.5 text-sky-400" />
-						<span class="font-display text-[10px] tracking-wider uppercase text-sky-400">In-World Time</span>
+						<span class="font-display text-[10px] tracking-wider uppercase text-sky-400">
+							{currentTime ? 'In-World Time' : 'Terminal World Tick'}
+						</span>
 					</div>
-					{#if daysUntilSim !== null}
+					{#if currentTime && daysUntilSim !== null}
 						<span class="text-[10px] tabular-nums text-[var(--text-muted)]" title="Days until next world simulation tick">
 							sim in {daysUntilSim}d
 						</span>
 					{/if}
 				</div>
+				{#if currentTime}
 				<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2 flex items-baseline gap-2">
 					<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Day</span>
 					<span class="text-sm font-semibold tabular-nums text-[var(--text-primary)]">
@@ -541,18 +963,23 @@
 					</span>
 					<span class="ml-auto text-sm tabular-nums text-[var(--text-primary)]">{currentTime.hms}</span>
 				</div>
+				{:else}
+				<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2 text-xs leading-relaxed text-[var(--text-muted)]">
+					Terminal-bound story. Manual world ticks run through the terminal job processor.
+				</div>
+				{/if}
 				<button
 					onclick={runWorldSimNow}
-					disabled={runningWorldSim || !worldSimEnabled || !story.currentStory}
+					disabled={runningWorldSim || !canRunWorldSim || !story.currentStory}
 					class="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-1.5 text-xs text-sky-400 transition-colors hover:bg-sky-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
-					title={worldSimEnabled ? 'Run world simulation now (bypasses the 7-day cadence)' : 'World simulation is disabled in settings'}
+					title={backendWorldSim ? 'Run a terminal-owned world tick now' : worldSimEnabled ? 'Run browser world simulation now (bypasses the 7-day cadence)' : 'World simulation is disabled in settings'}
 				>
 					{#if runningWorldSim}
 						<Loader2 class="h-3.5 w-3.5 animate-spin" />
 						<span>Running world sim…</span>
 					{:else}
 						<Play class="h-3.5 w-3.5" />
-						<span>Run world sim now</span>
+						<span>{backendWorldSim ? 'Run terminal world tick' : 'Run world sim now'}</span>
 					{/if}
 				</button>
 			</div>
@@ -1033,6 +1460,9 @@
 											<span class="rounded bg-[var(--bg-primary)] px-1 py-0 text-[var(--text-muted)] italic">{fa.actionType}</span>
 											<span class="ml-auto text-[var(--text-muted)] uppercase tracking-wider {fa.urgency === 'critical' ? 'text-rose-400' : fa.urgency === 'high' ? 'text-amber-400' : ''}">{fa.urgency}</span>
 										</div>
+										{#if fa.motivation && (fa.actionType === 'pressure' || fa.actionType === 'world_tick')}
+											<div class="mt-0.5 text-[9px] uppercase tracking-wider text-orange-300/70">{fa.motivation}</div>
+										{/if}
 										<p class="mt-0.5 text-[10px] leading-relaxed text-[var(--text-muted)] line-clamp-2">{fa.action}</p>
 									</div>
 								{/each}

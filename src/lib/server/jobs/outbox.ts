@@ -10,6 +10,8 @@ export const backendJobTypes = [
 	'evaluate_world_sim_tick',
 	'update_faction_pressure',
 	'rebuild_retrieval_projection',
+	'index_canonical_records',
+	'sync_story_vault',
 ] as const;
 
 export type BackendJobType = typeof backendJobTypes[number];
@@ -24,8 +26,15 @@ export interface EnqueueBackendJobInput {
 	metadata?: Record<string, unknown>;
 }
 
+const DEFAULT_STALE_LOCK_MS = 30 * 60_000;
+
 function nowIso(): string {
 	return new Date().toISOString();
+}
+
+function staleLockMs(): number {
+	const parsed = Number(process.env.MTHERIOS_JOB_STALE_LOCK_MS ?? DEFAULT_STALE_LOCK_MS);
+	return Number.isFinite(parsed) ? Math.max(60_000, Math.trunc(parsed)) : DEFAULT_STALE_LOCK_MS;
 }
 
 function id(prefix: string): string {
@@ -73,25 +82,44 @@ export async function enqueueBackendJob(input: EnqueueBackendJobInput): Promise<
 	return jobId;
 }
 
+export async function enqueueStoryVaultSyncJob(input: {
+	storyId: string;
+	serverVersion: number;
+	reason: string;
+	payload?: Record<string, unknown>;
+}): Promise<string> {
+	return enqueueBackendJob({
+		storyId: input.storyId,
+		type: 'sync_story_vault',
+		dedupeKey: `${input.reason}-story-vault-${input.serverVersion}`,
+		payload: {
+			...(input.payload ?? {}),
+			serverVersion: input.serverVersion,
+			reason: input.reason,
+		},
+		maxAttempts: 3,
+	});
+}
+
 export async function enqueueTurnProjectionJobs(input: {
 	storyId: string;
 	eventIds: string[];
 	memoryNodeIds: string[];
 	patchIds: string[];
 	serverVersion: number;
+	memorySettings?: {
+		chapterThreshold?: number;
+		postChapterBuffer?: number;
+		chaptersPerArc?: number;
+	};
 }): Promise<string[]> {
 	const jobs: Promise<string>[] = [];
+	const memorySettings = input.memorySettings ?? {};
 	if (input.eventIds.length > 0) {
 		jobs.push(enqueueBackendJob({
 			storyId: input.storyId,
 			type: 'create_memory_nodes_from_events',
 			dedupeKey: `turn-events-${input.serverVersion}`,
-			payload: { eventIds: input.eventIds, patchIds: input.patchIds, serverVersion: input.serverVersion },
-		}));
-		jobs.push(enqueueBackendJob({
-			storyId: input.storyId,
-			type: 'update_faction_pressure',
-			dedupeKey: `faction-pressure-${input.serverVersion}`,
 			payload: { eventIds: input.eventIds, patchIds: input.patchIds, serverVersion: input.serverVersion },
 		}));
 	}
@@ -105,9 +133,23 @@ export async function enqueueTurnProjectionJobs(input: {
 	}
 	jobs.push(enqueueBackendJob({
 		storyId: input.storyId,
+		type: 'index_canonical_records',
+		dedupeKey: `canonical-index-${input.serverVersion}`,
+		payload: { eventIds: input.eventIds, patchIds: input.patchIds, serverVersion: input.serverVersion },
+		maxAttempts: 3,
+	}));
+	jobs.push(enqueueBackendJob({
+		storyId: input.storyId,
 		type: 'summarize_chapter',
 		dedupeKey: `chapter-summary-${input.serverVersion}`,
+		payload: { eventIds: input.eventIds, patchIds: input.patchIds, serverVersion: input.serverVersion, ...memorySettings },
+	}));
+	jobs.push(enqueueBackendJob({
+		storyId: input.storyId,
+		type: 'sync_story_vault',
+		dedupeKey: `story-vault-${input.serverVersion}`,
 		payload: { eventIds: input.eventIds, patchIds: input.patchIds, serverVersion: input.serverVersion },
+		maxAttempts: 3,
 	}));
 	return Promise.all(jobs);
 }
@@ -142,19 +184,42 @@ export async function enqueueImportProjectionJobs(input: {
 			dedupeKey: `import-faction-pressure-${input.serverVersion}`,
 			payload: { counts: input.counts, serverVersion: input.serverVersion },
 		}),
+		enqueueBackendJob({
+			storyId: input.storyId,
+			type: 'evaluate_world_sim_tick',
+			dedupeKey: `import-world-sim-tick-${input.serverVersion}`,
+			payload: { counts: input.counts, serverVersion: input.serverVersion },
+		}),
+		enqueueBackendJob({
+			storyId: input.storyId,
+			type: 'index_canonical_records',
+			dedupeKey: `import-canonical-index-${input.serverVersion}`,
+			payload: { counts: input.counts, serverVersion: input.serverVersion },
+			maxAttempts: 3,
+		}),
+		enqueueBackendJob({
+			storyId: input.storyId,
+			type: 'sync_story_vault',
+			dedupeKey: `import-story-vault-${input.serverVersion}`,
+			payload: { counts: input.counts, serverVersion: input.serverVersion },
+			maxAttempts: 3,
+		}),
 	]);
 }
 
-export async function claimBackendJobs(workerId: string, limit = 10) {
+export async function claimBackendJobs(workerId: string, limit = 10, storyId?: string | null) {
 	const db = getDb();
 	const claimedAt = nowIso();
+	await recoverStaleBackendJobs(staleLockMs(), storyId);
+	const filters = [
+		inArray(backendJobs.status, ['queued', 'retry']),
+		lte(backendJobs.runAfter, claimedAt),
+	];
+	if (storyId) filters.push(eq(backendJobs.storyId, storyId));
 	const candidates = await db
 		.select({ id: backendJobs.id })
 		.from(backendJobs)
-		.where(and(
-			inArray(backendJobs.status, ['queued', 'retry']),
-			lte(backendJobs.runAfter, claimedAt),
-		))
+		.where(and(...filters))
 		.orderBy(asc(backendJobs.runAfter), asc(backendJobs.createdAt))
 		.limit(limit);
 	const ids = candidates.map((job) => job.id);
@@ -166,6 +231,40 @@ export async function claimBackendJobs(workerId: string, limit = 10) {
 		lockedBy: workerId,
 		updatedAt: claimedAt,
 	}).where(inArray(backendJobs.id, ids)).returning();
+}
+
+export async function recoverStaleBackendJobs(staleMs = staleLockMs(), storyId?: string | null): Promise<number> {
+	const db = getDb();
+	const recoveredAt = nowIso();
+	const cutoff = new Date(Date.now() - Math.max(60_000, staleMs)).toISOString();
+	const filters = [
+		eq(backendJobs.status, 'running'),
+		lte(backendJobs.lockedAt, cutoff),
+	];
+	if (storyId) filters.push(eq(backendJobs.storyId, storyId));
+	const rows = await db
+		.select({
+			id: backendJobs.id,
+			attemptCount: backendJobs.attemptCount,
+			maxAttempts: backendJobs.maxAttempts,
+			lockedAt: backendJobs.lockedAt,
+			lockedBy: backendJobs.lockedBy,
+		})
+		.from(backendJobs)
+		.where(and(...filters));
+
+	for (const job of rows) {
+		const exhausted = job.attemptCount >= job.maxAttempts;
+		await db.update(backendJobs).set({
+			status: exhausted ? 'failed' : 'retry',
+			runAfter: recoveredAt,
+			lockedAt: null,
+			lockedBy: null,
+			lastError: `Recovered stale job lock from ${job.lockedBy ?? 'unknown worker'} after ${Math.round(staleMs / 1000)}s.`,
+			updatedAt: recoveredAt,
+		}).where(eq(backendJobs.id, job.id));
+	}
+	return rows.length;
 }
 
 export async function markBackendJobComplete(jobId: string): Promise<void> {

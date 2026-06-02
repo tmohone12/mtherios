@@ -5,6 +5,7 @@
  *   - Contradictions between entries
  *   - Stale claims superseded by newer chapters
  *   - Orphan entries with no inbound links and no recent mentions
+ *   - Source trail gaps where important claims lack chapter/raw evidence
  *   - Missing entries — names mentioned in chapters but with no entry
  *   - Gap suggestions — topics that would benefit from elaboration
  *
@@ -37,6 +38,7 @@ Categories:
 - orphans: an entry has zero inbound mentions AND zero outbound relationships AND has not been mentioned in recent chapters
 - missingEntries: a name referenced in a chapter has no corresponding entry
 - gapSuggestions: a topic that's important but thinly developed (e.g. faction with members but no leader entry)
+- source trail gaps: report as gapSuggestions when an important entity, faction state, or claim needs stronger chapter/raw evidence
 - textFixes: exact replacements for typos, spelling errors, or stale wording. Only include these when the originalText appears verbatim in the listed field and the correction is safe.
 
 Respond ONLY with valid JSON matching the schema.`;

@@ -2,7 +2,7 @@
 	import { Plus, Upload, Trash2, Download, FileArchive } from 'lucide-svelte';
 	import { app } from '$lib/stores/app.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
-	import { getAllStories, deleteStory } from '$lib/services/database';
+	import { refreshStoryCatalog, deleteStoryEverywhere } from '$lib/services/serverStories';
 	import { downloadStoryAsJson, importStoryFromJson } from '$lib/services/storySync';
 	import { importStoryFromWiki } from '$lib/services/wikiImport';
 	import type { Story } from '$lib/types';
@@ -19,7 +19,7 @@
 	onMount(loadStories);
 
 	async function loadStories() {
-		stories = (await getAllStories()).sort((a, b) => b.updatedAt - a.updatedAt);
+		stories = await refreshStoryCatalog();
 	}
 
 	function formatDate(ts: number) {
@@ -32,9 +32,16 @@
 	}
 
 	async function handleDelete(id: string) {
-		await deleteStory(id);
-		stories = stories.filter(s => s.id !== id);
-		confirmDelete = null;
+		const target = stories.find(s => s.id === id);
+		if (!target) return;
+		try {
+			await deleteStoryEverywhere(target);
+			stories = stories.filter(s => s.id !== id);
+			confirmDelete = null;
+		} catch (err) {
+			console.error('Delete failed:', err);
+			alert(`Delete failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+		}
 	}
 
 	async function handleExport(e: Event, storyId: string) {

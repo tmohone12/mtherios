@@ -133,6 +133,11 @@ export interface ApplyTurnUpdateInput {
 	parseWarnings: string[];
 	retrievedMemoryIds: string[];
 	serverVersion: number;
+	memorySettings?: {
+		chapterThreshold?: number;
+		postChapterBuffer?: number;
+		chaptersPerArc?: number;
+	};
 }
 
 export interface ApplyTurnUpdateResult {
@@ -474,6 +479,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			memoryNodeIds,
 			patchIds: [patchId],
 			serverVersion: input.serverVersion,
+			memorySettings: input.memorySettings,
 		});
 	} catch (error) {
 		warnings.push(`Queued projection jobs failed: ${error instanceof Error ? error.message : String(error)}`);

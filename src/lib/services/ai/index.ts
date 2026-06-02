@@ -21,6 +21,7 @@ export { EntryRefinementService } from './lorebook/EntryRefinementService';
 export { ImageGenerationService } from './image/ImageGenerationService';
 export { WorldSimulationService } from './generation/WorldSimulationService';
 export { ArcCondensationService } from './generation/ArcCondensationService';
+export { SagaCondensationService } from './generation/SagaCondensationService';
 export { ProceduralMemoryService } from './memory/ProceduralMemoryService';
 export { EmbeddingService } from './embeddings/EmbeddingService';
 export { WikiLintService } from './wiki/WikiLintService';
@@ -37,6 +38,7 @@ import { EntryRefinementService } from './lorebook/EntryRefinementService';
 import { ImageGenerationService } from './image/ImageGenerationService';
 import { WorldSimulationService } from './generation/WorldSimulationService';
 import { ArcCondensationService } from './generation/ArcCondensationService';
+import { SagaCondensationService } from './generation/SagaCondensationService';
 import { ProceduralMemoryService } from './memory/ProceduralMemoryService';
 import { EmbeddingService } from './embeddings/EmbeddingService';
 import { WikiLintService } from './wiki/WikiLintService';
@@ -52,6 +54,7 @@ let _entryRefinement: EntryRefinementService;
 let _imageGen: ImageGenerationService;
 let _worldSim: WorldSimulationService;
 let _arcCondensation: ArcCondensationService;
+let _sagaCondensation: SagaCondensationService;
 let _proceduralMemory: ProceduralMemoryService;
 let _embeddings: EmbeddingService;
 let _wikiLint: WikiLintService;
@@ -68,6 +71,7 @@ export const ai = {
 	get imageGen() { return _imageGen ??= new ImageGenerationService(); },
 	get worldSim() { return _worldSim ??= new WorldSimulationService(); },
 	get arcCondensation() { return _arcCondensation ??= new ArcCondensationService(); },
+	get sagaCondensation() { return _sagaCondensation ??= new SagaCondensationService(); },
 	get proceduralMemory() { return _proceduralMemory ??= new ProceduralMemoryService(); },
 	get embeddings() { return _embeddings ??= new EmbeddingService(); },
 	get wikiLint() { return _wikiLint ??= new WikiLintService(); },

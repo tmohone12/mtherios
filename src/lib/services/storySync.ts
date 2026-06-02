@@ -14,6 +14,7 @@ import {
 	getChapters,
 	getLorebookEntries,
 	getArcs,
+	getSagas,
 	getEntryRelationships,
 	getConversationMemory,
 	getWorldEvents,
@@ -25,15 +26,18 @@ import {
 	getSetting,
 	setSetting,
 	createStory,
+	updateStory,
 	createStoryEntry,
-	createCharacter,
-	createLocation,
-	createItem,
+	putCharacter,
+	putLocation,
+	putItem,
 	createStoryBeat,
-	createChapter,
-	createLorebookEntry,
-	createArc,
+	putChapter,
+	putLorebookEntry,
+	putArc,
+	putSaga,
 } from '$lib/services/database';
+import { importStoryBundleToBackend } from '$lib/services/backendImport';
 import type {
 	Story,
 	StoryEntry,
@@ -43,6 +47,7 @@ import type {
 	StoryBeat,
 	Chapter,
 	Arc,
+	Saga,
 	Entry,
 	EntryRelationship,
 	ConversationMemoryEntry,
@@ -69,6 +74,7 @@ interface ExportedSettings {
 export interface StoryExportData {
 	version: 1;
 	exportedAt: number;
+	source?: 'backend_canon' | string;
 	story: Story;
 	storyEntries: StoryEntry[];
 	characters: Character[];
@@ -78,6 +84,7 @@ export interface StoryExportData {
 	chapters: Chapter[];
 	lorebookEntries: Entry[];
 	arcs: Arc[];
+	sagas?: Saga[];
 	entryRelationships?: EntryRelationship[];
 	conversationMemory?: ConversationMemoryEntry[];
 	worldEvents?: WorldEvent[];
@@ -86,6 +93,7 @@ export interface StoryExportData {
 	rumors?: RumorRecord[];
 	schemes?: Scheme[];
 	storyThreads?: StoryThread[];
+	backendCanon?: unknown;
 	/** API profiles & service configs — lets the other device connect without re-setup. */
 	settings?: ExportedSettings;
 }
@@ -97,6 +105,7 @@ export interface StoryExportData {
 export async function exportStory(storyId: string): Promise<StoryExportData> {
 	const story = await getStory(storyId);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
+	if (story.serverStoryId) return fetchBackendStoryExport(story.serverStoryId);
 
 	const [
 		storyEntries,
@@ -107,6 +116,7 @@ export async function exportStory(storyId: string): Promise<StoryExportData> {
 		chapters,
 		lorebookEntries,
 		arcs,
+		sagas,
 		entryRelationships,
 		conversationMemory,
 		worldEvents,
@@ -124,6 +134,7 @@ export async function exportStory(storyId: string): Promise<StoryExportData> {
 		getChapters(storyId),
 		getLorebookEntries(storyId),
 		getArcs(storyId),
+		getSagas(storyId),
 		getEntryRelationships(storyId),
 		getConversationMemory(storyId),
 		getWorldEvents(storyId),
@@ -159,6 +170,7 @@ export async function exportStory(storyId: string): Promise<StoryExportData> {
 		chapters,
 		lorebookEntries,
 		arcs,
+		sagas,
 		entryRelationships,
 		conversationMemory,
 		worldEvents,
@@ -169,6 +181,21 @@ export async function exportStory(storyId: string): Promise<StoryExportData> {
 		storyThreads,
 		settings: Object.keys(settings).length > 0 ? settings : undefined,
 	};
+}
+
+async function fetchBackendStoryExport(serverStoryId: string): Promise<StoryExportData> {
+	const response = await fetch(`/api/export/${encodeURIComponent(serverStoryId)}`);
+	const body = await response.json().catch(() => ({}));
+	if (!response.ok) {
+		throw new Error(typeof (body as { error?: unknown }).error === 'string'
+			? (body as { error: string }).error
+			: `Terminal export failed: ${response.status}`);
+	}
+	const data = body as StoryExportData;
+	if (!data || data.version !== 1 || !data.story || !Array.isArray(data.storyEntries)) {
+		throw new Error('Backend export returned an invalid story bundle.');
+	}
+	return data;
 }
 
 export async function downloadStoryAsJson(storyId: string): Promise<void> {
@@ -202,6 +229,187 @@ function newId(): string {
 	return uuid();
 }
 
+function remapStoryBundle(data: StoryExportData): StoryExportData {
+	const newStoryId = newId();
+	const now = Date.now();
+	const idMap = new Map<string, string>([[data.story.id, newStoryId]]);
+
+	const remap = (oldId: string): string => {
+		if (!oldId) return oldId;
+		let mapped = idMap.get(oldId);
+		if (!mapped) {
+			mapped = newId();
+			idMap.set(oldId, mapped);
+		}
+		return mapped;
+	};
+	const remapNullable = (oldId: string | null | undefined): string | null => oldId ? remap(oldId) : null;
+	const remapList = (ids: string[] = []): string[] => ids.map((value) => remap(value));
+
+	return {
+		...data,
+		exportedAt: now,
+		story: {
+			...data.story,
+			id: newStoryId,
+			createdAt: now,
+			updatedAt: now,
+			currentBranchId: remapNullable(data.story.currentBranchId),
+			serverStoryId: null,
+			serverVersion: null,
+			syncStatus: 'syncing',
+		},
+		storyEntries: data.storyEntries.map((entry) => ({
+			...entry,
+			id: remap(entry.id),
+			storyId: newStoryId,
+			parentId: remapNullable(entry.parentId),
+			branchId: remapNullable(entry.branchId),
+		})),
+		characters: data.characters.map((character) => ({
+			...character,
+			id: remap(character.id),
+			storyId: newStoryId,
+			branchId: remapNullable(character.branchId),
+			overridesId: remapNullable(character.overridesId),
+		})),
+		locations: data.locations.map((location) => ({
+			...location,
+			id: remap(location.id),
+			storyId: newStoryId,
+			branchId: remapNullable(location.branchId),
+			overridesId: remapNullable(location.overridesId),
+		})),
+		items: data.items.map((item) => ({
+			...item,
+			id: remap(item.id),
+			storyId: newStoryId,
+			branchId: remapNullable(item.branchId),
+			overridesId: remapNullable(item.overridesId),
+		})),
+		storyBeats: data.storyBeats.map((beat) => ({
+			...beat,
+			id: remap(beat.id),
+			storyId: newStoryId,
+			branchId: remapNullable(beat.branchId),
+			overridesId: remapNullable(beat.overridesId),
+		})),
+		chapters: data.chapters.map((chapter) => ({
+			...chapter,
+			id: remap(chapter.id),
+			storyId: newStoryId,
+			startEntryId: remap(chapter.startEntryId),
+			endEntryId: remap(chapter.endEntryId),
+			branchId: remapNullable(chapter.branchId),
+		})),
+		lorebookEntries: data.lorebookEntries.map((entry) => ({
+			...entry,
+			id: remap(entry.id),
+			storyId: newStoryId,
+			firstMentioned: remapNullable(entry.firstMentioned),
+			lastMentioned: remapNullable(entry.lastMentioned),
+			branchId: remapNullable(entry.branchId),
+			overridesId: remapNullable(entry.overridesId),
+		})),
+		arcs: (data.arcs ?? []).map((arc) => ({
+			...arc,
+			id: remap(arc.id),
+			storyId: newStoryId,
+			chapterIds: remapList(arc.chapterIds),
+			threadIds: remapList(arc.threadIds),
+			resolvedThreadIds: remapList(arc.resolvedThreadIds),
+			branchId: remapNullable(arc.branchId),
+		})),
+		sagas: data.sagas?.map((saga) => ({
+			...saga,
+			id: remap(saga.id),
+			storyId: newStoryId,
+			arcIds: remapList(saga.arcIds),
+			branchId: remapNullable(saga.branchId),
+		})),
+		entryRelationships: data.entryRelationships?.map((relationship) => ({
+			...relationship,
+			id: remap(relationship.id),
+			storyId: newStoryId,
+			sourceEntryId: remap(relationship.sourceEntryId),
+			targetEntryId: remap(relationship.targetEntryId),
+		})),
+		conversationMemory: data.conversationMemory?.map((memory) => ({
+			...memory,
+			id: remap(memory.id),
+			storyId: newStoryId,
+			npcEntryId: remap(memory.npcEntryId),
+			storyEntryId: remap(memory.storyEntryId),
+		})),
+		worldEvents: data.worldEvents?.map((event) => ({
+			...event,
+			id: remap(event.id),
+			storyId: newStoryId,
+			triggerEntryId: remap(event.triggerEntryId),
+			sourceEntityId: remapNullable(event.sourceEntityId),
+			consequences: event.consequences.map((consequence) => ({
+				...consequence,
+				id: remap(consequence.id),
+				targetEntityId: remapNullable(consequence.targetEntityId),
+			})),
+		})),
+		agreements: data.agreements?.map((agreement) => ({
+			...agreement,
+			id: remap(agreement.id),
+			storyId: newStoryId,
+		})),
+		factionActions: data.factionActions?.map((action) => ({
+			...action,
+			id: remap(action.id),
+			storyId: newStoryId,
+		})),
+		rumors: data.rumors?.map((rumor) => ({
+			...rumor,
+			id: remap(rumor.id),
+			storyId: newStoryId,
+		})),
+		schemes: data.schemes?.map((scheme) => ({
+			...scheme,
+			id: remap(scheme.id),
+			storyId: newStoryId,
+			ownerEntryId: remapNullable(scheme.ownerEntryId),
+			triggerEntryId: remapNullable(scheme.triggerEntryId),
+			branchId: remapNullable(scheme.branchId),
+		})),
+		storyThreads: data.storyThreads?.map((thread) => ({
+			...thread,
+			id: remap(thread.id),
+			storyId: newStoryId,
+			sourceArcId: remapNullable(thread.sourceArcId),
+			sourceChapterId: remapNullable(thread.sourceChapterId),
+			relatedFactionIds: remapList(thread.relatedFactionIds),
+		})),
+	};
+}
+
+async function writeImportedStoryProjection(bundle: StoryExportData): Promise<void> {
+	for (const entry of bundle.storyEntries) await createStoryEntry(entry);
+	for (const character of bundle.characters) await putCharacter(character);
+	for (const location of bundle.locations) await putLocation(location);
+	for (const item of bundle.items) await putItem(item);
+	for (const beat of bundle.storyBeats) await createStoryBeat(beat);
+	for (const chapter of bundle.chapters) await putChapter(chapter);
+	for (const entry of bundle.lorebookEntries) await putLorebookEntry(entry);
+	for (const arc of bundle.arcs ?? []) await putArc(arc);
+	for (const saga of bundle.sagas ?? []) await putSaga(saga);
+}
+
+async function restoreImportedSettings(settings?: ExportedSettings): Promise<void> {
+	if (!settings) return;
+	const existingProfiles = await getSetting('apiProfiles');
+	if (existingProfiles || !settings.apiProfiles) return;
+	await setSetting('apiProfiles', settings.apiProfiles);
+	if (settings.activeProfileId) await setSetting('activeProfileId', settings.activeProfileId);
+	if (settings.narrativeModel) await setSetting('narrativeModel', settings.narrativeModel);
+	if (settings.serviceConfigs) await setSetting('serviceConfigs', settings.serviceConfigs);
+	await setSetting('onboardingComplete', 'true');
+}
+
 export async function importStoryFromJson(file: File): Promise<string> {
 	const text = await file.text();
 	let parsed: unknown;
@@ -226,150 +434,20 @@ export async function importStoryFromJson(file: File): Promise<string> {
 		throw new Error('Invalid story file — missing storyEntries array.');
 	}
 
-	// Generate new IDs
-	const newStoryId = newId();
-	const idMap = new Map<string, string>();
-	idMap.set(data.story.id, newStoryId);
+	const bundle = remapStoryBundle(data);
+	const newStoryId = bundle.story.id;
 
-	const remap = (oldId: string): string => {
-		if (!oldId) return oldId;
-		let mapped = idMap.get(oldId);
-		if (!mapped) {
-			mapped = newId();
-			idMap.set(oldId, mapped);
-		}
-		return mapped;
-	};
+	await createStory(bundle.story);
 
-	// Story
-	const now = Date.now();
-	const story: Story = {
-		...data.story,
-		id: newStoryId,
-		createdAt: now,
-		updatedAt: now,
-	};
-	await createStory(story);
-
-	// Story entries
-	for (const entry of data.storyEntries) {
-		const mapped: StoryEntry = {
-			...entry,
-			id: remap(entry.id),
-			storyId: newStoryId,
-			parentId: entry.parentId ? remap(entry.parentId) : null,
-			branchId: entry.branchId ? remap(entry.branchId) : null,
-		};
-		await createStoryEntry(mapped);
+	try {
+		await importStoryBundleToBackend(bundle, newStoryId);
+	} catch (error) {
+		console.warn('[StorySync] Imported story remains local until backend is reachable:', error);
+		await updateStory(newStoryId, { syncStatus: 'offline' });
 	}
 
-	// Characters
-	for (const c of data.characters) {
-		const mapped: Character = {
-			...c,
-			id: remap(c.id),
-			storyId: newStoryId,
-			branchId: c.branchId ? remap(c.branchId) : null,
-			overridesId: c.overridesId ? remap(c.overridesId) : null,
-		};
-		await createCharacter(mapped);
-	}
-
-	// Locations
-	for (const l of data.locations) {
-		const mapped: Location = {
-			...l,
-			id: remap(l.id),
-			storyId: newStoryId,
-			branchId: l.branchId ? remap(l.branchId) : null,
-			overridesId: l.overridesId ? remap(l.overridesId) : null,
-		};
-		await createLocation(mapped);
-	}
-
-	// Items
-	for (const i of data.items) {
-		const mapped: Item = {
-			...i,
-			id: remap(i.id),
-			storyId: newStoryId,
-			branchId: i.branchId ? remap(i.branchId) : null,
-			overridesId: i.overridesId ? remap(i.overridesId) : null,
-		};
-		await createItem(mapped);
-	}
-
-	// Story beats
-	for (const b of data.storyBeats) {
-		const mapped: StoryBeat = {
-			...b,
-			id: remap(b.id),
-			storyId: newStoryId,
-			branchId: b.branchId ? remap(b.branchId) : null,
-			overridesId: b.overridesId ? remap(b.overridesId) : null,
-		};
-		await createStoryBeat(mapped);
-	}
-
-	// Chapters
-	for (const ch of data.chapters) {
-		const mapped: Chapter = {
-			...ch,
-			id: remap(ch.id),
-			storyId: newStoryId,
-			startEntryId: remap(ch.startEntryId),
-			endEntryId: remap(ch.endEntryId),
-			branchId: ch.branchId ? remap(ch.branchId) : null,
-		};
-		await createChapter(mapped);
-	}
-
-	// Lorebook entries
-	for (const le of data.lorebookEntries) {
-		const mapped: Entry = {
-			...le,
-			id: remap(le.id),
-			storyId: newStoryId,
-			firstMentioned: le.firstMentioned ? remap(le.firstMentioned) : null,
-			lastMentioned: le.lastMentioned ? remap(le.lastMentioned) : null,
-			branchId: le.branchId ? remap(le.branchId) : null,
-			overridesId: le.overridesId ? remap(le.overridesId) : null,
-		};
-		await createLorebookEntry(mapped);
-	}
-
-	// Arcs
-	if (data.arcs) {
-		for (const arc of data.arcs) {
-			const mapped: Arc = {
-				...arc,
-				id: remap(arc.id),
-				storyId: newStoryId,
-				chapterIds: arc.chapterIds.map(cid => remap(cid)),
-				branchId: arc.branchId ? remap(arc.branchId) : null,
-			};
-			await createArc(mapped);
-		}
-	}
-
-	// Restore API settings if this device has none configured
-	if (data.settings) {
-		const existingProfiles = await getSetting('apiProfiles');
-		if (!existingProfiles && data.settings.apiProfiles) {
-			await setSetting('apiProfiles', data.settings.apiProfiles);
-			if (data.settings.activeProfileId) {
-				await setSetting('activeProfileId', data.settings.activeProfileId);
-			}
-			if (data.settings.narrativeModel) {
-				await setSetting('narrativeModel', data.settings.narrativeModel);
-			}
-			if (data.settings.serviceConfigs) {
-				await setSetting('serviceConfigs', data.settings.serviceConfigs);
-			}
-			// Mark onboarding complete so the wizard doesn't re-trigger
-			await setSetting('onboardingComplete', 'true');
-		}
-	}
+	await writeImportedStoryProjection(bundle);
+	await restoreImportedSettings(bundle.settings);
 
 	return newStoryId;
 }

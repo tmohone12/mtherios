@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { Plus, Upload, Settings } from 'lucide-svelte';
 	import { app } from '$lib/stores/app.svelte';
-	import { getAllStories } from '$lib/services/database';
+	import { refreshStoryCatalog } from '$lib/services/serverStories';
 	import type { Story } from '$lib/types';
 	import { onMount } from 'svelte';
 
 	let stories = $state<Story[]>([]);
 
 	onMount(async () => {
-		stories = await getAllStories();
+		stories = await refreshStoryCatalog();
 	});
 
 	function formatDate(ts: number) {

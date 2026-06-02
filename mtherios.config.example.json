@@ -1,0 +1,46 @@
+{
+  "host": "127.0.0.1",
+  "port": 5173,
+  "dataRoot": "./data",
+  "vaultRoot": "./data/vaults",
+  "defaultVault": "./data/vaults/default",
+  "databaseUrl": "postgres://mtherios:mtherios@127.0.0.1:5432/mtherios",
+  "qdrantUrl": "http://127.0.0.1:6333",
+  "qdrantCollection": "mtherios_wiki",
+  "ollamaUrl": "http://127.0.0.1:11434",
+  "wikiEmbedProvider": "ollama",
+  "wikiEmbedModel": "nomic-embed-text",
+  "wikiAutoIndexStoryVaults": false,
+  "wikiAutoLintStoryVaults": false,
+  "jobWorker": true,
+  "jobIntervalMs": 5000,
+  "chapterThreshold": 20,
+  "postChapterBuffer": 10,
+  "chaptersPerArc": 5,
+  "memoryEmbeddingProvider": "",
+  "memoryEmbeddingModel": "",
+  "memoryEmbeddingBaseUrl": "",
+  "memoryEmbeddingApiKey": "",
+  "memoryEmbeddingUrl": "",
+  "memoryEmbeddingBatch": 8,
+  "memoryEmbeddingDimensions": 1536,
+  "llm": {
+    "providerType": "openrouter",
+    "apiKeyRef": "env:OPENROUTER_API_KEY",
+    "services": {
+      "narrative": {
+        "model": "z-ai/glm-5",
+        "temperature": 1,
+        "maxTokens": 8192
+      },
+      "classifier": {
+        "model": "x-ai/grok-4.1-fast",
+        "temperature": 0.2,
+        "maxTokens": 4096
+      }
+    }
+  },
+  "llmApiKeys": {
+    "exampleLocalKeyRef": "put-local-secrets-in-ignored-mtherios.config.json-only"
+  }
+}

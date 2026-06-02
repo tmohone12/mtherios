@@ -9,7 +9,7 @@
 
 import type { ToolCall } from '../sdk/generate';
 
-const KNOWN_TOOLS = new Set(['update_world_state', 'search_wiki', 'refresh_plot_momentum']);
+const KNOWN_TOOLS = new Set(['update_world_state', 'search_wiki', 'brief_wiki', 'refresh_plot_momentum']);
 
 const UPDATE_WORLD_STATE_KEYS = new Set([
 	'characters', 'locations', 'items', 'time_delta', 'mood', 'player_reputation',

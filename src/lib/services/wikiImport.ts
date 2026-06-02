@@ -18,11 +18,14 @@ import JSZip from 'jszip';
 import { uuid } from '$lib/utils/uuid';
 import {
 	createStory,
-	createChapter,
-	createLorebookEntry,
-	createAgreement,
+	updateStory,
+	putChapter,
+	putLorebookEntry,
+	putAgreement,
 	bulkPutRumors,
 } from './database';
+import { importStoryBundleToBackend } from '$lib/services/backendImport';
+import type { StoryExportData } from '$lib/services/storySync';
 import type {
 	Story,
 	StoryMode,
@@ -165,6 +168,7 @@ function parseEntry(md: string, storyId: string): Entry | null {
 	// Strip derived sections before treating body as description
 	let description = body;
 	description = stripSection(description, 'Reputation');
+	description = stripSection(description, 'Source Trail');
 	description = stripSection(description, 'GM Notes');
 	// The exporter writes `# <name>` as the first heading; strip it.
 	description = description.replace(/^#\s.+\n+/, '');
@@ -530,11 +534,15 @@ export async function importStoryFromWiki(file: File): Promise<WikiImportResult>
 		compactedLore: null,
 		compactedLoreHistory: null,
 		meters: meters.length > 0 ? meters : null,
+		playerReputation: null,
+		serverStoryId: null,
+		serverVersion: null,
+		syncStatus: 'syncing',
 	};
 	await createStory(story);
 
 	// Lorebook entries — wiki/<type>/*.md
-	let entryCount = 0;
+	const lorebookEntries: Entry[] = [];
 	const entryPaths = Object.keys(zip.files).filter(
 		(p) => p.startsWith('wiki/') && p.endsWith('.md') && !zip.files[p].dir,
 	);
@@ -542,16 +550,11 @@ export async function importStoryFromWiki(file: File): Promise<WikiImportResult>
 		const text = await zip.files[path].async('string');
 		const entry = parseEntry(text, storyId);
 		if (!entry) continue;
-		try {
-			await createLorebookEntry(entry);
-			entryCount++;
-		} catch (e) {
-			console.warn(`[Wiki Import] Failed to write entry ${path}:`, e);
-		}
+		lorebookEntries.push(entry);
 	}
 
 	// Chapters — chapters/*.md
-	let chapterCount = 0;
+	const chapters: Chapter[] = [];
 	const chapterPaths = Object.keys(zip.files).filter(
 		(p) => p.startsWith('chapters/') && p.endsWith('.md') && !zip.files[p].dir,
 	);
@@ -559,16 +562,11 @@ export async function importStoryFromWiki(file: File): Promise<WikiImportResult>
 		const text = await zip.files[path].async('string');
 		const chapter = parseChapter(text, storyId);
 		if (!chapter) continue;
-		try {
-			await createChapter(chapter);
-			chapterCount++;
-		} catch (e) {
-			console.warn(`[Wiki Import] Failed to write chapter ${path}:`, e);
-		}
+		chapters.push(chapter);
 	}
 
 	// Agreements — agreements/<category>/*.md (index.md is the only non-agreement)
-	let agreementCount = 0;
+	const agreements: Agreement[] = [];
 	const agreementPaths = Object.keys(zip.files).filter(
 		(p) =>
 			p.startsWith('agreements/') &&
@@ -580,26 +578,76 @@ export async function importStoryFromWiki(file: File): Promise<WikiImportResult>
 		const text = await zip.files[path].async('string');
 		const agreement = parseAgreement(text, storyId);
 		if (!agreement) continue;
-		try {
-			await createAgreement(agreement);
-			agreementCount++;
-		} catch (e) {
-			console.warn(`[Wiki Import] Failed to write agreement ${path}:`, e);
-		}
+		agreements.push(agreement);
 	}
 
 	// Rumors — rumors.md
-	let rumorCount = 0;
+	let rumors: RumorRecord[] = [];
 	const rumorsFile = zip.file('rumors.md');
 	if (rumorsFile) {
 		const text = await rumorsFile.async('string');
-		const rumors = parseRumorsFile(text, storyId);
+		rumors = parseRumorsFile(text, storyId);
+	}
+
+	const bundle: StoryExportData = {
+		version: 1,
+		exportedAt: now,
+		story,
+		storyEntries: [],
+		characters: [],
+		locations: [],
+		items: [],
+		storyBeats: [],
+		chapters,
+		lorebookEntries,
+		arcs: [],
+		agreements,
+		rumors,
+	};
+
+	try {
+		await importStoryBundleToBackend(bundle, storyId);
+	} catch (error) {
+		console.warn('[Wiki Import] Imported wiki remains local until backend is reachable:', error);
+		await updateStory(storyId, { syncStatus: 'offline' });
+	}
+
+	let entryCount = 0;
+	for (const entry of lorebookEntries) {
 		try {
-			await bulkPutRumors(rumors);
-			rumorCount = rumors.length;
+			await putLorebookEntry(entry);
+			entryCount++;
 		} catch (e) {
-			console.warn('[Wiki Import] Failed to write rumors:', e);
+			console.warn(`[Wiki Import] Failed to write entry ${entry.name}:`, e);
 		}
+	}
+
+	let chapterCount = 0;
+	for (const chapter of chapters) {
+		try {
+			await putChapter(chapter);
+			chapterCount++;
+		} catch (e) {
+			console.warn(`[Wiki Import] Failed to write chapter ${chapter.title ?? chapter.id}:`, e);
+		}
+	}
+
+	let agreementCount = 0;
+	for (const agreement of agreements) {
+		try {
+			await putAgreement(agreement);
+			agreementCount++;
+		} catch (e) {
+			console.warn(`[Wiki Import] Failed to write agreement ${agreement.id}:`, e);
+		}
+	}
+
+	let rumorCount = 0;
+	try {
+		await bulkPutRumors(rumors);
+		rumorCount = rumors.length;
+	} catch (e) {
+		console.warn('[Wiki Import] Failed to write rumors:', e);
 	}
 
 	return {

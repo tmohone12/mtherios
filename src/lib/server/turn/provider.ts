@@ -19,6 +19,43 @@ export interface ServerGenerationOptions {
 	responseFormat?: 'json_object';
 }
 
+export interface ServerGenerationUsage {
+	requestTokens: number | null;
+	responseTokens: number | null;
+	totalTokens: number | null;
+}
+
+export interface ServerGenerationResult {
+	text: string;
+	model: string;
+	endpoint: string;
+	durationMs: number;
+	promptChars: number;
+	responseChars: number;
+	usage: ServerGenerationUsage;
+}
+
+export class ServerGenerationError extends Error {
+	result: Omit<ServerGenerationResult, 'text' | 'responseChars' | 'usage'> & {
+		responseChars?: number;
+		usage?: ServerGenerationUsage;
+		statusCode?: number;
+	};
+
+	constructor(
+		message: string,
+		result: Omit<ServerGenerationResult, 'text' | 'responseChars' | 'usage'> & {
+			responseChars?: number;
+			usage?: ServerGenerationUsage;
+			statusCode?: number;
+		},
+	) {
+		super(message);
+		this.name = 'ServerGenerationError';
+		this.result = result;
+	}
+}
+
 function isAnthropicProvider(profile: ProviderProfile): boolean {
 	return profile.providerType === 'anthropic' || profile.providerType === 'anthropic-proxy';
 }
@@ -65,11 +102,35 @@ function openAiHeaders(profile: ProviderProfile): Record<string, string> {
 	return headers;
 }
 
-export async function generateServerText(options: ServerGenerationOptions): Promise<string> {
+function promptChars(options: ServerGenerationOptions): number {
+	return options.system.length
+		+ options.prompt.length
+		+ (options.messages ?? []).reduce((total, message) => total + message.content.length, 0);
+}
+
+function usageFromResponse(data: unknown, useAnthropic: boolean): ServerGenerationUsage {
+	const record = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+	const usage = record.usage && typeof record.usage === 'object' ? record.usage as Record<string, unknown> : {};
+	const requestTokens = useAnthropic ? usage.input_tokens : usage.prompt_tokens;
+	const responseTokens = useAnthropic ? usage.output_tokens : usage.completion_tokens;
+	const totalTokens = typeof usage.total_tokens === 'number'
+		? usage.total_tokens
+		: typeof requestTokens === 'number' && typeof responseTokens === 'number'
+			? requestTokens + responseTokens
+			: null;
+	return {
+		requestTokens: typeof requestTokens === 'number' ? requestTokens : null,
+		responseTokens: typeof responseTokens === 'number' ? responseTokens : null,
+		totalTokens: typeof totalTokens === 'number' ? totalTokens : null,
+	};
+}
+
+export async function generateServerTextWithMetrics(options: ServerGenerationOptions): Promise<ServerGenerationResult> {
 	if (requiresApiKey(options.profile) && !options.profile.apiKey?.trim()) {
 		throw new Error('Server turn generation requires an API profile with an API key.');
 	}
 
+	const startTime = Date.now();
 	const model = fallbackModelFor(options.profile, options.model);
 	const temperature = options.temperature ?? 1;
 	const maxTokens = options.maxTokens ?? 4096;
@@ -83,6 +144,7 @@ export async function generateServerText(options: ServerGenerationOptions): Prom
 	const endpoint = useAnthropic
 		? `${baseUrl || 'https://api.anthropic.com'}/v1/messages`
 		: `${baseUrl}/chat/completions`;
+	const inputChars = promptChars(options);
 
 	const body = useAnthropic
 		? {
@@ -107,26 +169,54 @@ export async function generateServerText(options: ServerGenerationOptions): Prom
 			...(options.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}),
 		};
 
-	const response = await fetch(endpoint, {
-		method: 'POST',
-		headers: useAnthropic
-			? anthropicHeaders(options.profile)
-			: useGoogleAgentPlatform
-				? { 'Content-Type': 'application/json', ...await getGoogleAgentPlatformHeaders() }
-				: openAiHeaders(options.profile),
-		body: JSON.stringify(body),
-	});
+	try {
+		const response = await fetch(endpoint, {
+			method: 'POST',
+			headers: useAnthropic
+				? anthropicHeaders(options.profile)
+				: useGoogleAgentPlatform
+					? { 'Content-Type': 'application/json', ...await getGoogleAgentPlatformHeaders() }
+					: openAiHeaders(options.profile),
+			body: JSON.stringify(body),
+		});
 
-	if (!response.ok) {
-		const text = await response.text().catch(() => '');
-		throw new Error(`Server LLM request failed (${response.status}): ${text || response.statusText}`);
-	}
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw new ServerGenerationError(`Server LLM request failed (${response.status}): ${text || response.statusText}`, {
+				model,
+				endpoint,
+				durationMs: Date.now() - startTime,
+				promptChars: inputChars,
+				statusCode: response.status,
+			});
+		}
 
-	const data = await response.json();
-	if (useAnthropic) {
-		return (data.content ?? []).map((block: { text?: string }) => block.text ?? '').join('').trim();
+		const data = await response.json();
+		const text = useAnthropic
+			? (data.content ?? []).map((block: { text?: string }) => block.text ?? '').join('').trim()
+			: String(data.choices?.[0]?.message?.content ?? '').trim();
+		return {
+			text,
+			model,
+			endpoint,
+			durationMs: Date.now() - startTime,
+			promptChars: inputChars,
+			responseChars: text.length,
+			usage: usageFromResponse(data, useAnthropic),
+		};
+	} catch (error) {
+		if (error instanceof ServerGenerationError) throw error;
+		throw new ServerGenerationError(error instanceof Error ? error.message : String(error), {
+			model,
+			endpoint,
+			durationMs: Date.now() - startTime,
+			promptChars: inputChars,
+		});
 	}
-	return String(data.choices?.[0]?.message?.content ?? '').trim();
+}
+
+export async function generateServerText(options: ServerGenerationOptions): Promise<string> {
+	return (await generateServerTextWithMetrics(options)).text;
 }
 
 export function parseJsonFromGeneratedText(raw: string): unknown {

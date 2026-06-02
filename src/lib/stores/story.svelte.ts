@@ -5,22 +5,30 @@
 
 import {
 	getStory, countStoryEntries, getRecentStoryEntries, getStoryEntriesBeforePosition, getLastStoryEntryPosition, getCharacters, getLocations, getItems,
-	getLorebookEntries, createStoryEntry, putStoryEntry, deleteStoryEntry, deleteStoryEntriesFromPosition, createCharacter, createLocation, createItem,
-	updateStory, updateCharacter, updateLocation, updateItem,
-	updateLorebookEntry,
+	getLorebookEntries, createStoryEntry, putStoryEntry, deleteStoryEntry, deleteStoryEntriesFromPosition,
+	updateStory,
+	putLorebookEntry, putCharacter, putLocation, putItem,
 	getEntryRelationships, getConversationMemory, getWorldEvents,
 	getChapters, getStoryBeats, getArcs,
 	getEmbeddedImages, getEmbeddedImagesForEntryIds, createEmbeddedImage, deleteEmbeddedImage,
-	createAgreement, updateAgreement, getAgreements,
-	getFactionActions, getRumors,
+	createAgreement, updateAgreement, getAgreements, putAgreement,
+	getFactionActions, getRumors, putConversationMemory, bulkPutFactionActions, bulkPutRumors, bulkPutSchemes,
 	getSchemes, getStoryThreads,
-	createWorldEvent,
+	putChapter, putArc, putSaga, putWorldEvent, putStoryThread,
+	getSyncOpsForStory, updateSyncOp, deleteSyncOp,
 } from '$lib/services/database';
+import {
+	patchCanonicalLorebookEntry,
+	saveCanonicalCharacter,
+	saveCanonicalItem,
+	saveCanonicalLocation,
+	saveCanonicalWorldEvent,
+} from '$lib/services/canonicalWrites';
 import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
 import { normalizeRelation } from '$lib/services/ai/tools/helpers';
 import { buildEconomyScaleBlock } from '$lib/services/ai/context/economyScale';
-import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, ConceptEntryState, EventEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Chapter, StoryBeat, Scheme, StoryThread, ProceduralRule } from '$lib/types';
+import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, ConceptEntryState, EventEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Saga, Chapter, StoryBeat, Scheme, StoryThread, ProceduralRule } from '$lib/types';
 import { injectSchemes } from '$lib/services/ai/scheme/SchemeService';
 import type { WorldSimulationResult, PlotMomentum } from '$lib/services/ai/sdk/schemas/worldsim';
 import type { SeasonEffect } from '$lib/services/ai/generation/WorldSimulationService';
@@ -106,9 +114,10 @@ import {
 	getDynamicPromptBudget,
 	type PromptSection,
 } from '$lib/services/ai/context/ContextBudgetService';
-import { processBackendTurn, pushPendingBackendOps, queueBackendSyncOp, retrieveBackendMemory } from '$lib/services/backendMemory';
+import { processBackendTurn, pullBackendChanges, pushPendingBackendOps, queueBackendSyncOp, retrieveBackendMemory } from '$lib/services/backendMemory';
+import { cacheBackendStoryFromBootstrap, fetchBackendStoryBootstrap, fetchBackendStoryEntriesPage } from '$lib/services/serverStories';
 import { settings } from '$lib/stores/settings.svelte';
-import type { TurnRequest, TurnResponse } from '$lib/contracts/memory';
+import type { BootstrapResponse, SyncChange, TurnRequest, TurnResponse } from '$lib/contracts/memory';
 
 /**
  * Strip leading type-prefixes (e.g. "Lore: ", "Item: ", "House: ", "General Lore: ")
@@ -155,6 +164,163 @@ function compactMemoryText(text: string, maxChars = 360): string {
 	const clean = (text ?? '').replace(/\s+/g, ' ').trim();
 	if (clean.length <= maxChars) return clean;
 	return clean.slice(0, Math.max(0, maxChars - 3)).trimEnd() + '...';
+}
+
+type JsonRecord = Record<string, unknown>;
+
+const ENTRY_TYPES = new Set(['character', 'location', 'item', 'faction', 'concept', 'event']);
+const ENTRY_CREATORS = new Set(['user', 'ai', 'import', 'forge']);
+const INJECTION_MODES = new Set(['always', 'keyword', 'never']);
+const AGREEMENT_CATEGORIES = new Set(['treaty', 'pact', 'alliance', 'oath', 'debt', 'promise', 'marriage', 'bond', 'contract', 'vassalage', 'bargain-with-entity']);
+const AGREEMENT_STATUSES = new Set(['active', 'broken', 'fulfilled', 'expired', 'contested']);
+const AGREEMENT_SECRECY = new Set(['public', 'known', 'secret']);
+const THREAD_STATUSES = new Set(['open', 'imminent', 'stalled', 'closed', 'abandoned']);
+const THREAD_SIGNIFICANCE = new Set(['minor', 'moderate', 'major', 'critical']);
+const CONVERSATION_IMPORTANCE = new Set(['trivial', 'minor', 'significant', 'critical']);
+const FACTION_ACTION_URGENCY = new Set(['low', 'medium', 'high', 'critical']);
+const FACTION_ACTION_STATUS = new Set(['active', 'resolved', 'superseded']);
+const RUMOR_SPREAD_RADIUS = new Set(['local', 'regional', 'continental']);
+const RUMOR_STATUS = new Set(['spreading', 'mature', 'stale', 'debunked']);
+const SCHEME_OWNER_TYPES = new Set(['faction', 'character', 'player']);
+const SCHEME_STATUSES = new Set(['incubating', 'active', 'climaxing', 'resolved', 'foiled', 'abandoned']);
+const SCHEME_SECRECY = new Set(['secret', 'rumored', 'known']);
+const SCHEME_STAGE_CONDITIONS = new Set(['time', 'player-location', 'player-act', 'prerequisite']);
+const WORLD_EVENT_TYPES = new Set(['death', 'hostility_change', 'territory_change', 'alliance_formed', 'alliance_broken', 'item_destroyed', 'location_blocked', 'secret_revealed', 'custom']);
+const WORLD_EVENT_SEVERITY = new Set(['minor', 'moderate', 'major', 'catastrophic']);
+const CONSEQUENCE_STATUSES = new Set(['pending', 'applied', 'expired', 'reversed']);
+const CONSEQUENCE_EFFECT_TYPES = new Set(['relationship_change', 'faction_status_change', 'location_blocked', 'location_unblocked', 'npc_status_change', 'rumor_spread', 'custom']);
+
+function asRecord(value: unknown): JsonRecord {
+	return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function asNullableString(value: unknown): string | null {
+	return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function asBoolean(value: unknown, fallback = false): boolean {
+	return typeof value === 'boolean' ? value : fallback;
+}
+
+function asStringArray(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function asArray<T = unknown>(value: unknown): T[] {
+	return Array.isArray(value) ? value as T[] : [];
+}
+
+function asTime(value: unknown, fallback = Date.now()): number {
+	if (typeof value === 'number' && Number.isFinite(value)) return value;
+	if (typeof value === 'string') {
+		const parsed = Date.parse(value);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return fallback;
+}
+
+function enumValue<T extends string>(allowed: Set<string>, value: unknown, fallback: T): T {
+	const raw = asString(value);
+	return allowed.has(raw) ? raw as T : fallback;
+}
+
+function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
+	return items.some((existing) => existing.id === item.id)
+		? items.map((existing) => existing.id === item.id ? item : existing)
+		: [...items, item];
+}
+
+function removeById<T extends { id: string }>(items: T[], id: string): T[] {
+	return items.filter((item) => item.id !== id);
+}
+
+function legacyRecord(row: JsonRecord): JsonRecord {
+	return asRecord(asRecord(row.metadata).legacyRecord);
+}
+
+function unprefixId(value: string, prefix: string): string {
+	return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+function entityType(value: unknown): Entry['type'] {
+	return typeof value === 'string' && ENTRY_TYPES.has(value) ? value as Entry['type'] : 'concept';
+}
+
+function entityStatus(value: unknown): Character['status'] {
+	return value === 'inactive' || value === 'deceased' ? value : 'active';
+}
+
+function defaultEntryState(type: Entry['type'], state: JsonRecord): Entry['state'] {
+	switch (type) {
+		case 'character':
+			return {
+				type,
+				isPresent: asBoolean(state.isPresent),
+				lastSeenLocation: asNullableString(state.lastSeenLocation),
+				currentDisposition: asNullableString(state.currentDisposition),
+				relationship: {
+					level: asNumber(asRecord(state.relationship).level, 0),
+					status: asString(asRecord(state.relationship).status, 'unknown'),
+					history: Array.isArray(asRecord(state.relationship).history) ? asRecord(state.relationship).history as CharacterEntryState['relationship']['history'] : [],
+				},
+				knownFacts: asStringArray(state.knownFacts),
+				revealedSecrets: asStringArray(state.revealedSecrets),
+				pressures: asStringArray(state.pressures),
+			};
+		case 'location':
+			return {
+				type,
+				isCurrentLocation: asBoolean(state.isCurrentLocation),
+				visitCount: asNumber(state.visitCount, 0),
+				changes: Array.isArray(state.changes) ? state.changes as LocationEntryState['changes'] : [],
+				presentCharacters: asStringArray(state.presentCharacters),
+				presentItems: asStringArray(state.presentItems),
+				connections: Array.isArray(state.connections) ? state.connections as LocationEntryState['connections'] : [],
+				region: asNullableString(state.region),
+				terrain: asNullableString(state.terrain),
+			};
+		case 'item':
+			return {
+				type,
+				inInventory: asBoolean(state.inInventory),
+				currentLocation: asNullableString(state.currentLocation),
+				condition: asNullableString(state.condition),
+				uses: Array.isArray(state.uses) ? state.uses as ItemEntryState['uses'] : [],
+			};
+		case 'faction':
+			return {
+				type,
+				playerStanding: asNumber(state.playerStanding, 0),
+				status: state.status === 'allied' || state.status === 'neutral' || state.status === 'hostile' || state.status === 'unknown' ? state.status : 'unknown',
+				knownMembers: asStringArray(state.knownMembers),
+				goals: Array.isArray(state.goals) ? state.goals as FactionEntryState['goals'] : [],
+				resources: asRecord(state.resources) as unknown as FactionEntryState['resources'],
+				territory: asStringArray(state.territory ?? state.territories),
+			};
+		case 'event':
+			return {
+				type,
+				occurred: asBoolean(state.occurred),
+				occurredAt: typeof state.occurredAt === 'number' ? state.occurredAt : null,
+				witnesses: asStringArray(state.witnesses),
+				consequences: asStringArray(state.consequences),
+			};
+		default:
+			return {
+				type: 'concept',
+				revealed: asBoolean(state.revealed),
+				comprehensionLevel: state.comprehensionLevel === 'basic' || state.comprehensionLevel === 'intermediate' || state.comprehensionLevel === 'advanced' ? state.comprehensionLevel : 'unknown',
+				relatedEntries: asStringArray(state.relatedEntries),
+			};
+	}
 }
 
 function retrieveChaptersForAction(
@@ -286,24 +452,34 @@ class StoryStore {
 		this.hydratingWorld = false;
 		this.worldHydrationError = null;
 		try {
-			const s = await getStory(storyId);
-			if (!s) throw new Error('Story not found');
+			let s = await getStory(storyId);
+			if (!s) {
+				try {
+					const bootstrap = await fetchBackendStoryBootstrap(storyId);
+					s = await cacheBackendStoryFromBootstrap(bootstrap);
+					if (this._loadGeneration !== generation) return;
+					await this.applyBackendBootstrap(s, bootstrap, generation);
+					return;
+				} catch {
+					throw new Error('Story not found');
+				}
+			}
+
+			if (s.serverStoryId) {
+				try {
+					await pushPendingBackendOps(s);
+					const bootstrap = await fetchBackendStoryBootstrap(s.serverStoryId);
+					const cachedStory = await cacheBackendStoryFromBootstrap(bootstrap);
+					if (this._loadGeneration !== generation) return;
+					await this.applyBackendBootstrap(cachedStory, bootstrap, generation);
+					return;
+				} catch (error) {
+					console.warn('[Story] backend bootstrap unavailable; falling back to local cache:', error);
+				}
+			}
+
 			this.currentStory = s;
-			this.entries = [];
-			this.entryCount = 0;
-			this.oldestLoadedEntryPosition = null;
-			this.images = [];
-			this.characters = [];
-			this.locations = [];
-			this.items = [];
-			this.lorebookEntries = [];
-			this.entryRelationships = [];
-			this.conversationMemories = [];
-			this.worldEvents = [];
-			this.agreements = [];
-			this.factionActions = [];
-			this.rumors = [];
-			this.schemes = [];
+			this.resetLoadedCollections();
 			const branchId = s.currentBranchId ?? null;
 			const [entryCount, entries, characters, locations, items] = await Promise.all([
 				countStoryEntries(storyId, branchId),
@@ -330,8 +506,660 @@ class StoryStore {
 		}
 	}
 
+	private resetLoadedCollections(): void {
+		this.entries = [];
+		this.entryCount = 0;
+		this.oldestLoadedEntryPosition = null;
+		this.images = [];
+		this.characters = [];
+		this.locations = [];
+		this.items = [];
+		this.lorebookEntries = [];
+		this.entryRelationships = [];
+		this.conversationMemories = [];
+		this.worldEvents = [];
+		this.agreements = [];
+		this.factionActions = [];
+		this.rumors = [];
+		this.schemes = [];
+		this.lastWorldSimResult = null;
+		this.lastTierUsage = null;
+		this.lastPromptSectionUsage = null;
+		this.lastContextTotal = 0;
+		this.chatHistoryFloor = 0;
+	}
+
 	private isCurrentLoad(storyId: string, generation: number): boolean {
 		return this._loadGeneration === generation && this.currentStory?.id === storyId;
+	}
+
+	private async applyBackendBootstrap(localStory: Story, bootstrap: BootstrapResponse, generation: number): Promise<void> {
+		const serverStoryId = asString(bootstrap.story.id, localStory.serverStoryId ?? localStory.id);
+		this.currentStory = {
+			...localStory,
+			serverStoryId,
+			serverVersion: bootstrap.serverVersion,
+			syncStatus: 'synced',
+		};
+		this.resetLoadedCollections();
+		this.hydratingWorld = true;
+		this.worldHydrationError = null;
+
+		try {
+			const entries = bootstrap.entries
+				.map((row) => this.serverEntryToLocal(row))
+				.filter((entry): entry is StoryEntry => Boolean(entry));
+			for (const entry of entries) await putStoryEntry(entry);
+			if (!this.isCurrentLoad(localStory.id, generation)) return;
+
+			this.entries = entries.sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
+			this.entryCount = Math.max(bootstrap.entryCount, this.entries.length);
+			this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+
+			const storyRow = asRecord(bootstrap.story);
+			const currentLocationId = asNullableString(storyRow.currentLocationId);
+			const entityRows = bootstrap.entities.map(asRecord);
+			this.lorebookEntries = entityRows
+				.map((row) => this.serverEntityToLorebookEntry(row))
+				.filter((entry): entry is Entry => Boolean(entry));
+			this.characters = entityRows
+				.map((row) => this.serverEntityToCharacter(row))
+				.filter((character): character is Character => Boolean(character));
+			this.locations = entityRows
+				.map((row) => this.serverEntityToLocation(row, currentLocationId))
+				.filter((location): location is Location => Boolean(location));
+			this.items = entityRows
+				.map((row) => this.serverEntityToItem(row))
+				.filter((item): item is Item => Boolean(item));
+			this.agreements = bootstrap.agreements
+				.map((row) => this.serverAgreementToLocal(row))
+				.filter((agreement): agreement is Agreement => Boolean(agreement));
+			this.worldEvents = bootstrap.recentEvents.map((row) => this.serverEventToLocal(row));
+			const memoryRows = bootstrap.memoryNodes.map((row) => asRecord(row));
+			const beliefRows = bootstrap.npcBeliefs.map((row) => asRecord(row));
+			const conversationById = new Map<string, ConversationMemoryEntry>();
+			for (const memory of memoryRows
+				.map((row) => this.serverMemoryNodeToConversation(row))
+				.filter((memory): memory is ConversationMemoryEntry => Boolean(memory))) {
+				conversationById.set(memory.id, memory);
+			}
+			for (const memory of beliefRows
+				.map((row) => this.serverNpcBeliefToConversation(row))
+				.filter((memory): memory is ConversationMemoryEntry => Boolean(memory))) {
+				conversationById.set(memory.id, memory);
+			}
+			this.conversationMemories = [...conversationById.values()].sort((a, b) => a.createdAt - b.createdAt);
+			this.factionActions = memoryRows
+				.map((row) => this.serverMemoryNodeToFactionAction(row))
+				.filter((action): action is FactionActionRecord => Boolean(action))
+				.sort((a, b) => a.createdAt - b.createdAt);
+			this.rumors = memoryRows
+				.map((row) => this.serverMemoryNodeToRumor(row))
+				.filter((rumor): rumor is RumorRecord => Boolean(rumor))
+				.sort((a, b) => a.createdAt - b.createdAt);
+			this.schemes = memoryRows
+				.map((row) => this.serverMemoryNodeToScheme(row))
+				.filter((scheme): scheme is Scheme => Boolean(scheme))
+				.sort((a, b) => a.createdAt - b.createdAt);
+			this.entryRelationships = [];
+			await Promise.all([
+				...this.lorebookEntries.map((entry) => putLorebookEntry(entry)),
+				...this.characters.map((character) => putCharacter(character)),
+				...this.locations.map((location) => putLocation(location)),
+				...this.items.map((item) => putItem(item)),
+				...this.agreements.map((agreement) => putAgreement(agreement)),
+				...this.worldEvents.map((event) => putWorldEvent(event)),
+				...this.conversationMemories.map((memory) => putConversationMemory(memory)),
+				bulkPutFactionActions(this.factionActions),
+				bulkPutRumors(this.rumors),
+				bulkPutSchemes(this.schemes),
+			]);
+
+			const localThreads = bootstrap.threads
+				.map((row) => this.serverThreadToLocal(row))
+				.filter((thread): thread is StoryThread => Boolean(thread));
+			for (const thread of localThreads) await putStoryThread(thread);
+
+			const localChapters = bootstrap.chapters
+				.map((row) => this.serverChapterToLocal(asRecord(row)))
+				.filter((chapter): chapter is Chapter => Boolean(chapter));
+			for (const chapter of localChapters) await putChapter(chapter);
+
+			const localArcs = bootstrap.arcs
+				.map((row) => this.serverArcToLocal(asRecord(row)))
+				.filter((arc): arc is Arc => Boolean(arc));
+			for (const arc of localArcs) await putArc(arc);
+
+			const localSagas = bootstrap.sagas
+				.map((row) => this.serverSagaToLocal(asRecord(row)))
+				.filter((saga): saga is Saga => Boolean(saga));
+			for (const saga of localSagas) await putSaga(saga);
+
+			await updateStory(localStory.id, {
+				serverStoryId,
+				serverVersion: bootstrap.serverVersion,
+				syncStatus: 'synced',
+			});
+			if (!this.isCurrentLoad(localStory.id, generation)) return;
+
+			this.loadImagesForEntries(localStory.id, entries.map((entry) => entry.id), generation)
+				.catch(e => console.warn('[Story] visible image load failed:', e));
+			globalThis.setTimeout(() => {
+				if (!this.isCurrentLoad(localStory.id, generation)) return;
+				this.preEmbedLorebook().catch(e => console.warn('[Story] preEmbedLorebook failed:', e));
+			}, 500);
+		} catch (error) {
+			if (this.isCurrentLoad(localStory.id, generation)) {
+				this.worldHydrationError = error instanceof Error ? error.message : String(error);
+				console.warn('[Story] backend bootstrap hydration failed:', error);
+			}
+		} finally {
+			if (this.isCurrentLoad(localStory.id, generation)) this.hydratingWorld = false;
+		}
+	}
+
+	private serverEntityToLorebookEntry(row: JsonRecord): Entry | null {
+		if (!this.currentStory) return null;
+		const id = asString(row.id);
+		const name = asString(row.name).trim();
+		if (!id || !name) return null;
+		const type = entityType(row.type);
+		const state = asRecord(row.state);
+		const metadata = asRecord(row.metadata);
+		const sourceEntryIds = asStringArray(row.sourceEntryIds);
+		const localInjection = asRecord(metadata.localInjection);
+		const injectionMode = INJECTION_MODES.has(asString(localInjection.mode)) ? asString(localInjection.mode) as Entry['injection']['mode'] : 'keyword';
+		const injectionKeywords = asStringArray(localInjection.keywords);
+		const createdBy = ENTRY_CREATORS.has(asString(metadata.localCreatedBy)) ? asString(metadata.localCreatedBy) as Entry['createdBy'] : metadata.originalTable === 'lorebookEntries' ? 'import' : 'ai';
+		return {
+			id,
+			storyId: this.currentStory.id,
+			name,
+			type,
+			description: asString(row.description),
+			hiddenInfo: asNullableString(state.hiddenInfo),
+			aliases: asStringArray(metadata.localAliases),
+			state: defaultEntryState(type, state),
+			adventureState: metadata.localAdventureState && typeof metadata.localAdventureState === 'object' && !Array.isArray(metadata.localAdventureState)
+				? metadata.localAdventureState as Entry['adventureState']
+				: null,
+			creativeState: metadata.localCreativeState && typeof metadata.localCreativeState === 'object' && !Array.isArray(metadata.localCreativeState)
+				? metadata.localCreativeState as Entry['creativeState']
+				: null,
+			injection: {
+				mode: injectionMode,
+				keywords: injectionKeywords.length > 0
+					? injectionKeywords
+					: [...new Set([name, ...name.split(/\s+/)].map(part => part.trim()).filter(part => part.length > 2))].slice(0, 8),
+				priority: asNumber(localInjection.priority, metadata.originalTable === 'lorebookEntries' ? 100 : 50),
+			},
+			firstMentioned: sourceEntryIds[0] ?? null,
+			lastMentioned: sourceEntryIds[sourceEntryIds.length - 1] ?? null,
+			mentionCount: asNumber(metadata.localMentionCount, sourceEntryIds.length),
+			createdBy,
+			createdAt: asTime(row.createdAt),
+			updatedAt: asTime(row.updatedAt),
+			loreManagementBlacklisted: asBoolean(metadata.loreManagementBlacklisted),
+			branchId: null,
+		};
+	}
+
+	private serverEntityToCharacter(row: JsonRecord): Character | null {
+		if (!this.currentStory || row.type !== 'character') return null;
+		const id = asString(row.id);
+		const name = asString(row.name).trim();
+		if (!id || !name) return null;
+		const state = asRecord(row.state);
+		const relationship = asRecord(state.relationship);
+		return {
+			id,
+			storyId: this.currentStory.id,
+			name,
+			description: asNullableString(row.description),
+			relationship: asNullableString(state.relationship) ?? asNullableString(relationship.status) ?? asNullableString(state.currentDisposition),
+			traits: asStringArray(state.traits),
+			visualDescriptors: asRecord(state.visualDescriptors) as Character['visualDescriptors'],
+			portrait: asNullableString(state.portrait),
+			status: entityStatus(row.status),
+			metadata: asRecord(row.metadata),
+			branchId: null,
+		};
+	}
+
+	private serverEntityToLocation(row: JsonRecord, currentLocationId: string | null): Location | null {
+		if (!this.currentStory || row.type !== 'location') return null;
+		const id = asString(row.id);
+		const name = asString(row.name).trim();
+		if (!id || !name) return null;
+		const state = asRecord(row.state);
+		const legacyConnections = asStringArray(state.legacyConnections);
+		const current = currentLocationId === id || asBoolean(state.isCurrentLocation);
+		return {
+			id,
+			storyId: this.currentStory.id,
+			name,
+			description: asNullableString(row.description),
+			visited: current || asNumber(state.visitCount, 0) > 0 || asBoolean(state.visited),
+			current,
+			connections: legacyConnections.length > 0 ? legacyConnections : asStringArray(state.connections),
+			metadata: asRecord(row.metadata),
+			branchId: null,
+		};
+	}
+
+	private serverEntityToItem(row: JsonRecord): Item | null {
+		if (!this.currentStory || row.type !== 'item') return null;
+		const id = asString(row.id);
+		const name = asString(row.name).trim();
+		if (!id || !name) return null;
+		const state = asRecord(row.state);
+		return {
+			id,
+			storyId: this.currentStory.id,
+			name,
+			description: asNullableString(row.description),
+			quantity: Math.max(1, asNumber(state.quantity, 1)),
+			equipped: asBoolean(state.equipped) || asBoolean(state.inInventory),
+			location: asString(state.currentLocation, asBoolean(state.inInventory) ? 'inventory' : ''),
+			metadata: asRecord(row.metadata),
+			branchId: null,
+		};
+	}
+
+	private serverAgreementToLocal(row: JsonRecord): Agreement | null {
+		if (!this.currentStory) return null;
+		const id = asString(row.id);
+		const terms = asString(row.terms).trim();
+		if (!id || !terms) return null;
+		const category = AGREEMENT_CATEGORIES.has(asString(row.category)) ? asString(row.category) as Agreement['category'] : 'pact';
+		const status = AGREEMENT_STATUSES.has(asString(row.status)) ? asString(row.status) as Agreement['status'] : 'active';
+		const secrecy = AGREEMENT_SECRECY.has(asString(row.secrecy)) ? asString(row.secrecy) as Agreement['secrecy'] : 'known';
+		return {
+			id,
+			storyId: this.currentStory.id,
+			parties: asStringArray(row.parties),
+			category,
+			terms,
+			status,
+			secrecy,
+			createdChapterNumber: null,
+			resolvedChapterNumber: null,
+			consequences: asStringArray(row.consequences),
+			metadata: asRecord(row.metadata),
+			createdAt: asTime(row.createdAt),
+			updatedAt: asTime(row.updatedAt),
+		};
+	}
+
+	private serverThreadToLocal(row: JsonRecord): StoryThread | null {
+		if (!this.currentStory) return null;
+		const id = asString(row.id);
+		const description = asString(row.description).trim();
+		if (!id || !description) return null;
+		const status = THREAD_STATUSES.has(asString(row.status)) ? asString(row.status) as StoryThread['status'] : 'open';
+		const significance = THREAD_SIGNIFICANCE.has(asString(row.significance)) ? asString(row.significance) as StoryThread['significance'] : 'moderate';
+		const sourceEventIds = asStringArray(row.sourceEventIds);
+		return {
+			id,
+			storyId: this.currentStory.id,
+			description,
+			status,
+			significance,
+			sourceArcId: null,
+			sourceChapterId: sourceEventIds[0] ?? null,
+			createdAt: asTime(row.createdAt),
+			updatedAt: asTime(row.updatedAt),
+			closedAt: row.closedAt ? asTime(row.closedAt) : null,
+			closureReason: asNullableString(row.closureReason),
+			relatedFactionIds: asStringArray(row.relatedFactionIds),
+			relatedCharacterNames: asStringArray(row.relatedEntityIds),
+		};
+	}
+
+	private serverChapterToLocal(row: JsonRecord): Chapter | null {
+		if (!this.currentStory) return null;
+		const id = asString(row.id);
+		if (!id) return null;
+		const metadata = asRecord(row.metadata);
+		const sourceEntryIds = asStringArray(row.sourceEntryIds);
+		return {
+			id,
+			storyId: this.currentStory.id,
+			number: asNumber(row.number, 0),
+			title: asNullableString(row.title),
+			startEntryId: sourceEntryIds[0] ?? asString(row.startEntryId),
+			endEntryId: sourceEntryIds[sourceEntryIds.length - 1] ?? asString(row.endEntryId),
+			entryCount: asNumber(metadata.entryCount, sourceEntryIds.length),
+			summary: asString(row.sceneOutcome, asString(row.summary)).trim(),
+			startTime: null,
+			endTime: null,
+			keywords: asStringArray(metadata.legacyKeywords ?? row.keywords),
+			characters: asStringArray(metadata.legacyCharacters ?? row.characters),
+			locations: asStringArray(metadata.legacyLocations ?? row.locations),
+			plotThreads: asStringArray(row.openThreads ?? metadata.openThreads),
+			emotionalTone: asNullableString(metadata.emotionalTone ?? row.emotionalTone),
+			branchId: asNullableString(row.branchId ?? metadata.branchId),
+			pinned: asBoolean(metadata.pinned),
+			createdAt: asTime(row.createdAt),
+		};
+	}
+
+	private serverArcToLocal(row: JsonRecord): Arc | null {
+		if (!this.currentStory) return null;
+		const id = asString(row.id);
+		if (!id) return null;
+		const metadata = asRecord(row.metadata);
+		const arcNumber = asNumber(row.number ?? row.arcNumber, 1);
+		const openThreadIds = asStringArray(row.openThreadIds ?? row.threadIds);
+		const characterArcs = Array.isArray(metadata.characterArcs)
+			? metadata.characterArcs
+				.map(asRecord)
+				.map((item) => ({
+					name: asString(item.name).trim(),
+					development: asString(item.development).trim(),
+				}))
+				.filter((item) => item.name)
+			: [];
+		return {
+			id,
+			storyId: this.currentStory.id,
+			arcNumber,
+			title: asString(row.title, `Arc ${arcNumber}`),
+			summary: asString(row.summary).trim(),
+			keyPlotPoints: asStringArray(metadata.keyPlotPoints ?? row.keyPlotPoints),
+			characterArcs,
+			unresolvedThreads: asStringArray(metadata.unresolvedThreads ?? openThreadIds),
+			threadIds: openThreadIds,
+			resolvedThreadIds: asStringArray(metadata.resolvedThreadIds),
+			emotionalProgression: asString(metadata.emotionalProgression ?? row.emotionalProgression),
+			chapterIds: asStringArray(row.chapterIds),
+			chapterRange: asString(metadata.legacyRange, String(arcNumber)),
+			branchId: asNullableString(row.branchId ?? metadata.branchId),
+			createdAt: asTime(row.createdAt),
+		};
+	}
+
+	private serverSagaToLocal(row: JsonRecord): Saga | null {
+		if (!this.currentStory) return null;
+		const id = asString(row.id);
+		if (!id) return null;
+		const metadata = asRecord(row.metadata);
+		const sagaNumber = asNumber(row.number ?? row.sagaNumber, 1);
+		return {
+			id,
+			storyId: this.currentStory.id,
+			sagaNumber,
+			title: asString(row.title, `Saga ${sagaNumber}`),
+			summary: asString(row.summary).trim(),
+			arcIds: asStringArray(row.arcIds),
+			arcRange: asString(row.arcRange ?? metadata.legacyRange, `Arcs ${sagaNumber}`),
+			keyFactionShifts: asStringArray(row.keyFactionShifts),
+			majorPowerChanges: asStringArray(row.majorPowerChanges),
+			lingeringThreads: asStringArray(row.lingeringThreads),
+			overallTone: asString(row.overallTone),
+			branchId: asNullableString(row.branchId ?? metadata.branchId),
+			createdAt: asTime(row.createdAt),
+		};
+	}
+
+	private serverEventToLocal(row: BootstrapResponse['recentEvents'][number]): WorldEvent {
+		const metadata = asRecord(row.metadata);
+		const legacy = asRecord(metadata.legacyRecord);
+		const legacyType = asString(legacy.type);
+		const type = WORLD_EVENT_TYPES.has(legacyType)
+			? legacyType as WorldEvent['type']
+			: row.type === 'death'
+			? 'death'
+			: row.type === 'relationship_shift'
+				? 'hostility_change'
+				: row.type === 'faction_move'
+					? 'territory_change'
+					: row.type === 'reveal'
+						? 'secret_revealed'
+						: 'custom';
+		const createdAt = asTime(row.createdAt);
+		return {
+			id: row.id,
+			storyId: this.currentStory?.id ?? row.storyId,
+			name: asString(legacy.name, row.title),
+			description: asString(legacy.description, row.body),
+			triggerEntryId: asString(legacy.triggerEntryId, row.sourceEntryIds[0] ?? ''),
+			triggerPosition: asNumber(legacy.triggerPosition, asNumber(metadata.triggerPosition, 0)),
+			sourceEntityId: asNullableString(legacy.sourceEntityId) ?? row.actorEntityIds[0] ?? null,
+			type,
+			severity: enumValue(WORLD_EVENT_SEVERITY, legacy.severity ?? metadata.severity, 'moderate'),
+			consequences: asArray<JsonRecord>(legacy.consequences).map((consequence) => this.serverConsequenceToLocal(consequence)),
+			appliedAt: legacy.appliedAt == null ? createdAt : asTime(legacy.appliedAt, createdAt),
+			createdAt: asTime(legacy.createdAt, createdAt),
+		};
+	}
+
+	private serverConsequenceToLocal(row: JsonRecord): WorldEvent['consequences'][number] {
+		return {
+			id: asString(row.id, uuid()),
+			description: asString(row.description),
+			status: enumValue(CONSEQUENCE_STATUSES, row.status, 'pending'),
+			targetEntityId: asNullableString(row.targetEntityId),
+			targetEntityName: asString(row.targetEntityName),
+			effectType: enumValue(CONSEQUENCE_EFFECT_TYPES, row.effectType, 'custom'),
+			effectPayload: asRecord(row.effectPayload),
+			delay: asNumber(row.delay, 0),
+			appliedAt: row.appliedAt == null ? null : asTime(row.appliedAt),
+		};
+	}
+
+	private serverMemoryNodeToConversation(row: JsonRecord): ConversationMemoryEntry | null {
+		const metadata = asRecord(row.metadata);
+		if (asString(metadata.sourceType) !== 'conversation_memory_import') return null;
+		const legacy = legacyRecord(row);
+		const nodeId = asString(row.id);
+		const id = asString(legacy.id) || unprefixId(nodeId, 'mem_conversation_');
+		const npcEntryId = asString(legacy.npcEntryId) || asStringArray(row.entityIds)[0] || '';
+		const npcName = asString(legacy.npcName)
+			|| this.lorebookEntries.find((entry) => entry.id === npcEntryId)?.name
+			|| asString(row.title).replace(/^Conversation memory:\s*/i, '')
+			|| 'Unknown NPC';
+		if (!id) return null;
+		return {
+			id,
+			storyId: this.currentStory?.id ?? asString(row.storyId),
+			npcEntryId,
+			npcName,
+			storyEntryId: asString(legacy.storyEntryId) || asStringArray(row.sourceEntryIds)[0] || '',
+			storyPosition: asNumber(legacy.storyPosition, 0),
+			topic: asString(legacy.topic) || asString(row.title, 'Conversation memory'),
+			playerSaid: asString(legacy.playerSaid),
+			npcLearned: asStringArray(legacy.npcLearned),
+			emotionalImpact: asNullableString(legacy.emotionalImpact),
+			importance: enumValue(CONVERSATION_IMPORTANCE, legacy.importance, 'minor'),
+			createdAt: asTime(legacy.createdAt, asTime(row.createdAt)),
+		};
+	}
+
+	private serverNpcBeliefToConversation(row: JsonRecord): ConversationMemoryEntry | null {
+		const id = asString(row.id);
+		const npcEntryId = asString(row.believerEntityId);
+		const belief = asString(row.belief).trim();
+		if (!id || !npcEntryId || !belief) return null;
+		const npcName = this.lorebookEntries.find((entry) => entry.id === npcEntryId)?.name ?? 'Unknown NPC';
+		const lines = belief.split('\n').map((line) => line.trim()).filter(Boolean);
+		const playerLine = lines.find((line) => line.toLowerCase().startsWith('player revealed:'));
+		const learnedLine = lines.find((line) => line.toLowerCase().startsWith('npc learned:'));
+		const emotionalLine = lines.find((line) => line.toLowerCase().startsWith('emotional shift:'));
+		const sourceEntryId = asStringArray(row.sourceEntryIds)[0] ?? '';
+		const sourceEntry = this.entries.find((entry) => entry.id === sourceEntryId);
+		const confidence = asNumber(row.confidence, 0.5);
+		return {
+			id,
+			storyId: this.currentStory?.id ?? asString(row.storyId),
+			npcEntryId,
+			npcName,
+			storyEntryId: sourceEntryId,
+			storyPosition: sourceEntry?.position ?? 0,
+			topic: lines[0] ?? 'NPC belief',
+			playerSaid: playerLine?.replace(/^player revealed:\s*/i, '') ?? '',
+			npcLearned: learnedLine
+				? learnedLine.replace(/^npc learned:\s*/i, '').split(';').map((item) => item.trim()).filter(Boolean)
+				: [belief],
+			emotionalImpact: emotionalLine?.replace(/^emotional shift:\s*/i, '') ?? null,
+			importance: confidence >= 0.85 ? 'critical' : confidence >= 0.65 ? 'significant' : 'minor',
+			createdAt: asTime(row.createdAt),
+		};
+	}
+
+	private serverMemoryNodeToFactionAction(row: JsonRecord): FactionActionRecord | null {
+		const metadata = asRecord(row.metadata);
+		const sourceType = asString(metadata.sourceType);
+		if (sourceType === 'terminal_faction_pressure_job') {
+			const id = asString(row.id);
+			if (!id) return null;
+			const pressure = asNumber(metadata.pressure, Math.round(asNumber(row.importance, 0.55) * 100));
+			return {
+				id,
+				storyId: this.currentStory?.id ?? asString(row.storyId),
+				factionName: this.memoryNodeFactionName(row, metadata),
+				action: asString(row.content) || asString(row.summary) || asString(row.title),
+				actionType: 'pressure',
+				target: null,
+				motivation: `Pressure ${Math.max(0, Math.min(100, pressure))}/100`,
+				consequences: asString(row.content).split('\n')
+					.map((line) => line.replace(/^-\s*/, '').trim())
+					.filter((line) => line.startsWith('+'))
+					.slice(0, 3),
+				urgency: this.pressureUrgency(pressure),
+				affectedRegions: [],
+				chapterNumber: null,
+				status: 'active',
+				createdAt: asTime(row.updatedAt, asTime(row.createdAt)),
+			};
+		}
+		if (sourceType === 'terminal_world_sim_tick') {
+			const id = unprefixId(asString(row.id), 'mem_world_tick_') || asString(row.id);
+			if (!id) return null;
+			const pressure = asNumber(metadata.pressure, 70);
+			return {
+				id,
+				storyId: this.currentStory?.id ?? asString(row.storyId),
+				factionName: this.memoryNodeFactionName(row, metadata),
+				action: asString(row.content) || asString(row.summary) || asString(row.title),
+				actionType: 'world_tick',
+				target: null,
+				motivation: `Terminal world tick at pressure ${Math.max(0, Math.min(100, pressure))}/100`,
+				consequences: asStringArray(row.sourceEventIds).map((eventId) => `Canonical event ${eventId}`).slice(0, 1),
+				urgency: this.pressureUrgency(pressure),
+				affectedRegions: [],
+				chapterNumber: null,
+				status: 'active',
+				createdAt: asTime(row.updatedAt, asTime(row.createdAt)),
+			};
+		}
+		if (sourceType !== 'faction_action_import') return null;
+		const legacy = legacyRecord(row);
+		const id = asString(legacy.id) || unprefixId(asString(row.id), 'mem_faction_action_');
+		if (!id) return null;
+		return {
+			id,
+			storyId: this.currentStory?.id ?? asString(row.storyId),
+			factionName: asString(legacy.factionName) || asStringArray(row.factionIds)[0] || 'Faction',
+			action: asString(legacy.action) || asString(row.content),
+			actionType: asString(legacy.actionType) || asStringArray(row.keywords)[1] || 'custom',
+			target: asNullableString(legacy.target),
+			motivation: asNullableString(legacy.motivation),
+			consequences: asStringArray(legacy.consequences),
+			urgency: enumValue(FACTION_ACTION_URGENCY, legacy.urgency, 'medium'),
+			affectedRegions: asStringArray(legacy.affectedRegions),
+			chapterNumber: legacy.chapterNumber == null ? null : asNumber(legacy.chapterNumber, 0),
+			status: enumValue(FACTION_ACTION_STATUS, legacy.status, 'active'),
+			createdAt: asTime(legacy.createdAt, asTime(row.createdAt)),
+		};
+	}
+
+	private memoryNodeFactionName(row: JsonRecord, metadata: JsonRecord): string {
+		const metadataName = asString(metadata.factionName).trim();
+		if (metadataName) return metadataName;
+		const factionId = asString(metadata.factionId) || asStringArray(row.factionIds)[0] || asStringArray(row.entityIds)[0];
+		const entryName = factionId ? this.lorebookEntries.find((entry) => entry.id === factionId)?.name : '';
+		if (entryName) return entryName;
+		const title = asString(row.title).trim();
+		const pressureTitle = title.match(/^(.*?)\s+pressure$/i)?.[1]?.trim();
+		if (pressureTitle) return pressureTitle;
+		const worldTickTitle = title.match(/^(.*?)\s+converts\s+pressure/i)?.[1]?.trim();
+		if (worldTickTitle) return worldTickTitle;
+		return factionId || 'Faction';
+	}
+
+	private pressureUrgency(pressure: number): FactionActionRecord['urgency'] {
+		if (pressure >= 90) return 'critical';
+		if (pressure >= 78) return 'high';
+		if (pressure >= 55) return 'medium';
+		return 'low';
+	}
+
+	private serverMemoryNodeToRumor(row: JsonRecord): RumorRecord | null {
+		const metadata = asRecord(row.metadata);
+		if (asString(metadata.sourceType) !== 'rumor_import') return null;
+		const legacy = legacyRecord(row);
+		const id = asString(legacy.id) || unprefixId(asString(row.id), 'mem_rumor_');
+		if (!id) return null;
+		return {
+			id,
+			storyId: this.currentStory?.id ?? asString(row.storyId),
+			content: asString(legacy.content) || asString(row.content),
+			truthfulness: Math.max(0, Math.min(1, asNumber(legacy.truthfulness, asNumber(row.importance, 0.5)))),
+			originRegion: asString(legacy.originRegion, 'unknown'),
+			spreadRadius: enumValue(RUMOR_SPREAD_RADIUS, legacy.spreadRadius, 'local'),
+			sourceType: asString(legacy.sourceType, 'gossip'),
+			relatedFaction: asNullableString(legacy.relatedFaction),
+			chapterNumber: legacy.chapterNumber == null ? null : asNumber(legacy.chapterNumber, 0),
+			staleAfterChapters: asNumber(legacy.staleAfterChapters, 5),
+			status: enumValue(RUMOR_STATUS, legacy.status, 'spreading'),
+			createdAt: asTime(legacy.createdAt, asTime(row.createdAt)),
+		};
+	}
+
+	private serverMemoryNodeToScheme(row: JsonRecord): Scheme | null {
+		const metadata = asRecord(row.metadata);
+		if (asString(metadata.sourceType) !== 'scheme_import') return null;
+		const legacy = legacyRecord(row);
+		const id = asString(legacy.id) || asStringArray(row.threadIds)[0] || unprefixId(asString(row.id), 'mem_scheme_');
+		if (!id) return null;
+		const stageRows = asArray<JsonRecord>(legacy.stages);
+		const stages = stageRows.length > 0
+			? stageRows.map((stage, index) => this.serverSchemeStageToLocal(stage, index))
+			: [this.serverSchemeStageToLocal({ label: 'Unfolding pressure', hook: asString(row.summary) || asString(row.content) }, 0)];
+		const pressure = Math.max(0, Math.min(100, asNumber(legacy.pressure, Math.round(asNumber(row.importance, 0.45) * 100))));
+		return {
+			id,
+			storyId: this.currentStory?.id ?? asString(row.storyId),
+			ownerType: enumValue(SCHEME_OWNER_TYPES, legacy.ownerType, 'character'),
+			ownerEntryId: asNullableString(legacy.ownerEntryId),
+			ownerName: asString(legacy.ownerName) || asStringArray(row.keywords)[0] || 'Unknown actor',
+			goal: asString(legacy.goal) || asString(row.title).replace(/^Scheme:\s*/i, '') || asString(row.summary, id),
+			trigger: asString(legacy.trigger),
+			triggerChapter: legacy.triggerChapter == null ? null : asNumber(legacy.triggerChapter, 0),
+			triggerEntryId: asNullableString(legacy.triggerEntryId) ?? asStringArray(row.sourceEntryIds)[0] ?? null,
+			stages,
+			currentStageIndex: Math.max(0, Math.min(stages.length - 1, asNumber(legacy.currentStageIndex, 0))),
+			pressure,
+			status: enumValue(SCHEME_STATUSES, legacy.status, 'active'),
+			secrecy: enumValue(SCHEME_SECRECY, legacy.secrecy, 'known'),
+			nextTickAtDay: legacy.nextTickAtDay == null ? null : asNumber(legacy.nextTickAtDay, 0),
+			branchId: asNullableString(legacy.branchId),
+			createdAt: asTime(legacy.createdAt, asTime(row.createdAt)),
+			updatedAt: asTime(legacy.updatedAt, asTime(row.updatedAt)),
+		};
+	}
+
+	private serverSchemeStageToLocal(row: JsonRecord, index: number): Scheme['stages'][number] {
+		return {
+			index: asNumber(row.index, index),
+			label: asString(row.label, `Stage ${index + 1}`),
+			hook: asString(row.hook),
+			condition: enumValue(SCHEME_STAGE_CONDITIONS, row.condition, 'prerequisite'),
+			conditionPayload: asRecord(row.conditionPayload ?? row.condition_payload),
+			completed: asBoolean(row.completed),
+			completedAt: row.completedAt == null ? null : asTime(row.completedAt),
+		};
 	}
 
 	private async loadImagesForEntries(storyId: string, entryIds: string[], generation: number): Promise<void> {
@@ -395,24 +1223,75 @@ class StoryStore {
 
 	async loadOlderEntries(limit = OLDER_TRANSCRIPT_PAGE_SIZE): Promise<void> {
 		if (!this.currentStory || this.loadingOlderEntries || this.oldestLoadedEntryPosition == null) return;
+		const storyId = this.currentStory.id;
+		const serverStoryId = this.currentStory.serverStoryId ?? null;
+		const beforePosition = this.oldestLoadedEntryPosition;
+		const branchId = this.currentStory.currentBranchId ?? null;
 		this.loadingOlderEntries = true;
 		try {
-			const older = await getStoryEntriesBeforePosition(
-				this.currentStory.id,
-				this.oldestLoadedEntryPosition,
-				limit,
-				this.currentStory.currentBranchId ?? null,
-			);
+			let older: StoryEntry[] = [];
+			let backendEntryCount: number | null = null;
+			let backendHasMore: boolean | null = null;
+
+			if (serverStoryId) {
+				try {
+					const page = await fetchBackendStoryEntriesPage(serverStoryId, {
+						beforePosition,
+						limit,
+						branchId,
+					});
+					if (!this.currentStory || this.currentStory.id !== storyId) return;
+
+					older = page.entries
+						.map((row) => this.serverEntryToLocal(asRecord(row)))
+						.filter((entry): entry is StoryEntry => Boolean(entry));
+					for (const entry of older) await putStoryEntry(entry);
+					backendEntryCount = page.entryCount;
+					backendHasMore = page.hasMore;
+					this.currentStory = {
+						...this.currentStory,
+						serverVersion: page.serverVersion,
+						syncStatus: 'synced',
+					};
+					await updateStory(storyId, {
+						serverVersion: page.serverVersion,
+						syncStatus: 'synced',
+						updatedAt: Date.now(),
+					});
+				} catch (error) {
+					console.warn('[Story] backend transcript page unavailable; using local cache:', error);
+				}
+			}
+
+			if (older.length === 0 && backendEntryCount === null) {
+				older = await getStoryEntriesBeforePosition(
+					storyId,
+					beforePosition,
+					limit,
+					branchId,
+				);
+			}
+			if (!this.currentStory || this.currentStory.id !== storyId) return;
+
 			if (older.length === 0) {
-				this.entryCount = this.entries.length;
+				if (backendEntryCount !== null && backendHasMore === false) {
+					this.entryCount = this.entries.length;
+				} else if (backendEntryCount === null) {
+					this.entryCount = this.entries.length;
+				}
 				return;
 			}
 			const byId = new Map<string, StoryEntry>();
 			for (const entry of [...older, ...this.entries]) byId.set(entry.id, entry);
 			this.entries = [...byId.values()].sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
 			this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+			if (backendEntryCount !== null) {
+				this.entryCount = backendHasMore === false
+					? this.entries.length
+					: Math.max(backendEntryCount, this.entries.length);
+			}
 
-			const olderImages = await getEmbeddedImagesForEntryIds(this.currentStory.id, older.map((entry) => entry.id));
+			const olderImages = await getEmbeddedImagesForEntryIds(storyId, older.map((entry) => entry.id));
 			if (olderImages.length > 0) {
 				const imageById = new Map(this.images.map((image) => [image.id, image]));
 				for (const image of olderImages) imageById.set(image.id, image);
@@ -489,6 +1368,7 @@ class StoryStore {
 					await queueBackendSyncOp(this.currentStory, 'create_entry', { entry });
 					const sync = await pushPendingBackendOps(this.currentStory);
 					if (sync) {
+						await this.applyBackendSyncChanges(sync.changes);
 						this.currentStory = {
 							...this.currentStory,
 							serverVersion: sync.serverVersion,
@@ -501,6 +1381,77 @@ class StoryStore {
 				}
 			}
 			return entry;
+		} finally {
+			releaseLock();
+		}
+	}
+
+	async queueOfflineBackendTurn(
+		playerText: string,
+		clientContext: Record<string, unknown> = {},
+		clientTurnId = uuid(),
+	): Promise<StoryEntry> {
+		if (!this.currentStory?.serverStoryId) throw new Error('Story is not bound to the terminal world database.');
+
+		const previous = this._entryLock;
+		let releaseLock!: () => void;
+		this._entryLock = new Promise(r => { releaseLock = r; });
+		await previous;
+
+		try {
+			const current = this.currentStory;
+			const now = Date.now();
+			const lastLoadedPosition = this.entries.reduce((max, e) => Math.max(max, e.position), -1);
+			const lastPersistedPosition = lastLoadedPosition >= 0
+				? lastLoadedPosition
+				: await getLastStoryEntryPosition(current.id, current.currentBranchId ?? null);
+			const position = lastPersistedPosition + 1;
+			const queuedAt = new Date(now).toISOString();
+			const playerEntry: StoryEntry = {
+				id: `entry_${clientTurnId}`,
+				storyId: current.id,
+				type: 'user_action',
+				content: playerText,
+				parentId: null,
+				position,
+				createdAt: now,
+				metadata: {
+					source: 'queued_backend_turn',
+					originalInput: playerText,
+				},
+				branchId: current.currentBranchId ?? null,
+			};
+			const systemEntry: StoryEntry = {
+				id: `queued_${clientTurnId}`,
+				storyId: current.id,
+				type: 'system',
+				content: 'Backend is unavailable. This turn was queued for the terminal process and will sync when the server is reachable.',
+				parentId: playerEntry.id,
+				position: position + 1,
+				createdAt: now + 1,
+				metadata: {
+					source: 'queued_backend_turn_notice',
+					originalInput: playerText,
+				},
+				branchId: current.currentBranchId ?? null,
+			};
+
+			await createStoryEntry(playerEntry);
+			await createStoryEntry(systemEntry);
+			await queueBackendSyncOp(current, 'turn_command', {
+				clientTurnId,
+				playerText,
+				clientContext,
+				entryId: playerEntry.id,
+				position,
+				queuedAt,
+			});
+			this.entries = [...this.entries, playerEntry, systemEntry]
+				.sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
+			this.entryCount = Math.max(this.entryCount + 2, this.entries.length);
+			this.currentStory = { ...current, syncStatus: 'offline' };
+			await updateStory(current.id, { syncStatus: 'offline', updatedAt: now });
+			return playerEntry;
 		} finally {
 			releaseLock();
 		}
@@ -551,14 +1502,258 @@ class StoryStore {
 		return entries;
 	}
 
+	private async applyBackendEntityChange(row: JsonRecord): Promise<void> {
+		if (!this.currentStory) return;
+		const id = asString(row.id);
+		if (!id) return;
+		const currentLocationId = this.locations.find((location) => location.current)?.id ?? null;
+
+		const entry = this.serverEntityToLorebookEntry(row);
+		if (entry) {
+			await putLorebookEntry(entry);
+			this.upsertProjectedLoreEntry(entry);
+		}
+
+		const character = this.serverEntityToCharacter(row);
+		if (character) {
+			await putCharacter(character);
+			this.characters = upsertById(this.characters, character);
+		} else {
+			this.characters = removeById(this.characters, id);
+		}
+
+		const location = this.serverEntityToLocation(row, currentLocationId);
+		if (location) {
+			await putLocation(location);
+			this.locations = upsertById(this.locations, location);
+		} else {
+			this.locations = removeById(this.locations, id);
+		}
+
+		const item = this.serverEntityToItem(row);
+		if (item) {
+			await putItem(item);
+			this.items = upsertById(this.items, item);
+		} else {
+			this.items = removeById(this.items, id);
+		}
+	}
+
+	private async applyBackendMemoryNodeChange(row: JsonRecord): Promise<void> {
+		const conversation = this.serverMemoryNodeToConversation(row);
+		if (conversation) {
+			await putConversationMemory(conversation);
+			this.conversationMemories = upsertById(this.conversationMemories, conversation)
+				.sort((a, b) => a.createdAt - b.createdAt);
+		}
+
+		const action = this.serverMemoryNodeToFactionAction(row);
+		if (action) {
+			await bulkPutFactionActions([action]);
+			this.factionActions = upsertById(this.factionActions, action)
+				.sort((a, b) => a.createdAt - b.createdAt);
+		}
+
+		const rumor = this.serverMemoryNodeToRumor(row);
+		if (rumor) {
+			await bulkPutRumors([rumor]);
+			this.rumors = upsertById(this.rumors, rumor)
+				.sort((a, b) => a.createdAt - b.createdAt);
+		}
+
+		const scheme = this.serverMemoryNodeToScheme(row);
+		if (scheme) {
+			await bulkPutSchemes([scheme]);
+			this.schemes = upsertById(this.schemes, scheme)
+				.sort((a, b) => a.createdAt - b.createdAt);
+		}
+	}
+
+	private async applyBackendSyncChanges(changes: SyncChange[]): Promise<void> {
+		if (!this.currentStory || changes.length === 0) return;
+
+		const entryRows = changes
+			.filter((change) => change.op === 'upsert' && change.table === 'story_entries')
+			.map((change) => asRecord(change.row));
+		await this.mirrorBackendEntries(entryRows);
+
+		for (const change of changes) {
+			if (change.op !== 'upsert') continue;
+			const row = asRecord(change.row);
+			if (Object.keys(row).length === 0) continue;
+
+			if (change.table === 'entities') {
+				await this.applyBackendEntityChange(row);
+			} else if (change.table === 'agreements') {
+				const agreement = this.serverAgreementToLocal(row);
+				if (agreement) {
+					await putAgreement(agreement);
+					this.agreements = upsertById(this.agreements, agreement)
+						.sort((a, b) => a.createdAt - b.createdAt);
+				}
+			} else if (change.table === 'story_threads') {
+				const thread = this.serverThreadToLocal(row);
+				if (thread) await putStoryThread(thread);
+			} else if (change.table === 'npc_beliefs') {
+				const memory = this.serverNpcBeliefToConversation(row);
+				if (memory) {
+					await putConversationMemory(memory);
+					this.conversationMemories = upsertById(this.conversationMemories, memory)
+						.sort((a, b) => a.createdAt - b.createdAt);
+				}
+			} else if (change.table === 'story_events') {
+				const event = this.serverEventToLocal(row as BootstrapResponse['recentEvents'][number]);
+				await putWorldEvent(event);
+				this.worldEvents = upsertById(this.worldEvents, event)
+					.sort((a, b) => a.createdAt - b.createdAt);
+			} else if (change.table === 'memory_nodes') {
+				await this.applyBackendMemoryNodeChange(row);
+			} else if (change.table === 'chapters') {
+				const chapter = this.serverChapterToLocal(row);
+				if (chapter) await putChapter(chapter);
+			} else if (change.table === 'arcs') {
+				const arc = this.serverArcToLocal(row);
+				if (arc) await putArc(arc);
+			} else if (change.table === 'sagas') {
+				const saga = this.serverSagaToLocal(row);
+				if (saga) await putSaga(saga);
+			} else if (change.table === 'stories') {
+				const title = asString(row.title, this.currentStory.title);
+				this.currentStory = {
+					...this.currentStory,
+					title,
+					description: asNullableString(row.description),
+					genre: asNullableString(row.genre),
+					headerPrompt: asNullableString(row.headerPrompt),
+				};
+			}
+		}
+
+		if (!this.currentStory) return;
+		const serverVersion = changes.reduce((max, change) => Math.max(max, change.version), this.currentStory.serverVersion ?? 0);
+		this.currentStory = { ...this.currentStory, serverVersion, syncStatus: 'synced' };
+		await updateStory(this.currentStory.id, {
+			title: this.currentStory.title,
+			description: this.currentStory.description,
+			genre: this.currentStory.genre,
+			headerPrompt: this.currentStory.headerPrompt,
+			serverVersion,
+			syncStatus: 'synced',
+		});
+	}
+
+	private async flushBackendOutbox(current: Story): Promise<boolean> {
+		if (!current.serverStoryId) return true;
+		const sync = await pushPendingBackendOps(current);
+		if (!sync) return true;
+		if (this.currentStory?.id !== current.id) return false;
+		if (sync.syncStatus === 'offline') {
+			this.currentStory = { ...this.currentStory, syncStatus: 'offline' };
+			await updateStory(current.id, { syncStatus: 'offline' });
+			return false;
+		}
+		if (sync.changes.length > 0) await this.applyBackendSyncChanges(sync.changes);
+		if (this.currentStory?.id !== current.id) return false;
+		this.currentStory = {
+			...this.currentStory,
+			serverVersion: sync.serverVersion,
+			syncStatus: sync.syncStatus,
+		};
+		await updateStory(current.id, {
+			serverVersion: sync.serverVersion,
+			syncStatus: sync.syncStatus,
+		});
+		return sync.syncStatus !== 'conflict';
+	}
+
+	async retryBackendSyncRepair(opId: string): Promise<void> {
+		const current = this.currentStory;
+		if (!current?.serverStoryId) return;
+		await updateSyncOp(opId, {
+			status: 'pending',
+			error: null,
+			repairPayload: null,
+			repairReason: null,
+			repairCreatedAt: null,
+		});
+		if (this.currentStory?.id !== current.id) return;
+		this.currentStory = { ...this.currentStory, syncStatus: 'syncing' };
+		await updateStory(current.id, { syncStatus: 'syncing' });
+		await this.pullBackendProjection();
+	}
+
+	async discardBackendSyncRepair(opId: string): Promise<void> {
+		const current = this.currentStory;
+		if (!current?.serverStoryId) return;
+		const rows = await getSyncOpsForStory(current.id);
+		const discarded = rows.find((op) => op.id === opId);
+		await deleteSyncOp(opId);
+		if (discarded?.type === 'turn_command') {
+			const payload = asRecord(discarded.payload);
+			const clientTurnId = asNullableString(payload.clientTurnId);
+			const entryIds = [
+				asNullableString(payload.entryId),
+				clientTurnId ? `queued_${clientTurnId}` : null,
+			].filter((id): id is string => Boolean(id));
+			for (const entryId of entryIds) await deleteStoryEntry(entryId);
+			if (entryIds.length > 0) {
+				const removed = new Set(entryIds);
+				this.entries = this.entries.filter((entry) => !removed.has(entry.id));
+				this.entryCount = await countStoryEntries(current.id, current.currentBranchId ?? null);
+				this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+			}
+		}
+		const remaining = rows.filter((op) => op.id !== opId);
+		if (this.currentStory?.id !== current.id) return;
+		const hasRepair = remaining.some((op) => op.status === 'needs_repair' || op.status === 'rejected');
+		const hasPending = remaining.some((op) => op.status === 'pending' || op.status === 'pushing');
+		const syncStatus: Story['syncStatus'] = hasRepair ? 'conflict' : hasPending ? 'syncing' : 'synced';
+		this.currentStory = { ...this.currentStory, syncStatus };
+		await updateStory(current.id, { syncStatus });
+	}
+
+	async pullBackendProjection(): Promise<void> {
+		const current = this.currentStory;
+		if (!current?.serverStoryId) return;
+		try {
+			const flushed = await this.flushBackendOutbox(current);
+			if (!flushed || this.currentStory?.id !== current.id) return;
+			const refreshed = this.currentStory ?? current;
+			const result = await pullBackendChanges(refreshed);
+			if (!result || this.currentStory?.id !== current.id) return;
+			await this.applyBackendSyncChanges(result.changes);
+			if (!this.currentStory || this.currentStory.id !== current.id) return;
+			this.currentStory = { ...this.currentStory, serverVersion: result.serverVersion, syncStatus: 'synced' };
+			await updateStory(this.currentStory.id, {
+				serverVersion: result.serverVersion,
+				syncStatus: 'synced',
+			});
+		} catch (error) {
+			console.warn('[Story] backend pull sync failed:', error);
+			if (this.currentStory?.id === current.id) {
+				this.currentStory = { ...this.currentStory, syncStatus: 'offline' };
+				await updateStory(current.id, { syncStatus: 'offline' });
+			}
+		}
+	}
+
 	async submitBackendTurn(request: Omit<TurnRequest, 'storyId' | 'localVersion'>): Promise<TurnResponse> {
-		if (!this.currentStory?.serverStoryId) throw new Error('Story is not bound to backend canon.');
+		if (!this.currentStory?.serverStoryId) throw new Error('Story is not bound to the terminal world database.');
+		const current = this.currentStory;
+		const flushed = await this.flushBackendOutbox(current);
+		if (!flushed || !this.currentStory || this.currentStory.id !== current.id) {
+			throw new Error('Pending backend commands could not be synced before this turn.');
+		}
+		if (this.currentStory.syncStatus === 'conflict') {
+			throw new Error('Resolve backend sync conflicts before submitting another backend turn.');
+		}
 		const response = await processBackendTurn({
 			...request,
 			storyId: this.currentStory.serverStoryId,
 			localVersion: this.currentStory.serverVersion ?? 0,
 		});
 		await this.mirrorBackendEntries(response.entries);
+		await this.applyBackendSyncChanges(response.syncChanges);
 		this.currentStory = {
 			...this.currentStory,
 			serverVersion: response.serverVersion,
@@ -586,9 +1781,15 @@ class StoryStore {
 				entryId: id,
 				reason: 'Player deleted a poisoned context message.',
 			});
-			await pushPendingBackendOps(this.currentStory).catch((e) => {
+			try {
+				const sync = await pushPendingBackendOps(this.currentStory);
+				if (sync) {
+					await this.applyBackendSyncChanges(sync.changes);
+					this.currentStory = { ...this.currentStory, serverVersion: sync.serverVersion, syncStatus: sync.syncStatus };
+				}
+			} catch (e) {
 				console.warn('[Story] backend delete sync failed:', e);
-			});
+			}
 		}
 	}
 
@@ -607,10 +1808,28 @@ class StoryStore {
 				entryIds: removed.map((entry) => entry.id),
 				reason: 'Player deleted poisoned context from this point onward.',
 			});
-			await pushPendingBackendOps(this.currentStory).catch((e) => {
+			try {
+				const sync = await pushPendingBackendOps(this.currentStory);
+				if (sync) {
+					await this.applyBackendSyncChanges(sync.changes);
+					this.currentStory = { ...this.currentStory, serverVersion: sync.serverVersion, syncStatus: sync.syncStatus };
+				}
+			} catch (e) {
 				console.warn('[Story] backend range delete sync failed:', e);
-			});
+			}
 		}
+	}
+
+	private applyCanonicalVersion(serverVersion: number | null): void {
+		if (serverVersion !== null && this.currentStory) {
+			this.currentStory = { ...this.currentStory, serverVersion, syncStatus: 'synced' };
+		}
+	}
+
+	private upsertProjectedLoreEntry(entry: Entry): void {
+		this.lorebookEntries = this.lorebookEntries.some((existing) => existing.id === entry.id)
+			? this.lorebookEntries.map((existing) => existing.id === entry.id ? entry : existing)
+			: [...this.lorebookEntries, entry];
 	}
 
 	async addCharacter(name: string, description?: string, relationship?: string): Promise<Character> {
@@ -628,7 +1847,9 @@ class StoryStore {
 			visualDescriptors: {},
 			portrait: null,
 		};
-		await createCharacter(char);
+		const result = await saveCanonicalCharacter(char, 'create');
+		this.applyCanonicalVersion(result.serverVersion);
+		this.upsertProjectedLoreEntry(result.entry);
 		this.characters = [...this.characters, char];
 		return char;
 	}
@@ -658,8 +1879,11 @@ class StoryStore {
 			if (newTraits.length !== char.traits.length) merged.traits = newTraits;
 		}
 		if (Object.keys(merged).length === 0) return;
-		await updateCharacter(char.id, merged);
-		this.characters = this.characters.map(c => c.id === char.id ? { ...c, ...merged } : c);
+		const updated = { ...char, ...merged };
+		const result = await saveCanonicalCharacter(updated);
+		this.applyCanonicalVersion(result.serverVersion);
+		this.upsertProjectedLoreEntry(result.entry);
+		this.characters = this.characters.map(c => c.id === char.id ? updated : c);
 	}
 
 	async updateCharacterDetails(id: string, updates: Partial<Pick<Character, 'name' | 'description' | 'traits' | 'status'>>): Promise<void> {
@@ -682,8 +1906,11 @@ class StoryStore {
 		}
 		if (Object.keys(clean).length === 0) return;
 
-		await updateCharacter(char.id, clean);
-		this.characters = this.characters.map(c => c.id === char.id ? { ...c, ...clean } : c);
+		const updated = { ...char, ...clean };
+		const result = await saveCanonicalCharacter(updated);
+		this.applyCanonicalVersion(result.serverVersion);
+		this.upsertProjectedLoreEntry(result.entry);
+		this.characters = this.characters.map(c => c.id === char.id ? updated : c);
 
 		if (clean.name && char.relationship === 'self') {
 			const oldName = char.name.toLowerCase();
@@ -695,7 +1922,10 @@ class StoryStore {
 			);
 			if (target) {
 				const aliases = [...new Set([...(target.aliases ?? []), char.name])];
-				await updateLorebookEntry(target.id, { name: clean.name, aliases, updatedAt: Date.now() });
+				const result = await patchCanonicalLorebookEntry(target.id, { name: clean.name, aliases, updatedAt: Date.now() });
+				if (result.serverVersion && this.currentStory) {
+					this.currentStory = { ...this.currentStory, serverVersion: result.serverVersion, syncStatus: 'synced' };
+				}
 				this.lorebookEntries = this.lorebookEntries.map(e =>
 					e.id === target.id ? { ...e, name: clean.name!, aliases, updatedAt: Date.now() } : e
 				);
@@ -747,7 +1977,10 @@ class StoryStore {
 		};
 		const now = Date.now();
 		try {
-			await updateLorebookEntry(target.id, { state: newState, updatedAt: now });
+			const result = await patchCanonicalLorebookEntry(target.id, { state: newState, updatedAt: now });
+			if (result.serverVersion && this.currentStory) {
+				this.currentStory = { ...this.currentStory, serverVersion: result.serverVersion, syncStatus: 'synced' };
+			}
 			this.lorebookEntries = this.lorebookEntries.map(e =>
 				e.id === target.id ? { ...e, state: newState, updatedAt: now } : e,
 			);
@@ -765,9 +1998,12 @@ class StoryStore {
 			const char = this.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
 			if (!char) continue;
 			const meta = { ...(char.metadata ?? {}), lastSeenLocation: locationName };
-			await updateCharacter(char.id, { metadata: meta });
+			const updated = { ...char, metadata: meta };
+			const result = await saveCanonicalCharacter(updated);
+			this.applyCanonicalVersion(result.serverVersion);
+			this.upsertProjectedLoreEntry(result.entry);
 			this.characters = this.characters.map(c =>
-				c.id === char.id ? { ...c, metadata: meta } : c
+				c.id === char.id ? updated : c
 			);
 			await this.syncLorebookPresence(char.name, true, locationName);
 		}
@@ -783,9 +2019,12 @@ class StoryStore {
 			if (!char) continue;
 			const meta = { ...(char.metadata ?? {}) };
 			delete meta.lastSeenLocation;
-			await updateCharacter(char.id, { metadata: meta });
+			const updated = { ...char, metadata: meta };
+			const result = await saveCanonicalCharacter(updated);
+			this.applyCanonicalVersion(result.serverVersion);
+			this.upsertProjectedLoreEntry(result.entry);
 			this.characters = this.characters.map(c =>
-				c.id === char.id ? { ...c, metadata: meta } : c
+				c.id === char.id ? updated : c
 			);
 			await this.syncLorebookPresence(char.name, false, null);
 		}
@@ -796,9 +2035,12 @@ class StoryStore {
 		if (!char) return;
 		const meta = { ...(char.metadata ?? {}) };
 		delete meta.lastSeenLocation;
-		await updateCharacter(char.id, { metadata: meta });
+		const updated = { ...char, metadata: meta };
+		const result = await saveCanonicalCharacter(updated);
+		this.applyCanonicalVersion(result.serverVersion);
+		this.upsertProjectedLoreEntry(result.entry);
 		this.characters = this.characters.map(c =>
-			c.id === characterId ? { ...c, metadata: meta } : c
+			c.id === characterId ? updated : c
 		);
 		await this.syncLorebookPresence(char.name, false, null);
 	}
@@ -813,7 +2055,10 @@ class StoryStore {
 			const targetName = name.toLowerCase();
 			const stale = this.locations.filter(l => l.current && l.name.toLowerCase() !== targetName);
 			for (const loc of stale) {
-				await updateLocation(loc.id, { current: false });
+				const updated = { ...loc, current: false };
+				const result = await saveCanonicalLocation(updated);
+				this.applyCanonicalVersion(result.serverVersion);
+				this.upsertProjectedLoreEntry(result.entry);
 			}
 			if (stale.length > 0) {
 				const staleIds = new Set(stale.map(l => l.id));
@@ -829,8 +2074,11 @@ class StoryStore {
 			if (current !== undefined) merged.current = current;
 			if (current) merged.visited = true;
 			if (Object.keys(merged).length > 0) {
-				await updateLocation(existing.id, merged);
-				this.locations = this.locations.map(l => l.id === existing.id ? { ...l, ...merged } : l);
+				const updated = { ...existing, ...merged };
+				const result = await saveCanonicalLocation(updated);
+				this.applyCanonicalVersion(result.serverVersion);
+				this.upsertProjectedLoreEntry(result.entry);
+				this.locations = this.locations.map(l => l.id === existing.id ? updated : l);
 			}
 		} else {
 			const loc: Location = {
@@ -844,7 +2092,9 @@ class StoryStore {
 				connections: [],
 				metadata: null,
 			};
-			await createLocation(loc);
+			const result = await saveCanonicalLocation(loc, 'create');
+			this.applyCanonicalVersion(result.serverVersion);
+			this.upsertProjectedLoreEntry(result.entry);
 			this.locations = [...this.locations, loc];
 		}
 	}
@@ -859,8 +2109,11 @@ class StoryStore {
 			if (equipped !== undefined && equipped !== existing.equipped) merged.equipped = equipped;
 			if (location !== undefined && location !== existing.location) merged.location = location;
 			if (Object.keys(merged).length > 0) {
-				await updateItem(existing.id, merged);
-				this.items = this.items.map(i => i.id === existing.id ? { ...i, ...merged } : i);
+				const updated = { ...existing, ...merged };
+				const result = await saveCanonicalItem(updated);
+				this.applyCanonicalVersion(result.serverVersion);
+				this.upsertProjectedLoreEntry(result.entry);
+				this.items = this.items.map(i => i.id === existing.id ? updated : i);
 			}
 		} else {
 			const item: Item = {
@@ -874,7 +2127,9 @@ class StoryStore {
 				location: location ?? '',
 				metadata: null,
 			};
-			await createItem(item);
+			const result = await saveCanonicalItem(item, 'create');
+			this.applyCanonicalVersion(result.serverVersion);
+			this.upsertProjectedLoreEntry(result.entry);
 			this.items = [...this.items, item];
 		}
 	}
@@ -1108,6 +2363,7 @@ class StoryStore {
 				'',
 				'### When to call which tool',
 				'- **search_wiki** - optional. Search the local lorebook/wiki for names, factions, places, items, customs, secrets, or prior facts before writing. Treat hidden_info as narrator-only; never reveal it verbatim unless the scene earns the reveal.',
+				'- **brief_wiki** - optional. Get broader terminal wiki orientation when a scene touches several linked pages, a long-running mystery, wiki health, hubs, or maintenance context. Use search_wiki for one narrow lookup; use brief_wiki when the lore graph matters.',
 				'- **update_world_state** — call ONCE at the end of each turn. Cover:',
 				'  - **Location** (paramount): if the player moved this turn, emit a location with `current: true`. Only one location may be current. The previous current location is unset automatically.',
 				'  - **Time** (paramount, NEVER skip when time passed): emit a `time_delta` whenever any time passes in the scene. Examples: "a few seconds" (a quick exchange), "5 minutes" (a short walk), "30 minutes" (a brief conversation), "3 hours" (a meal + travel), "1 day" (overnight rest), "a week" (training/travel montage). Numbers + units parse most reliably. **If you don\'t emit `time_delta`, the world clock freezes — factions stop acting, rumors stop spreading, the world becomes static.** The only time you may omit it is for a reaction beat that takes no in-world time (a single line of dialogue mid-action).',
@@ -1866,8 +3122,15 @@ class StoryStore {
 	 * Chapters / Living World sections without re-querying.
 	 */
 	async buildStateSnapshot(currentAction = ''): Promise<StateSnapshot> {
-		const s = this.currentStory;
+		let s = this.currentStory;
 		if (!s) return emptySnapshot();
+		if (s.serverStoryId) {
+			await this.pullBackendProjection().catch((error) => {
+				console.warn('[Story] backend projection refresh failed:', error);
+			});
+			s = this.currentStory;
+			if (!s) return emptySnapshot();
+		}
 
 		let arcs: Arc[] = [];
 		let chapters: Chapter[] = [];
@@ -2447,7 +3710,7 @@ class StoryStore {
 							appliedAt: now,
 							createdAt: now,
 						};
-						await createWorldEvent(ev);
+						this.applyCanonicalVersion(await saveCanonicalWorldEvent(ev));
 						this.worldEvents = [...this.worldEvents, ev];
 					}
 				}

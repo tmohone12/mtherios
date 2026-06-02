@@ -10,6 +10,7 @@
 	import { GM_TOOLS, worldStateUpdateSchema, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
 	import { declarePlayerScheme } from '$lib/services/ai/scheme/SchemeService';
 	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
+	import { isTerminalReachabilityError } from '$lib/services/backendMemory';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
 
 	type ActionType = 'do' | 'say' | 'think' | 'story' | 'free';
@@ -62,14 +63,24 @@
 	}
 
 	function shouldUseBackendTurn(): boolean {
-		const profile = settings.getServiceProfile('narrative');
-		const provider = settings.getServiceProvider('narrative');
-		const configured = Boolean(profile && provider && (!provider.requiresApiKey || profile.apiKey));
 		return Boolean(
 			settings.uiSettings.serverAuthoritativeTurns &&
-			story.currentStory?.serverStoryId &&
-			configured,
+			story.currentStory?.serverStoryId,
 		);
+	}
+
+	function buildBackendClientContext() {
+		return {
+			sceneEntityIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
+			presentNpcIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
+			locationId: story.locations.find((location) => location.current)?.id ?? null,
+			threadIds: [],
+			memoryTokenBudget: settings.uiSettings.backendMemoryTokenBudget || 800,
+			contextBudget: settings.contextBudget || 0,
+			chapterThreshold: settings.uiSettings.chapterThreshold || 20,
+			postChapterBuffer: settings.uiSettings.postChapterBuffer ?? 10,
+			chaptersPerArc: settings.uiSettings.chaptersPerArc || 5,
+		};
 	}
 
 	const actionConfig: Record<ActionType, {
@@ -623,49 +634,38 @@
 
 	async function submitBackendAuthoritativeTurn(content: string): Promise<boolean> {
 		if (!story.currentStory?.serverStoryId) return false;
-		const narrativeConfig = getNarrativeRequestConfig();
-		const profile = settings.getServiceProfile('narrative');
-		const provider = settings.getServiceProvider('narrative');
-		if (!profile || !provider || (provider.requiresApiKey && !profile.apiKey)) return false;
+		const clientContext = buildBackendClientContext();
+		const clientTurnId = crypto.randomUUID();
 
 		isGenerating = true;
 		abortController = new AbortController();
 		onStreamStart?.();
 		try {
 			const response = await story.submitBackendTurn({
-				clientTurnId: crypto.randomUUID(),
+				clientTurnId,
 				playerText: content,
-				providerProfile: profile,
-				generation: {
-					model: narrativeConfig.model,
-					temperature: narrativeConfig.temperature,
-					maxTokens: narrativeConfig.maxTokens,
-				},
-				clientContext: {
-					sceneEntityIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
-					presentNpcIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
-					locationId: story.locations.find((location) => location.current)?.id ?? null,
-					threadIds: [],
-				},
+				clientContext,
 			});
 			if (response.narration.trim()) {
 				onStreamChunk?.(response.narration);
 			}
 			onStreamClear?.();
-			try {
-				const backgroundErrors = await runBackgroundJobs();
-				if (backgroundErrors.length > 0) {
-					console.warn('[BackendTurn] Background job errors:', backgroundErrors);
-				}
-			} catch (e) {
-				console.warn('[BackendTurn] Background jobs failed:', e);
-			}
 			onStreamEnd?.(response.narration);
 			return true;
 		} catch (error) {
-			console.warn('[BackendTurn] Falling back to local narrator path:', error);
+			if (!isTerminalReachabilityError(error)) {
+				const message = error instanceof Error ? error.message : String(error);
+				console.warn('[BackendTurn] Terminal turn failed without offline queue:', error);
+				await story.addEntry('system', `Terminal turn failed: ${message}`);
+				onStreamClear?.();
+				onStreamEnd?.('');
+				return true;
+			}
+			console.warn('[BackendTurn] Backend unavailable; queued turn command for terminal sync:', error);
+			await story.queueOfflineBackendTurn(content, clientContext, clientTurnId);
 			onStreamClear?.();
-			return false;
+			onStreamEnd?.('');
+			return true;
 		} finally {
 			isGenerating = false;
 			abortController = null;

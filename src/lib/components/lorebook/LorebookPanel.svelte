@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { Plus, X, Search, Upload, Trash2, Sparkles, Loader2, List, LayoutList, Stethoscope } from 'lucide-svelte';
-	import { getAllStories, getLorebookEntries, createLorebookEntry, updateLorebookEntry, deleteLorebookEntry, getEntryRelationships, getChapters } from '$lib/services/database';
+	import { getLorebookEntries, getEntryRelationships, getChapters } from '$lib/services/database';
+	import { deleteCanonicalLorebookEntry, saveCanonicalLorebookEntry } from '$lib/services/canonicalWrites';
+	import { refreshStoryCatalog } from '$lib/services/serverStories';
 	import { uuid } from '$lib/utils/uuid';
 	import { ai } from '$lib/services/ai';
 	import { story } from '$lib/stores/story.svelte';
@@ -48,7 +50,7 @@
 	const entryTypes: EntryType[] = ['character', 'location', 'item', 'faction', 'concept', 'event'];
 
 	onMount(async () => {
-		stories = await getAllStories();
+		stories = await refreshStoryCatalog();
 		if (stories.length > 0) {
 			selectedStoryId = stories[0].id;
 			await loadEntries();
@@ -140,6 +142,34 @@
 		);
 	}
 
+	const selectedStory = $derived(stories.find(s => s.id === selectedStoryId) ?? null);
+
+	function applyBackendVersion(localStoryId: string, serverVersion: number) {
+		stories = stories.map(s => s.id === localStoryId
+			? { ...s, serverVersion, syncStatus: 'synced' }
+			: s);
+		if (story.currentStory?.id === localStoryId) {
+			story.currentStory = {
+				...story.currentStory,
+				serverVersion,
+				syncStatus: 'synced',
+			};
+		}
+	}
+
+	async function saveWikiEntry(entry: Entry, mode: 'create' | 'update' = 'update') {
+		const serverVersion = await saveCanonicalLorebookEntry(entry, mode);
+		if (serverVersion) applyBackendVersion(entry.storyId, serverVersion);
+	}
+
+	async function deleteWikiEntry(id: string) {
+		const target = entries.find(entry => entry.id === id);
+		const owner = target ? stories.find(s => s.id === target.storyId) : selectedStory;
+		if (!owner) throw new Error('Select a story before deleting wiki entries.');
+		const serverVersion = await deleteCanonicalLorebookEntry(owner.id, id);
+		if (serverVersion) applyBackendVersion(owner.id, serverVersion);
+	}
+
 	function keywordsForMissing(entry: WikiMissingEntry): string[] {
 		return Array.from(new Set([
 			entry.suggestedName,
@@ -177,7 +207,7 @@
 			updatedAt: now,
 			loreManagementBlacklisted: false,
 		};
-		await createLorebookEntry(entry);
+		await saveWikiEntry(entry, 'create');
 		entries = [...entries, entry];
 		if (story.currentStory?.id === selectedStoryId) {
 			story.lorebookEntries = [...story.lorebookEntries, entry];
@@ -204,8 +234,8 @@
 			else updates.hiddenInfo = replaced || null;
 		}
 
-		await updateLorebookEntry(target.id, updates);
 		const updated = { ...target, ...updates };
+		await saveWikiEntry(updated);
 		entries = entries.map(entry => entry.id === target.id ? updated : entry);
 		if (story.currentStory?.id === target.storyId) {
 			story.lorebookEntries = story.lorebookEntries.map(entry => entry.id === target.id ? updated : entry);
@@ -240,7 +270,7 @@
 			updatedAt: now,
 			loreManagementBlacklisted: false,
 		};
-		await createLorebookEntry(entry);
+		await saveWikiEntry(entry, 'create');
 		entries = [...entries, entry];
 		resetCreate();
 	}
@@ -280,7 +310,8 @@
 		detailEntry = prev;
 	}
 
-	function handleDetailSave(updated: Entry) {
+	async function handleDetailSave(updated: Entry) {
+		await saveWikiEntry(updated);
 		entries = entries.map(e => e.id === updated.id ? updated : e);
 		// Sync the live story store too — without this, the narrator, executor,
 		// and #sectionCharacters keep reading the pre-edit version until the
@@ -294,7 +325,8 @@
 		closeDetail();
 	}
 
-	function handleDetailDelete(id: string) {
+	async function handleDetailDelete(id: string) {
+		await deleteWikiEntry(id);
 		entries = entries.filter(e => e.id !== id);
 		if (story.currentStory && selectedStoryId === story.currentStory.id) {
 			story.lorebookEntries = story.lorebookEntries.filter(e => e.id !== id);
@@ -304,7 +336,7 @@
 
 	async function handleDelete(id: string, e: Event) {
 		e.stopPropagation();
-		await deleteLorebookEntry(id);
+		await deleteWikiEntry(id);
 		entries = entries.filter(en => en.id !== id);
 		if (story.currentStory && selectedStoryId === story.currentStory.id) {
 			story.lorebookEntries = story.lorebookEntries.filter(en => en.id !== id);

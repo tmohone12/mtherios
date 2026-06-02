@@ -4,6 +4,7 @@
 	import { story } from '$lib/stores/story.svelte';
 	import { getProceduralRules, deleteProceduralRule } from '$lib/services/database';
 	import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
+	import { syncTerminalLlmSettingsFromBrowser } from '$lib/services/terminalSettings';
 	import type { APIProfile, ProviderType } from '$lib/types';
 
 	interface Props {
@@ -19,6 +20,7 @@
 	let profileModelSearch = $state<Record<string, string>>({});
 	let serviceModelSearch = $state<Record<string, string>>({});
 	let saving = $state(false);
+	let terminalSyncStatus = $state('');
 
 	// ── CASS / Procedural Memory state ──
 	let cassRuleCount = $state<number | null>(null);
@@ -175,17 +177,25 @@
 
 	async function saveAll() {
 		saving = true;
-		// Save profile models
-		for (const [profileId, model] of Object.entries(editingProfileModels)) {
-			await settings.setProfileModel(profileId, model);
+		terminalSyncStatus = '';
+		try {
+			// Save profile models
+			for (const [profileId, model] of Object.entries(editingProfileModels)) {
+				await settings.setProfileModel(profileId, model);
+			}
+			// Save per-service configs
+			for (const [id, config] of Object.entries(editingConfigs)) {
+				await settings.setServiceConfig(id, config);
+			}
+			await syncTerminalLlmSettingsFromBrowser();
+			terminalSyncStatus = 'Terminal runtime settings synced.';
+			editingConfigs = {};
+			editingProfileModels = {};
+		} catch (error) {
+			terminalSyncStatus = `Local settings saved; terminal sync failed: ${error instanceof Error ? error.message : String(error)}`;
+		} finally {
+			saving = false;
 		}
-		// Save per-service configs
-		for (const [id, config] of Object.entries(editingConfigs)) {
-			await settings.setServiceConfig(id, config);
-		}
-		editingConfigs = {};
-		editingProfileModels = {};
-		saving = false;
 	}
 
 	const hasChanges = $derived(
@@ -198,6 +208,10 @@
 		Services are grouped into profiles. Set one model per profile — all services in that group share it.
 		Expand individual services to tune temperature, tokens, or prompt overrides.
 	</p>
+
+	{#if terminalSyncStatus}
+		<p class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-accent)]">{terminalSyncStatus}</p>
+	{/if}
 
 	<!-- Profile cards -->
 	<div class="space-y-3">

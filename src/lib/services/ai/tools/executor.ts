@@ -9,15 +9,28 @@
 import { story } from '$lib/stores/story.svelte';
 import { settings } from '$lib/stores/settings.svelte';
 import { ai } from '$lib/services/ai';
+import {
+	briefTerminalWiki,
+	contextTerminalWiki,
+	type TerminalWikiBriefResponse,
+	type TerminalWikiContextPage,
+	type TerminalWikiSearchResult,
+} from '$lib/services/terminalWiki';
 import { uuid } from '$lib/utils/uuid';
 import {
-	createLorebookEntry, updateLorebookEntry,
 	createEntryRelationship, getRelationshipsForEntry, updateEntryRelationship,
-	createConversationMemory, createWorldEvent, updateWorldEvent, createStoryBeat,
+	createStoryBeat,
 	updateStory, getChapters, getArcs,
-	bulkPutFactionActions, bulkPutRumors, updateRumor,
 	getStoryThreads, createStoryThread, updateStoryThread, getAgreements, getWorldEvents,
 } from '$lib/services/database';
+import {
+	patchCanonicalLorebookEntry,
+	saveCanonicalConversationMemory,
+	saveCanonicalFactionActions,
+	saveCanonicalLorebookEntry,
+	saveCanonicalRumors,
+	saveCanonicalWorldEvent,
+} from '$lib/services/canonicalWrites';
 import {
 	parseTimeProgression, advanceTime, clamp,
 	makeLoreEntry, WORLD_SIM_DAY_INTERVAL,
@@ -28,8 +41,10 @@ import {
 	ENTROPY_DRIFT_THRESHOLD, ENTROPY_DRIFT_STEP,
 } from './helpers';
 import {
+	briefWikiSchema,
 	searchWikiSchema,
 	worldStateUpdateSchema,
+	type BriefWikiArgs,
 	type SearchWikiArgs,
 	type WorldStateUpdate,
 	type WorldStateLorebookEntry,
@@ -49,6 +64,77 @@ type FactionGoalInput = Omit<Partial<FactionGoal>, 'deadline'> & {
 	deadline?: string | null;
 };
 type WorldSimThreadUpdate = WorldSimulationResult['threadUpdates'][number];
+type SearchWikiToolResult = {
+	query: string;
+	source: 'terminal_wiki' | 'local_lorebook';
+	count: number;
+	fallbackReason?: string;
+	semanticError?: string | null;
+	context?: {
+		citations: string[];
+		pages: Array<{
+			id: string;
+			name: string;
+			type?: string;
+			description: string;
+			path: string;
+			layer?: string;
+			citationId: number;
+			distance: number;
+			sourceSeedPaths: string[];
+		}>;
+		markdown: string;
+	};
+	results: Array<{
+		id: string;
+		name: string;
+		type?: EntryType | string;
+		description: string;
+		hidden_info?: string | null;
+		aliases: string[];
+		keywords: string[];
+		path?: string;
+		layer?: string;
+		score?: number;
+		links?: string[];
+		backlinks?: string[];
+		neighbors?: Array<{ path: string; title: string; distance: number }>;
+	}>;
+};
+type BriefWikiToolResult = {
+	task: string;
+	source: 'terminal_wiki_brief' | 'search_wiki_fallback';
+	mode: string;
+	fallbackReason?: string;
+	semanticError?: string | null;
+	health?: {
+		ok: boolean;
+		issueCount: number;
+		pageCount: number;
+		brokenLinks: number;
+		orphanPages: number;
+		thinPages: number;
+	};
+	inventory?: {
+		pageCount: number;
+		layers: Record<string, number>;
+		hubs: Array<{ path?: string; title?: string; backlinkCount?: number; linkCount?: number }>;
+		rawSourceCount: number;
+	};
+	context?: SearchWikiToolResult['context'];
+	runbook?: string[];
+	briefMarkdown?: string;
+	fallback?: SearchWikiToolResult;
+};
+
+function applyCurrentStoryServerVersion(serverVersion: number | null): void {
+	if (!serverVersion || !story.currentStory) return;
+	story.currentStory = {
+		...story.currentStory,
+		serverVersion,
+		syncStatus: 'synced',
+	};
+}
 
 // ── Main router ──
 
@@ -62,7 +148,14 @@ export async function executeToolCall(
 			if (!parsed.success) {
 				return JSON.stringify({ error: 'Invalid arguments', details: parsed.error.issues });
 			}
-			return JSON.stringify(searchWiki(parsed.data));
+			return JSON.stringify(await searchWiki(parsed.data));
+		}
+		case 'brief_wiki': {
+			const parsed = briefWikiSchema.safeParse(args);
+			if (!parsed.success) {
+				return JSON.stringify({ error: 'Invalid arguments', details: parsed.error.issues });
+			}
+			return JSON.stringify(await briefWiki(parsed.data));
 		}
 		case 'update_world_state': {
 			const parsed = worldStateUpdateSchema.safeParse(args);
@@ -132,19 +225,152 @@ export async function executeToolCall(
 // update_world_state — replaces ClassifierService + Pipeline Phase 1
 // ══════════════════════════════════════════════════════════════
 
-function searchWiki(args: SearchWikiArgs): {
-	query: string;
-	count: number;
-	results: Array<{
-		id: string;
-		name: string;
-		type: EntryType;
-		description: string;
-		hidden_info?: string | null;
-		aliases: string[];
-		keywords: string[];
-	}>;
-} {
+async function searchWiki(args: SearchWikiArgs): Promise<SearchWikiToolResult> {
+	const query = args.query.trim();
+	const limit = Math.max(1, Math.min(args.limit ?? 5, 10));
+	const followDepth = Math.max(0, Math.min(args.follow_depth ?? 1, 3));
+	try {
+		const terminal = await contextTerminalWiki({
+			query,
+			storyId: story.currentStory?.serverStoryId ?? null,
+			limit,
+			followDepth,
+			pageLimit: Math.max(limit, limit * Math.max(1, followDepth + 1)),
+			pageChars: 1200,
+			maxChars: 9000,
+			exact: args.exact,
+		});
+		const pagesByPath = new Map((terminal.pages ?? []).map((page) => [page.path, page]));
+		const results = filterTerminalWikiResults(terminal.seeds ?? [], args.types ?? [])
+			.slice(0, limit)
+			.map((row) => ({
+				id: row.path,
+				name: row.title,
+				type: row.layer,
+				description: truncateForTool(pagesByPath.get(row.path)?.text ?? row.text ?? '', 1200),
+				hidden_info: undefined,
+				aliases: [],
+				keywords: wikiResultKeywords(row),
+				path: row.path,
+				layer: row.layer,
+				score: row.score,
+				links: (row.links ?? []).slice(0, 12),
+				backlinks: (row.backlinks ?? []).slice(0, 12),
+				neighbors: (row.neighbors ?? []).slice(0, 12),
+			}));
+		if (results.length === 0 && story.lorebookEntries.length > 0) {
+			return localSearchWiki(args, terminal.semanticError
+				? `Terminal wiki returned no matches; semantic search note: ${terminal.semanticError}`
+				: 'Terminal wiki returned no matches.');
+		}
+		return {
+			query,
+			source: 'terminal_wiki',
+			count: results.length,
+			semanticError: terminal.semanticError ?? null,
+			context: {
+				citations: (terminal.citations ?? []).slice(0, 24),
+				pages: filterTerminalWikiContextPages(terminal.pages ?? [], args.types ?? [])
+					.slice(0, 24)
+					.map((page) => ({
+						id: page.path,
+						name: page.title,
+						type: page.layer,
+						description: truncateForTool(page.text ?? '', 900),
+						path: page.path,
+						layer: page.layer,
+						citationId: page.citationId,
+						distance: page.distance,
+						sourceSeedPaths: page.sourceSeedPaths,
+					})),
+				markdown: truncateForTool(terminal.contextMarkdown ?? '', 6000),
+			},
+			results,
+		};
+	} catch (error) {
+		return localSearchWiki(args, error instanceof Error ? error.message : String(error));
+	}
+}
+
+async function briefWiki(args: BriefWikiArgs): Promise<BriefWikiToolResult> {
+	const task = args.task.trim();
+	const limit = Math.max(1, Math.min(args.limit ?? 5, 8));
+	const followDepth = Math.max(0, Math.min(args.follow_depth ?? 2, 3));
+	const pageLimit = Math.max(1, Math.min(args.page_limit ?? 12, 24));
+	const mode = args.mode ?? 'answer';
+
+	try {
+		const brief = await briefTerminalWiki({
+			query: task,
+			storyId: story.currentStory?.serverStoryId ?? null,
+			mode,
+			limit,
+			followDepth,
+			pageLimit,
+			pageChars: 1200,
+			maxChars: 12000,
+			inventoryLimit: 8,
+			exact: args.exact,
+		});
+		const summary = brief.lint?.summary ?? {};
+		return {
+			task,
+			source: 'terminal_wiki_brief',
+			mode: brief.mode ?? mode,
+			semanticError: brief.search?.semanticError ?? null,
+			health: {
+				ok: Boolean(brief.lint?.ok),
+				issueCount: summary.issueCount ?? 0,
+				pageCount: summary.pageCount ?? brief.inventory?.pageCount ?? 0,
+				brokenLinks: summary.brokenLinks ?? 0,
+				orphanPages: summary.orphanPages ?? 0,
+				thinPages: summary.thinPages ?? 0,
+			},
+			inventory: {
+				pageCount: brief.inventory?.pageCount ?? 0,
+				layers: brief.inventory?.layers ?? {},
+				hubs: mapBriefHubs(brief.inventory?.hubs ?? []),
+				rawSourceCount: brief.inventory?.rawSources?.length ?? 0,
+			},
+			context: {
+				citations: (brief.context?.citations ?? []).slice(0, 24),
+				pages: filterTerminalWikiContextPages(brief.context?.pages ?? [], [])
+					.slice(0, 24)
+					.map((page) => ({
+						id: page.path,
+						name: page.title,
+						type: page.layer,
+						description: truncateForTool(page.text ?? '', 900),
+						path: page.path,
+						layer: page.layer,
+						citationId: page.citationId,
+						distance: page.distance,
+						sourceSeedPaths: page.sourceSeedPaths,
+					})),
+				markdown: truncateForTool(brief.context?.contextMarkdown ?? '', 6500),
+			},
+			runbook: (brief.runbook ?? []).slice(0, 10),
+			briefMarkdown: truncateForTool(brief.briefMarkdown ?? '', 9000),
+		};
+	} catch (error) {
+		return {
+			task,
+			source: 'search_wiki_fallback',
+			mode,
+			fallbackReason: error instanceof Error ? error.message : String(error),
+			fallback: await searchWiki({
+				query: task,
+				types: [],
+				limit,
+				follow_depth: followDepth,
+				include_hidden: true,
+				exact: args.exact ?? false,
+			}),
+		};
+	}
+}
+
+function localSearchWiki(args: SearchWikiArgs, fallbackReason?: string): SearchWikiToolResult {
 	const query = args.query.trim();
 	const terms = tokenize(query);
 	const typeFilter = new Set(args.types ?? []);
@@ -160,7 +386,9 @@ function searchWiki(args: SearchWikiArgs): {
 
 	return {
 		query,
+		source: 'local_lorebook',
 		count: scored.length,
+		fallbackReason,
 		results: scored.map(({ entry }) => ({
 			id: entry.id,
 			name: entry.name,
@@ -171,6 +399,45 @@ function searchWiki(args: SearchWikiArgs): {
 			keywords: entry.injection?.keywords ?? [],
 		})),
 	};
+}
+
+function mapBriefHubs(hubs: TerminalWikiBriefResponse['inventory']['hubs']): NonNullable<BriefWikiToolResult['inventory']>['hubs'] {
+	return hubs.slice(0, 8).map((row) => ({
+		path: typeof row.path === 'string' ? row.path : undefined,
+		title: typeof row.title === 'string' ? row.title : undefined,
+		backlinkCount: typeof row.backlinkCount === 'number' ? row.backlinkCount : undefined,
+		linkCount: typeof row.linkCount === 'number' ? row.linkCount : undefined,
+	}));
+}
+
+function filterTerminalWikiContextPages(pages: TerminalWikiContextPage[], types: SearchWikiArgs['types']): TerminalWikiContextPage[] {
+	if (!types || types.length === 0) return pages;
+	const folders = new Set(types.map((type) => `wiki/${type}s/`));
+	return pages.filter((row) => {
+		const path = row.path.toLowerCase();
+		if (folders.has(path.split('/').slice(0, 2).join('/') + '/')) return true;
+		return types.some((type) => path.includes(`/${type}`) || row.title.toLowerCase().includes(type));
+	});
+}
+
+function filterTerminalWikiResults(results: TerminalWikiSearchResult[], types: SearchWikiArgs['types']): TerminalWikiSearchResult[] {
+	if (!types || types.length === 0) return results;
+	const folders = new Set(types.map((type) => `wiki/${type}s/`));
+	return results.filter((row) => {
+		const path = row.path.toLowerCase();
+		if (folders.has(path.split('/').slice(0, 2).join('/') + '/')) return true;
+		return types.some((type) => path.includes(`/${type}`) || row.title.toLowerCase().includes(type));
+	});
+}
+
+function wikiResultKeywords(row: TerminalWikiSearchResult): string[] {
+	return [
+		row.layer,
+		...(row.links ?? []).slice(0, 4),
+		...(row.backlinks ?? []).slice(0, 4),
+	]
+		.filter((value): value is string => Boolean(value))
+		.slice(0, 12);
 }
 
 function tokenize(text: string): string[] {
@@ -274,7 +541,7 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 					...char.pressures.filter(p => p && p.trim()),
 				])].slice(-8); // cap so it doesn't bloat — keep most recent
 				const newState: CharacterEntryState = { ...prev, pressures: merged };
-				await updateLorebookEntry(target.id, { state: newState as any, updatedAt: Date.now() });
+				applyCurrentStoryServerVersion((await patchCanonicalLorebookEntry(target.id, { state: newState as any, updatedAt: Date.now() })).serverVersion);
 				story.lorebookEntries = story.lorebookEntries.map(e =>
 					e.id === target.id ? { ...e, state: newState as any } : e
 				);
@@ -428,7 +695,7 @@ async function handleLorebookCreations(
 		const existing = findExistingLoreEntry(incoming);
 		if (existing) {
 			const updated = mergeLorebookEntry(existing, incoming);
-			await updateLorebookEntry(existing.id, updated);
+			applyCurrentStoryServerVersion((await patchCanonicalLorebookEntry(existing.id, updated)).serverVersion);
 			updatedEntries.set(existing.id, { ...existing, ...updated });
 			console.log(`[Executor] Lorebook entry "${incoming.name}" already exists — skipping creation`);
 			continue;
@@ -450,7 +717,7 @@ async function handleLorebookCreations(
 			},
 		);
 
-		await createLorebookEntry(entry);
+		applyCurrentStoryServerVersion(await saveCanonicalLorebookEntry(entry, 'create'));
 		newEntries.push(entry);
 	}
 
@@ -659,7 +926,7 @@ async function syncLocationConnections(
 
 	if (changed) {
 		state.connections = conns;
-		await updateLorebookEntry(sourceEntry.id, { state: state as any, updatedAt: Date.now() });
+		applyCurrentStoryServerVersion((await patchCanonicalLorebookEntry(sourceEntry.id, { state: state as any, updatedAt: Date.now() })).serverVersion);
 		story.lorebookEntries = story.lorebookEntries.map(e =>
 			e.id === sourceEntry.id ? { ...e, state: state as any } : e
 		);
@@ -681,7 +948,7 @@ async function syncConversationMemory(
 		);
 		if (!npcEntry) continue;
 
-		await createConversationMemory({
+		await saveCanonicalConversationMemory({
 			id: uuid(), storyId: story.currentStory.id,
 			npcEntryId: npcEntry.id, npcName: conv.npcName,
 			storyEntryId: narrativeEntry.id, storyPosition: narrativeEntry.position,
@@ -695,7 +962,7 @@ async function syncConversationMemory(
 		cState.conversationTopics = [...new Set([...(cState.conversationTopics ?? []), conv.topicSummary])];
 		cState.lastConversationAt = narrativeEntry.position;
 		if (conv.emotionalShift) cState.personalOpinion = conv.emotionalShift;
-		await updateLorebookEntry(npcEntry.id, { state: cState as any, updatedAt: Date.now() });
+		applyCurrentStoryServerVersion((await patchCanonicalLorebookEntry(npcEntry.id, { state: cState as any, updatedAt: Date.now() })).serverVersion);
 		updatedEntries.set(npcEntry.id, { ...npcEntry, state: cState as any });
 	}
 
@@ -768,7 +1035,7 @@ async function syncFactionMembership(source: Entry, target: Entry, type: string)
 	const knownMembers = mergeStrings(state.knownMembers ?? [], [source.id]);
 	if (knownMembers.length === (state.knownMembers ?? []).length) return;
 	const next: FactionEntryState = { ...state, knownMembers };
-	await updateLorebookEntry(target.id, { state: next as any, updatedAt: Date.now() });
+	applyCurrentStoryServerVersion((await patchCanonicalLorebookEntry(target.id, { state: next as any, updatedAt: Date.now() })).serverVersion);
 	story.lorebookEntries = story.lorebookEntries.map(e =>
 		e.id === target.id ? { ...e, state: next as any, updatedAt: Date.now() } : e
 	);
@@ -806,7 +1073,7 @@ async function applyTimeProgression(progression: string): Promise<void> {
  * Fan-out called whenever the world clock advances. Owns all time-driven
  * subsystems so we have one ordered place to add new ones.
  *
- * Today: rumor aging + world-sim cadence trigger.
+ * Today: rumor aging + scheme ticking. World simulation is chapter-triggered.
  * Future hooks (intentionally kept here): agreement deadline checks,
  * faction goal progress, NPC schedule advancement.
  */
@@ -814,7 +1081,6 @@ async function tickWorld(deltaMinutes: number): Promise<void> {
 	if (!story.currentStory) return;
 	await ageRumors();
 	await schemeService.tick(deltaMinutes);
-	await maybeRunWorldSim();
 	// future: ageAgreements(deltaMinutes); progressFactionGoals(deltaMinutes); ...
 }
 
@@ -868,25 +1134,26 @@ async function ageRumors(): Promise<void> {
 	}
 
 	if (updates.length === 0) return;
-	for (const u of updates) {
-		try { await updateRumor(u.id, { status: u.status }); }
-		catch (e) { console.warn(`[Executor] ageRumors update failed for ${u.id}:`, e); }
-	}
 	const byId = new Map(updates.map((u) => [u.id, u.status]));
+	const updatedRumors = story.rumors
+		.filter((r) => byId.has(r.id))
+		.map((r) => ({ ...r, status: byId.get(r.id)! }));
+	try {
+		applyCurrentStoryServerVersion(await saveCanonicalRumors(updatedRumors));
+	} catch (e) {
+		console.warn('[Executor] ageRumors update failed:', e);
+	}
 	story.rumors = story.rumors.map((r) =>
 		byId.has(r.id) ? { ...r, status: byId.get(r.id)! } : r,
 	);
 }
 
 /**
- * Fire the world simulation if enough in-world days have passed since the
- * last tick. Lifted out of `applyTimeProgression` so `tickWorld` can own
- * all clock-driven side effects.
+ * Manual world-simulation entry point for the World drawer.
  *
  * Pass `{ force: true }` to bypass the day-interval gate — used by the manual
- * "Run now" button in the World drawer. The wsConfig.enabled gate is always
- * respected; if the service is disabled, the run is skipped silently and the
- * UI should disable its button.
+ * "Run now" button in the World drawer. Automatic world simulation runs when
+ * a new chapter is created.
  */
 export async function maybeRunWorldSim(opts: { force?: boolean } = {}): Promise<void> {
 	if (!story.currentStory) return;
@@ -956,7 +1223,7 @@ export async function maybeRunWorldSim(opts: { force?: boolean } = {}): Promise<
 				createdAt: now,
 			}));
 			try {
-				await bulkPutFactionActions(rows);
+				applyCurrentStoryServerVersion(await saveCanonicalFactionActions(rows));
 				story.factionActions = [...story.factionActions, ...rows];
 			} catch (e) { console.warn('[Executor] persist factionActions failed:', e); }
 
@@ -990,7 +1257,7 @@ export async function maybeRunWorldSim(opts: { force?: boolean } = {}): Promise<
 				createdAt: now,
 			}));
 			try {
-				await bulkPutRumors(rows);
+				applyCurrentStoryServerVersion(await saveCanonicalRumors(rows));
 				story.rumors = [...story.rumors, ...rows];
 			} catch (e) { console.warn('[Executor] persist rumors failed:', e); }
 		}
@@ -1136,7 +1403,7 @@ async function evaluateConsequences(
 				sourceEntityId: charEntry.id, type: 'death', severity: 'major',
 				consequences, appliedAt: null, createdAt: Date.now(),
 			};
-			await createWorldEvent(event);
+			applyCurrentStoryServerVersion(await saveCanonicalWorldEvent(event));
 			newEvents.push(event);
 
 			// Apply immediate consequences
@@ -1145,7 +1412,7 @@ async function evaluateConsequences(
 			}
 
 			// Persist applied consequence statuses
-			await updateWorldEvent(event.id, { consequences: event.consequences });
+			applyCurrentStoryServerVersion(await saveCanonicalWorldEvent(event));
 		}
 	}
 
@@ -1172,7 +1439,7 @@ async function applyConsequence(consequence: Consequence, eventId: string): Prom
 		}
 		if (state.playerStanding <= -50) state.status = 'hostile';
 		else if (state.playerStanding >= 50) state.status = 'allied';
-		await updateLorebookEntry(entry.id, { state: state as any, updatedAt: Date.now() });
+		applyCurrentStoryServerVersion((await patchCanonicalLorebookEntry(entry.id, { state: state as any, updatedAt: Date.now() })).serverVersion);
 		story.lorebookEntries = story.lorebookEntries.map(e =>
 			e.id === entry.id ? { ...e, state: state as any } : e
 		);
@@ -1352,7 +1619,7 @@ async function writeRelation(
 	const prev = state.interFactionRelations ?? {};
 	const newRels = { ...prev, [otherName]: relation };
 	const newState = { ...state, interFactionRelations: newRels };
-	await updateLorebookEntry(factionEntryId, { state: newState as any, updatedAt: Date.now() });
+	applyCurrentStoryServerVersion((await patchCanonicalLorebookEntry(factionEntryId, { state: newState as any, updatedAt: Date.now() })).serverVersion);
 	story.lorebookEntries = story.lorebookEntries.map(e =>
 		e.id === factionEntryId ? { ...e, state: newState as any } : e,
 	);
@@ -1437,7 +1704,7 @@ async function cascadePlayerStandingThroughAllies(
 			playerStanding: newStanding,
 			status: newStanding <= -50 ? 'hostile' : newStanding >= 50 ? 'allied' : allyState.status ?? 'unknown',
 		};
-		await updateLorebookEntry(ally.id, { state: newAllyState as any, updatedAt: Date.now() });
+		applyCurrentStoryServerVersion((await patchCanonicalLorebookEntry(ally.id, { state: newAllyState as any, updatedAt: Date.now() })).serverVersion);
 		story.lorebookEntries = story.lorebookEntries.map(e =>
 			e.id === ally.id ? { ...e, state: newAllyState as any } : e,
 		);

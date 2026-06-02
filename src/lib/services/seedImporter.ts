@@ -10,7 +10,8 @@
  */
 
 import { uuid } from '$lib/utils/uuid';
-import { createLorebookEntry, getLorebookEntries } from '$lib/services/database';
+import { getLorebookEntries } from '$lib/services/database';
+import { saveCanonicalLorebookEntry } from '$lib/services/canonicalWrites';
 import type {
 	Entry,
 	EntryType,
@@ -173,7 +174,7 @@ export async function importFactionSeed(
 				loreManagementBlacklisted: false,
 			};
 
-			await createLorebookEntry(entry);
+			await saveCanonicalLorebookEntry(entry, 'create');
 			result.imported++;
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
@@ -268,7 +269,7 @@ export async function importLorebookSeed(
 				loreManagementBlacklisted: false,
 			};
 
-			await createLorebookEntry(entry);
+			await saveCanonicalLorebookEntry(entry, 'create');
 			result.imported++;
 		} catch (e) {
 			result.errors.push(`${seed.name}: ${e instanceof Error ? e.message : String(e)}`);

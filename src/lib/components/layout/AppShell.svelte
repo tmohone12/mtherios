@@ -1,17 +1,19 @@
 <script lang="ts">
-	import { BookOpen, Library, ScrollText, Settings } from 'lucide-svelte';
+	import { BookOpen, Database, Library, ScrollText, Settings } from 'lucide-svelte';
 	import SettingsModal from '$lib/components/settings/SettingsModal.svelte';
 	import LibraryPanel from '$lib/components/library/LibraryPanel.svelte';
 	import LorebookPanel from '$lib/components/lorebook/LorebookPanel.svelte';
 	import StoryMemoryPanel from '$lib/components/memory/StoryMemoryPanel.svelte';
+	import WorldExplorer from '$lib/components/database/WorldExplorer.svelte';
 
-	let activePanel = $state<'library' | 'chapters' | 'wiki' | 'settings'>('library');
+	let activePanel = $state<'library' | 'chapters' | 'wiki' | 'database' | 'settings'>('library');
 	let settingsOpen = $state(false);
 
 	const navItems = [
 		{ id: 'library' as const, icon: Library, label: 'Library' },
 		{ id: 'chapters' as const, icon: BookOpen, label: 'Chapters' },
 		{ id: 'wiki' as const, icon: ScrollText, label: 'Wiki' },
+		{ id: 'database' as const, icon: Database, label: 'World DB' },
 		{ id: 'settings' as const, icon: Settings, label: 'Settings', action: () => settingsOpen = true },
 	];
 </script>
@@ -56,6 +58,8 @@
 			<StoryMemoryPanel />
 		{:else if activePanel === 'wiki'}
 			<LorebookPanel />
+		{:else if activePanel === 'database'}
+			<WorldExplorer />
 		{:else if activePanel === 'settings'}
 			<div class="flex h-full items-center justify-center">
 				<button class="rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] px-6 py-3 font-display text-sm font-semibold tracking-wide text-[var(--bg-primary)]"

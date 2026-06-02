@@ -6,6 +6,7 @@
 	import { settings, SERVICE_DEFINITIONS, SERVICE_PROFILES } from '$lib/stores/settings.svelte';
 	import { PROVIDERS, getProviderList } from '$lib/services/ai/sdk/providers/config';
 	import { STYLE_PRESETS } from '$lib/services/ai/image/ImageGenerationService';
+	import { defaultTerminalApiKeyRef, syncTerminalLlmSettingsFromBrowser } from '$lib/services/terminalSettings';
 	import type { ProviderType, APIProfile, UISettings } from '$lib/types';
 	import { uuid } from '$lib/utils/uuid';
 	import { fade } from 'svelte/transition';
@@ -49,6 +50,7 @@
 	// Provider editing
 	let editingProvider = $state<ProviderType | null>(null);
 	let apiKey = $state('');
+	let terminalApiKeyRef = $state('');
 	let customUrl = $state('');
 	let model = $state('');
 	let showApiKey = $state(false);
@@ -160,6 +162,7 @@
 		editingProvider = id;
 		const existing = getProfileByProvider(id);
 		apiKey = existing?.apiKey ?? '';
+		terminalApiKeyRef = existing?.terminalApiKeyRef ?? defaultTerminalApiKeyRef(id);
 		model = existing ? (settings.narrativeSettings.model || '') : '';
 		customUrl = existing?.baseUrl ?? '';
 		showApiKey = false;
@@ -217,9 +220,11 @@
 		const providerType = editingProvider;
 		const providerConfig = PROVIDERS[providerType];
 		const existing = getProfileByProvider(providerType);
+		const normalizedKeyRef = terminalApiKeyRef.trim() || null;
 
 		if (existing) {
 			existing.apiKey = apiKey;
+			existing.terminalApiKeyRef = normalizedKeyRef;
 			if (customUrl) existing.baseUrl = customUrl;
 			else delete existing.baseUrl;
 			if (fetchedModelsForProfile.length > 0) existing.fetchedModels = [...fetchedModelsForProfile];
@@ -231,6 +236,7 @@
 				name: providerConfig?.name ?? providerType,
 				providerType,
 				apiKey,
+				terminalApiKeyRef: normalizedKeyRef,
 				...(customUrl ? { baseUrl: customUrl } : {}),
 				customModels: [],
 				fetchedModels: [...fetchedModelsForProfile],
@@ -246,6 +252,14 @@
 		if (model) {
 			settings.narrativeSettings.model = model;
 			await settings.saveNarrativeSettings();
+		}
+		try {
+			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']);
+			testStatus = 'success';
+			testMessage = 'Saved provider and synced terminal runtime settings.';
+		} catch (error) {
+			testStatus = 'error';
+			testMessage = `Saved locally, but terminal sync failed: ${error instanceof Error ? error.message : String(error)}`;
 		}
 	}
 
@@ -332,11 +346,19 @@
 	async function saveUiNumber(key: NumericUiSettingKey, value: number, min: number, max: number) {
 		settings.uiSettings[key] = clampDial(value, min, max);
 		await settings.saveUISettings();
+		if (key === 'backendMemoryTokenBudget') {
+			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
+				console.warn('[Settings] Terminal memory setting sync failed:', error);
+			});
+		}
 	}
 
 	async function saveContextBudgetValue(value: number) {
 		settings.contextBudget = clampDial(value, 0, 200000);
 		await settings.saveContextBudget();
+		await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
+			console.warn('[Settings] Terminal context budget sync failed:', error);
+		});
 	}
 
 	const providerIcons: Record<string, typeof Zap> = {
@@ -437,7 +459,7 @@
 	];
 
 	const retrievalDials: MemoryDial[] = [
-		{ key: 'backendMemoryTokenBudget', label: 'Backend Memory Packet', description: 'Target size for server-retrieved memory when a story is bound to backend canon.', min: 160, max: 2400, step: 40, suffix: 'tokens' },
+		{ key: 'backendMemoryTokenBudget', label: 'Terminal Memory Packet', description: 'Target size for terminal-retrieved memory when a story is bound to the terminal world database.', min: 160, max: 2400, step: 40, suffix: 'tokens' },
 		{ key: 'retrievedChapterLimit', label: 'Chapter Memories', description: 'Searchable episodic chapters injected for the current action.', min: 0, max: 12, step: 1, suffix: 'chapters', zeroLabel: 'Off' },
 		{ key: 'retrievedLoreEntryLimit', label: 'Lorebook Matches', description: 'Local lore entries pulled by current action when backend retrieval is unavailable.', min: 0, max: 24, step: 1, suffix: 'entries', zeroLabel: 'Off' },
 		{ key: 'conversationMemoryLimit', label: 'NPC Conversation Memory', description: 'NPC-specific remembered exchanges eligible for the current scene.', min: 0, max: 24, step: 1, suffix: 'memories', zeroLabel: 'Off' },
@@ -695,6 +717,20 @@
 								</div>
 							{/if}
 
+							<div class="space-y-1.5">
+								<label for="terminal-key-ref-{editingProvider}" class="text-xs text-[var(--text-muted)]">Terminal key ref</label>
+								<input
+									id="terminal-key-ref-{editingProvider}"
+									type="text"
+									bind:value={terminalApiKeyRef}
+									placeholder={defaultTerminalApiKeyRef(editingProvider)}
+									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
+								/>
+								<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">
+									Saved to terminal settings as an env/config reference. The raw key stays in browser settings or ignored local config, not Postgres.
+								</p>
+							</div>
+
 							<!-- Custom URL -->
 							{#if editingProvider === 'openai-compatible' || editingProvider === 'ollama' || editingProvider === 'lmstudio' || editingProvider === 'anthropic-proxy'}
 								<div class="space-y-1.5">
@@ -782,7 +818,7 @@
 						<ContextWindow />
 					</div>
 					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
-						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Backend Canon</h4>
+						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Terminal Runtime</h4>
 						<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
 							<input
 								type="checkbox"
@@ -791,8 +827,8 @@
 								class="mt-0.5 accent-[var(--color-gold-400)]"
 							/>
 							<span class="min-w-0">
-								<span class="block text-xs font-medium text-[var(--text-primary)]">Server-authoritative online turns</span>
-								<span class="mt-1 block text-[10px] leading-relaxed text-[var(--text-muted)]">For backend-bound stories, route turns through /api/turn so canon, events, patches, and memory nodes are written server-side.</span>
+								<span class="block text-xs font-medium text-[var(--text-primary)]">Terminal-run online turns</span>
+								<span class="mt-1 block text-[10px] leading-relaxed text-[var(--text-muted)]">For terminal-bound stories, route turns through /api/turn so prompts, model calls, events, patches, and memory nodes are handled by the terminal process.</span>
 							</span>
 						</label>
 					</div>
@@ -890,7 +926,7 @@
 									onchange={(e) => { settings.uiSettings.serverAuthoritativeTurns = (e.target as HTMLInputElement).checked; settings.saveUISettings(); }}
 									class="accent-[var(--color-gold-400)]"
 								/>
-								Backend turns
+								Terminal turns
 							</label>
 						</div>
 

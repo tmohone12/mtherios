@@ -17,6 +17,10 @@ Thumbs.db
 .env.*
 !.env.example
 !.env.test
+mtherios.config.json
+
+# Local terminal-app data
+/data/
 
 # Vite
 vite.config.js.timestamp-*

@@ -29,6 +29,7 @@ export const SERVICE_DEFINITIONS: Record<string, { label: string; description: s
 	imageGeneration: { label: 'Image Generation', description: 'Scene image generation', profile: 'image', defaultTemp: 0.7, defaultMaxTokens: 1024 },
 	worldSimulation: { label: 'World Simulation', description: 'Living world DM — plot injection, faction movements, rumors, world tension', profile: 'worldState', defaultTemp: 0.6, defaultMaxTokens: 8192 },
 	arcCondensation: { label: 'Arc Condensation', description: 'Condense chapters into arc summaries', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	sagaCondensation: { label: 'Saga Condensation', description: 'Condense arcs into long-term saga summaries', profile: 'memoryContext', defaultTemp: 0.25, defaultMaxTokens: 4096 },
 	proceduralMemory: { label: 'Procedural Memory', description: 'CASS-inspired narrative rule extraction and injection', profile: 'memoryContext', defaultTemp: 0.4, defaultMaxTokens: 4096 },
 	wikiLint: { label: 'Wiki Lint', description: 'Health-check the lorebook for contradictions, stale claims, orphan entries, and missing entries.', profile: 'lorebook', defaultTemp: 0.2, defaultMaxTokens: 16384 },
 };
@@ -47,7 +48,7 @@ export const SERVICE_PROFILES: ServiceProfile[] = [
 	{ id: 'narrative', label: 'Narrative', description: 'Main story generation engine', icon: '✍️', serviceIds: ['narrative'] },
 	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, items, living world simulation, and plot momentum', icon: '🌍', serviceIds: ['classifier', 'worldSimulation'] },
 	{ id: 'guidance', label: 'Player Guidance', description: 'Suggestions and branching action choices', icon: '🧭', serviceIds: ['suggestions', 'actionChoices'] },
-	{ id: 'memoryContext', label: 'Memory & Context', description: 'Chapter summaries, arc condensation, and procedural memory', icon: '🧠', serviceIds: ['memory', 'arcCondensation', 'proceduralMemory'] },
+	{ id: 'memoryContext', label: 'Memory & Context', description: 'Chapter, arc, saga, and procedural memory', icon: '🧠', serviceIds: ['memory', 'arcCondensation', 'sagaCondensation', 'proceduralMemory'] },
 	{ id: 'lorebook', label: 'Lorebook', description: 'Discover, curate, query, and lint lore entries', icon: '📜', serviceIds: ['loreManagement', 'entryRefinement', 'wikiLint'] },
 	{ id: 'style', label: 'Style Review', description: 'POV, tense, and prose quality checks', icon: '✨', serviceIds: ['styleReviewer'] },
 	{ id: 'image', label: 'Image Generation', description: 'Scene and character image generation', icon: '🎨', serviceIds: ['imageGeneration'] },
@@ -121,9 +122,9 @@ class SettingsStore {
 		retrievedLoreEntryLimit: 8,
 		conversationMemoryLimit: 6,
 		proceduralMemoryLimit: 8,
-		backendMemoryTokenBudget: 1100,
+		backendMemoryTokenBudget: 800,
 		snapshotTokenCap: 0,
-		serverAuthoritativeTurns: false,
+		serverAuthoritativeTurns: true,
 	});
 
 	// ── Per-Service Configs ──
@@ -273,7 +274,7 @@ class SettingsStore {
 		this.uiSettings.retrievedLoreEntryLimit = this.clampNumber(this.uiSettings.retrievedLoreEntryLimit, 0, 24, 8);
 		this.uiSettings.conversationMemoryLimit = this.clampNumber(this.uiSettings.conversationMemoryLimit, 0, 24, 6);
 		this.uiSettings.proceduralMemoryLimit = this.clampNumber(this.uiSettings.proceduralMemoryLimit, 0, 24, 8);
-		this.uiSettings.backendMemoryTokenBudget = this.clampNumber(this.uiSettings.backendMemoryTokenBudget, 160, 2400, 1100);
+		this.uiSettings.backendMemoryTokenBudget = this.clampNumber(this.uiSettings.backendMemoryTokenBudget, 160, 2400, 800);
 		this.uiSettings.snapshotTokenCap = this.clampNumber(this.uiSettings.snapshotTokenCap, 0, 50000, 0);
 	}
 

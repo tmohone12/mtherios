@@ -23,7 +23,8 @@ import { uuid } from '$lib/utils/uuid';
 import { story } from '$lib/stores/story.svelte';
 import { settings } from '$lib/stores/settings.svelte';
 import { generateStructuredWithTools } from '$lib/services/ai/sdk/generate';
-import { getChapters, createScheme, updateScheme, bulkPutSchemes } from '$lib/services/database';
+import { getChapters } from '$lib/services/database';
+import { saveCanonicalScheme, saveCanonicalSchemes } from '$lib/services/canonicalWrites';
 import type { Scheme, SchemeStage, Entry } from '$lib/types';
 import {
 	manageSchemesSchema,
@@ -42,6 +43,15 @@ const PRESSURE_CLIMAX_THRESHOLD = 70;
 const PRESSURE_VISIBLE_OVERRIDE = 70; // pressure ≥ this leaks the scheme even when secret
 const INJECT_CAP = 4; // narrator gets at most this many schemes
 const TIME_STAGE_DEFAULT_DAYS = 3;
+
+function applyCurrentStoryServerVersion(serverVersion: number | null): void {
+	if (!serverVersion || !story.currentStory) return;
+	story.currentStory = {
+		...story.currentStory,
+		serverVersion,
+		syncStatus: 'synced',
+	};
+}
 
 /**
  * Gate for when `evaluate()` should run. Cheap heuristic: only call the LLM
@@ -176,7 +186,7 @@ async function applyManageSchemes(args: ManageSchemesArgs, errors: string[]): Pr
 			updatedAt: now,
 		};
 		try {
-			await createScheme(scheme);
+			applyCurrentStoryServerVersion(await saveCanonicalScheme(scheme));
 			created.push(scheme);
 		} catch (e) {
 			errors.push(`scheme.create persist: ${e instanceof Error ? e.message : e}`);
@@ -211,8 +221,9 @@ async function applyManageSchemes(args: ManageSchemesArgs, errors: string[]): Pr
 			next.status = 'climaxing';
 		}
 		try {
-			await updateScheme(target.id, next);
-			story.schemes = story.schemes.map(s => (s.id === target.id ? { ...s, ...next } : s));
+			const updated = { ...target, ...next };
+			applyCurrentStoryServerVersion(await saveCanonicalScheme(updated));
+			story.schemes = story.schemes.map(s => (s.id === target.id ? updated : s));
 		} catch (err) {
 			errors.push(`scheme.escalate persist: ${err instanceof Error ? err.message : err}`);
 		}
@@ -226,8 +237,9 @@ async function applyManageSchemes(args: ManageSchemesArgs, errors: string[]): Pr
 		}
 		const next: Partial<Scheme> = { status: r.outcome, updatedAt: now };
 		try {
-			await updateScheme(target.id, next);
-			story.schemes = story.schemes.map(s => (s.id === target.id ? { ...s, ...next } : s));
+			const updated = { ...target, ...next };
+			applyCurrentStoryServerVersion(await saveCanonicalScheme(updated));
+			story.schemes = story.schemes.map(s => (s.id === target.id ? updated : s));
 		} catch (err) {
 			errors.push(`scheme.resolve persist: ${err instanceof Error ? err.message : err}`);
 		}
@@ -274,7 +286,7 @@ export async function tick(_deltaMinutes: number): Promise<void> {
 
 	if (updates.length === 0) return;
 	try {
-		await bulkPutSchemes(updates);
+		applyCurrentStoryServerVersion(await saveCanonicalSchemes(updates));
 		const byId = new Map(updates.map(u => [u.id, u]));
 		story.schemes = story.schemes.map(s => byId.get(s.id) ?? s);
 	} catch (e) {
@@ -450,7 +462,7 @@ async function persistPlayerScheme(
 		updatedAt: now,
 	};
 	try {
-		await createScheme(scheme);
+		applyCurrentStoryServerVersion(await saveCanonicalScheme(scheme));
 		story.schemes = [...story.schemes, scheme];
 		return scheme;
 	} catch (e) {

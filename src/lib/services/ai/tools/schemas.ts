@@ -147,12 +147,24 @@ export const searchWikiSchema = z.object({
 	query: z.string().min(1),
 	types: z.array(z.enum(['character', 'location', 'item', 'faction', 'concept', 'event'])).optional().default([]),
 	limit: z.number().int().min(1).max(10).optional().default(5),
+	follow_depth: z.number().int().min(0).max(3).optional().default(1),
 	include_hidden: z.boolean().optional().default(true),
+	exact: z.boolean().optional().default(false),
+});
+
+export const briefWikiSchema = z.object({
+	task: z.string().min(1),
+	mode: z.enum(['answer', 'maintain', 'ingest', 'lint', 'explore']).optional().default('answer'),
+	limit: z.number().int().min(1).max(8).optional().default(5),
+	follow_depth: z.number().int().min(0).max(3).optional().default(2),
+	page_limit: z.number().int().min(1).max(24).optional().default(12),
+	exact: z.boolean().optional().default(false),
 });
 
 export type WorldStateUpdate = z.infer<typeof worldStateUpdateSchema>;
 export type WorldStateLorebookEntry = z.infer<typeof worldStateLorebookEntrySchema>;
 export type SearchWikiArgs = z.infer<typeof searchWikiSchema>;
+export type BriefWikiArgs = z.infer<typeof briefWikiSchema>;
 
 // ── OpenAI Function-Calling Format ──
 
@@ -161,7 +173,7 @@ export const GM_TOOLS = [
 		type: 'function' as const,
 		function: {
 			name: 'search_wiki',
-			description: 'Search the local lorebook/wiki for relevant entries before narrating. Use when needed facts are not already present in context.',
+			description: 'Search the terminal-owned Obsidian/Qdrant wiki before narrating, returning an LLM-ready context pack from followed wikilinks/backlinks when useful. Falls back to the local lorebook cache if the terminal wiki is unavailable.',
 			parameters: {
 				type: 'object',
 				properties: {
@@ -178,12 +190,58 @@ export const GM_TOOLS = [
 						type: 'number',
 						description: 'Maximum results to return, 1-10. Default 5.',
 					},
+					follow_depth: {
+						type: 'number',
+						description: 'How many wikilink/backlink layers to include for each result, 0-3. Default 1.',
+					},
 					include_hidden: {
 						type: 'boolean',
-						description: 'Whether to include narrator-only hidden_info in results. Default true.',
+						description: 'Whether local-cache fallback results may include narrator-only hidden_info. Default true.',
+					},
+					exact: {
+						type: 'boolean',
+						description: 'Use exact markdown search only instead of semantic Qdrant search. Default false.',
 					},
 				},
 				required: ['query'],
+			},
+		},
+	},
+	{
+		type: 'function' as const,
+		function: {
+			name: 'brief_wiki',
+			description: 'Get a broader terminal-owned wiki orientation brief before narrating or repairing lore. Use this when the scene touches several pages, when you need health/hubs/recent context, or when a plain search is too narrow. Returns followed wikilink/backlink context plus a runbook.',
+			parameters: {
+				type: 'object',
+				properties: {
+					task: {
+						type: 'string',
+						description: 'The question or maintenance task to orient around.',
+					},
+					mode: {
+						type: 'string',
+						enum: ['answer', 'maintain', 'ingest', 'lint', 'explore'],
+						description: 'Briefing style. Use answer before narration, explore for broad lore mapping, maintain/lint/ingest for wiki maintenance. Default answer.',
+					},
+					limit: {
+						type: 'number',
+						description: 'Search seed count, 1-8. Default 5.',
+					},
+					follow_depth: {
+						type: 'number',
+						description: 'How many wikilink/backlink layers to include, 0-3. Default 2.',
+					},
+					page_limit: {
+						type: 'number',
+						description: 'Maximum context pages in the brief, 1-24. Default 12.',
+					},
+					exact: {
+						type: 'boolean',
+						description: 'Use exact markdown search only instead of semantic Qdrant search. Default false.',
+					},
+				},
+				required: ['task'],
 			},
 		},
 	},

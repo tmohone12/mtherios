@@ -75,8 +75,11 @@ export interface SyncOutboxOp {
   type: 'create_entry' | 'delete_entry' | 'turn_command' | 'state_correction' | 'pin_memory' | 'merge_memory' | 'archive_memory' | 'import_bundle'
   payload: Record<string, unknown>
   localVersion: number
-  status: 'pending' | 'pushing' | 'applied' | 'rejected'
+  status: 'pending' | 'pushing' | 'applied' | 'rejected' | 'needs_repair'
   error: string | null
+  repairPayload?: unknown
+  repairReason?: string | null
+  repairCreatedAt?: number | null
   createdAt: number
   updatedAt: number
 }
@@ -488,6 +491,23 @@ export interface Arc {
   createdAt: number
 }
 
+// Saga - condensed summary of multiple arcs
+export interface Saga {
+  id: string
+  storyId: string
+  sagaNumber: number
+  title: string
+  summary: string
+  arcIds: string[]
+  arcRange: string // e.g. "Arcs 1-10"
+  keyFactionShifts: string[]
+  majorPowerChanges: string[]
+  lingeringThreads: string[]
+  overallTone: string
+  branchId: string | null
+  createdAt: number
+}
+
 // Checkpoint for save/restore functionality
 export interface Checkpoint {
   id: string
@@ -840,6 +860,7 @@ export interface APIProfile {
   providerType: ProviderType // Explicit provider selection (determines SDK provider)
   baseUrl?: string // Optional custom base URL (works for all providers)
   apiKey: string // API key for this endpoint
+  terminalApiKeyRef?: string | null // Env/config key reference the terminal process should resolve
   customModels: string[] // Manually added models
   fetchedModels: string[] // Auto-fetched from /models endpoint
   reasoningModels: string[] // Models that support reasoning (fetched from API capabilities)
@@ -912,7 +933,7 @@ export interface UISettings {
   proceduralMemoryLimit: number
   backendMemoryTokenBudget: number
   snapshotTokenCap: number // 0 = unlimited (context window is the limit)
-  /** Route online turns through backend canon when the story is bound to a server story id. */
+  /** Route online turns through the terminal world database when the story is bound to a server story id. */
   serverAuthoritativeTurns?: boolean
 }
 

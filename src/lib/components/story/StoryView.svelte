@@ -7,7 +7,7 @@
 	import ActionChoiceCards from './ActionChoiceCards.svelte';
 	import WorldDrawer from './WorldDrawer.svelte';
 	import { downloadStoryAsJson } from '$lib/services/storySync';
-	import { deleteStory } from '$lib/services/database';
+	import { deleteStoryEverywhere } from '$lib/services/serverStories';
 	import { formatNarrative } from '$lib/utils/narrativeHtml';
 	import { ArrowLeft, Loader2, Users, BookOpen, Image, AlertTriangle, Download, Trash2, MoreVertical, X, ScrollText, UserRound, Scissors } from 'lucide-svelte';
 	import { tick, onMount } from 'svelte';
@@ -95,10 +95,10 @@
 
 	async function handleDelete() {
 		if (!story.currentStory) return;
-		const storyId = story.currentStory.id;
+		const currentStory = story.currentStory;
+		await deleteStoryEverywhere(currentStory);
 		story.clear();
 		app.closeStory();
-		await deleteStory(storyId);
 	}
 
 	async function handleDeleteEntry(entry: StoryEntry) {

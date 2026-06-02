@@ -348,6 +348,25 @@ export const arcs = pgTable('arcs', {
 	storyNumberIdx: index('arcs_story_number_idx').on(table.storyId, table.number),
 }));
 
+export const sagas = pgTable('sagas', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	number: integer('number').notNull(),
+	title: text('title').notNull(),
+	summary: text('summary').notNull(),
+	arcIds: jsonb('arc_ids').$type<string[]>().notNull().default(jsonArray),
+	keyFactionShifts: jsonb('key_faction_shifts').$type<string[]>().notNull().default(jsonArray),
+	majorPowerChanges: jsonb('major_power_changes').$type<string[]>().notNull().default(jsonArray),
+	lingeringThreads: jsonb('lingering_threads').$type<string[]>().notNull().default(jsonArray),
+	overallTone: text('overall_tone').notNull().default(''),
+	sourceEventIds: jsonb('source_event_ids').$type<string[]>().notNull().default(jsonArray),
+	openThreadIds: jsonb('open_thread_ids').$type<string[]>().notNull().default(jsonArray),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	...syncColumns,
+}, (table) => ({
+	storyNumberIdx: index('sagas_story_number_idx').on(table.storyId, table.number),
+}));
+
 export const syncOps = pgTable('sync_ops', {
 	id: text('id').primaryKey(),
 	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
@@ -380,6 +399,76 @@ export const backendJobs = pgTable('backend_jobs', {
 	runAfterIdx: index('backend_jobs_run_after_idx').on(table.status, table.runAfter),
 }));
 
+export const llmServiceSettings = pgTable('llm_service_settings', {
+	serviceId: text('service_id').primaryKey(),
+	providerType: text('provider_type').notNull(),
+	baseUrl: text('base_url'),
+	model: text('model'),
+	temperature: real('temperature').notNull().default(1),
+	maxTokens: integer('max_tokens').notNull().default(4096),
+	topP: real('top_p'),
+	frequencyPenalty: real('frequency_penalty'),
+	presencePenalty: real('presence_penalty'),
+	reasoningEffort: text('reasoning_effort'),
+	contextBudget: integer('context_budget'),
+	enabled: boolean('enabled').notNull().default(true),
+	systemPromptOverride: text('system_prompt_override'),
+	apiKeyRef: text('api_key_ref'),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const searchIndexRecords = pgTable('search_index_records', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	recordType: text('record_type').notNull(),
+	recordId: text('record_id').notNull(),
+	qdrantPointId: text('qdrant_point_id'),
+	collection: text('collection').notNull(),
+	contentHash: text('content_hash').notNull(),
+	model: text('model'),
+	status: text('status').notNull().default('queued'),
+	error: text('error'),
+	indexedAt: timestamp('indexed_at', { withTimezone: true, mode: 'string' }),
+	sourceEntryIds: jsonb('source_entry_ids').$type<string[]>().notNull().default(jsonArray),
+	sourceEventIds: jsonb('source_event_ids').$type<string[]>().notNull().default(jsonArray),
+	sourcePatchIds: jsonb('source_patch_ids').$type<string[]>().notNull().default(jsonArray),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (table) => ({
+	storyRecordIdx: index('search_index_records_story_record_idx').on(table.storyId, table.recordType, table.recordId, table.collection),
+	storyStatusIdx: index('search_index_records_story_status_idx').on(table.storyId, table.status),
+	typeStatusIdx: index('search_index_records_type_idx').on(table.recordType, table.status),
+}));
+
+export const apiCallLogs = pgTable('api_call_logs', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').references(() => stories.id, { onDelete: 'cascade' }),
+	serviceId: text('service_id'),
+	operation: text('operation').notNull(),
+	providerType: text('provider_type'),
+	providerName: text('provider_name'),
+	profileId: text('profile_id'),
+	model: text('model'),
+	endpoint: text('endpoint'),
+	status: text('status').notNull().default('success'),
+	durationMs: integer('duration_ms').notNull(),
+	requestTokens: integer('request_tokens'),
+	responseTokens: integer('response_tokens'),
+	totalTokens: integer('total_tokens'),
+	promptChars: integer('prompt_chars'),
+	responseChars: integer('response_chars'),
+	error: text('error'),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (table) => ({
+	storyCreatedIdx: index('api_call_logs_story_created_idx').on(table.storyId, table.createdAt),
+	serviceCreatedIdx: index('api_call_logs_service_created_idx').on(table.serviceId, table.createdAt),
+	statusCreatedIdx: index('api_call_logs_status_created_idx').on(table.status, table.createdAt),
+}));
+
 export const schema = {
 	stories,
 	storyEntries,
@@ -398,6 +487,10 @@ export const schema = {
 	memoryNodes,
 	chapters,
 	arcs,
+	sagas,
 	syncOps,
 	backendJobs,
+	llmServiceSettings,
+	searchIndexRecords,
+	apiCallLogs,
 };

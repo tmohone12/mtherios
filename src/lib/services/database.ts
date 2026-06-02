@@ -4,7 +4,7 @@
  * Works on iPhone Safari, Chrome, Firefox — no native dependencies.
  */
 
-import Dexie, { type Table } from 'dexie';
+import Dexie, { type Table, type UpdateSpec } from 'dexie';
 import type {
 	Story,
 	StoryEntry,
@@ -14,6 +14,7 @@ import type {
 	StoryBeat,
 	Chapter,
 	Arc,
+	Saga,
 	Entry,
 	EmbeddedImage,
 	MemoryConfig,
@@ -50,6 +51,7 @@ interface MtheriosDB extends Dexie {
 	lorebookEntries: Table<Entry, string>;
 	embeddedImages: Table<EmbeddedImage, string>;
 	arcs: Table<Arc, string>;
+	sagas: Table<Saga, string>;
 	proceduralRules: Table<ProceduralRule, string>;
 	embeddingCache: Table<EmbeddingCacheEntry, string>;
 	entryRelationships: Table<EntryRelationship, string>;
@@ -65,6 +67,43 @@ interface MtheriosDB extends Dexie {
 }
 
 const db = new Dexie('mtherios') as MtheriosDB;
+
+function toIndexedDbValue<T>(value: T): T {
+	if (value === null || value === undefined) return value;
+	try {
+		return structuredClone(value);
+	} catch {
+		const seen = new WeakSet<object>();
+		const json = JSON.stringify(value, (_key, nested) => {
+			if (typeof nested === 'function' || typeof nested === 'symbol') return undefined;
+			if (typeof nested === 'bigint') return nested.toString();
+			if (nested && typeof nested === 'object') {
+				if (seen.has(nested)) return undefined;
+				seen.add(nested);
+			}
+			return nested;
+		});
+		if (json === undefined) return undefined as T;
+		return JSON.parse(json) as T;
+	}
+}
+
+async function addRecord<T>(table: Table<T, string>, value: T): Promise<void> {
+	await table.add(toIndexedDbValue(value));
+}
+
+async function putRecord<T>(table: Table<T, string>, value: T): Promise<void> {
+	await table.put(toIndexedDbValue(value));
+}
+
+async function bulkPutRecords<T>(table: Table<T, string>, values: T[]): Promise<void> {
+	if (values.length === 0) return;
+	await table.bulkPut(values.map((value) => toIndexedDbValue(value)));
+}
+
+async function updateRecord<T>(table: Table<T, string>, id: string, updates: Partial<T>): Promise<void> {
+	await table.update(id, toIndexedDbValue(updates) as UpdateSpec<T>);
+}
 
 // Version 4: Clean schema with explicit upgrade to clear lorebook issues
 db.version(4).stores({
@@ -235,6 +274,33 @@ db.version(11).stores({
 	syncOutbox: 'id, storyId, serverStoryId, status, createdAt, [storyId+status]',
 });
 
+// Version 12: Saga condensation layer above arcs.
+db.version(12).stores({
+	stories: 'id, title, createdAt, updatedAt, serverStoryId, serverVersion',
+	storyEntries: 'id, storyId, position, type, [storyId+position], [storyId+branchId+position]',
+	characters: 'id, storyId, name, [storyId+name]',
+	locations: 'id, storyId, name, [storyId+name]',
+	items: 'id, storyId, name, [storyId+name]',
+	storyBeats: 'id, storyId, type, status',
+	chapters: 'id, storyId, number, [storyId+number]',
+	lorebookEntries: 'id, storyId, name, type, [storyId+type]',
+	embeddedImages: 'id, storyId, entryId, status, [storyId+entryId]',
+	appSettings: 'key',
+	arcs: 'id, storyId, arcNumber, [storyId+arcNumber]',
+	sagas: 'id, storyId, sagaNumber, [storyId+sagaNumber]',
+	proceduralRules: 'id, storyId, category, maturity, [storyId+category], [storyId+maturity]',
+	embeddingCache: 'id, sourceId, sourceType, [sourceType+sourceId]',
+	entryRelationships: 'id, storyId, sourceEntryId, targetEntryId, type, [storyId+sourceEntryId], [storyId+targetEntryId]',
+	conversationMemory: 'id, storyId, npcEntryId, storyPosition, [storyId+npcEntryId], [storyId+storyPosition]',
+	worldEvents: 'id, storyId, triggerPosition, type, [storyId+triggerPosition]',
+	agreements: 'id, storyId, status, category, createdChapterNumber, [storyId+status], [storyId+category]',
+	factionActions: 'id, storyId, factionName, chapterNumber, urgency, [storyId+chapterNumber]',
+	rumors: 'id, storyId, status, chapterNumber, relatedFaction, [storyId+status]',
+	schemes: 'id, storyId, status, ownerType, ownerEntryId, branchId, [storyId+status], [storyId+ownerType], [storyId+branchId]',
+	storyThreads: 'id, storyId, status, significance, [storyId+status], [storyId+significance]',
+	syncOutbox: 'id, storyId, serverStoryId, status, createdAt, [storyId+status]',
+});
+
 // Debug function to check DB status
 export async function debugDatabaseStatus(): Promise<void> {
 	console.log('=== Database Debug Info ===');
@@ -259,7 +325,7 @@ export async function debugDatabaseStatus(): Promise<void> {
 // ============================================================================
 
 export async function createStory(story: Story): Promise<void> {
-	await db.stories.add(story);
+	await addRecord(db.stories, story);
 }
 
 export async function getStory(id: string): Promise<Story | undefined> {
@@ -271,7 +337,7 @@ export async function getAllStories(): Promise<Story[]> {
 }
 
 export async function updateStory(id: string, updates: Partial<Story>): Promise<void> {
-	await db.stories.update(id, { ...updates, updatedAt: Date.now() });
+	await updateRecord(db.stories, id, { ...updates, updatedAt: Date.now() });
 }
 
 export async function deleteStory(id: string): Promise<void> {
@@ -286,6 +352,7 @@ export async function deleteStory(id: string): Promise<void> {
 		db.lorebookEntries,
 		db.embeddedImages,
 		db.arcs,
+		db.sagas,
 		db.proceduralRules,
 		db.embeddingCache,
 		db.entryRelationships,
@@ -314,6 +381,7 @@ export async function deleteStory(id: string): Promise<void> {
 		await db.lorebookEntries.where('storyId').equals(id).delete();
 		await db.embeddedImages.where('storyId').equals(id).delete();
 		await db.arcs.where('storyId').equals(id).delete();
+		await db.sagas.where('storyId').equals(id).delete();
 		await db.proceduralRules.where('storyId').equals(id).delete();
 		if (embeddedSourceIds.size > 0) {
 			await db.embeddingCache.filter(e => embeddedSourceIds.has(e.sourceId)).delete();
@@ -335,11 +403,11 @@ export async function deleteStory(id: string): Promise<void> {
 // ============================================================================
 
 export async function createStoryEntry(entry: StoryEntry): Promise<void> {
-	await db.storyEntries.add(entry);
+	await addRecord(db.storyEntries, entry);
 }
 
 export async function putStoryEntry(entry: StoryEntry): Promise<void> {
-	await db.storyEntries.put(entry);
+	await putRecord(db.storyEntries, entry);
 }
 
 export async function getStoryEntry(id: string): Promise<StoryEntry | undefined> {
@@ -435,7 +503,7 @@ export async function getLastStoryEntryPosition(storyId: string, branchId?: stri
 }
 
 export async function updateStoryEntry(id: string, updates: Partial<StoryEntry>): Promise<void> {
-	await db.storyEntries.update(id, updates);
+	await updateRecord(db.storyEntries, id, updates);
 }
 
 export async function deleteStoryEntry(id: string): Promise<void> {
@@ -455,7 +523,11 @@ export async function deleteStoryEntriesFromPosition(storyId: string, fromPositi
 // ============================================================================
 
 export async function createCharacter(character: Character): Promise<void> {
-	await db.characters.add(character);
+	await addRecord(db.characters, character);
+}
+
+export async function putCharacter(character: Character): Promise<void> {
+	await putRecord(db.characters, character);
 }
 
 export async function getCharacters(storyId: string): Promise<Character[]> {
@@ -463,7 +535,7 @@ export async function getCharacters(storyId: string): Promise<Character[]> {
 }
 
 export async function updateCharacter(id: string, updates: Partial<Character>): Promise<void> {
-	await db.characters.update(id, updates);
+	await updateRecord(db.characters, id, updates);
 }
 
 export async function deleteCharacter(id: string): Promise<void> {
@@ -475,7 +547,11 @@ export async function deleteCharacter(id: string): Promise<void> {
 // ============================================================================
 
 export async function createLocation(location: Location): Promise<void> {
-	await db.locations.add(location);
+	await addRecord(db.locations, location);
+}
+
+export async function putLocation(location: Location): Promise<void> {
+	await putRecord(db.locations, location);
 }
 
 export async function getLocations(storyId: string): Promise<Location[]> {
@@ -483,7 +559,7 @@ export async function getLocations(storyId: string): Promise<Location[]> {
 }
 
 export async function updateLocation(id: string, updates: Partial<Location>): Promise<void> {
-	await db.locations.update(id, updates);
+	await updateRecord(db.locations, id, updates);
 }
 
 export async function deleteLocation(id: string): Promise<void> {
@@ -495,7 +571,11 @@ export async function deleteLocation(id: string): Promise<void> {
 // ============================================================================
 
 export async function createItem(item: Item): Promise<void> {
-	await db.items.add(item);
+	await addRecord(db.items, item);
+}
+
+export async function putItem(item: Item): Promise<void> {
+	await putRecord(db.items, item);
 }
 
 export async function getItems(storyId: string): Promise<Item[]> {
@@ -503,7 +583,7 @@ export async function getItems(storyId: string): Promise<Item[]> {
 }
 
 export async function updateItem(id: string, updates: Partial<Item>): Promise<void> {
-	await db.items.update(id, updates);
+	await updateRecord(db.items, id, updates);
 }
 
 export async function deleteItem(id: string): Promise<void> {
@@ -515,7 +595,7 @@ export async function deleteItem(id: string): Promise<void> {
 // ============================================================================
 
 export async function createStoryBeat(beat: StoryBeat): Promise<void> {
-	await db.storyBeats.add(beat);
+	await addRecord(db.storyBeats, beat);
 }
 
 export async function getStoryBeats(storyId: string): Promise<StoryBeat[]> {
@@ -523,7 +603,7 @@ export async function getStoryBeats(storyId: string): Promise<StoryBeat[]> {
 }
 
 export async function updateStoryBeat(id: string, updates: Partial<StoryBeat>): Promise<void> {
-	await db.storyBeats.update(id, updates);
+	await updateRecord(db.storyBeats, id, updates);
 }
 
 export async function deleteStoryBeat(id: string): Promise<void> {
@@ -535,7 +615,11 @@ export async function deleteStoryBeat(id: string): Promise<void> {
 // ============================================================================
 
 export async function createChapter(chapter: Chapter): Promise<void> {
-	await db.chapters.add(chapter);
+	await addRecord(db.chapters, chapter);
+}
+
+export async function putChapter(chapter: Chapter): Promise<void> {
+	await putRecord(db.chapters, chapter);
 }
 
 export async function getChapters(storyId: string): Promise<Chapter[]> {
@@ -543,7 +627,7 @@ export async function getChapters(storyId: string): Promise<Chapter[]> {
 }
 
 export async function updateChapter(id: string, updates: Partial<Chapter>): Promise<void> {
-	await db.chapters.update(id, updates);
+	await updateRecord(db.chapters, id, updates);
 }
 
 export async function deleteChapter(id: string): Promise<void> {
@@ -555,7 +639,11 @@ export async function deleteChapter(id: string): Promise<void> {
 // ============================================================================
 
 export async function createArc(arc: Arc): Promise<void> {
-	await db.arcs.add(arc);
+	await addRecord(db.arcs, arc);
+}
+
+export async function putArc(arc: Arc): Promise<void> {
+	await putRecord(db.arcs, arc);
 }
 
 export async function getArcs(storyId: string): Promise<Arc[]> {
@@ -563,11 +651,35 @@ export async function getArcs(storyId: string): Promise<Arc[]> {
 }
 
 export async function updateArc(id: string, updates: Partial<Arc>): Promise<void> {
-	await db.arcs.update(id, updates);
+	await updateRecord(db.arcs, id, updates);
 }
 
 export async function deleteArc(id: string): Promise<void> {
 	await db.arcs.delete(id);
+}
+
+// ============================================================================
+// Sagas CRUD
+// ============================================================================
+
+export async function createSaga(saga: Saga): Promise<void> {
+	await addRecord(db.sagas, saga);
+}
+
+export async function putSaga(saga: Saga): Promise<void> {
+	await putRecord(db.sagas, saga);
+}
+
+export async function getSagas(storyId: string): Promise<Saga[]> {
+	return db.sagas.where('storyId').equals(storyId).sortBy('sagaNumber');
+}
+
+export async function updateSaga(id: string, updates: Partial<Saga>): Promise<void> {
+	await updateRecord(db.sagas, id, updates);
+}
+
+export async function deleteSaga(id: string): Promise<void> {
+	await db.sagas.delete(id);
 }
 
 // ============================================================================
@@ -579,15 +691,24 @@ export async function createLorebookEntry(entry: Entry): Promise<void> {
 	const cleanEntry: Entry = JSON.parse(JSON.stringify(entry));
 	
 	try {
-		await db.lorebookEntries.put(cleanEntry);
+		await putRecord(db.lorebookEntries, cleanEntry);
 	} catch (e: unknown) {
 		console.error('Lorebook save failed:', e);
 		throw e;
 	}
 }
 
+export async function putLorebookEntry(entry: Entry): Promise<void> {
+	const cleanEntry: Entry = JSON.parse(JSON.stringify(entry));
+	await putRecord(db.lorebookEntries, cleanEntry);
+}
+
 export async function getLorebookEntries(storyId: string): Promise<Entry[]> {
 	return db.lorebookEntries.where('storyId').equals(storyId).toArray();
+}
+
+export async function getLorebookEntry(id: string): Promise<Entry | undefined> {
+	return db.lorebookEntries.get(id);
 }
 
 export async function updateLorebookEntry(id: string, updates: Partial<Entry>): Promise<void> {
@@ -597,7 +718,7 @@ export async function updateLorebookEntry(id: string, updates: Partial<Entry>): 
 	// because the structuredClone path chokes on proxy objects. Mirrors the
 	// treatment in createLorebookEntry above.
 	const clean: Partial<Entry> = JSON.parse(JSON.stringify(updates));
-	await db.lorebookEntries.update(id, clean);
+	await updateRecord(db.lorebookEntries, id, clean);
 }
 
 export async function deleteLorebookEntry(id: string): Promise<void> {
@@ -609,7 +730,7 @@ export async function deleteLorebookEntry(id: string): Promise<void> {
 // ============================================================================
 
 export async function createEmbeddedImage(image: Omit<EmbeddedImage, 'createdAt'>): Promise<void> {
-	await db.embeddedImages.add({ ...image, createdAt: Date.now() } as EmbeddedImage);
+	await addRecord(db.embeddedImages, { ...image, createdAt: Date.now() } as EmbeddedImage);
 }
 
 export async function getEmbeddedImages(storyId: string): Promise<EmbeddedImage[]> {
@@ -628,7 +749,7 @@ export async function getEmbeddedImagesForEntryIds(storyId: string, entryIds: st
 }
 
 export async function updateEmbeddedImage(id: string, updates: Partial<EmbeddedImage>): Promise<void> {
-	await db.embeddedImages.update(id, updates);
+	await updateRecord(db.embeddedImages, id, updates);
 }
 
 export async function deleteEmbeddedImage(id: string): Promise<void> {
@@ -640,7 +761,7 @@ export async function deleteEmbeddedImage(id: string): Promise<void> {
 // ============================================================================
 
 export async function createProceduralRule(rule: ProceduralRule): Promise<void> {
-	await db.proceduralRules.put(rule);
+	await putRecord(db.proceduralRules, rule);
 }
 
 export async function getProceduralRules(storyId: string): Promise<ProceduralRule[]> {
@@ -652,7 +773,7 @@ export async function getProceduralRulesByCategory(storyId: string, category: st
 }
 
 export async function updateProceduralRule(id: string, updates: Partial<ProceduralRule>): Promise<void> {
-	await db.proceduralRules.update(id, updates);
+	await updateRecord(db.proceduralRules, id, updates);
 }
 
 export async function deleteProceduralRule(id: string): Promise<void> {
@@ -660,7 +781,7 @@ export async function deleteProceduralRule(id: string): Promise<void> {
 }
 
 export async function bulkPutProceduralRules(rules: ProceduralRule[]): Promise<void> {
-	await db.proceduralRules.bulkPut(rules);
+	await bulkPutRecords(db.proceduralRules, rules);
 }
 
 // ============================================================================
@@ -672,7 +793,7 @@ export async function getEmbedding(sourceType: string, sourceId: string): Promis
 }
 
 export async function putEmbedding(entry: EmbeddingCacheEntry): Promise<void> {
-	await db.embeddingCache.put(entry);
+	await putRecord(db.embeddingCache, entry);
 }
 
 export async function getEmbeddingsByType(sourceType: string): Promise<EmbeddingCacheEntry[]> {
@@ -697,7 +818,7 @@ export async function getSetting(key: string): Promise<string | undefined> {
 }
 
 export async function setSetting(key: string, value: string): Promise<void> {
-	await db.appSettings.put({ key, value });
+	await putRecord(db.appSettings, { key, value });
 }
 
 export async function deleteSetting(key: string): Promise<void> {
@@ -718,7 +839,7 @@ export async function getAllSettings(): Promise<Record<string, string>> {
 // ============================================================================
 
 export async function createEntryRelationship(rel: EntryRelationship): Promise<void> {
-	await db.entryRelationships.add(rel);
+	await addRecord(db.entryRelationships, rel);
 }
 
 export async function getEntryRelationships(storyId: string): Promise<EntryRelationship[]> {
@@ -730,7 +851,7 @@ export async function getRelationshipsForEntry(storyId: string, entryId: string)
 }
 
 export async function updateEntryRelationship(id: string, updates: Partial<EntryRelationship>): Promise<void> {
-	await db.entryRelationships.update(id, updates);
+	await updateRecord(db.entryRelationships, id, updates);
 }
 
 export async function deleteEntryRelationship(id: string): Promise<void> {
@@ -742,7 +863,11 @@ export async function deleteEntryRelationship(id: string): Promise<void> {
 // ============================================================================
 
 export async function createConversationMemory(entry: ConversationMemoryEntry): Promise<void> {
-	await db.conversationMemory.add(entry);
+	await addRecord(db.conversationMemory, entry);
+}
+
+export async function putConversationMemory(entry: ConversationMemoryEntry): Promise<void> {
+	await putRecord(db.conversationMemory, entry);
 }
 
 export async function getConversationMemory(storyId: string): Promise<ConversationMemoryEntry[]> {
@@ -758,7 +883,11 @@ export async function getNpcConversationMemory(storyId: string, npcEntryId: stri
 // ============================================================================
 
 export async function createWorldEvent(event: WorldEvent): Promise<void> {
-	await db.worldEvents.add(event);
+	await addRecord(db.worldEvents, event);
+}
+
+export async function putWorldEvent(event: WorldEvent): Promise<void> {
+	await putRecord(db.worldEvents, event);
 }
 
 export async function getWorldEvents(storyId: string): Promise<WorldEvent[]> {
@@ -766,7 +895,7 @@ export async function getWorldEvents(storyId: string): Promise<WorldEvent[]> {
 }
 
 export async function updateWorldEvent(id: string, updates: Partial<WorldEvent>): Promise<void> {
-	await db.worldEvents.update(id, updates);
+	await updateRecord(db.worldEvents, id, updates);
 }
 
 // ============================================================================
@@ -774,7 +903,11 @@ export async function updateWorldEvent(id: string, updates: Partial<WorldEvent>)
 // ============================================================================
 
 export async function createAgreement(agreement: Agreement): Promise<void> {
-	await db.agreements.add(agreement);
+	await addRecord(db.agreements, agreement);
+}
+
+export async function putAgreement(agreement: Agreement): Promise<void> {
+	await putRecord(db.agreements, agreement);
 }
 
 export async function getAgreements(storyId: string): Promise<Agreement[]> {
@@ -789,7 +922,7 @@ export async function getAgreementsByStatus(
 }
 
 export async function updateAgreement(id: string, updates: Partial<Agreement>): Promise<void> {
-	await db.agreements.update(id, updates);
+	await updateRecord(db.agreements, id, updates);
 }
 
 export async function deleteAgreement(id: string): Promise<void> {
@@ -801,12 +934,11 @@ export async function deleteAgreement(id: string): Promise<void> {
 // ============================================================================
 
 export async function createFactionAction(action: FactionActionRecord): Promise<void> {
-	await db.factionActions.add(action);
+	await addRecord(db.factionActions, action);
 }
 
 export async function bulkPutFactionActions(actions: FactionActionRecord[]): Promise<void> {
-	if (actions.length === 0) return;
-	await db.factionActions.bulkPut(actions);
+	await bulkPutRecords(db.factionActions, actions);
 }
 
 export async function getFactionActions(storyId: string): Promise<FactionActionRecord[]> {
@@ -828,7 +960,7 @@ export async function updateFactionAction(
 	id: string,
 	updates: Partial<FactionActionRecord>,
 ): Promise<void> {
-	await db.factionActions.update(id, updates);
+	await updateRecord(db.factionActions, id, updates);
 }
 
 // ============================================================================
@@ -836,12 +968,11 @@ export async function updateFactionAction(
 // ============================================================================
 
 export async function createRumor(rumor: RumorRecord): Promise<void> {
-	await db.rumors.add(rumor);
+	await addRecord(db.rumors, rumor);
 }
 
 export async function bulkPutRumors(rumors: RumorRecord[]): Promise<void> {
-	if (rumors.length === 0) return;
-	await db.rumors.bulkPut(rumors);
+	await bulkPutRecords(db.rumors, rumors);
 }
 
 export async function getRumors(storyId: string): Promise<RumorRecord[]> {
@@ -856,7 +987,7 @@ export async function getRumorsByStatus(
 }
 
 export async function updateRumor(id: string, updates: Partial<RumorRecord>): Promise<void> {
-	await db.rumors.update(id, updates);
+	await updateRecord(db.rumors, id, updates);
 }
 
 // ============================================================================
@@ -864,12 +995,11 @@ export async function updateRumor(id: string, updates: Partial<RumorRecord>): Pr
 // ============================================================================
 
 export async function createScheme(scheme: Scheme): Promise<void> {
-	await db.schemes.add(scheme);
+	await addRecord(db.schemes, scheme);
 }
 
 export async function bulkPutSchemes(schemes: Scheme[]): Promise<void> {
-	if (schemes.length === 0) return;
-	await db.schemes.bulkPut(schemes);
+	await bulkPutRecords(db.schemes, schemes);
 }
 
 export async function getSchemes(storyId: string): Promise<Scheme[]> {
@@ -884,7 +1014,7 @@ export async function getActiveSchemes(storyId: string): Promise<Scheme[]> {
 }
 
 export async function updateScheme(id: string, updates: Partial<Scheme>): Promise<void> {
-	await db.schemes.update(id, updates);
+	await updateRecord(db.schemes, id, updates);
 }
 
 export async function deleteScheme(id: string): Promise<void> {
@@ -896,7 +1026,11 @@ export async function deleteScheme(id: string): Promise<void> {
 // ============================================================================
 
 export async function createStoryThread(thread: StoryThread): Promise<void> {
-	await db.storyThreads.add(thread);
+	await addRecord(db.storyThreads, thread);
+}
+
+export async function putStoryThread(thread: StoryThread): Promise<void> {
+	await putRecord(db.storyThreads, thread);
 }
 
 export async function getStoryThreads(storyId: string): Promise<StoryThread[]> {
@@ -911,7 +1045,7 @@ export async function getStoryThreadsByStatus(
 }
 
 export async function updateStoryThread(id: string, updates: Partial<StoryThread>): Promise<void> {
-	await db.storyThreads.update(id, updates);
+	await updateRecord(db.storyThreads, id, updates);
 }
 
 export async function deleteStoryThread(id: string): Promise<void> {
@@ -923,18 +1057,30 @@ export async function deleteStoryThread(id: string): Promise<void> {
 // ============================================================================
 
 export async function enqueueSyncOp(op: SyncOutboxOp): Promise<void> {
-	await db.syncOutbox.put(op);
+	await putRecord(db.syncOutbox, op);
 }
 
 export async function getPendingSyncOps(storyId: string): Promise<SyncOutboxOp[]> {
-	return db.syncOutbox
-		.where('[storyId+status]')
-		.equals([storyId, 'pending'])
-		.sortBy('createdAt');
+	const retryCutoff = Date.now() - 30_000;
+	const rows = await db.syncOutbox
+		.where('storyId')
+		.equals(storyId)
+		.toArray();
+	return rows
+		.filter((op) => op.status === 'pending' || (op.status === 'pushing' && op.updatedAt < retryCutoff))
+		.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export async function getSyncOpsForStory(storyId: string): Promise<SyncOutboxOp[]> {
+	const rows = await db.syncOutbox
+		.where('storyId')
+		.equals(storyId)
+		.toArray();
+	return rows.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export async function updateSyncOp(id: string, updates: Partial<SyncOutboxOp>): Promise<void> {
-	await db.syncOutbox.update(id, { ...updates, updatedAt: Date.now() });
+	await updateRecord(db.syncOutbox, id, { ...updates, updatedAt: Date.now() });
 }
 
 export async function deleteSyncOp(id: string): Promise<void> {
