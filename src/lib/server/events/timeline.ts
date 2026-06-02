@@ -34,39 +34,37 @@ export function selectDueTimelineEvents(events: StoryEventRow[], currentTurn: nu
 }
 
 export function buildNpcEventLinksForEvent(input: {
-	event: Pick<StoryEventRow,
-		| 'id'
-		| 'storyId'
-		| 'actorEntityIds'
-		| 'targetEntityIds'
-		| 'visibility'
-		| 'sourceEntryIds'
-		| 'sourcePatchIds'
-		| 'serverVersion'
-	>;
+	storyId: string;
+	eventId: string;
+	actorEntityIds: string[];
+	targetEntityIds: string[];
+	visibility: MemoryVisibility | string;
+	sourceEntryIds: string[];
+	sourcePatchIds: string[];
+	serverVersion: number;
 	now: string;
 }): NpcEventLinkInsert[] {
 	const byNpc = new Map<string, NpcEventLinkRole>();
 
-	for (const npcEntityId of input.event.actorEntityIds ?? []) {
+	for (const npcEntityId of input.actorEntityIds ?? []) {
 		if (npcEntityId) byNpc.set(npcEntityId, 'actor');
 	}
 
-	for (const npcEntityId of input.event.targetEntityIds ?? []) {
+	for (const npcEntityId of input.targetEntityIds ?? []) {
 		if (npcEntityId && !byNpc.has(npcEntityId)) byNpc.set(npcEntityId, 'target');
 	}
 
 	return Array.from(byNpc.entries()).map(([npcEntityId, role]) => ({
-		id: `npc_event_${input.event.id}_${npcEntityId}`,
-		storyId: input.event.storyId,
-		eventId: input.event.id,
+		id: `npc_event_${input.eventId}_${npcEntityId}`,
+		storyId: input.storyId,
+		eventId: input.eventId,
 		npcEntityId,
 		role,
-		visibility: input.event.visibility,
+		visibility: input.visibility,
 		evidenceStrength: role === 'actor' ? 0.9 : 0.75,
-		sourceEntryIds: input.event.sourceEntryIds ?? [],
-		sourcePatchIds: input.event.sourcePatchIds ?? [],
-		serverVersion: input.event.serverVersion,
+		sourceEntryIds: input.sourceEntryIds ?? [],
+		sourcePatchIds: input.sourcePatchIds ?? [],
+		serverVersion: input.serverVersion,
 		createdAt: input.now,
 		updatedAt: input.now,
 	}));
@@ -132,10 +130,10 @@ export function buildGmTimelineBrief(input: {
 	storyId: string;
 	currentTurn: number;
 	currentWorldTime: string | null;
-	eventRows: StoryEventRow[];
-	linkRows: NpcEventLinkRow[];
+	events: StoryEventRow[];
+	npcLinks: NpcEventLinkRow[];
 	presentNpcIds?: string[];
-	sceneNpcIds?: string[];
+	sceneEntityIds?: string[];
 	includeSecret?: boolean;
 	recentLimit?: number;
 	scheduledLimit?: number;
@@ -143,9 +141,9 @@ export function buildGmTimelineBrief(input: {
 	npcLimit?: number;
 }): GmTimelineBrief {
 	const includeSecret = input.includeSecret ?? false;
-	const visibleEvents = input.eventRows.filter(event => isVisible(event.visibility, includeSecret));
+	const visibleEvents = input.events.filter(event => isVisible(event.visibility, includeSecret));
 	const visibleEventIds = new Set(visibleEvents.map(event => event.id));
-	const visibleLinks = input.linkRows.filter(link =>
+	const visibleLinks = input.npcLinks.filter(link =>
 		visibleEventIds.has(link.eventId) && isVisible(link.visibility, includeSecret));
 
 	const dueRows = selectDueTimelineEvents(visibleEvents, input.currentTurn)
@@ -177,7 +175,7 @@ export function buildGmTimelineBrief(input: {
 		npcEvents: buildNpcTimelineEvents({
 			eventRows: [...dueRows, ...recentRows, ...scheduledRows],
 			linkRows: visibleLinks,
-			npcEntityIds: unique([...(input.presentNpcIds ?? []), ...(input.sceneNpcIds ?? [])]),
+			npcEntityIds: unique([...(input.presentNpcIds ?? []), ...(input.sceneEntityIds ?? [])]),
 			limit: input.npcLimit ?? DEFAULT_NPC_LIMIT,
 		}),
 	};
@@ -186,7 +184,7 @@ export function buildGmTimelineBrief(input: {
 export async function loadGmTimelineBrief(input: {
 	storyId: string;
 	presentNpcIds?: string[];
-	sceneNpcIds?: string[];
+	sceneEntityIds?: string[];
 	includeSecret?: boolean;
 	recentLimit?: number;
 	scheduledLimit?: number;
@@ -210,8 +208,8 @@ export async function loadGmTimelineBrief(input: {
 		...input,
 		currentTurn: story.currentTurn,
 		currentWorldTime: story.currentWorldTime,
-		eventRows,
-		linkRows,
+		events: eventRows,
+		npcLinks: linkRows,
 	});
 }
 
@@ -221,7 +219,17 @@ export async function scheduleTimelineEvent(input: Parameters<typeof buildSchedu
 	const [row] = await db.insert(storyEvents).values(eventInsert).returning();
 	if (!row) throw new Error('Failed to schedule timeline event');
 
-	const links = buildNpcEventLinksForEvent({ event: row, now: input.now });
+	const links = buildNpcEventLinksForEvent({
+		storyId: row.storyId,
+		eventId: row.id,
+		actorEntityIds: row.actorEntityIds ?? [],
+		targetEntityIds: row.targetEntityIds ?? [],
+		visibility: row.visibility,
+		sourceEntryIds: row.sourceEntryIds ?? [],
+		sourcePatchIds: row.sourcePatchIds ?? [],
+		serverVersion: row.serverVersion,
+		now: input.now,
+	});
 	if (links.length > 0) {
 		await db.insert(npcEventLinks).values(links).onConflictDoNothing();
 	}
@@ -229,7 +237,11 @@ export async function scheduleTimelineEvent(input: Parameters<typeof buildSchedu
 	return row;
 }
 
-export async function promoteDueTimelineEvents(storyId: string, currentTurn: number, now: string): Promise<StoryEventRow[]> {
+export async function promoteDueTimelineEvents(
+	storyId: string,
+	currentTurn: number,
+	now = new Date().toISOString(),
+): Promise<StoryEventRow[]> {
 	return getDb()
 		.update(storyEvents)
 		.set({

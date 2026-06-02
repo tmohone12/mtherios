@@ -3,13 +3,15 @@ import {
 	buildGmTimelineBrief,
 	buildNpcEventLinksForEvent,
 	buildScheduledTimelineEventInsert,
+	loadGmTimelineBrief,
+	promoteDueTimelineEvents,
 	selectDueTimelineEvents,
 } from './timeline';
 
 const now = '2026-06-02T12:00:00.000Z';
 
 type TestStoryEvent = Parameters<typeof selectDueTimelineEvents>[0][number];
-type TestNpcLink = Parameters<typeof buildGmTimelineBrief>[0]['linkRows'][number];
+type TestNpcLink = Parameters<typeof buildGmTimelineBrief>[0]['npcLinks'][number];
 
 function event(overrides: Partial<TestStoryEvent>): TestStoryEvent {
 	return {
@@ -80,11 +82,14 @@ describe('timeline selection helpers', () => {
 
 	it('creates actor and target links without duplicates and lets actor role win', () => {
 		const links = buildNpcEventLinksForEvent({
-			event: event({
-				id: 'event_scheme',
-				actorEntityIds: ['npc_anya', 'npc_borin'],
-				targetEntityIds: ['npc_borin', 'npc_cass'],
-			}),
+			storyId: 'story_1',
+			eventId: 'event_scheme',
+			actorEntityIds: ['npc_anya', 'npc_borin'],
+			targetEntityIds: ['npc_borin', 'npc_cass'],
+			visibility: 'player_known',
+			sourceEntryIds: [],
+			sourcePatchIds: [],
+			serverVersion: 1,
 			now,
 		});
 
@@ -135,22 +140,34 @@ describe('timeline selection helpers', () => {
 		});
 	});
 
+	it('accepts plan-compatible loader and promotion signatures at compile time', () => {
+		const loadInput = {
+			storyId: 'story_1',
+			sceneEntityIds: ['npc_cass'],
+		} satisfies Parameters<typeof loadGmTimelineBrief>[0];
+		const promoteInput = ['story_1', 5] satisfies Parameters<typeof promoteDueTimelineEvents>;
+
+		expect(loadInput.sceneEntityIds).toEqual(['npc_cass']);
+		expect(promoteInput).toEqual(['story_1', 5]);
+	});
+
 	it('builds due, recent, scheduled, and npc event slices with due statuses overridden', () => {
 		const brief = buildGmTimelineBrief({
 			storyId: 'story_1',
 			currentTurn: 5,
 			currentWorldTime: 'Late spring',
-			eventRows: [
+			events: [
 				event({ id: 'recent', status: 'committed', occurredTurn: 4, scheduledTurn: null, actorEntityIds: ['npc_anya'] }),
 				event({ id: 'due_scheduled', status: 'scheduled', scheduledTurn: 5, actorEntityIds: ['npc_borin'] }),
 				event({ id: 'future', status: 'scheduled', scheduledTurn: 8, targetEntityIds: ['npc_cass'] }),
 			],
-			linkRows: [
+			npcLinks: [
 				link({ eventId: 'recent', npcEntityId: 'npc_anya', role: 'actor' }),
 				link({ eventId: 'due_scheduled', npcEntityId: 'npc_borin', role: 'actor' }),
 				link({ eventId: 'future', npcEntityId: 'npc_cass', role: 'target' }),
 			],
 			presentNpcIds: ['npc_anya', 'npc_borin'],
+			sceneEntityIds: ['npc_cass'],
 			includeSecret: false,
 		});
 
@@ -173,6 +190,12 @@ describe('timeline selection helpers', () => {
 				summary: 'A quiet scheme',
 				visibility: 'player_known',
 			},
+			{
+				npcEntityId: 'npc_cass',
+				eventIds: ['future'],
+				summary: 'A quiet scheme',
+				visibility: 'player_known',
+			},
 		]);
 	});
 
@@ -184,8 +207,8 @@ describe('timeline selection helpers', () => {
 			storyId: 'story_1',
 			currentTurn: 5,
 			currentWorldTime: null,
-			eventRows: [hidden, visible],
-			linkRows: [
+			events: [hidden, visible],
+			npcLinks: [
 				link({ eventId: 'hidden', npcEntityId: 'npc_secret', visibility: 'secret' }),
 				link({ eventId: 'visible', npcEntityId: 'npc_visible', visibility: 'player_known' }),
 			],
@@ -197,8 +220,8 @@ describe('timeline selection helpers', () => {
 			storyId: 'story_1',
 			currentTurn: 5,
 			currentWorldTime: null,
-			eventRows: [hidden, visible],
-			linkRows: [
+			events: [hidden, visible],
+			npcLinks: [
 				link({ eventId: 'hidden', npcEntityId: 'npc_secret', visibility: 'secret' }),
 				link({ eventId: 'visible', npcEntityId: 'npc_visible', visibility: 'player_known' }),
 			],
