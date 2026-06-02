@@ -6,6 +6,7 @@ import { bumpStoryVersion, getSyncChanges } from '$lib/server/memory/canonical';
 import { retrieveMemoryPacket } from '$lib/server/memory/retrieval';
 import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
 import { contextWiki } from '$lib/server/wiki/wikiCore';
+import { loadGmTimelineBrief, promoteDueTimelineEvents } from '$lib/server/events/timeline';
 import { loadTurnContext } from './context';
 import { buildServerTurnPrompt, buildStateExtractionPrompt } from './promptPacket';
 import {
@@ -270,7 +271,7 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 			return { ok: false as const, error };
 		}
 	});
-	const [retrieved, ctx, wikiResult] = await recorder.time('turn.context_assembly', {
+	const [retrieved, ctx, gmBrief, wikiResult] = await recorder.time('turn.context_assembly', {
 		parallel: true,
 		memoryTokenBudget,
 	}, () => Promise.all([
@@ -283,8 +284,22 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		recorder.time('turn.context_load', {
 			presentNpcIds: request.clientContext?.presentNpcIds?.length ?? 0,
 		}, () => loadTurnContext(request.storyId, request.clientContext?.presentNpcIds ?? [])),
+		recorder.time('turn.gm_timeline_brief', {
+			sceneEntityIds: retrievalRequest.sceneEntityIds.length,
+			presentNpcIds: retrievalRequest.presentNpcIds.length,
+		}, async () => {
+			const brief = await loadGmTimelineBrief({
+				storyId: request.storyId,
+				sceneEntityIds: retrievalRequest.sceneEntityIds,
+				presentNpcIds: retrievalRequest.presentNpcIds,
+				includeSecret: true,
+			});
+			await promoteDueTimelineEvents(request.storyId, brief.currentTurn);
+			return brief;
+		}),
 		wikiContextTask,
 	]));
+	const ctxWithTimeline = { ...ctx, gmBrief };
 	let wikiContext: ServerWikiContext | null = null;
 	if (wikiResult.ok) {
 		wikiContext = wikiResult.value;
@@ -296,8 +311,8 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 	const prompt = recorder.timeSync('turn.prompt_assembly', {
 		retrievedMemoryNodes: retrieved.nodes.length,
 		wikiContextChars: wikiContext?.markdown.length ?? 0,
-		...turnContextCounts(ctx),
-	}, () => buildServerTurnPrompt(ctx, retrieved, playerEntryId, {
+		...turnContextCounts(ctxWithTimeline),
+	}, () => buildServerTurnPrompt(ctxWithTimeline, retrieved, playerEntryId, {
 		currentFactionId: request.clientContext?.currentFactionId ?? null,
 		sceneEntityIds: request.clientContext?.sceneEntityIds ?? [],
 		wikiContextMarkdown: wikiContext?.markdown ?? null,
@@ -318,7 +333,7 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		prompt: narrativePrompt,
 		retrievedMemory: retrieved,
 		wikiContext,
-		contextCounts: turnContextCounts(ctx),
+		contextCounts: turnContextCounts(ctxWithTimeline),
 	};
 
 	let narration = '';

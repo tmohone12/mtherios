@@ -1,5 +1,6 @@
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
+import type { GmTimelineBrief } from '$lib/contracts/memory';
 import {
 	agreements,
 	entities,
@@ -26,6 +27,7 @@ export interface TurnContext {
 	threads: Array<typeof storyThreads.$inferSelect>;
 	events: Array<typeof storyEvents.$inferSelect>;
 	beliefs: Array<typeof npcBeliefs.$inferSelect>;
+	gmBrief: GmTimelineBrief | null;
 }
 
 export async function loadTurnContext(storyId: string, presentNpcIds: string[] = []): Promise<TurnContext> {
@@ -74,5 +76,6 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		beliefs: presentSet.size > 0
 			? beliefRows.filter((belief) => presentSet.has(belief.believerEntityId))
 			: beliefRows,
+		gmBrief: null,
 	};
 }
