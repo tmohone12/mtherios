@@ -587,16 +587,29 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		memorySettings,
 	}));
 	warnings.push(...applied.warnings);
-	const promotionMetadata = {
+	const promotionMetadata: Record<string, unknown> = {
 		currentTurn: gmBrief.currentTurn,
+		serverVersion: turnVersion,
+		status: 'pending',
 		...turnContextCounts(ctxWithTimeline),
 		promotedEvents: 0,
 	};
-	await recorder.time('turn.timeline.promote_due', promotionMetadata, async () => {
-		const promotedEvents = await promoteDueTimelineEvents(request.storyId, gmBrief.currentTurn);
-		promotionMetadata.promotedEvents = promotedEvents.length;
-		return promotedEvents;
-	});
+	try {
+		await recorder.time('turn.timeline.promote_due', promotionMetadata, async () => {
+			try {
+				const promotedEvents = await promoteDueTimelineEvents(request.storyId, gmBrief.currentTurn, { serverVersion: turnVersion });
+				promotionMetadata.promotedEvents = promotedEvents.length;
+				promotionMetadata.status = 'success';
+				return promotedEvents;
+			} catch (error) {
+				promotionMetadata.status = 'error';
+				promotionMetadata.error = error instanceof Error ? error.message : String(error);
+				throw error;
+			}
+		});
+	} catch (error) {
+		warnings.push(`Timeline due-event promotion failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
 
 	const [entries, syncChanges] = await recorder.time('turn.final_response.readback', {
 		localVersion: request.localVersion,

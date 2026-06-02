@@ -151,14 +151,38 @@ export function buildScheduledTimelineEventInsert(input: {
 	};
 }
 
-export function buildDueTimelineEventPromotionPatch(now: string): {
+interface DueTimelineEventPromotionOptions {
+	now?: string;
+	serverVersion?: number;
+}
+
+function normalizeDueTimelineEventPromotionOptions(
+	options?: string | DueTimelineEventPromotionOptions,
+): Required<Pick<DueTimelineEventPromotionOptions, 'now'>> & Pick<DueTimelineEventPromotionOptions, 'serverVersion'> {
+	if (typeof options === 'string') return { now: options };
+	return {
+		now: options?.now ?? new Date().toISOString(),
+		serverVersion: options?.serverVersion,
+	};
+}
+
+export function buildDueTimelineEventPromotionPatch(now: string, options: Pick<DueTimelineEventPromotionOptions, 'serverVersion'> = {}): {
 	status: 'due';
 	updatedAt: string;
+	serverVersion?: number;
 } {
-	return {
+	const patch: {
+		status: 'due';
+		updatedAt: string;
+		serverVersion?: number;
+	} = {
 		status: 'due',
 		updatedAt: now,
 	};
+	if (typeof options.serverVersion === 'number' && Number.isFinite(options.serverVersion)) {
+		patch.serverVersion = options.serverVersion;
+	}
+	return patch;
 }
 
 export function buildGmTimelineBrief(input: {
@@ -387,11 +411,12 @@ export async function scheduleTimelineEvent(input: Parameters<typeof buildSchedu
 export async function promoteDueTimelineEvents(
 	storyId: string,
 	currentTurn: number,
-	now = new Date().toISOString(),
+	options?: string | DueTimelineEventPromotionOptions,
 ): Promise<StoryEventRow[]> {
+	const promotion = normalizeDueTimelineEventPromotionOptions(options);
 	return getDb()
 		.update(storyEvents)
-		.set(buildDueTimelineEventPromotionPatch(now))
+		.set(buildDueTimelineEventPromotionPatch(promotion.now, { serverVersion: promotion.serverVersion }))
 		.where(and(
 			eq(storyEvents.storyId, storyId),
 			eq(storyEvents.status, 'scheduled'),

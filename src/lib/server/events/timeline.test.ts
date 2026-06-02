@@ -297,10 +297,12 @@ describe('timeline selection helpers', () => {
 			npcEventLimit: 2,
 		} satisfies Parameters<typeof loadGmTimelineBrief>[0];
 		const promoteInput = ['story_1', 5] satisfies Parameters<typeof promoteDueTimelineEvents>;
+		const promoteWithVersionInput = ['story_1', 5, { now, serverVersion: 42 }] satisfies Parameters<typeof promoteDueTimelineEvents>;
 
 		expect(loadInput.sceneEntityIds).toEqual(['npc_cass']);
 		expect(loadInput.currentTurn).toBe(7);
 		expect(promoteInput).toEqual(['story_1', 5]);
+		expect(promoteWithVersionInput[2]).toEqual({ now, serverVersion: 42 });
 	});
 
 	it('accepts scheduled timeline input with explicit npc ids at compile time', () => {
@@ -388,6 +390,17 @@ describe('timeline selection helpers', () => {
 		});
 	});
 
+	it('builds a versioned due promotion patch without mutating occurred turn', () => {
+		const patch = buildDueTimelineEventPromotionPatch(now, { serverVersion: 42 });
+
+		expect(patch).toEqual({
+			status: 'due',
+			updatedAt: now,
+			serverVersion: 42,
+		});
+		expect(patch).not.toHaveProperty('occurredTurn');
+	});
+
 	it('promotes only scheduled due rows and leaves occurred turn out of the update payload', async () => {
 		const rows = [event({ id: 'due_scheduled', status: 'due', scheduledTurn: 5 })];
 		const returning = vi.fn().mockResolvedValue(rows);
@@ -416,6 +429,29 @@ describe('timeline selection helpers', () => {
 		expect(dbMocks.eq).toHaveBeenCalledWith(storyEvents.status, 'scheduled');
 		expect(sqlExpressionIncludes(dueTurnCondition, storyEvents.scheduledTurn)).toBe(true);
 		expect(sqlExpressionIncludes(dueTurnCondition, 5)).toBe(true);
+	});
+
+	it('promotes scheduled due rows with server version when provided', async () => {
+		const rows = [event({ id: 'due_scheduled', status: 'due', scheduledTurn: 5, serverVersion: 42 })];
+		const returning = vi.fn().mockResolvedValue(rows);
+		const where = vi.fn(() => ({ returning }));
+		const set = vi.fn((payload: Record<string, unknown>) => {
+			void payload;
+			return { where };
+		});
+		const update = vi.fn(() => ({ set }));
+		dbMocks.getDb.mockReturnValue({ update });
+
+		const result = await promoteDueTimelineEvents('story_1', 5, { now, serverVersion: 42 });
+		const setPayload = set.mock.calls[0]?.[0];
+
+		expect(result).toBe(rows);
+		expect(setPayload).toEqual({
+			status: 'due',
+			updatedAt: now,
+			serverVersion: 42,
+		});
+		expect(setPayload).not.toHaveProperty('occurredTurn');
 	});
 
 	it('loads a timeline brief from bounded due, recent, scheduled, npc-link, and linked-event queries', async () => {
