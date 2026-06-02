@@ -251,10 +251,25 @@ export function buildServerTurnPrompt(
 	const wikiContextMarkdown = compactBlock(options.wikiContextMarkdown, WIKI_CONTEXT_CHAR_LIMIT);
 	const currentLocation = ctx.entities.find((entity) => entity.type === 'location' && (entity.state as Record<string, unknown> | null)?.current === true);
 	const sceneEntityIds = new Set(options.sceneEntityIds ?? []);
-	const presentEntities = ctx.entities.filter((entity) => {
-		const state = entity.state as Record<string, unknown> | null;
-		return state?.present === true || state?.current === true || entity.id === currentLocation?.id || sceneEntityIds.has(entity.id);
-	}).slice(0, PRESENT_ENTITY_LIMIT);
+	const presentEntities = ctx.entities
+		.map((entity, index) => {
+			const state = entity.state as Record<string, unknown> | null;
+			const isCurrentLocation = entity.id === currentLocation?.id;
+			const isSceneEntity = sceneEntityIds.has(entity.id);
+			const isPresent = state?.present === true;
+			const isCurrent = state?.current === true;
+			const rank = isCurrentLocation ? 0 : isSceneEntity ? 1 : isPresent ? 2 : isCurrent ? 3 : 4;
+			return {
+				entity,
+				index,
+				isIncluded: isCurrentLocation || isSceneEntity || isPresent || isCurrent,
+				rank,
+			};
+		})
+		.filter((item) => item.isIncluded)
+		.sort((a, b) => (a.rank - b.rank) || (a.index - b.index))
+		.slice(0, PRESENT_ENTITY_LIMIT)
+		.map((item) => item.entity);
 	const presentEntityIds = new Set(presentEntities.map((entity) => entity.id));
 	const entityNameById = new Map(ctx.entities.map((entity) => [entity.id, entity.name]));
 	const relevantFactions = selectRelevantFactions(ctx, retrieved, presentEntityIds, options);

@@ -444,6 +444,66 @@ describe('turn prompt harness', () => {
 		expect(failedLabels(findings)).toEqual([]);
 	});
 
+	it('prioritizes scene-selected NPC portrayal over incidental crowded entities', () => {
+		const incidentalGuests = Array.from({ length: 16 }, (_, index) => {
+			const ordinal = index + 1;
+			return entity(
+				`npc_incidental_${ordinal}`,
+				'character',
+				`Incidental Guest ${ordinal}`,
+				`Guest ${ordinal} fills the feast table.`,
+				{
+					present: true,
+					appearance: `ceremonial silk guest ${ordinal}`,
+					personalityDescriptors: [`watchful courtier ${ordinal}`],
+					voice: `formal guest voice ${ordinal}`,
+					mannerisms: [`adjusts a jeweled cuff ${ordinal}`],
+				},
+			);
+		});
+		const report = buildPromptHarnessReport({
+			name: 'scene-entity-priority-in-crowd',
+			playerText: 'I ignore the crowd and ask Zarela what alliance she really wants.',
+			ctx: baseContext({
+				entities: [
+					entity('loc_crimson_spire', 'location', 'The Crimson Spire', 'The Balaerys manse inside the Black Walls.', { current: true }),
+					entity('pc_balaerys', 'character', 'Balaerys Heir', 'The watched young heir of House Balaerys.', { present: true }),
+					...incidentalGuests,
+					entity(
+						'npc_zarela',
+						'character',
+						'Lady Zarela Qhaedar',
+						'A rival Old Blood negotiator testing House Balaerys.',
+						{
+							appearance: 'ivory braid pins, a red lacquered fan, and watchful amber eyes',
+							personalityDescriptors: ['ceremonial', 'needle-sharp', 'patient enough to let a silence bleed'],
+							voice: 'soft, formal, and edged with ritual courtesy',
+							mannerisms: ['folds her fan once before naming a debt'],
+						},
+					),
+				],
+			}),
+			retrieved: packet('Old Blood negotiation posture', []),
+			options: {
+				sceneEntityIds: ['pc_balaerys', 'npc_zarela'],
+				maxFactions: 2,
+			},
+		});
+
+		const findings = evaluatePromptHarness(report, {
+			promptIncludes: [
+				'Lady Zarela Qhaedar',
+				'Appearance: ivory braid pins',
+				'Personality: ceremonial; needle-sharp; patient enough to let a silence bleed',
+				'Voice: soft, formal, and edged with ritual courtesy',
+				'Mannerisms: folds her fan once before naming a debt',
+			],
+			maxTotalBeforeGenerationTokens: 2600,
+		});
+
+		expect(failedLabels(findings)).toEqual([]);
+	});
+
 	it('labels secret GM timeline context as narrator-only', () => {
 		const gmBrief: GmTimelineBrief = {
 			storyId: 'story_balaerys',

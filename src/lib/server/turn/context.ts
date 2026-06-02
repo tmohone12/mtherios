@@ -1,4 +1,4 @@
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
 import type { GmTimelineBrief } from '$lib/contracts/memory';
 import {
@@ -30,14 +30,16 @@ export interface TurnContext {
 	gmBrief: GmTimelineBrief | null;
 }
 
-export async function loadTurnContext(storyId: string, presentNpcIds: string[] = []): Promise<TurnContext> {
+export async function loadTurnContext(storyId: string, presentNpcIds: string[] = [], sceneEntityIds: string[] = []): Promise<TurnContext> {
 	const db = getDb();
 	const [story] = await db.select().from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
+	const requestedEntityIds = [...new Set([...presentNpcIds, ...sceneEntityIds].map((id) => id.trim()).filter((id) => id.length > 0))];
 
 	const [
 		recentEntriesDesc,
 		entityRows,
+		requestedEntityRows,
 		factionRows,
 		factionMembershipRows,
 		factionResourceRows,
@@ -49,6 +51,9 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 	] = await Promise.all([
 		db.select().from(storyEntries).where(eq(storyEntries.storyId, storyId)).orderBy(desc(storyEntries.position)).limit(40),
 		db.select().from(entities).where(eq(entities.storyId, storyId)).limit(160),
+		requestedEntityIds.length
+			? db.select().from(entities).where(and(eq(entities.storyId, storyId), inArray(entities.id, requestedEntityIds))).limit(requestedEntityIds.length)
+			: Promise.resolve([] as Array<typeof entities.$inferSelect>),
 		db.select().from(factions).where(eq(factions.storyId, storyId)).limit(80),
 		db.select().from(factionMemberships).where(eq(factionMemberships.storyId, storyId)).limit(240),
 		db.select().from(factionResources).where(eq(factionResources.storyId, storyId)).limit(240),
@@ -56,16 +61,23 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		db.select().from(agreements).where(and(eq(agreements.storyId, storyId), ne(agreements.status, 'archived'))).limit(80),
 		db.select().from(storyThreads).where(and(eq(storyThreads.storyId, storyId), ne(storyThreads.status, 'closed'))).limit(80),
 		db.select().from(storyEvents).where(eq(storyEvents.storyId, storyId)).orderBy(desc(storyEvents.updatedAt)).limit(80),
-		presentNpcIds.length
-			? db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).limit(120)
+		requestedEntityIds.length
+			? db.select().from(npcBeliefs).where(and(eq(npcBeliefs.storyId, storyId), inArray(npcBeliefs.believerEntityId, requestedEntityIds))).limit(120)
 			: db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).limit(40),
 	]);
 
-	const presentSet = new Set(presentNpcIds);
+	const mergedEntityRows = [...entityRows];
+	const seenEntityIds = new Set(entityRows.map((entity) => entity.id));
+	for (const entity of requestedEntityRows) {
+		if (seenEntityIds.has(entity.id)) continue;
+		seenEntityIds.add(entity.id);
+		mergedEntityRows.push(entity);
+	}
+	const requestedSet = new Set(requestedEntityIds);
 	return {
 		story,
 		recentEntries: [...recentEntriesDesc].reverse(),
-		entities: entityRows,
+		entities: mergedEntityRows,
 		factions: factionRows,
 		factionMemberships: factionMembershipRows,
 		factionResources: factionResourceRows,
@@ -73,8 +85,8 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		agreements: agreementRows,
 		threads: threadRows,
 		events: eventRows,
-		beliefs: presentSet.size > 0
-			? beliefRows.filter((belief) => presentSet.has(belief.believerEntityId))
+		beliefs: requestedSet.size > 0
+			? beliefRows.filter((belief) => requestedSet.has(belief.believerEntityId))
 			: beliefRows,
 		gmBrief: null,
 	};

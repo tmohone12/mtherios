@@ -292,7 +292,8 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		}, () => retrieveMemoryPacket(retrievalRequest)),
 		recorder.time('turn.context_load', {
 			presentNpcIds: request.clientContext?.presentNpcIds?.length ?? 0,
-		}, () => loadTurnContext(request.storyId, request.clientContext?.presentNpcIds ?? [])),
+			sceneEntityIds: retrievalRequest.sceneEntityIds.length,
+		}, () => loadTurnContext(request.storyId, request.clientContext?.presentNpcIds ?? [], retrievalRequest.sceneEntityIds)),
 		recorder.time('turn.gm_timeline_brief', {
 			sceneEntityIds: retrievalRequest.sceneEntityIds.length,
 			presentNpcIds: retrievalRequest.presentNpcIds.length,
