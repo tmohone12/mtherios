@@ -131,6 +131,10 @@ function extractServerWikiContext(result: unknown): ServerWikiContext {
 }
 
 function turnContextCounts(ctx: Awaited<ReturnType<typeof loadTurnContext>>): Record<string, number> {
+	const gmDueEvents = ctx.gmBrief?.dueEvents.length ?? 0;
+	const gmRecentEvents = ctx.gmBrief?.recentEvents.length ?? 0;
+	const gmScheduledEvents = ctx.gmBrief?.scheduledEvents.length ?? 0;
+	const gmNpcEvents = ctx.gmBrief?.npcEvents.length ?? 0;
 	return {
 		recentEntries: ctx.recentEntries.length,
 		entities: ctx.entities.length,
@@ -142,6 +146,11 @@ function turnContextCounts(ctx: Awaited<ReturnType<typeof loadTurnContext>>): Re
 		threads: ctx.threads.length,
 		events: ctx.events.length,
 		beliefs: ctx.beliefs.length,
+		gmDueEvents,
+		gmRecentEvents,
+		gmScheduledEvents,
+		gmNpcEvents,
+		gmTimelineEvents: gmDueEvents + gmRecentEvents + gmScheduledEvents,
 	};
 }
 
@@ -287,16 +296,12 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		recorder.time('turn.gm_timeline_brief', {
 			sceneEntityIds: retrievalRequest.sceneEntityIds.length,
 			presentNpcIds: retrievalRequest.presentNpcIds.length,
-		}, async () => {
-			const brief = await loadGmTimelineBrief({
-				storyId: request.storyId,
-				sceneEntityIds: retrievalRequest.sceneEntityIds,
-				presentNpcIds: retrievalRequest.presentNpcIds,
-				includeSecret: true,
-			});
-			await promoteDueTimelineEvents(request.storyId, brief.currentTurn);
-			return brief;
-		}),
+		}, () => loadGmTimelineBrief({
+			storyId: request.storyId,
+			sceneEntityIds: retrievalRequest.sceneEntityIds,
+			presentNpcIds: retrievalRequest.presentNpcIds,
+			includeSecret: true,
+		})),
 		wikiContextTask,
 	]));
 	const ctxWithTimeline = { ...ctx, gmBrief };
@@ -582,6 +587,16 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		memorySettings,
 	}));
 	warnings.push(...applied.warnings);
+	const promotionMetadata = {
+		currentTurn: gmBrief.currentTurn,
+		...turnContextCounts(ctxWithTimeline),
+		promotedEvents: 0,
+	};
+	await recorder.time('turn.timeline.promote_due', promotionMetadata, async () => {
+		const promotedEvents = await promoteDueTimelineEvents(request.storyId, gmBrief.currentTurn);
+		promotionMetadata.promotedEvents = promotedEvents.length;
+		return promotedEvents;
+	});
 
 	const [entries, syncChanges] = await recorder.time('turn.final_response.readback', {
 		localVersion: request.localVersion,
