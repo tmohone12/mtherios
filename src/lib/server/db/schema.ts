@@ -51,6 +51,8 @@ export const stories = pgTable('stories', {
 	settings: jsonb('settings').$type<Record<string, unknown> | null>().default(null),
 	headerPrompt: text('header_prompt'),
 	currentLocationId: text('current_location_id'),
+	currentTurn: integer('current_turn').notNull().default(0),
+	currentWorldTime: text('current_world_time'),
 	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
 	...syncColumns,
 }, (table) => ({
@@ -257,20 +259,46 @@ export const storyEvents = pgTable('story_events', {
 	id: text('id').primaryKey(),
 	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
 	type: text('type').notNull(),
+	status: text('status').notNull().default('committed'),
 	title: text('title').notNull(),
 	body: text('body').notNull(),
 	actorEntityIds: jsonb('actor_entity_ids').$type<string[]>().notNull().default(jsonArray),
 	targetEntityIds: jsonb('target_entity_ids').$type<string[]>().notNull().default(jsonArray),
 	locationId: text('location_id'),
+	locationIds: jsonb('location_ids').$type<string[]>().notNull().default(jsonArray),
+	factionIds: jsonb('faction_ids').$type<string[]>().notNull().default(jsonArray),
 	threadIds: jsonb('thread_ids').$type<string[]>().notNull().default(jsonArray),
 	visibility: text('visibility').notNull().default('player_known'),
+	createdTurn: integer('created_turn').notNull().default(0),
+	occurredTurn: integer('occurred_turn'),
+	scheduledTurn: integer('scheduled_turn'),
+	worldTime: text('world_time'),
+	memoryImpact: jsonb('memory_impact').$type<Record<string, unknown>>().notNull().default(jsonObject),
 	sourceEntryIds: jsonb('source_entry_ids').$type<string[]>().notNull().default(jsonArray),
 	sourcePatchIds: jsonb('source_patch_ids').$type<string[]>().notNull().default(jsonArray),
 	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
 	...syncColumns,
 }, (table) => ({
 	storyTypeIdx: index('story_events_story_type_idx').on(table.storyId, table.type),
+	storyStatusTurnIdx: index('story_events_story_status_turn_idx').on(table.storyId, table.status, table.scheduledTurn),
+	storyOccurredTurnIdx: index('story_events_story_occurred_turn_idx').on(table.storyId, table.occurredTurn),
 	updatedAtIdx: index('story_events_updated_at_idx').on(table.updatedAt),
+}));
+
+export const npcEventLinks = pgTable('npc_event_links', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	eventId: text('event_id').notNull().references(() => storyEvents.id, { onDelete: 'cascade' }),
+	npcEntityId: text('npc_entity_id').notNull().references(() => entities.id, { onDelete: 'cascade' }),
+	role: text('role').notNull().default('affected'),
+	visibility: text('visibility').notNull().default('player_known'),
+	evidenceStrength: real('evidence_strength').notNull().default(0.75),
+	sourceEntryIds: jsonb('source_entry_ids').$type<string[]>().notNull().default(jsonArray),
+	sourcePatchIds: jsonb('source_patch_ids').$type<string[]>().notNull().default(jsonArray),
+	...syncColumns,
+}, (table) => ({
+	storyEventIdx: index('npc_event_links_story_event_idx').on(table.storyId, table.eventId),
+	storyNpcIdx: index('npc_event_links_story_npc_idx').on(table.storyId, table.npcEntityId),
 }));
 
 export const statePatches = pgTable('state_patches', {
@@ -483,6 +511,7 @@ export const schema = {
 	agreements,
 	storyThreads,
 	storyEvents,
+	npcEventLinks,
 	statePatches,
 	memoryNodes,
 	chapters,

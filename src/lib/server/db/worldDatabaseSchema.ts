@@ -14,6 +14,7 @@ export const TERMINAL_WORLD_DATABASE_TABLE_ORDER = [
 	'agreements',
 	'storyThreads',
 	'storyEvents',
+	'npcEventLinks',
 	'statePatches',
 	'memoryNodes',
 	'chapters',
@@ -192,7 +193,7 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 		stories: {
 			purpose: 'One world database shell per story/campaign.',
 			primaryKey: 'id',
-			fields: ['id', 'clientStoryId', 'title', 'description', 'genre', 'mode', 'settings', 'headerPrompt', 'currentLocationId', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
+			fields: ['id', 'clientStoryId', 'title', 'description', 'genre', 'mode', 'settings', 'headerPrompt', 'currentLocationId', 'currentTurn', 'currentWorldTime', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
 		},
 		storyEntries: {
 			purpose: 'Transcript evidence: player actions, narration, system records, and imported source text.',
@@ -264,7 +265,13 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 			purpose: 'Canonical events and consequences produced by turns, imports, world simulation, and validated state changes.',
 			primaryKey: 'id',
 			foreignKeys: ['storyId -> stories.id'],
-			fields: ['id', 'storyId', 'type', 'title', 'body', 'actorEntityIds', 'targetEntityIds', 'locationId', 'threadIds', 'visibility', 'sourceEntryIds', 'sourcePatchIds', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
+			fields: ['id', 'storyId', 'type', 'status', 'title', 'body', 'actorEntityIds', 'targetEntityIds', 'locationId', 'locationIds', 'factionIds', 'threadIds', 'visibility', 'createdTurn', 'occurredTurn', 'scheduledTurn', 'worldTime', 'memoryImpact', 'sourceEntryIds', 'sourcePatchIds', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
+		},
+		npcEventLinks: {
+			purpose: 'Evidence-backed links between canonical timeline events and NPC memory/personality state.',
+			primaryKey: 'id',
+			foreignKeys: ['storyId -> stories.id', 'eventId -> storyEvents.id', 'npcEntityId -> entities.id'],
+			fields: ['id', 'storyId', 'eventId', 'npcEntityId', 'role', 'visibility', 'evidenceStrength', 'sourceEntryIds', 'sourcePatchIds', 'serverVersion', 'createdAt', 'updatedAt'],
 		},
 		statePatches: {
 			purpose: 'Proposed/applied structured changes from tools, imports, and narration validation.',
