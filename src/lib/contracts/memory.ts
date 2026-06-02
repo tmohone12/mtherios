@@ -95,7 +95,7 @@ export const storyEventSchema = z.object({
 	updatedAt: z.string(),
 });
 
-export const npcEventLinkRoleSchema = z.enum(['actor', 'target', 'witness', 'affected']);
+export const npcEventLinkRoleSchema = z.enum(['actor', 'target', 'witness', 'affected', 'knower']);
 
 export const npcEventLinkSchema = z.object({
 	id: z.string(),
@@ -118,7 +118,7 @@ export const gmTimelineBriefEventSchema = z.object({
 	status: storyEventStatusSchema,
 	title: z.string(),
 	body: z.string(),
-	turnsUntilDue: z.number().int(),
+	turnsUntilDue: z.number().int().nullable().default(null),
 	worldTime: z.string().nullable().default(null),
 	npcEntityIds: z.array(z.string()).default([]),
 	factionIds: z.array(z.string()).default([]),

@@ -89,6 +89,43 @@ describe('timeline contracts', () => {
 		expect(link.evidenceStrength).toBe(0.9);
 	});
 
+	it('defaults optional NPC-event link evidence fields', () => {
+		const link = npcEventLinkSchema.parse({
+			id: 'npc_event_link_defaults',
+			storyId: 'story_1',
+			eventId: 'event_marriage_alliance',
+			npcEntityId: 'npc_vhalor_heir',
+			serverVersion: 12,
+			createdAt: '2026-06-02T00:00:00.000Z',
+			updatedAt: '2026-06-02T00:00:00.000Z',
+		});
+
+		expect(link.role).toBe('affected');
+		expect(link.visibility).toBe('player_known');
+		expect(link.evidenceStrength).toBe(0.75);
+		expect(link.sourceEntryIds).toEqual([]);
+		expect(link.sourcePatchIds).toEqual([]);
+	});
+
+	it('parses knowledge-oriented NPC-event links', () => {
+		const link = npcEventLinkSchema.parse({
+			id: 'npc_event_link_knower',
+			storyId: 'story_1',
+			eventId: 'event_secret_alliance',
+			npcEntityId: 'npc_spymaster',
+			role: 'knower',
+			visibility: 'secret',
+			evidenceStrength: 0.8,
+			sourceEntryIds: ['entry_7'],
+			sourcePatchIds: ['patch_7'],
+			serverVersion: 13,
+			createdAt: '2026-06-02T00:00:00.000Z',
+			updatedAt: '2026-06-02T00:00:00.000Z',
+		});
+
+		expect(link.role).toBe('knower');
+	});
+
 	it('parses compact GM timeline briefs', () => {
 		const brief = gmTimelineBriefSchema.parse({
 			storyId: 'story_1',
@@ -107,12 +144,24 @@ describe('timeline contracts', () => {
 				locationIds: ['loc_harbor_keep'],
 				visibility: 'secret',
 			}],
-			recentEvents: [],
+			recentEvents: [{
+				id: 'event_raven_warning',
+				type: 'rumor',
+				status: 'committed',
+				title: 'Raven warning received',
+				body: 'A raven warning reached the harbor keep earlier today.',
+				worldTime: '17th day of the 9th moon, 296 AC',
+				npcEntityIds: ['npc_watch_captain'],
+				factionIds: ['faction_vhalor'],
+				locationIds: ['loc_harbor_keep'],
+				visibility: 'player_known',
+			}],
 			scheduledEvents: [],
 			npcEvents: [],
 		});
 
 		expect(brief.dueEvents[0].turnsUntilDue).toBe(0);
+		expect(brief.recentEvents[0].turnsUntilDue).toBeNull();
 	});
 
 	it('rejects invalid story event statuses', () => {
