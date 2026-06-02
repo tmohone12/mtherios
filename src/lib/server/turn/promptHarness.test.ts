@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { MemoryNode, RetrievedMemoryPacket } from '$lib/contracts/memory';
+import type { GmTimelineBrief, MemoryNode, RetrievedMemoryPacket } from '$lib/contracts/memory';
 import type { TurnContext } from './context';
 import { buildPromptHarnessReport, evaluatePromptHarness } from './promptHarness';
 
@@ -164,6 +164,7 @@ function baseContext(overrides: Partial<TurnContext> = {}): TurnContext {
 		threads: [],
 		events: [],
 		beliefs: [],
+		gmBrief: null,
 		...overrides,
 	} as unknown as TurnContext;
 }
@@ -286,6 +287,115 @@ describe('turn prompt harness', () => {
 			promptIncludes: ['House Balaerys', 'members: Balaerys Heir'],
 			promptExcludes: ['House Irrelevant 5'],
 			maxTotalBeforeGenerationTokens: 2200,
+		});
+
+		expect(failedLabels(findings)).toEqual([]);
+	});
+
+	it('includes compact GM timeline and text-RPG NPC portrayal details', () => {
+		const gmBrief: GmTimelineBrief = {
+			storyId: 'story_balaerys',
+			currentTurn: 17,
+			currentWorldTime: '296 AC, 15th day of the 8th moon, sunset',
+			dueEvents: [
+				{
+					id: 'event_harbor_pact_due',
+					type: 'marriage',
+					status: 'due',
+					title: 'Harbor marriage pact matures',
+					body: 'The harbor faction expects House Balaerys to answer the marriage offer before the envoy leaves the quay.',
+					turnsUntilDue: 0,
+					worldTime: '296 AC, 15th day of the 8th moon, sunset',
+					npcEntityIds: ['npc_saera'],
+					factionIds: ['faction_balaerys', 'faction_harbor'],
+					locationIds: ['loc_crimson_spire'],
+					visibility: 'player_known',
+				},
+			],
+			recentEvents: [
+				{
+					id: 'event_ring_terms',
+					type: 'scheme',
+					status: 'committed',
+					title: 'Ring-gift terms whispered',
+					body: 'A scribe carried the price of the proposed match from the harbor countinghouse.',
+					turnsUntilDue: null,
+					worldTime: '296 AC, 15th day of the 8th moon, afternoon',
+					npcEntityIds: ['npc_saera'],
+					factionIds: ['faction_balaerys'],
+					locationIds: ['loc_crimson_spire'],
+					visibility: 'player_known',
+				},
+			],
+			scheduledEvents: [
+				{
+					id: 'event_harbor_envoy_waits',
+					type: 'faction_move',
+					status: 'scheduled',
+					title: 'Harbor envoy demands answer',
+					body: 'The envoy will seek a public yes or insult at the nameday tables.',
+					turnsUntilDue: 2,
+					worldTime: '296 AC, 16th day of the 8th moon, morning',
+					npcEntityIds: ['npc_saera'],
+					factionIds: ['faction_harbor'],
+					locationIds: ['loc_crimson_spire'],
+					visibility: 'player_known',
+				},
+			],
+			npcEvents: [
+				{
+					npcEntityId: 'npc_saera',
+					eventIds: ['event_harbor_pact_due', 'event_ring_terms'],
+					summary: 'Saera has tracked the harbor pact, its ring-gift price, and who benefits if House Balaerys accepts.',
+					visibility: 'player_known',
+				},
+			],
+		};
+		const report = buildPromptHarnessReport({
+			name: 'gm-timeline-portrayal',
+			playerText: 'I ask Lady Saera what price the harbor pact truly carries.',
+			ctx: baseContext({
+				entities: [
+					entity('loc_crimson_spire', 'location', 'The Crimson Spire', 'The Balaerys manse inside the Black Walls.', { current: true }),
+					entity('pc_balaerys', 'character', 'Balaerys Heir', 'The watched young heir of House Balaerys.', { present: true }),
+					entity(
+						'npc_saera',
+						'character',
+						'Lady Saera Balaerys',
+						'A senior Balaerys matchmaker and court watcher.',
+						{
+							present: true,
+							appearance: 'silver-streaked black hair, severe jade gown, ringed hands, sharp violet eyes',
+							personalityDescriptors: ['controlled', 'cutting', 'protective when House Balaerys benefits'],
+							voice: 'low, precise, and dryly amused',
+							mannerisms: ['taps one ring against the table before naming a cost'],
+						},
+					),
+				],
+				gmBrief,
+			}),
+			retrieved: packet('Saera harbor marriage pact Balaerys cost', []),
+			options: {
+				currentFactionId: 'faction_balaerys',
+				sceneEntityIds: ['pc_balaerys', 'npc_saera'],
+			},
+		});
+
+		const findings = evaluatePromptHarness(report, {
+			promptIncludes: [
+				'GM timeline brief:',
+				'Current turn',
+				'Due events',
+				'Harbor marriage pact matures',
+				'Recent events',
+				'Scheduled future events',
+				'NPC event memory',
+				'Appearance: silver-streaked black hair',
+				'Personality: controlled; cutting; protective when House Balaerys benefits',
+				'Voice: low, precise, and dryly amused',
+				'Mannerisms: taps one ring against the table before naming a cost',
+			],
+			maxTotalBeforeGenerationTokens: 2500,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);

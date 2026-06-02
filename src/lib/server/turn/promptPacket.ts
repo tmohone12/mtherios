@@ -1,5 +1,5 @@
 import type { TurnContext } from './context';
-import type { RetrievedMemoryPacket } from '$lib/contracts/memory';
+import type { GmTimelineBrief, GmTimelineBriefEvent, RetrievedMemoryPacket } from '$lib/contracts/memory';
 import { buildEconomyScaleBlock } from '$lib/services/ai/context/economyScale';
 
 export interface ServerTurnPromptOptions {
@@ -22,6 +22,9 @@ const BELIEF_LIMIT = 8;
 const THREAD_LIMIT = 10;
 const AGREEMENT_LIMIT = 8;
 const EVENT_LIMIT = 8;
+const GM_EVENT_SECTION_LIMIT = 4;
+const GM_NPC_EVENT_LIMIT = 4;
+const PORTRAYAL_LIST_LIMIT = 3;
 const STATE_EXTRACTION_NARRATION_LIMIT = 6000;
 
 function asStringArray(value: unknown): string[] {
@@ -38,6 +41,36 @@ function compactBlock(value: string | null | undefined, max = 7500): string {
 	const text = (value ?? '').trim();
 	if (text.length <= max) return text;
 	return `${text.slice(0, max - 3).trimEnd()}...`;
+}
+
+function stringStateValue(state: Record<string, unknown>, key: string, max = 120): string {
+	const value = state[key];
+	return typeof value === 'string' ? compact(value, max) : '';
+}
+
+function stringStateList(state: Record<string, unknown>, key: string, max = 90): string {
+	return asStringArray(state[key])
+		.slice(0, PORTRAYAL_LIST_LIMIT)
+		.map((item) => compact(item, max))
+		.filter(Boolean)
+		.join('; ');
+}
+
+function renderEntityPortrayal(stateValue: unknown): string {
+	if (!stateValue || typeof stateValue !== 'object') return '';
+	const state = stateValue as Record<string, unknown>;
+	const appearance = stringStateValue(state, 'appearance', 130);
+	const personality = stringStateList(state, 'personalityDescriptors', 90);
+	const voice = stringStateValue(state, 'voice', 110);
+	const mannerisms = stringStateList(state, 'mannerisms', 110);
+	const parts = [
+		appearance ? `Appearance: ${appearance}` : '',
+		personality ? `Personality: ${personality}` : '',
+		voice ? `Voice: ${voice}` : '',
+		mannerisms ? `Mannerisms: ${mannerisms}` : '',
+	].filter(Boolean);
+
+	return parts.length ? ` (${parts.join('; ')})` : '';
 }
 
 function normalizeLookup(text: string): string {
@@ -63,6 +96,52 @@ function includesAnyToken(text: string, tokens: string[]): number {
 	if (tokens.length === 0) return 0;
 	const haystack = normalizeLookup(text);
 	return tokens.reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0);
+}
+
+function renderDueTiming(event: GmTimelineBriefEvent): string {
+	if (event.turnsUntilDue === 0) return 'due now';
+	if (typeof event.turnsUntilDue === 'number') {
+		return event.turnsUntilDue > 0 ? `due +${event.turnsUntilDue}t` : `due ${event.turnsUntilDue}t`;
+	}
+	return 'due n/a';
+}
+
+function compactTags(event: GmTimelineBriefEvent): string {
+	const tags = [
+		event.worldTime ? `time=${compact(event.worldTime, 90)}` : '',
+		event.npcEntityIds.length ? `npcs=${event.npcEntityIds.slice(0, 4).map((id) => compact(id, 40)).join(',')}` : '',
+		event.factionIds.length ? `factions=${event.factionIds.slice(0, 4).map((id) => compact(id, 40)).join(',')}` : '',
+		event.locationIds.length ? `locs=${event.locationIds.slice(0, 3).map((id) => compact(id, 40)).join(',')}` : '',
+	].filter(Boolean);
+	return tags.length ? ` (${tags.join('; ')})` : '';
+}
+
+function renderGmEvent(event: GmTimelineBriefEvent): string {
+	return `- ${event.type}/${event.status}; ${renderDueTiming(event)}: ${compact(event.title, 90)} - ${compact(event.body, 150)}${compactTags(event)}`;
+}
+
+function renderGmEventSection(label: string, events: GmTimelineBriefEvent[]): string {
+	const lines = events.slice(0, GM_EVENT_SECTION_LIMIT).map(renderGmEvent);
+	return lines.length ? `${label}:\n${lines.join('\n')}` : '';
+}
+
+function renderGmNpcEvents(brief: GmTimelineBrief): string {
+	const lines = brief.npcEvents
+		.slice(0, GM_NPC_EVENT_LIMIT)
+		.map((event) => `- ${event.npcEntityId}: ${compact(event.summary, 150)}`);
+	return lines.length ? `NPC event memory:\n${lines.join('\n')}` : '';
+}
+
+function renderGmTimelineBrief(brief: GmTimelineBrief | null): string {
+	if (!brief) return '';
+	return [
+		'GM timeline brief:',
+		`Current turn: ${brief.currentTurn}${brief.currentWorldTime ? ` (${compact(brief.currentWorldTime, 90)})` : ''}`,
+		renderGmEventSection('Due events', brief.dueEvents),
+		renderGmEventSection('Recent events', brief.recentEvents),
+		renderGmEventSection('Scheduled future events', brief.scheduledEvents),
+		renderGmNpcEvents(brief),
+	].filter(Boolean).join('\n');
 }
 
 function renderEntries(ctx: TurnContext, currentEntryId: string): Array<{ role: 'user' | 'assistant'; content: string }> {
@@ -200,9 +279,10 @@ export function buildServerTurnPrompt(
 	const eventLines = ctx.events.slice(0, EVENT_LIMIT).map((event) =>
 		`- ${event.type}: ${event.title} - ${compact(event.body, 160)}`
 	);
+	const gmTimelineBrief = renderGmTimelineBrief(ctx.gmBrief);
 
 	const entityLines = presentEntities.map((entity) =>
-		`- ${entity.type}: ${entity.name}${entity.description ? ` - ${compact(entity.description, 160)}` : ''}`
+		`- ${entity.type}: ${entity.name}${renderEntityPortrayal(entity.state)}${entity.description ? ` - ${compact(entity.description, 160)}` : ''}`
 	);
 
 	const system = [
@@ -232,7 +312,7 @@ export function buildServerTurnPrompt(
 		beliefLines.length ? `Actor belief limits:\n${beliefLines.join('\n')}` : '',
 		agreementLines.length ? `Agreements and obligations:\n${agreementLines.join('\n')}` : '',
 		threadLines.length ? `Open plot ledger:\n${threadLines.join('\n')}` : '',
-		eventLines.length ? `Recent source-linked events:\n${eventLines.join('\n')}` : '',
+		gmTimelineBrief || (eventLines.length ? `Recent source-linked events:\n${eventLines.join('\n')}` : ''),
 		wikiContextMarkdown ? `Terminal wiki context:\n${wikiContextMarkdown}` : '',
 		retrieved.packet,
 		'Return only the narration prose for the player action. Do not include JSON in this response.',
