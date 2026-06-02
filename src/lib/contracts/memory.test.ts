@@ -157,11 +157,18 @@ describe('timeline contracts', () => {
 				visibility: 'player_known',
 			}],
 			scheduledEvents: [],
-			npcEvents: [],
+			npcEvents: [{
+				npcEntityId: 'npc_vhalor_heir',
+				eventIds: ['event_marriage_alliance'],
+				summary: 'House Vhalor marriage pact: the heir knows this marriage changes fleet loyalties.',
+				visibility: 'secret',
+			}],
 		});
 
 		expect(brief.dueEvents[0].turnsUntilDue).toBe(0);
 		expect(brief.recentEvents[0].turnsUntilDue).toBeNull();
+		expect(brief.npcEvents[0].summary).toContain('fleet loyalties');
+		expect(brief.npcEvents[0].eventIds).toEqual(['event_marriage_alliance']);
 	});
 
 	it('rejects invalid story event statuses', () => {

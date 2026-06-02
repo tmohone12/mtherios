@@ -128,7 +128,9 @@ export const gmTimelineBriefEventSchema = z.object({
 
 export const gmTimelineNpcEventSchema = z.object({
 	npcEntityId: z.string(),
-	events: z.array(gmTimelineBriefEventSchema).default([]),
+	eventIds: z.array(z.string()).default([]),
+	summary: z.string(),
+	visibility: memoryVisibilitySchema,
 });
 
 export const gmTimelineBriefSchema = z.object({
