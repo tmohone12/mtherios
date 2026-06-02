@@ -25,6 +25,13 @@ const EVENT_LIMIT = 8;
 const GM_EVENT_SECTION_LIMIT = 4;
 const GM_NPC_EVENT_LIMIT = 4;
 const PORTRAYAL_LIST_LIMIT = 3;
+const PORTRAYAL_APPEARANCE_CHAR_LIMIT = 72;
+const PORTRAYAL_PERSONALITY_CHAR_LIMIT = 82;
+const PORTRAYAL_VOICE_CHAR_LIMIT = 58;
+const PORTRAYAL_MANNERISMS_CHAR_LIMIT = 58;
+const PORTRAYAL_SUFFIX_CHAR_LIMIT = 320;
+const SECRET_TIMELINE_LABEL = '[secret narrator-only]';
+const SECRET_TIMELINE_INSTRUCTION = 'Secret timeline items are narrator-only context; present NPCs must not speak or act on them unless actor beliefs or scene evidence supports it.';
 const STATE_EXTRACTION_NARRATION_LIMIT = 6000;
 
 function asStringArray(value: unknown): string[] {
@@ -64,13 +71,13 @@ function renderEntityPortrayal(stateValue: unknown): string {
 	const voice = stringStateValue(state, 'voice', 110);
 	const mannerisms = stringStateList(state, 'mannerisms', 110);
 	const parts = [
-		appearance ? `Appearance: ${appearance}` : '',
-		personality ? `Personality: ${personality}` : '',
-		voice ? `Voice: ${voice}` : '',
-		mannerisms ? `Mannerisms: ${mannerisms}` : '',
+		appearance ? `Appearance: ${compact(appearance, PORTRAYAL_APPEARANCE_CHAR_LIMIT)}` : '',
+		personality ? `Personality: ${compact(personality, PORTRAYAL_PERSONALITY_CHAR_LIMIT)}` : '',
+		voice ? `Voice: ${compact(voice, PORTRAYAL_VOICE_CHAR_LIMIT)}` : '',
+		mannerisms ? `Mannerisms: ${compact(mannerisms, PORTRAYAL_MANNERISMS_CHAR_LIMIT)}` : '',
 	].filter(Boolean);
 
-	return parts.length ? ` (${parts.join('; ')})` : '';
+	return parts.length ? ` (${compact(parts.join('; '), PORTRAYAL_SUFFIX_CHAR_LIMIT)})` : '';
 }
 
 function normalizeLookup(text: string): string {
@@ -116,8 +123,21 @@ function compactTags(event: GmTimelineBriefEvent): string {
 	return tags.length ? ` (${tags.join('; ')})` : '';
 }
 
+function renderGmVisibilityPrefix(visibility: string): string {
+	return visibility === 'secret' ? `${SECRET_TIMELINE_LABEL} ` : '';
+}
+
+function gmBriefHasSecretItems(brief: GmTimelineBrief): boolean {
+	return [
+		...brief.dueEvents,
+		...brief.recentEvents,
+		...brief.scheduledEvents,
+		...brief.npcEvents,
+	].some((item) => item.visibility === 'secret');
+}
+
 function renderGmEvent(event: GmTimelineBriefEvent): string {
-	return `- ${event.type}/${event.status}; ${renderDueTiming(event)}: ${compact(event.title, 90)} - ${compact(event.body, 150)}${compactTags(event)}`;
+	return `- ${renderGmVisibilityPrefix(event.visibility)}${event.type}/${event.status}; ${renderDueTiming(event)}: ${compact(event.title, 90)} - ${compact(event.body, 150)}${compactTags(event)}`;
 }
 
 function renderGmEventSection(label: string, events: GmTimelineBriefEvent[]): string {
@@ -128,7 +148,7 @@ function renderGmEventSection(label: string, events: GmTimelineBriefEvent[]): st
 function renderGmNpcEvents(brief: GmTimelineBrief): string {
 	const lines = brief.npcEvents
 		.slice(0, GM_NPC_EVENT_LIMIT)
-		.map((event) => `- ${event.npcEntityId}: ${compact(event.summary, 150)}`);
+		.map((event) => `- ${renderGmVisibilityPrefix(event.visibility)}${event.npcEntityId}: ${compact(event.summary, 150)}`);
 	return lines.length ? `NPC event memory:\n${lines.join('\n')}` : '';
 }
 
@@ -137,6 +157,7 @@ function renderGmTimelineBrief(brief: GmTimelineBrief | null): string {
 	return [
 		'GM timeline brief:',
 		`Current turn: ${brief.currentTurn}${brief.currentWorldTime ? ` (${compact(brief.currentWorldTime, 90)})` : ''}`,
+		gmBriefHasSecretItems(brief) ? SECRET_TIMELINE_INSTRUCTION : '',
 		renderGmEventSection('Due events', brief.dueEvents),
 		renderGmEventSection('Recent events', brief.recentEvents),
 		renderGmEventSection('Scheduled future events', brief.scheduledEvents),

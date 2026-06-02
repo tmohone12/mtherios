@@ -400,4 +400,197 @@ describe('turn prompt harness', () => {
 
 		expect(failedLabels(findings)).toEqual([]);
 	});
+
+	it('labels secret GM timeline context as narrator-only', () => {
+		const gmBrief: GmTimelineBrief = {
+			storyId: 'story_balaerys',
+			currentTurn: 18,
+			currentWorldTime: '296 AC, 15th day of the 8th moon, night',
+			dueEvents: [
+				{
+					id: 'event_poison_due',
+					type: 'scheme',
+					status: 'due',
+					title: 'Cupbearer poison attempt ripens',
+					body: 'A hidden servant has been paid to poison the rival envoy during the nameday feast.',
+					turnsUntilDue: 0,
+					worldTime: '296 AC, 15th day of the 8th moon, night',
+					npcEntityIds: ['npc_saera'],
+					factionIds: ['faction_balaerys'],
+					locationIds: ['loc_crimson_spire'],
+					visibility: 'secret',
+				},
+			],
+			recentEvents: [
+				{
+					id: 'event_public_toast',
+					type: 'reveal',
+					status: 'committed',
+					title: 'Public feast toast',
+					body: 'The rival envoy praised House Balaerys loudly enough for the room to hear.',
+					turnsUntilDue: null,
+					worldTime: '296 AC, 15th day of the 8th moon, evening',
+					npcEntityIds: ['npc_saera'],
+					factionIds: ['faction_balaerys'],
+					locationIds: ['loc_crimson_spire'],
+					visibility: 'player_known',
+				},
+			],
+			scheduledEvents: [
+				{
+					id: 'event_secret_ship',
+					type: 'faction_move',
+					status: 'scheduled',
+					title: 'Hidden harbor ship departs',
+					body: 'A ship carrying sealed Balaerys letters will leave before sunrise if the pact holds.',
+					turnsUntilDue: 3,
+					worldTime: '296 AC, 16th day of the 8th moon, dawn',
+					npcEntityIds: ['npc_saera'],
+					factionIds: ['faction_balaerys'],
+					locationIds: ['loc_harbor'],
+					visibility: 'secret',
+				},
+			],
+			npcEvents: [
+				{
+					npcEntityId: 'npc_saera',
+					eventIds: ['event_poison_due'],
+					summary: 'Saera is tied to the cupbearer plot in narrator-only canon, not public scene knowledge.',
+					visibility: 'secret',
+				},
+			],
+		};
+		const report = buildPromptHarnessReport({
+			name: 'secret-gm-brief-labels',
+			playerText: 'I ask Lady Saera why the cupbearer looks afraid.',
+			ctx: baseContext({
+				entities: [
+					entity('loc_crimson_spire', 'location', 'The Crimson Spire', 'The Balaerys manse inside the Black Walls.', { current: true }),
+					entity('pc_balaerys', 'character', 'Balaerys Heir', 'The watched young heir of House Balaerys.', { present: true }),
+					entity('npc_saera', 'character', 'Lady Saera Balaerys', 'A senior Balaerys matchmaker and court watcher.', { present: true }),
+				],
+				gmBrief,
+			}),
+			retrieved: packet('Saera cupbearer poison fear', []),
+			options: {
+				sceneEntityIds: ['pc_balaerys', 'npc_saera'],
+			},
+		});
+
+		const findings = evaluatePromptHarness(report, {
+			promptIncludes: [
+				'Secret timeline items are narrator-only context; present NPCs must not speak or act on them unless actor beliefs or scene evidence supports it.',
+				'[secret narrator-only] scheme/due; due now: Cupbearer poison attempt ripens',
+				'[secret narrator-only] faction_move/scheduled; due +3t: Hidden harbor ship departs',
+				'[secret narrator-only] npc_saera: Saera is tied to the cupbearer plot',
+				'reveal/committed; due n/a: Public feast toast',
+			],
+			maxTotalBeforeGenerationTokens: 2600,
+		});
+
+		expect(failedLabels(findings)).toEqual([]);
+	});
+
+	it('keeps crowded-scene portrayal detail inside a strict prompt budget', () => {
+		const portrayedNpcs = Array.from({ length: 12 }, (_, index) => {
+			const ordinal = index + 1;
+			return entity(
+				`npc_crowded_${ordinal}`,
+				'character',
+				`Old Blood Guest ${ordinal}`,
+				`Guest ${ordinal} watches the room for leverage.`,
+				{
+					present: true,
+					appearance: `NPC ${ordinal} wears layered ceremonial silk, jeweled pins, house-colored cuffs, old scars, scented oil, and a public mask of expensive boredom`,
+					personalityDescriptors: [
+						`calculating court survivor ${ordinal} with a habit of measuring every silence before answering`,
+						`eager to find weakness in House Balaerys without showing open hostility ${ordinal}`,
+						`polite when watched and venomous when protected by rank ${ordinal}`,
+					],
+					voice: `smoothly formal voice ${ordinal}, soft enough to force listeners closer while hiding the insult inside courtesy`,
+					mannerisms: [
+						`touches a signet before speaking ${ordinal}`,
+						`counts allies with a glance before smiling ${ordinal}`,
+						`lets the final word hang until the room shifts ${ordinal}`,
+					],
+				},
+			);
+		});
+		const report = buildPromptHarnessReport({
+			name: 'crowded-portrayal-budget',
+			playerText: 'I enter the feast and study the crowded Old Blood table.',
+			ctx: baseContext({
+				entities: [
+					entity('loc_crimson_spire', 'location', 'The Crimson Spire', 'The Balaerys manse inside the Black Walls.', { current: true }),
+					entity('pc_balaerys', 'character', 'Balaerys Heir', 'The watched young heir of House Balaerys.', { present: true }),
+					...portrayedNpcs,
+				],
+			}),
+			retrieved: packet('Old Blood crowded feast portrayal', []),
+			options: {
+				sceneEntityIds: ['pc_balaerys', ...portrayedNpcs.map((npc) => npc.id)],
+				maxFactions: 2,
+			},
+		});
+
+		const findings = evaluatePromptHarness(report, {
+			promptIncludes: [
+				'Old Blood Guest 1',
+				'Appearance: NPC 1 wears layered ceremonial silk',
+				'Personality: calculating court survivor 1',
+				'Voice:',
+			],
+			maxTotalBeforeGenerationTokens: 2200,
+		});
+
+		expect(failedLabels(findings)).toEqual([]);
+	});
+
+	it('uses old recent source-linked event fallback when no GM brief is loaded', () => {
+		const report = buildPromptHarnessReport({
+			name: 'recent-event-fallback-without-gm-brief',
+			playerText: 'I ask what changed after the harbor envoy arrived.',
+			ctx: baseContext({
+				events: [
+					row({
+						id: 'event_harbor_arrival',
+						storyId: 'story_balaerys',
+						type: 'arrival',
+						status: 'committed',
+						title: 'Harbor envoy arrives',
+						body: 'A harbor envoy entered the Crimson Spire with witnesses and a public marriage offer.',
+						actorEntityIds: ['npc_harbor_envoy'],
+						targetEntityIds: ['pc_balaerys'],
+						locationId: 'loc_crimson_spire',
+						locationIds: ['loc_crimson_spire'],
+						factionIds: ['faction_harbor'],
+						threadIds: [],
+						visibility: 'player_known',
+						createdTurn: 16,
+						occurredTurn: 16,
+						scheduledTurn: null,
+						worldTime: '296 AC, 15th day of the 8th moon, afternoon',
+						memoryImpact: {},
+						sourceEntryIds: ['entry_harbor_arrival'],
+						sourcePatchIds: [],
+						metadata: {},
+					}),
+				],
+				gmBrief: null,
+			}),
+			retrieved: packet('harbor envoy public offer', []),
+		});
+
+		const findings = evaluatePromptHarness(report, {
+			promptIncludes: [
+				'Recent source-linked events:',
+				'Harbor envoy arrives',
+				'A harbor envoy entered the Crimson Spire with witnesses and a public marriage offer.',
+			],
+			promptExcludes: ['GM timeline brief:'],
+			maxTotalBeforeGenerationTokens: 2400,
+		});
+
+		expect(failedLabels(findings)).toEqual([]);
+	});
 });
