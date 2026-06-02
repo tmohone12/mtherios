@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type {
 	GmTimelineBrief,
 	GmTimelineBriefEvent,
@@ -20,6 +20,10 @@ export const DEFAULT_RECENT_LIMIT = 12;
 export const DEFAULT_SCHEDULED_LIMIT = 10;
 export const DEFAULT_DUE_LIMIT = 10;
 export const DEFAULT_NPC_LIMIT = 8;
+export const DEFAULT_NPC_EVENT_LIMIT = 4;
+
+const NPC_EVENT_QUERY_MULTIPLIER = 4;
+const NPC_EVENT_SUMMARY_CHAR_LIMIT = 280;
 
 const PUBLIC_VISIBILITIES = new Set<string>(['public', 'player_known']);
 
@@ -31,7 +35,7 @@ export function selectDueTimelineEvents(events: StoryEventRow[], currentTurn: nu
 				&& event.scheduledTurn !== null
 				&& event.scheduledTurn <= currentTurn;
 		})
-		.sort((left, right) => compareNullableTurn(left.scheduledTurn, right.scheduledTurn));
+		.sort(compareDueTimelineEvents);
 }
 
 export function buildNpcEventLinksForEvent(input: {
@@ -155,22 +159,27 @@ export function buildGmTimelineBrief(input: {
 	scheduledLimit?: number;
 	dueLimit?: number;
 	npcLimit?: number;
+	npcEventLimit?: number;
 }): GmTimelineBrief {
 	const includeSecret = input.includeSecret ?? false;
+	const dueLimit = normalizeLimit(input.dueLimit, DEFAULT_DUE_LIMIT);
+	const recentLimit = normalizeLimit(input.recentLimit, DEFAULT_RECENT_LIMIT);
+	const scheduledLimit = normalizeLimit(input.scheduledLimit, DEFAULT_SCHEDULED_LIMIT);
+	const npcLimit = normalizeLimit(input.npcLimit, DEFAULT_NPC_LIMIT);
+	const npcEventLimit = normalizeLimit(input.npcEventLimit, DEFAULT_NPC_EVENT_LIMIT);
 	const visibleEvents = input.events.filter(event => isVisible(event.visibility, includeSecret));
 	const visibleEventIds = new Set(visibleEvents.map(event => event.id));
 	const visibleLinks = input.npcLinks.filter(link =>
 		visibleEventIds.has(link.eventId) && isVisible(link.visibility, includeSecret));
 
 	const dueRows = selectDueTimelineEvents(visibleEvents, input.currentTurn)
-		.slice(0, input.dueLimit ?? DEFAULT_DUE_LIMIT);
+		.slice(0, dueLimit);
 	const dueIds = new Set(dueRows.map(event => event.id));
 
 	const recentRows = visibleEvents
 		.filter(event => !dueIds.has(event.id) && event.status === 'committed')
-		.sort((left, right) =>
-			compareNullableTurn(right.occurredTurn ?? right.createdTurn, left.occurredTurn ?? left.createdTurn))
-		.slice(0, input.recentLimit ?? DEFAULT_RECENT_LIMIT);
+		.sort(compareRecentTimelineEvents)
+		.slice(0, recentLimit);
 
 	const scheduledRows = visibleEvents
 		.filter(event =>
@@ -178,8 +187,8 @@ export function buildGmTimelineBrief(input: {
 			&& event.status === 'scheduled'
 			&& event.scheduledTurn !== null
 			&& event.scheduledTurn > input.currentTurn)
-		.sort((left, right) => compareNullableTurn(left.scheduledTurn, right.scheduledTurn))
-		.slice(0, input.scheduledLimit ?? DEFAULT_SCHEDULED_LIMIT);
+		.sort(compareScheduledTimelineEvents)
+		.slice(0, scheduledLimit);
 
 	return {
 		storyId: input.storyId,
@@ -192,7 +201,9 @@ export function buildGmTimelineBrief(input: {
 			eventRows: visibleEvents,
 			linkRows: visibleLinks,
 			npcEntityIds: unique([...(input.presentNpcIds ?? []), ...(input.sceneEntityIds ?? [])]),
-			limit: input.npcLimit ?? DEFAULT_NPC_LIMIT,
+			currentTurn: input.currentTurn,
+			limit: npcLimit,
+			eventLimit: npcEventLimit,
 		}),
 	};
 }
@@ -207,26 +218,107 @@ export async function loadGmTimelineBrief(input: {
 	scheduledLimit?: number;
 	dueLimit?: number;
 	npcLimit?: number;
+	npcEventLimit?: number;
 }): Promise<GmTimelineBrief> {
 	const db = getDb();
 	const [story] = await db.select().from(stories).where(eq(stories.id, input.storyId)).limit(1);
 	if (!story) throw new Error(`Story not found: ${input.storyId}`);
 
-	const [eventRows, linkRows] = await Promise.all([
+	const currentTurn = input.currentTurn ?? story.currentTurn;
+	const dueLimit = normalizeLimit(input.dueLimit, DEFAULT_DUE_LIMIT);
+	const recentLimit = normalizeLimit(input.recentLimit, DEFAULT_RECENT_LIMIT);
+	const scheduledLimit = normalizeLimit(input.scheduledLimit, DEFAULT_SCHEDULED_LIMIT);
+	const npcLimit = normalizeLimit(input.npcLimit, DEFAULT_NPC_LIMIT);
+	const npcEventLimit = normalizeLimit(input.npcEventLimit, DEFAULT_NPC_EVENT_LIMIT);
+	const npcEntityIds = unique([...(input.presentNpcIds ?? []), ...(input.sceneEntityIds ?? [])])
+		.slice(0, npcLimit);
+	const npcLinkLimit = npcEntityIds.length * npcEventLimit * NPC_EVENT_QUERY_MULTIPLIER;
+
+	const [dueRows, recentRows, scheduledRows, linkRows] = await Promise.all([
 		db.select().from(storyEvents)
-			.where(eq(storyEvents.storyId, input.storyId))
-			.orderBy(asc(storyEvents.scheduledTurn), desc(storyEvents.occurredTurn), desc(storyEvents.createdAt)),
-		db.select().from(npcEventLinks)
-			.where(eq(npcEventLinks.storyId, input.storyId))
-			.orderBy(asc(npcEventLinks.npcEntityId), asc(npcEventLinks.createdAt)),
+			.where(and(
+				eq(storyEvents.storyId, input.storyId),
+				sql`(${storyEvents.status} = 'due' OR (${storyEvents.status} = 'scheduled' AND ${storyEvents.scheduledTurn} <= ${currentTurn}))`,
+			))
+			.orderBy(
+				sql`CASE WHEN ${storyEvents.status} = 'due' AND ${storyEvents.scheduledTurn} IS NULL THEN 0 ELSE 1 END`,
+				asc(storyEvents.scheduledTurn),
+				desc(storyEvents.occurredTurn),
+				desc(storyEvents.createdTurn),
+				desc(storyEvents.updatedAt),
+				asc(storyEvents.id),
+			)
+			.limit(dueLimit),
+		db.select().from(storyEvents)
+			.where(and(
+				eq(storyEvents.storyId, input.storyId),
+				eq(storyEvents.status, 'committed'),
+			))
+			.orderBy(
+				desc(storyEvents.occurredTurn),
+				desc(storyEvents.createdTurn),
+				desc(storyEvents.updatedAt),
+				desc(storyEvents.createdAt),
+				asc(storyEvents.id),
+			)
+			.limit(recentLimit),
+		db.select().from(storyEvents)
+			.where(and(
+				eq(storyEvents.storyId, input.storyId),
+				eq(storyEvents.status, 'scheduled'),
+				sql`${storyEvents.scheduledTurn} > ${currentTurn}`,
+			))
+			.orderBy(
+				asc(storyEvents.scheduledTurn),
+				desc(storyEvents.updatedAt),
+				desc(storyEvents.createdAt),
+				asc(storyEvents.id),
+			)
+			.limit(scheduledLimit),
+		npcLinkLimit > 0
+			? db.select().from(npcEventLinks)
+				.where(and(
+					eq(npcEventLinks.storyId, input.storyId),
+					inArray(npcEventLinks.npcEntityId, npcEntityIds),
+				))
+				.orderBy(
+					asc(npcEventLinks.npcEntityId),
+					desc(npcEventLinks.evidenceStrength),
+					desc(npcEventLinks.updatedAt),
+					desc(npcEventLinks.createdAt),
+					asc(npcEventLinks.eventId),
+				)
+				.limit(npcLinkLimit)
+			: Promise.resolve([]),
 	]);
+	const linkedEventIds = unique(linkRows.map(link => link.eventId));
+	const linkedEventRows = linkedEventIds.length > 0
+		? await db.select().from(storyEvents)
+			.where(and(
+				eq(storyEvents.storyId, input.storyId),
+				inArray(storyEvents.id, linkedEventIds),
+			))
+			.orderBy(
+				desc(storyEvents.occurredTurn),
+				desc(storyEvents.createdTurn),
+				desc(storyEvents.updatedAt),
+				desc(storyEvents.createdAt),
+				asc(storyEvents.id),
+			)
+			.limit(linkedEventIds.length)
+		: [];
 
 	return buildGmTimelineBrief({
 		...input,
-		currentTurn: input.currentTurn ?? story.currentTurn,
+		currentTurn,
 		currentWorldTime: story.currentWorldTime,
-		events: eventRows,
+		events: uniqueStoryEventRows([...dueRows, ...recentRows, ...scheduledRows, ...linkedEventRows]),
 		npcLinks: linkRows,
+		dueLimit,
+		recentLimit,
+		scheduledLimit,
+		npcLimit,
+		npcEventLimit,
 	});
 }
 
@@ -317,27 +409,40 @@ function buildNpcTimelineEvents(input: {
 	eventRows: StoryEventRow[];
 	linkRows: NpcEventLinkRow[];
 	npcEntityIds: string[];
+	currentTurn: number;
 	limit: number;
+	eventLimit: number;
 }): GmTimelineNpcEvent[] {
 	const eventsById = new Map(input.eventRows.map(event => [event.id, event]));
 
 	return input.npcEntityIds
 		.map((npcEntityId) => {
 			const links = input.linkRows.filter(link => link.npcEntityId === npcEntityId && eventsById.has(link.eventId));
-			const eventIds = unique(links.map(link => link.eventId));
+			const evidenceByEventId = maxEvidenceByEventId(links);
+			const eventIds = unique(links.map(link => link.eventId))
+				.sort((leftId, rightId) => compareNpcLinkedTimelineEvents(
+					eventsById.get(leftId),
+					eventsById.get(rightId),
+					input.currentTurn,
+					evidenceByEventId.get(leftId) ?? 0,
+					evidenceByEventId.get(rightId) ?? 0,
+				))
+				.slice(0, input.eventLimit);
 			const linkedEvents = eventIds
 				.map(eventId => eventsById.get(eventId))
 				.filter((event): event is StoryEventRow => Boolean(event));
 
 			if (linkedEvents.length === 0) return null;
+			const selectedEventIds = new Set(eventIds);
+			const selectedLinks = links.filter(link => selectedEventIds.has(link.eventId));
 
 			return {
 				npcEntityId,
 				eventIds,
-				summary: linkedEvents.map(event => event.title).join('; '),
+				summary: truncateText(linkedEvents.map(event => compactText(event.title)).join('; '), NPC_EVENT_SUMMARY_CHAR_LIMIT),
 				visibility: mostRestrictiveVisibility([
 					...linkedEvents.map(event => event.visibility),
-					...links.map(link => link.visibility),
+					...selectedLinks.map(link => link.visibility),
 				]),
 			} satisfies GmTimelineNpcEvent;
 		})
@@ -349,10 +454,113 @@ function eventNpcIds(event: StoryEventRow, linkRows: NpcEventLinkRow[]): string[
 	return unique(linkRows.filter(link => link.eventId === event.id).map(link => link.npcEntityId));
 }
 
+function compareDueTimelineEvents(left: StoryEventRow, right: StoryEventRow): number {
+	const leftNullDue = left.status === 'due' && left.scheduledTurn === null;
+	const rightNullDue = right.status === 'due' && right.scheduledTurn === null;
+	if (leftNullDue !== rightNullDue) return leftNullDue ? -1 : 1;
+
+	return compareNullableTurn(left.scheduledTurn, right.scheduledTurn)
+		|| compareRecentTimelineEvents(left, right);
+}
+
+function compareRecentTimelineEvents(left: StoryEventRow, right: StoryEventRow): number {
+	return compareNullableTurn(right.occurredTurn ?? right.createdTurn, left.occurredTurn ?? left.createdTurn)
+		|| compareDescendingText(left.updatedAt, right.updatedAt)
+		|| compareDescendingText(left.createdAt, right.createdAt)
+		|| left.id.localeCompare(right.id);
+}
+
+function compareScheduledTimelineEvents(left: StoryEventRow, right: StoryEventRow): number {
+	return compareNullableTurn(left.scheduledTurn, right.scheduledTurn)
+		|| compareRecentTimelineEvents(left, right);
+}
+
+function compareNpcLinkedTimelineEvents(
+	left: StoryEventRow | undefined,
+	right: StoryEventRow | undefined,
+	currentTurn: number,
+	leftEvidence: number,
+	rightEvidence: number,
+): number {
+	if (!left && !right) return 0;
+	if (!left) return 1;
+	if (!right) return -1;
+
+	return compareNpcTimelineUrgency(left, right, currentTurn)
+		|| compareDescendingNumber(leftEvidence, rightEvidence)
+		|| compareRecentTimelineEvents(left, right);
+}
+
+function compareNpcTimelineUrgency(left: StoryEventRow, right: StoryEventRow, currentTurn: number): number {
+	const leftRank = npcTimelineUrgencyRank(left, currentTurn);
+	const rightRank = npcTimelineUrgencyRank(right, currentTurn);
+	if (leftRank !== rightRank) return leftRank - rightRank;
+
+	if (leftRank === 0) {
+		const leftNullDue = left.status === 'due' && left.scheduledTurn === null;
+		const rightNullDue = right.status === 'due' && right.scheduledTurn === null;
+		if (leftNullDue !== rightNullDue) return leftNullDue ? -1 : 1;
+	}
+
+	if (leftRank <= 1) {
+		return compareNullableTurn(left.scheduledTurn, right.scheduledTurn);
+	}
+
+	return 0;
+}
+
+function npcTimelineUrgencyRank(event: StoryEventRow, currentTurn: number): number {
+	if (event.status === 'due') return 0;
+	if (event.status === 'scheduled' && event.scheduledTurn !== null && event.scheduledTurn <= currentTurn) return 0;
+	if (event.status === 'scheduled' && event.scheduledTurn !== null) return 1;
+	return 2;
+}
+
 function compareNullableTurn(left: number | null, right: number | null): number {
 	const leftValue = left ?? Number.MAX_SAFE_INTEGER;
 	const rightValue = right ?? Number.MAX_SAFE_INTEGER;
 	return leftValue - rightValue;
+}
+
+function compareDescendingNumber(left: number, right: number): number {
+	return right - left;
+}
+
+function compareDescendingText(left: string | null, right: string | null): number {
+	return (right ?? '').localeCompare(left ?? '');
+}
+
+function maxEvidenceByEventId(links: NpcEventLinkRow[]): Map<string, number> {
+	const evidenceByEventId = new Map<string, number>();
+	for (const link of links) {
+		evidenceByEventId.set(
+			link.eventId,
+			Math.max(evidenceByEventId.get(link.eventId) ?? Number.NEGATIVE_INFINITY, link.evidenceStrength ?? 0),
+		);
+	}
+	return evidenceByEventId;
+}
+
+function compactText(value: string): string {
+	return value.replace(/\s+/g, ' ').trim();
+}
+
+function truncateText(value: string, limit: number): string {
+	if (value.length <= limit) return value;
+	return `${value.slice(0, Math.max(0, limit - 3)).trimEnd()}...`;
+}
+
+function normalizeLimit(value: number | undefined, fallback: number): number {
+	const candidate = value ?? fallback;
+	return Math.max(0, Math.floor(Number.isFinite(candidate) ? candidate : fallback));
+}
+
+function uniqueStoryEventRows(rows: StoryEventRow[]): StoryEventRow[] {
+	const byId = new Map<string, StoryEventRow>();
+	for (const row of rows) {
+		if (!byId.has(row.id)) byId.set(row.id, row);
+	}
+	return Array.from(byId.values());
 }
 
 function isVisible(visibility: string, includeSecret: boolean): boolean {

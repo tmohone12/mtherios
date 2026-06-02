@@ -120,6 +120,24 @@ describe('timeline selection helpers', () => {
 		expect(selected.map(item => item.id)).toEqual(['due_without_turn']);
 	});
 
+	it('keeps null-turn due rows in the brief under tight due limits', () => {
+		const brief = buildGmTimelineBrief({
+			storyId: 'story_1',
+			currentTurn: 8,
+			currentWorldTime: null,
+			events: [
+				event({ id: 'dated_due', status: 'scheduled', scheduledTurn: 3 }),
+				event({ id: 'null_due', status: 'due', scheduledTurn: null, createdTurn: 2 }),
+			],
+			npcLinks: [],
+			dueLimit: 1,
+			recentLimit: 0,
+			scheduledLimit: 0,
+		});
+
+		expect(brief.dueEvents.map(item => item.id)).toEqual(['null_due']);
+	});
+
 	it('does not create npc links from generic actor and target entity ids by default', () => {
 		const links = buildNpcEventLinksForEvent({
 			storyId: 'story_1',
@@ -242,6 +260,7 @@ describe('timeline selection helpers', () => {
 			storyId: 'story_1',
 			sceneEntityIds: ['npc_cass'],
 			currentTurn: 7,
+			npcEventLimit: 2,
 		} satisfies Parameters<typeof loadGmTimelineBrief>[0];
 		const promoteInput = ['story_1', 5] satisfies Parameters<typeof promoteDueTimelineEvents>;
 
@@ -365,6 +384,106 @@ describe('timeline selection helpers', () => {
 		expect(sqlExpressionIncludes(dueTurnCondition, 5)).toBe(true);
 	});
 
+	it('loads a timeline brief from bounded due, recent, scheduled, npc-link, and linked-event queries', async () => {
+		const storyRow = {
+			id: 'story_1',
+			currentTurn: 8,
+			currentWorldTime: 'Dawn court',
+		};
+		const dueRows = [
+			event({
+				id: 'null_due',
+				status: 'due',
+				title: 'Undated danger arrives',
+				scheduledTurn: null,
+				createdTurn: 2,
+			}),
+		];
+		const recentRows = [
+			event({
+				id: 'recent_headline',
+				status: 'committed',
+				title: 'Fresh court rumor',
+				occurredTurn: 7,
+				createdTurn: 7,
+			}),
+		];
+		const scheduledRows = [
+			event({
+				id: 'future_event',
+				status: 'scheduled',
+				title: 'Gatehouse pressure',
+				scheduledTurn: 9,
+			}),
+		];
+		const npcRows = [
+			link({
+				eventId: 'linked_old_memory',
+				npcEntityId: 'npc_present',
+				role: 'affected',
+				evidenceStrength: 0.95,
+			}),
+		];
+		const linkedRows = [
+			event({
+				id: 'linked_old_memory',
+				status: 'committed',
+				title: 'Old border debt',
+				occurredTurn: 1,
+				createdTurn: 1,
+			}),
+		];
+		const chains = [storyRow ? [storyRow] : [], dueRows, recentRows, scheduledRows, npcRows, linkedRows]
+			.map((rows) => {
+				const chain = {
+					from: vi.fn(() => chain),
+					where: vi.fn(() => chain),
+					orderBy: vi.fn(() => chain),
+					limit: vi.fn(() => Promise.resolve(rows)),
+				};
+				return chain;
+			});
+		const select = vi.fn()
+			.mockReturnValueOnce(chains[0])
+			.mockReturnValueOnce(chains[1])
+			.mockReturnValueOnce(chains[2])
+			.mockReturnValueOnce(chains[3])
+			.mockReturnValueOnce(chains[4])
+			.mockReturnValueOnce(chains[5]);
+		dbMocks.getDb.mockReturnValue({ select });
+
+		const brief = await loadGmTimelineBrief({
+			storyId: 'story_1',
+			presentNpcIds: ['npc_present'],
+			currentTurn: undefined,
+			dueLimit: 1,
+			recentLimit: 1,
+			scheduledLimit: 1,
+			npcLimit: 1,
+			npcEventLimit: 1,
+		});
+
+		expect(select).toHaveBeenCalledTimes(6);
+		expect(chains[1].limit).toHaveBeenCalledWith(1);
+		expect(chains[2].limit).toHaveBeenCalledWith(1);
+		expect(chains[3].limit).toHaveBeenCalledWith(1);
+		expect(chains[4].limit).toHaveBeenCalledWith(expect.any(Number));
+		expect(chains[5].limit).toHaveBeenCalledWith(1);
+		expect(brief.currentTurn).toBe(8);
+		expect(brief.currentWorldTime).toBe('Dawn court');
+		expect(brief.dueEvents.map(item => item.id)).toEqual(['null_due']);
+		expect(brief.recentEvents.map(item => item.id)).toEqual(['recent_headline']);
+		expect(brief.scheduledEvents.map(item => item.id)).toEqual(['future_event']);
+		expect(brief.npcEvents).toEqual([
+			{
+				npcEntityId: 'npc_present',
+				eventIds: ['linked_old_memory'],
+				summary: 'Old border debt',
+				visibility: 'player_known',
+			},
+		]);
+	});
+
 	it('builds due, recent, scheduled, and npc event slices with due statuses overridden', () => {
 		const brief = buildGmTimelineBrief({
 			storyId: 'story_1',
@@ -453,6 +572,128 @@ describe('timeline selection helpers', () => {
 				visibility: 'player_known',
 			},
 		]);
+	});
+
+	it('caps present npc memory outside headline slices to the per-npc event limit', () => {
+		const brief = buildGmTimelineBrief({
+			storyId: 'story_1',
+			currentTurn: 20,
+			currentWorldTime: null,
+			events: [
+				event({
+					id: 'headline_recent',
+					status: 'committed',
+					title: 'Fresh court rumor',
+					occurredTurn: 19,
+					createdTurn: 19,
+				}),
+				event({
+					id: 'linked_due_memory',
+					status: 'due',
+					title: 'Old border debt comes due',
+					scheduledTurn: null,
+					createdTurn: 2,
+				}),
+				event({
+					id: 'linked_quiet_memory',
+					status: 'committed',
+					title: 'Quiet remembered slight',
+					occurredTurn: 3,
+					createdTurn: 3,
+				}),
+			],
+			npcLinks: [
+				link({ eventId: 'linked_quiet_memory', npcEntityId: 'npc_present', role: 'affected' }),
+				link({ eventId: 'linked_due_memory', npcEntityId: 'npc_present', role: 'affected' }),
+			],
+			presentNpcIds: ['npc_present'],
+			recentLimit: 1,
+			scheduledLimit: 0,
+			dueLimit: 0,
+			npcEventLimit: 1,
+			includeSecret: false,
+		});
+
+		expect(brief.recentEvents.map(item => item.id)).toEqual(['headline_recent']);
+		expect(brief.npcEvents).toEqual([
+			{
+				npcEntityId: 'npc_present',
+				eventIds: ['linked_due_memory'],
+				summary: 'Old border debt comes due',
+				visibility: 'player_known',
+			},
+		]);
+	});
+
+	it('caps per-npc event ids and summary with deterministic relevance ordering', () => {
+		const longTitle = (prefix: string) => `${prefix} ${'x'.repeat(120)}`;
+		const brief = buildGmTimelineBrief({
+			storyId: 'story_1',
+			currentTurn: 10,
+			currentWorldTime: null,
+			events: [
+				event({
+					id: 'committed_newer',
+					status: 'committed',
+					title: longTitle('Newest committed memory'),
+					occurredTurn: 9,
+					createdTurn: 9,
+				}),
+				event({
+					id: 'future_later',
+					status: 'scheduled',
+					title: longTitle('Later scheduled pressure'),
+					scheduledTurn: 14,
+					createdTurn: 4,
+				}),
+				event({
+					id: 'due_null',
+					status: 'due',
+					title: longTitle('Undated due pressure'),
+					scheduledTurn: null,
+					createdTurn: 1,
+				}),
+				event({
+					id: 'future_soon',
+					status: 'scheduled',
+					title: longTitle('Soon scheduled pressure'),
+					scheduledTurn: 11,
+					createdTurn: 3,
+				}),
+				event({
+					id: 'committed_stronger',
+					status: 'committed',
+					title: longTitle('Stronger committed memory'),
+					occurredTurn: 2,
+					createdTurn: 2,
+				}),
+			],
+			npcLinks: [
+				link({ eventId: 'committed_newer', npcEntityId: 'npc_present', evidenceStrength: 0.1, createdAt: '2026-06-02T12:00:05.000Z' }),
+				link({ eventId: 'future_later', npcEntityId: 'npc_present', evidenceStrength: 0.2, createdAt: '2026-06-02T12:00:04.000Z' }),
+				link({ eventId: 'due_null', npcEntityId: 'npc_present', evidenceStrength: 0.1, createdAt: '2026-06-02T12:00:01.000Z' }),
+				link({ eventId: 'future_soon', npcEntityId: 'npc_present', evidenceStrength: 0.9, createdAt: '2026-06-02T12:00:03.000Z' }),
+				link({ eventId: 'committed_stronger', npcEntityId: 'npc_present', evidenceStrength: 0.95, createdAt: '2026-06-02T12:00:02.000Z' }),
+			],
+			presentNpcIds: ['npc_present'],
+			recentLimit: 0,
+			scheduledLimit: 0,
+			dueLimit: 0,
+			npcEventLimit: 4,
+			includeSecret: false,
+		});
+
+		const npcEvent = brief.npcEvents[0];
+
+		expect(npcEvent?.eventIds).toEqual([
+			'due_null',
+			'future_soon',
+			'future_later',
+			'committed_stronger',
+		]);
+		expect(npcEvent?.summary).toContain('Undated due pressure');
+		expect(npcEvent?.summary).not.toContain('Newest committed memory');
+		expect(npcEvent?.summary.length).toBeLessThanOrEqual(320);
 	});
 
 	it('derives brief npc ids from links only, not generic actor or target entity ids', () => {
