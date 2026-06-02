@@ -20,6 +20,8 @@ import { buildNpcEventLinksForEvent } from '$lib/server/events/timeline';
 import { enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
 import { worldStateUpdateSchema, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
 
+type TurnPersistenceDb = Pick<ReturnType<typeof getDb>, 'insert' | 'select' | 'update'>;
+
 const extractedUpdateSchema = z.object({
 	update: worldStateUpdateSchema.default(() => worldStateUpdateSchema.parse({})),
 });
@@ -51,8 +53,8 @@ export function parseTurnUpdate(input: unknown): { update: WorldStateUpdate; war
 	};
 }
 
-async function findEntityByName(storyId: string, name: string, type?: string): Promise<typeof entities.$inferSelect | null> {
-	const rows = await getDb()
+async function findEntityByName(db: TurnPersistenceDb, storyId: string, name: string, type?: string): Promise<typeof entities.$inferSelect | null> {
+	const rows = await db
 		.select()
 		.from(entities)
 		.where(and(eq(entities.storyId, storyId), eq(entities.name, name)))
@@ -63,8 +65,8 @@ async function findEntityByName(storyId: string, name: string, type?: string): P
 		?? null;
 }
 
-async function findCharacterEntityByName(storyId: string, name: string): Promise<typeof entities.$inferSelect | null> {
-	const rows = await getDb()
+async function findCharacterEntityByName(db: TurnPersistenceDb, storyId: string, name: string): Promise<typeof entities.$inferSelect | null> {
+	const rows = await db
 		.select()
 		.from(entities)
 		.where(and(eq(entities.storyId, storyId), eq(entities.name, name)))
@@ -74,6 +76,7 @@ async function findCharacterEntityByName(storyId: string, name: string): Promise
 }
 
 async function upsertEntity(
+	db: TurnPersistenceDb,
 	storyId: string,
 	type: string,
 	name: string,
@@ -85,10 +88,10 @@ async function upsertEntity(
 	serverVersion: number,
 	createdAt: string,
 ): Promise<string> {
-	const existing = await findEntityByName(storyId, name, type);
+	const existing = await findEntityByName(db, storyId, name, type);
 	const entityId = existing?.id ?? id('entity');
 	const nextState = { ...(existing?.state as Record<string, unknown> | null ?? {}), ...state };
-	await getDb().insert(entities).values({
+	await db.insert(entities).values({
 		id: entityId,
 		storyId,
 		type,
@@ -181,165 +184,142 @@ export interface ApplyTurnUpdateResult {
 export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Promise<ApplyTurnUpdateResult> {
 	const db = getDb();
 	const createdAt = nowIso();
-	const [story] = await db.select().from(stories).where(eq(stories.id, input.storyId)).limit(1);
-	if (!story) throw new Error(`Story not found: ${input.storyId}`);
-
-	const currentTurn = story.currentTurn ?? 0;
-	const currentWorldTime = story.currentWorldTime ?? null;
 	const eventIds: string[] = [];
 	const memoryNodeIds: string[] = [];
 	const warnings = [...input.parseWarnings];
 	const operations = makeOperations(input.update);
 	const patchId = id('patch');
-	const insertNpcLinksForEvent = async (event: {
-		eventId: string;
-		actorNpcEntityIds?: string[];
-		targetNpcEntityIds?: string[];
-		visibility: string;
-		sourceEntryIds: string[];
-		sourcePatchIds: string[];
-	}) => {
-		const links = buildNpcEventLinksForEvent({
-			storyId: input.storyId,
-			eventId: event.eventId,
-			actorNpcEntityIds: event.actorNpcEntityIds,
-			targetNpcEntityIds: event.targetNpcEntityIds,
-			visibility: event.visibility,
-			sourceEntryIds: event.sourceEntryIds,
-			sourcePatchIds: event.sourcePatchIds,
-			serverVersion: input.serverVersion,
-			now: createdAt,
-		});
-		if (links.length > 0) {
-			await db.insert(npcEventLinks).values(links).onConflictDoNothing();
-		}
-	};
 
-	await db.insert(statePatches).values({
-		id: patchId,
-		storyId: input.storyId,
-		operations,
-		reason: 'Server turn structured update.',
-		status: input.parseWarnings.length > 0 ? 'needs_repair' : 'applied',
-		validationWarnings: input.parseWarnings,
-		sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
-		sourceEventIds: [],
-		serverVersion: input.serverVersion,
-		createdAt,
-		updatedAt: createdAt,
-	});
+	await db.transaction(async (tx) => {
+		const [story] = await tx
+			.select()
+			.from(stories)
+			.where(eq(stories.id, input.storyId))
+			.for('update')
+			.limit(1);
+		if (!story) throw new Error(`Story not found: ${input.storyId}`);
 
-	if (input.update.player_reputation) {
-		const metadata = story?.metadata && typeof story.metadata === 'object' ? story.metadata as Record<string, unknown> : {};
-		await db.update(stories).set({
-			metadata: { ...metadata, playerReputation: input.update.player_reputation },
-			serverVersion: input.serverVersion,
-			updatedAt: createdAt,
-		}).where(eq(stories.id, input.storyId));
-	}
-
-	const turnEventId = id('event');
-	await db.insert(storyEvents).values({
-		id: turnEventId,
-		storyId: input.storyId,
-		type: 'scene_transition',
-		title: 'Turn resolved',
-		body: input.narration.replace(/\s+/g, ' ').slice(0, 500),
-		...timelineDefaults({ currentTurn, currentWorldTime }),
-		visibility: 'player_known',
-		sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
-		sourcePatchIds: [patchId],
-		metadata: {},
-		serverVersion: input.serverVersion,
-		createdAt,
-		updatedAt: createdAt,
-	});
-	await insertNpcLinksForEvent({
-		eventId: turnEventId,
-		visibility: 'player_known',
-		sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
-		sourcePatchIds: [patchId],
-	});
-	eventIds.push(turnEventId);
-
-	for (const character of input.update.characters) {
-		await upsertEntity(input.storyId, 'character', character.name, character.description, {
-			status: character.status,
-			relationship: character.relationship,
-			traits: character.traits,
-			present: character.present,
-			pressures: character.pressures,
-		}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt);
-	}
-
-	for (const location of input.update.locations) {
-		await upsertEntity(input.storyId, 'location', location.name, location.description, {
-			current: location.current,
-			region: location.region,
-			connections: location.connections,
-		}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt);
-	}
-
-	for (const item of input.update.items) {
-		await upsertEntity(input.storyId, 'item', item.name, item.description, {
-			quantity: item.quantity,
-			equipped: item.equipped,
-			location: item.location,
-		}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt);
-	}
-
-	for (const entry of input.update.lorebook_entries) {
-		const entityId = await upsertEntity(input.storyId, entry.type, entry.name, entry.description, {
-			hiddenInfo: entry.hidden_info,
-			aliases: entry.aliases,
-			keywords: entry.keywords,
-			...entry.state_overrides,
-		}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt);
-		if (entry.type === 'faction') {
-			const factionId = `faction_${entityId}`;
-			await db.insert(factions).values({
-				id: factionId,
+		const currentTurn = story.currentTurn ?? 0;
+		const currentWorldTime = story.currentWorldTime ?? null;
+		const insertNpcLinksForEvent = async (event: {
+			eventId: string;
+			actorNpcEntityIds?: string[];
+			targetNpcEntityIds?: string[];
+			visibility: string;
+			sourceEntryIds: string[];
+			sourcePatchIds: string[];
+		}) => {
+			const links = buildNpcEventLinksForEvent({
 				storyId: input.storyId,
-				entityId,
-				name: entry.name,
-				goals: entry.faction_goals.map((goal) => goal.description),
-				resources: entry.faction_resources ?? {},
-				memberEntityIds: entry.known_members,
-				territoryIds: entry.territory,
-				allies: [],
-				enemies: [],
-				pressure: 0,
-				metadata: { disposition: entry.faction_disposition, goals: entry.faction_goals },
-				sourceEntryIds: [input.assistantEntryId],
-				sourceEventIds: [],
-				sourcePatchIds: [patchId],
+				eventId: event.eventId,
+				actorNpcEntityIds: event.actorNpcEntityIds,
+				targetNpcEntityIds: event.targetNpcEntityIds,
+				visibility: event.visibility,
+				sourceEntryIds: event.sourceEntryIds,
+				sourcePatchIds: event.sourcePatchIds,
 				serverVersion: input.serverVersion,
-				createdAt,
+				now: createdAt,
+			});
+			if (links.length > 0) {
+				await tx.insert(npcEventLinks).values(links).onConflictDoNothing();
+			}
+		};
+
+		await tx.insert(statePatches).values({
+			id: patchId,
+			storyId: input.storyId,
+			operations,
+			reason: 'Server turn structured update.',
+			status: input.parseWarnings.length > 0 ? 'needs_repair' : 'applied',
+			validationWarnings: input.parseWarnings,
+			sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
+			sourceEventIds: [],
+			serverVersion: input.serverVersion,
+			createdAt,
+			updatedAt: createdAt,
+		});
+
+		if (input.update.player_reputation) {
+			const metadata = story?.metadata && typeof story.metadata === 'object' ? story.metadata as Record<string, unknown> : {};
+			await tx.update(stories).set({
+				metadata: { ...metadata, playerReputation: input.update.player_reputation },
+				serverVersion: input.serverVersion,
 				updatedAt: createdAt,
-			}).onConflictDoUpdate({
-				target: factions.id,
-				set: {
+			}).where(eq(stories.id, input.storyId));
+		}
+
+		const turnEventId = id('event');
+		await tx.insert(storyEvents).values({
+			id: turnEventId,
+			storyId: input.storyId,
+			type: 'scene_transition',
+			title: 'Turn resolved',
+			body: input.narration.replace(/\s+/g, ' ').slice(0, 500),
+			...timelineDefaults({ currentTurn, currentWorldTime }),
+			visibility: 'player_known',
+			sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
+			sourcePatchIds: [patchId],
+			metadata: {},
+			serverVersion: input.serverVersion,
+			createdAt,
+			updatedAt: createdAt,
+		});
+		await insertNpcLinksForEvent({
+			eventId: turnEventId,
+			visibility: 'player_known',
+			sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
+			sourcePatchIds: [patchId],
+		});
+		eventIds.push(turnEventId);
+
+		for (const character of input.update.characters) {
+			await upsertEntity(tx, input.storyId, 'character', character.name, character.description, {
+				status: character.status,
+				relationship: character.relationship,
+				traits: character.traits,
+				present: character.present,
+				pressures: character.pressures,
+			}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt);
+		}
+
+		for (const location of input.update.locations) {
+			await upsertEntity(tx, input.storyId, 'location', location.name, location.description, {
+				current: location.current,
+				region: location.region,
+				connections: location.connections,
+			}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt);
+		}
+
+		for (const item of input.update.items) {
+			await upsertEntity(tx, input.storyId, 'item', item.name, item.description, {
+				quantity: item.quantity,
+				equipped: item.equipped,
+				location: item.location,
+			}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt);
+		}
+
+		for (const entry of input.update.lorebook_entries) {
+			const entityId = await upsertEntity(tx, input.storyId, entry.type, entry.name, entry.description, {
+				hiddenInfo: entry.hidden_info,
+				aliases: entry.aliases,
+				keywords: entry.keywords,
+				...entry.state_overrides,
+			}, [input.assistantEntryId], [], [patchId], input.serverVersion, createdAt);
+			if (entry.type === 'faction') {
+				const factionId = `faction_${entityId}`;
+				await tx.insert(factions).values({
+					id: factionId,
+					storyId: input.storyId,
+					entityId,
+					name: entry.name,
 					goals: entry.faction_goals.map((goal) => goal.description),
 					resources: entry.faction_resources ?? {},
 					memberEntityIds: entry.known_members,
 					territoryIds: entry.territory,
+					allies: [],
+					enemies: [],
+					pressure: 0,
 					metadata: { disposition: entry.faction_disposition, goals: entry.faction_goals },
-					sourcePatchIds: [patchId],
-					serverVersion: input.serverVersion,
-					updatedAt: createdAt,
-				},
-			});
-			for (const [idx, member] of entry.known_members.entries()) {
-				await db.insert(factionMemberships).values({
-					id: `${factionId}_member_${idx}_${normalizeName(member).replace(/\s+/g, '_') || idx}`,
-					storyId: input.storyId,
-					factionId,
-					entityId: null,
-					role: idx === 0 ? 'leader-or-member' : 'member',
-					rank: null,
-					status: 'active',
-					visibility: 'player_known',
-					metadata: { memberNameOrId: member },
 					sourceEntryIds: [input.assistantEntryId],
 					sourceEventIds: [],
 					sourcePatchIds: [patchId],
@@ -347,23 +327,29 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 					createdAt,
 					updatedAt: createdAt,
 				}).onConflictDoUpdate({
-					target: factionMemberships.id,
-					set: { status: 'active', sourcePatchIds: [patchId], serverVersion: input.serverVersion, updatedAt: createdAt },
+					target: factions.id,
+					set: {
+						goals: entry.faction_goals.map((goal) => goal.description),
+						resources: entry.faction_resources ?? {},
+						memberEntityIds: entry.known_members,
+						territoryIds: entry.territory,
+						metadata: { disposition: entry.faction_disposition, goals: entry.faction_goals },
+						sourcePatchIds: [patchId],
+						serverVersion: input.serverVersion,
+						updatedAt: createdAt,
+					},
 				});
-			}
-			if (entry.faction_resources) {
-				for (const [kind, amount] of Object.entries(entry.faction_resources)) {
-					await db.insert(factionResources).values({
-						id: `${factionId}_resource_${kind}`,
+				for (const [idx, member] of entry.known_members.entries()) {
+					await tx.insert(factionMemberships).values({
+						id: `${factionId}_member_${idx}_${normalizeName(member).replace(/\s+/g, '_') || idx}`,
 						storyId: input.storyId,
 						factionId,
-						kind,
-						name: kind,
-						amount: typeof amount === 'number' ? amount : null,
-						status: 'available',
-						locationId: null,
+						entityId: null,
+						role: idx === 0 ? 'leader-or-member' : 'member',
+						rank: null,
+						status: 'active',
 						visibility: 'player_known',
-						metadata: {},
+						metadata: { memberNameOrId: member },
 						sourceEntryIds: [input.assistantEntryId],
 						sourceEventIds: [],
 						sourcePatchIds: [patchId],
@@ -371,194 +357,219 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 						createdAt,
 						updatedAt: createdAt,
 					}).onConflictDoUpdate({
-						target: factionResources.id,
-						set: { amount: typeof amount === 'number' ? amount : null, sourcePatchIds: [patchId], serverVersion: input.serverVersion, updatedAt: createdAt },
+						target: factionMemberships.id,
+						set: { status: 'active', sourcePatchIds: [patchId], serverVersion: input.serverVersion, updatedAt: createdAt },
+					});
+				}
+				if (entry.faction_resources) {
+					for (const [kind, amount] of Object.entries(entry.faction_resources)) {
+						await tx.insert(factionResources).values({
+							id: `${factionId}_resource_${kind}`,
+							storyId: input.storyId,
+							factionId,
+							kind,
+							name: kind,
+							amount: typeof amount === 'number' ? amount : null,
+							status: 'available',
+							locationId: null,
+							visibility: 'player_known',
+							metadata: {},
+							sourceEntryIds: [input.assistantEntryId],
+							sourceEventIds: [],
+							sourcePatchIds: [patchId],
+							serverVersion: input.serverVersion,
+							createdAt,
+							updatedAt: createdAt,
+						}).onConflictDoUpdate({
+							target: factionResources.id,
+							set: { amount: typeof amount === 'number' ? amount : null, sourcePatchIds: [patchId], serverVersion: input.serverVersion, updatedAt: createdAt },
+						});
+					}
+				}
+				for (const [idx, goal] of entry.faction_goals.entries()) {
+					await tx.insert(factionGoals).values({
+						id: `${factionId}_goal_${idx}_${normalizeName(goal.description).slice(0, 24).replace(/\s+/g, '_') || idx}`,
+						storyId: input.storyId,
+						factionId,
+						goal: goal.description,
+						status: 'active',
+						priority: goal.priority,
+						secrecy: 'player_known',
+						metadata: goal,
+						sourceEntryIds: [input.assistantEntryId],
+						sourceEventIds: [],
+						sourcePatchIds: [patchId],
+						serverVersion: input.serverVersion,
+						createdAt,
+						updatedAt: createdAt,
+					}).onConflictDoUpdate({
+						target: factionGoals.id,
+						set: { goal: goal.description, priority: goal.priority, metadata: goal, sourcePatchIds: [patchId], serverVersion: input.serverVersion, updatedAt: createdAt },
 					});
 				}
 			}
-			for (const [idx, goal] of entry.faction_goals.entries()) {
-				await db.insert(factionGoals).values({
-					id: `${factionId}_goal_${idx}_${normalizeName(goal.description).slice(0, 24).replace(/\s+/g, '_') || idx}`,
-					storyId: input.storyId,
-					factionId,
-					goal: goal.description,
-					status: 'active',
-					priority: goal.priority,
-					secrecy: 'player_known',
-					metadata: goal,
-					sourceEntryIds: [input.assistantEntryId],
-					sourceEventIds: [],
-					sourcePatchIds: [patchId],
-					serverVersion: input.serverVersion,
-					createdAt,
-					updatedAt: createdAt,
-				}).onConflictDoUpdate({
-					target: factionGoals.id,
-					set: { goal: goal.description, priority: goal.priority, metadata: goal, sourcePatchIds: [patchId], serverVersion: input.serverVersion, updatedAt: createdAt },
-				});
+		}
+
+		for (const rel of input.update.relationships) {
+			const source = await findEntityByName(tx, input.storyId, rel.sourceName);
+			const target = await findEntityByName(tx, input.storyId, rel.targetName);
+			if (!source || !target) {
+				warnings.push(`Skipped relationship ${rel.sourceName} -> ${rel.targetName}: missing entity.`);
+				continue;
 			}
-		}
-	}
-
-	for (const rel of input.update.relationships) {
-		const source = await findEntityByName(input.storyId, rel.sourceName);
-		const target = await findEntityByName(input.storyId, rel.targetName);
-		if (!source || !target) {
-			warnings.push(`Skipped relationship ${rel.sourceName} -> ${rel.targetName}: missing entity.`);
-			continue;
-		}
-		await db.insert(relationships).values({
-			id: id('rel'),
-			storyId: input.storyId,
-			sourceEntityId: source.id,
-			targetEntityId: target.id,
-			type: rel.type,
-			label: rel.label,
-			strength: rel.strength,
-			bidirectional: rel.bidirectional,
-			metadata: {},
-			sourceEntryIds: [input.assistantEntryId],
-			sourceEventIds: [],
-			sourcePatchIds: [patchId],
-			serverVersion: input.serverVersion,
-			createdAt,
-			updatedAt: createdAt,
-		}).onConflictDoNothing();
-	}
-
-	for (const conversation of input.update.conversations) {
-		const believer = await findEntityByName(input.storyId, conversation.npcName, 'character');
-		if (!believer) {
-			warnings.push(`Skipped NPC belief for ${conversation.npcName}: missing character entity.`);
-			continue;
-		}
-		const beliefText = [
-			conversation.topicSummary,
-			conversation.playerRevealed.length ? `Player revealed: ${conversation.playerRevealed.join('; ')}` : '',
-			conversation.npcLearned.length ? `NPC learned: ${conversation.npcLearned.join('; ')}` : '',
-			conversation.emotionalShift ? `Emotional shift: ${conversation.emotionalShift}` : '',
-		].filter(Boolean).join('\n');
-		await db.insert(npcBeliefs).values({
-			id: id('belief'),
-			storyId: input.storyId,
-			believerEntityId: believer.id,
-			subjectEntityId: null,
-			belief: beliefText,
-			confidence: 0.75,
-			visibility: 'secret',
-			evidenceEventIds: [],
-			sourceEntryIds: [input.assistantEntryId],
-			sourceEventIds: [],
-			sourcePatchIds: [patchId],
-			serverVersion: input.serverVersion,
-			createdAt,
-			updatedAt: createdAt,
-		});
-	}
-
-	for (const agreement of input.update.agreements) {
-		const eventId = id('event');
-		const visibility = agreement.secrecy === 'secret' ? 'secret' : 'player_known';
-		const resolvedPartyIds: string[] = [];
-		for (const party of agreement.parties) {
-			const entity = await findCharacterEntityByName(input.storyId, party);
-			if (entity) resolvedPartyIds.push(entity.id);
-		}
-		const uniqueResolvedPartyIds = sourceIds(...resolvedPartyIds);
-		await db.insert(storyEvents).values({
-			id: eventId,
-			storyId: input.storyId,
-			type: 'agreement',
-			title: `${agreement.action} agreement`,
-			body: agreement.terms ?? agreement.reason ?? `${agreement.action} ${agreement.category ?? 'agreement'}`,
-			...timelineDefaults({ currentTurn, currentWorldTime }),
-			visibility,
-			sourceEntryIds: [input.assistantEntryId],
-			sourcePatchIds: [patchId],
-			metadata: { agreement },
-			serverVersion: input.serverVersion,
-			createdAt,
-			updatedAt: createdAt,
-		});
-		await insertNpcLinksForEvent({
-			eventId,
-			actorNpcEntityIds: uniqueResolvedPartyIds.slice(0, 1),
-			targetNpcEntityIds: uniqueResolvedPartyIds.slice(1),
-			visibility,
-			sourceEntryIds: [input.assistantEntryId],
-			sourcePatchIds: [patchId],
-		});
-		eventIds.push(eventId);
-		if (agreement.action === 'create' && agreement.category && agreement.terms && agreement.parties.length > 0) {
-			await db.insert(agreements).values({
-				id: id('agreement'),
+			await tx.insert(relationships).values({
+				id: id('rel'),
 				storyId: input.storyId,
-				parties: agreement.parties,
-				category: agreement.category,
-				terms: agreement.terms,
-				status: 'active',
-				secrecy: agreement.secrecy,
-				consequences: agreement.consequences,
+				sourceEntityId: source.id,
+				targetEntityId: target.id,
+				type: rel.type,
+				label: rel.label,
+				strength: rel.strength,
+				bidirectional: rel.bidirectional,
+				metadata: {},
 				sourceEntryIds: [input.assistantEntryId],
-				sourceEventIds: [eventId],
+				sourceEventIds: [],
+				sourcePatchIds: [patchId],
+				serverVersion: input.serverVersion,
+				createdAt,
+				updatedAt: createdAt,
+			}).onConflictDoNothing();
+		}
+
+		for (const conversation of input.update.conversations) {
+			const believer = await findEntityByName(tx, input.storyId, conversation.npcName, 'character');
+			if (!believer) {
+				warnings.push(`Skipped NPC belief for ${conversation.npcName}: missing character entity.`);
+				continue;
+			}
+			const beliefText = [
+				conversation.topicSummary,
+				conversation.playerRevealed.length ? `Player revealed: ${conversation.playerRevealed.join('; ')}` : '',
+				conversation.npcLearned.length ? `NPC learned: ${conversation.npcLearned.join('; ')}` : '',
+				conversation.emotionalShift ? `Emotional shift: ${conversation.emotionalShift}` : '',
+			].filter(Boolean).join('\n');
+			await tx.insert(npcBeliefs).values({
+				id: id('belief'),
+				storyId: input.storyId,
+				believerEntityId: believer.id,
+				subjectEntityId: null,
+				belief: beliefText,
+				confidence: 0.75,
+				visibility: 'secret',
+				evidenceEventIds: [],
+				sourceEntryIds: [input.assistantEntryId],
+				sourceEventIds: [],
 				sourcePatchIds: [patchId],
 				serverVersion: input.serverVersion,
 				createdAt,
 				updatedAt: createdAt,
 			});
 		}
-	}
 
-	for (const beat of input.update.story_beats) {
-		const eventId = id('event');
-		await db.insert(storyEvents).values({
-			id: eventId,
+		for (const agreement of input.update.agreements) {
+			const eventId = id('event');
+			const visibility = agreement.secrecy === 'secret' ? 'secret' : 'player_known';
+			const resolvedPartyIds: string[] = [];
+			for (const party of agreement.parties) {
+				const entity = await findCharacterEntityByName(tx, input.storyId, party);
+				if (entity) resolvedPartyIds.push(entity.id);
+			}
+			const uniqueResolvedPartyIds = sourceIds(...resolvedPartyIds);
+			await tx.insert(storyEvents).values({
+				id: eventId,
+				storyId: input.storyId,
+				type: 'agreement',
+				title: `${agreement.action} agreement`,
+				body: agreement.terms ?? agreement.reason ?? `${agreement.action} ${agreement.category ?? 'agreement'}`,
+				...timelineDefaults({ currentTurn, currentWorldTime }),
+				visibility,
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: [patchId],
+				metadata: { agreement },
+				serverVersion: input.serverVersion,
+				createdAt,
+				updatedAt: createdAt,
+			});
+			await insertNpcLinksForEvent({
+				eventId,
+				actorNpcEntityIds: uniqueResolvedPartyIds.slice(0, 1),
+				targetNpcEntityIds: uniqueResolvedPartyIds.slice(1),
+				visibility,
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: [patchId],
+			});
+			eventIds.push(eventId);
+			if (agreement.action === 'create' && agreement.category && agreement.terms && agreement.parties.length > 0) {
+				await tx.insert(agreements).values({
+					id: id('agreement'),
+					storyId: input.storyId,
+					parties: agreement.parties,
+					category: agreement.category,
+					terms: agreement.terms,
+					status: 'active',
+					secrecy: agreement.secrecy,
+					consequences: agreement.consequences,
+					sourceEntryIds: [input.assistantEntryId],
+					sourceEventIds: [eventId],
+					sourcePatchIds: [patchId],
+					serverVersion: input.serverVersion,
+					createdAt,
+					updatedAt: createdAt,
+				});
+			}
+		}
+
+		for (const beat of input.update.story_beats) {
+			const eventId = id('event');
+			await tx.insert(storyEvents).values({
+				id: eventId,
+				storyId: input.storyId,
+				type: 'reveal',
+				title: beat.title,
+				body: beat.description,
+				...timelineDefaults({ currentTurn, currentWorldTime }),
+				visibility: 'player_known',
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: [patchId],
+				metadata: { significance: beat.significance },
+				serverVersion: input.serverVersion,
+				createdAt,
+				updatedAt: createdAt,
+			});
+			eventIds.push(eventId);
+		}
+
+		const memoryId = id('mem');
+		await tx.insert(memoryNodes).values({
+			id: memoryId,
 			storyId: input.storyId,
-			type: 'reveal',
-			title: beat.title,
-			body: beat.description,
-			...timelineDefaults({ currentTurn, currentWorldTime }),
+			type: 'episodic',
+			title: 'Recent turn',
+			content: input.narration,
+			summary: input.narration.replace(/\s+/g, ' ').slice(0, 360),
+			keywords: [],
+			entityIds: [],
+			factionIds: [],
+			threadIds: [],
+			locationId: null,
 			visibility: 'player_known',
-			sourceEntryIds: [input.assistantEntryId],
+			importance: 0.55,
+			sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
+			sourceEventIds: eventIds,
 			sourcePatchIds: [patchId],
-			metadata: { significance: beat.significance },
+			metadata: { retrievedMemoryIds: input.retrievedMemoryIds },
 			serverVersion: input.serverVersion,
 			createdAt,
 			updatedAt: createdAt,
 		});
-		eventIds.push(eventId);
-	}
+		memoryNodeIds.push(memoryId);
 
-	const memoryId = id('mem');
-	await db.insert(memoryNodes).values({
-		id: memoryId,
-		storyId: input.storyId,
-		type: 'episodic',
-		title: 'Recent turn',
-		content: input.narration,
-		summary: input.narration.replace(/\s+/g, ' ').slice(0, 360),
-		keywords: [],
-		entityIds: [],
-		factionIds: [],
-		threadIds: [],
-		locationId: null,
-		visibility: 'player_known',
-		importance: 0.55,
-		sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
-		sourceEventIds: eventIds,
-		sourcePatchIds: [patchId],
-		metadata: { retrievedMemoryIds: input.retrievedMemoryIds },
-		serverVersion: input.serverVersion,
-		createdAt,
-		updatedAt: createdAt,
+		await tx.update(stories).set({
+			currentTurn: currentTurn + 1,
+			serverVersion: input.serverVersion,
+			updatedAt: createdAt,
+		}).where(eq(stories.id, input.storyId));
 	});
-	memoryNodeIds.push(memoryId);
-
-	await db.update(stories).set({
-		currentTurn: currentTurn + 1,
-		serverVersion: input.serverVersion,
-		updatedAt: createdAt,
-	}).where(eq(stories.id, input.storyId));
 
 	try {
 		await enqueueTurnProjectionJobs({

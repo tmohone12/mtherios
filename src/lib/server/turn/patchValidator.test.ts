@@ -30,46 +30,69 @@ const entityRows = [
 ];
 
 function createDbMock(options: { story?: typeof storyRow | null } = {}) {
-	const insertCalls: Array<{ table: unknown; value: unknown }> = [];
+	type DbSource = 'root' | 'tx';
+	const insertCalls: Array<{ source: DbSource; table: unknown; value: unknown }> = [];
+	const updateCalls: Array<{ source: DbSource; table: unknown; value: Record<string, unknown> }> = [];
+	const selectLocks: Array<{ source: DbSource; table: unknown; strength: string }> = [];
 	const storyUpdates: Array<Record<string, unknown>> = [];
 	const selectedStory = options.story === undefined ? storyRow : options.story;
-	let selectedTable: unknown;
 
-	const selectChain = {
-		from: vi.fn((table: unknown) => {
-			selectedTable = table;
-			return selectChain;
-		}),
-		where: vi.fn(() => selectChain),
-		limit: vi.fn(() => {
-			if (selectedTable === stories) return Promise.resolve(selectedStory ? [selectedStory] : []);
-			if (selectedTable === entities) return Promise.resolve(entityRows);
-			return Promise.resolve([]);
-		}),
-	};
-	const select = vi.fn(() => selectChain);
+	function createConnection(source: DbSource) {
+		let selectedTable: unknown;
 
-	const insert = vi.fn((table: unknown) => ({
-		values: vi.fn((value: unknown) => {
-			insertCalls.push({ table, value });
-			return {
-				onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
-			};
-		}),
-	}));
-
-	const update = vi.fn((table: unknown) => ({
-		set: vi.fn((value: Record<string, unknown>) => ({
-			where: vi.fn(() => {
-				if (table === stories) storyUpdates.push(value);
-				return Promise.resolve(undefined);
+		const selectChain = {
+			from: vi.fn((table: unknown) => {
+				selectedTable = table;
+				return selectChain;
 			}),
-		})),
-	}));
+			where: vi.fn(() => selectChain),
+			for: vi.fn((strength: string) => {
+				selectLocks.push({ source, table: selectedTable, strength });
+				return selectChain;
+			}),
+			limit: vi.fn(() => {
+				if (selectedTable === stories) return Promise.resolve(selectedStory ? [selectedStory] : []);
+				if (selectedTable === entities) return Promise.resolve(entityRows);
+				return Promise.resolve([]);
+			}),
+		};
+		const select = vi.fn(() => selectChain);
+
+		const insert = vi.fn((table: unknown) => ({
+			values: vi.fn((value: unknown) => {
+				insertCalls.push({ source, table, value });
+				return {
+					onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+					onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+				};
+			}),
+		}));
+
+		const update = vi.fn((table: unknown) => ({
+			set: vi.fn((value: Record<string, unknown>) => ({
+				where: vi.fn(() => {
+					updateCalls.push({ source, table, value });
+					if (table === stories) storyUpdates.push(value);
+					return Promise.resolve(undefined);
+				}),
+			})),
+		}));
+
+		return { insert, select, update };
+	}
+
+	const tx = createConnection('tx');
+	const db = {
+		...createConnection('root'),
+		transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+	};
 
 	return {
-		db: { insert, select, update },
+		db,
+		tx,
 		insertCalls,
+		updateCalls,
+		selectLocks,
 		storyUpdates,
 	};
 }
@@ -82,7 +105,7 @@ beforeEach(() => {
 
 describe('applyValidatedTurnUpdate', () => {
 	it('throws before applying a patch when the story is missing', async () => {
-		const { db, insertCalls } = createDbMock({ story: null });
+		const { db, insertCalls, updateCalls, selectLocks } = createDbMock({ story: null });
 		dbMocks.getDb.mockReturnValue(db);
 		const update = worldStateUpdateSchema.parse({});
 
@@ -97,12 +120,17 @@ describe('applyValidatedTurnUpdate', () => {
 			serverVersion: 12,
 		})).rejects.toThrow('Story not found: missing_story');
 
+		expect(db.transaction).toHaveBeenCalledTimes(1);
+		expect(selectLocks).toEqual([
+			expect.objectContaining({ source: 'tx', table: stories, strength: 'update' }),
+		]);
 		expect(insertCalls).toEqual([]);
+		expect(updateCalls).toEqual([]);
 		expect(dbMocks.enqueueTurnProjectionJobs).not.toHaveBeenCalled();
 	});
 
 	it('emits committed timeline defaults, resolved agreement npc links, and advances story turn', async () => {
-		const { db, insertCalls, storyUpdates } = createDbMock();
+		const { db, tx, insertCalls, updateCalls, selectLocks, storyUpdates } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
 		const update = worldStateUpdateSchema.parse({
 			player_reputation: 'honored',
@@ -135,6 +163,17 @@ describe('applyValidatedTurnUpdate', () => {
 			retrievedMemoryIds: ['mem_old'],
 			serverVersion: 12,
 		});
+
+		expect(db.transaction).toHaveBeenCalledTimes(1);
+		expect(db.select).not.toHaveBeenCalled();
+		expect(db.insert).not.toHaveBeenCalled();
+		expect(db.update).not.toHaveBeenCalled();
+		expect(tx.select).toHaveBeenCalled();
+		expect(insertCalls.every(call => call.source === 'tx')).toBe(true);
+		expect(updateCalls.every(call => call.source === 'tx')).toBe(true);
+		expect(selectLocks).toEqual([
+			expect.objectContaining({ source: 'tx', table: stories, strength: 'update' }),
+		]);
 
 		const patchInsert = insertCalls.find(call => call.table === statePatches)?.value as { id: string };
 		const eventInserts = insertCalls
@@ -219,5 +258,28 @@ describe('applyValidatedTurnUpdate', () => {
 			patchIds: [patchInsert.id],
 			serverVersion: 12,
 		}));
+	});
+
+	it('keeps persisted transaction results and reports projection enqueue warnings', async () => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		dbMocks.enqueueTurnProjectionJobs.mockRejectedValue(new Error('outbox unavailable'));
+		const update = worldStateUpdateSchema.parse({});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'The turn persists before projection work is queued.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 12,
+		});
+
+		expect(db.transaction).toHaveBeenCalledTimes(1);
+		expect(insertCalls.some(call => call.source === 'tx' && call.table === statePatches)).toBe(true);
+		expect(result.patchIds).toHaveLength(1);
+		expect(result.warnings).toEqual(['Queued projection jobs failed: outbox unavailable']);
 	});
 });
