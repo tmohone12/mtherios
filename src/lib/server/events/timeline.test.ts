@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { storyEvents } from '$lib/server/db/schema';
 import {
 	buildDueTimelineEventPromotionPatch,
 	buildGmTimelineBrief,
@@ -9,6 +10,25 @@ import {
 	scheduleTimelineEvent,
 	selectDueTimelineEvents,
 } from './timeline';
+
+const dbMocks = vi.hoisted(() => ({
+	getDb: vi.fn(),
+	and: vi.fn((...conditions: unknown[]) => ({ kind: 'and', conditions })),
+	eq: vi.fn((left: unknown, right: unknown) => ({ kind: 'eq', left, right })),
+}));
+
+vi.mock('$lib/server/db/client', () => ({
+	getDb: dbMocks.getDb,
+}));
+
+vi.mock('drizzle-orm', async (importActual) => {
+	const actual = await importActual<typeof import('drizzle-orm')>();
+	return {
+		...actual,
+		and: dbMocks.and,
+		eq: dbMocks.eq,
+	};
+});
 
 const now = '2026-06-02T12:00:00.000Z';
 
@@ -60,6 +80,24 @@ function link(overrides: Partial<TestNpcLink>): TestNpcLink {
 		updatedAt: overrides.updatedAt ?? now,
 	};
 }
+
+function sqlExpressionIncludes(value: unknown, expected: unknown): boolean {
+	if (value === expected) return true;
+	if (!value || typeof value !== 'object') return false;
+
+	const record = value as { queryChunks?: unknown[]; value?: unknown };
+	if (record.value === expected) return true;
+	if (Array.isArray(record.value) && record.value.includes(expected)) return true;
+	if (!Array.isArray(record.queryChunks)) return false;
+
+	return record.queryChunks.some(chunk => sqlExpressionIncludes(chunk, expected));
+}
+
+beforeEach(() => {
+	dbMocks.getDb.mockReset();
+	dbMocks.and.mockClear();
+	dbMocks.eq.mockClear();
+});
 
 describe('timeline selection helpers', () => {
 	it('selects scheduled events due on or before the current turn and excludes future or committed rows', () => {
@@ -231,11 +269,100 @@ describe('timeline selection helpers', () => {
 		expect(scheduleInput.targetNpcEntityIds).toEqual(['npc_borin']);
 	});
 
+	it('inserts scheduled events and npc links inside a transaction', async () => {
+		const row = event({
+			id: 'event_tx',
+			status: 'scheduled',
+			title: 'Gatehouse pressure',
+			body: 'A faction tests the gatehouse through named agents.',
+			scheduledTurn: 7,
+			sourceEntryIds: ['entry_1'],
+			sourcePatchIds: ['patch_1'],
+			serverVersion: 3,
+		});
+		const eventReturning = vi.fn().mockResolvedValue([row]);
+		const eventValues = vi.fn(() => ({ returning: eventReturning }));
+		const linkOnConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+		const linkValues = vi.fn(() => ({ onConflictDoNothing: linkOnConflictDoNothing }));
+		const txInsert = vi.fn()
+			.mockReturnValueOnce({ values: eventValues })
+			.mockReturnValueOnce({ values: linkValues });
+		const transaction = vi.fn(async (callback: (tx: { insert: typeof txInsert }) => Promise<TestStoryEvent>) =>
+			callback({ insert: txInsert }));
+		const dbInsert = vi.fn();
+		dbMocks.getDb.mockReturnValue({ transaction, insert: dbInsert });
+
+		const result = await scheduleTimelineEvent({
+			storyId: 'story_1',
+			type: 'scheme',
+			title: 'Gatehouse pressure',
+			body: 'A faction tests the gatehouse through named agents.',
+			currentTurn: 5,
+			delayTurns: 2,
+			now,
+			actorNpcEntityIds: ['npc_anya'],
+		});
+
+		expect(result).toBe(row);
+		expect(transaction).toHaveBeenCalledTimes(1);
+		expect(dbInsert).not.toHaveBeenCalled();
+		expect(txInsert).toHaveBeenCalledTimes(2);
+		expect(eventValues).toHaveBeenCalledWith(expect.objectContaining({
+			storyId: 'story_1',
+			status: 'scheduled',
+			title: 'Gatehouse pressure',
+			scheduledTurn: 7,
+		}));
+		expect(linkValues).toHaveBeenCalledWith([
+			expect.objectContaining({
+				storyId: 'story_1',
+				eventId: 'event_tx',
+				npcEntityId: 'npc_anya',
+				role: 'actor',
+				visibility: 'player_known',
+				sourceEntryIds: ['entry_1'],
+				sourcePatchIds: ['patch_1'],
+				serverVersion: 3,
+			}),
+		]);
+		expect(linkOnConflictDoNothing).toHaveBeenCalledTimes(1);
+	});
+
 	it('builds a due promotion patch without mutating occurred turn', () => {
 		expect(buildDueTimelineEventPromotionPatch(now)).toEqual({
 			status: 'due',
 			updatedAt: now,
 		});
+	});
+
+	it('promotes only scheduled due rows and leaves occurred turn out of the update payload', async () => {
+		const rows = [event({ id: 'due_scheduled', status: 'due', scheduledTurn: 5 })];
+		const returning = vi.fn().mockResolvedValue(rows);
+		const where = vi.fn(() => ({ returning }));
+		const set = vi.fn((payload: Record<string, unknown>) => {
+			void payload;
+			return { where };
+		});
+		const update = vi.fn(() => ({ set }));
+		dbMocks.getDb.mockReturnValue({ update });
+
+		const result = await promoteDueTimelineEvents('story_1', 5, now);
+		const setPayload = set.mock.calls[0]?.[0];
+		const dueTurnCondition = dbMocks.and.mock.calls[0]?.[2];
+
+		expect(result).toBe(rows);
+		expect(update).toHaveBeenCalledWith(storyEvents);
+		expect(setPayload).toEqual({
+			status: 'due',
+			updatedAt: now,
+		});
+		expect(setPayload).not.toHaveProperty('occurredTurn');
+		expect(where).toHaveBeenCalledWith(expect.objectContaining({ kind: 'and' }));
+		expect(returning).toHaveBeenCalledTimes(1);
+		expect(dbMocks.eq).toHaveBeenCalledWith(storyEvents.storyId, 'story_1');
+		expect(dbMocks.eq).toHaveBeenCalledWith(storyEvents.status, 'scheduled');
+		expect(sqlExpressionIncludes(dueTurnCondition, storyEvents.scheduledTurn)).toBe(true);
+		expect(sqlExpressionIncludes(dueTurnCondition, 5)).toBe(true);
 	});
 
 	it('builds due, recent, scheduled, and npc event slices with due statuses overridden', () => {
@@ -286,6 +413,48 @@ describe('timeline selection helpers', () => {
 		]);
 	});
 
+	it('builds present npc memory from visible links even when linked events miss headline limits', () => {
+		const brief = buildGmTimelineBrief({
+			storyId: 'story_1',
+			currentTurn: 20,
+			currentWorldTime: null,
+			events: [
+				event({
+					id: 'linked_old_memory',
+					status: 'committed',
+					title: 'Old border debt',
+					occurredTurn: 1,
+					createdTurn: 1,
+				}),
+				event({
+					id: 'headline_recent',
+					status: 'committed',
+					title: 'Fresh court rumor',
+					occurredTurn: 19,
+					createdTurn: 19,
+				}),
+			],
+			npcLinks: [
+				link({ eventId: 'linked_old_memory', npcEntityId: 'npc_present', role: 'affected' }),
+			],
+			presentNpcIds: ['npc_present'],
+			recentLimit: 1,
+			scheduledLimit: 0,
+			dueLimit: 0,
+			includeSecret: false,
+		});
+
+		expect(brief.recentEvents.map(item => item.id)).toEqual(['headline_recent']);
+		expect(brief.npcEvents).toEqual([
+			{
+				npcEntityId: 'npc_present',
+				eventIds: ['linked_old_memory'],
+				summary: 'Old border debt',
+				visibility: 'player_known',
+			},
+		]);
+	});
+
 	it('derives brief npc ids from links only, not generic actor or target entity ids', () => {
 		const brief = buildGmTimelineBrief({
 			storyId: 'story_1',
@@ -312,6 +481,38 @@ describe('timeline selection helpers', () => {
 				npcEntityIds: ['npc_a'],
 			},
 		]);
+	});
+
+	it('does not build public npc memory from a secret linked event', () => {
+		const brief = buildGmTimelineBrief({
+			storyId: 'story_1',
+			currentTurn: 20,
+			currentWorldTime: null,
+			events: [
+				event({
+					id: 'secret_memory',
+					status: 'committed',
+					title: 'Hidden pact',
+					visibility: 'secret',
+					occurredTurn: 1,
+					createdTurn: 1,
+				}),
+			],
+			npcLinks: [
+				link({
+					eventId: 'secret_memory',
+					npcEntityId: 'npc_present',
+					role: 'actor',
+					visibility: 'player_known',
+				}),
+			],
+			presentNpcIds: ['npc_present'],
+			recentLimit: 0,
+			includeSecret: false,
+		});
+
+		expect(brief.recentEvents).toEqual([]);
+		expect(brief.npcEvents).toEqual([]);
 	});
 
 	it('excludes secret events and links unless includeSecret is true', () => {

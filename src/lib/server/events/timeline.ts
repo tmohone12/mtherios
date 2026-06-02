@@ -189,7 +189,7 @@ export function buildGmTimelineBrief(input: {
 		recentEvents: recentRows.map(event => toBriefEvent(event, input.currentTurn, undefined, visibleLinks)),
 		scheduledEvents: scheduledRows.map(event => toBriefEvent(event, input.currentTurn, undefined, visibleLinks)),
 		npcEvents: buildNpcTimelineEvents({
-			eventRows: [...dueRows, ...recentRows, ...scheduledRows],
+			eventRows: visibleEvents,
 			linkRows: visibleLinks,
 			npcEntityIds: unique([...(input.presentNpcIds ?? []), ...(input.sceneEntityIds ?? [])]),
 			limit: input.npcLimit ?? DEFAULT_NPC_LIMIT,
