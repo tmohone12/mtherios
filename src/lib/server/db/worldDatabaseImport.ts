@@ -12,6 +12,7 @@ import {
 	factions,
 	memoryNodes,
 	npcBeliefs,
+	npcEventLinks,
 	relationships,
 	sagas,
 	statePatches,
@@ -40,6 +41,7 @@ interface WorldDatabaseTables {
 	agreements: JsonRecord[];
 	threads: JsonRecord[];
 	events: JsonRecord[];
+	npcEventLinks: JsonRecord[];
 	statePatches: JsonRecord[];
 	memoryNodes: JsonRecord[];
 	chapters: JsonRecord[];
@@ -124,6 +126,7 @@ function normalizeTables(rawBundle: JsonRecord): WorldDatabaseTables {
 		agreements: asArray(source.agreements),
 		threads: asArray(source.threads ?? source.storyThreads),
 		events: asArray(source.events ?? source.storyEvents),
+		npcEventLinks: asArray(source.npcEventLinks ?? source.npc_event_links),
 		statePatches: asArray(source.statePatches),
 		memoryNodes: asArray(source.memoryNodes),
 		chapters: asArray(source.chapters),
@@ -199,6 +202,8 @@ function storyValue(row: JsonRecord, importedAt: string): typeof stories.$inferI
 		settings: row.settings == null ? null : asRecord(row.settings),
 		headerPrompt: asNullableString(row.headerPrompt),
 		currentLocationId: asNullableString(row.currentLocationId),
+		currentTurn: asNumber(row.currentTurn, 0),
+		currentWorldTime: asNullableString(row.currentWorldTime),
 		metadata: {
 			...asRecord(row.metadata),
 			importedFrom: 'terminal_world_database',
@@ -426,16 +431,41 @@ function eventValue(row: JsonRecord, storyId: string, importedAt: string): typeo
 		id: asString(row.id, id('event')),
 		storyId,
 		type: asString(row.type, 'imported_memory'),
+		status: asString(row.status, 'committed'),
 		title: asString(row.title, 'Imported Event'),
 		body: asString(row.body),
 		actorEntityIds: asStringArray(row.actorEntityIds),
 		targetEntityIds: asStringArray(row.targetEntityIds),
 		locationId: asNullableString(row.locationId),
+		locationIds: asStringArray(row.locationIds),
+		factionIds: asStringArray(row.factionIds),
 		threadIds: asStringArray(row.threadIds),
 		visibility: asString(row.visibility, 'player_known'),
+		createdTurn: asNumber(row.createdTurn, 0),
+		occurredTurn: typeof row.occurredTurn === 'number' && Number.isFinite(row.occurredTurn) ? row.occurredTurn : null,
+		scheduledTurn: typeof row.scheduledTurn === 'number' && Number.isFinite(row.scheduledTurn) ? row.scheduledTurn : null,
+		worldTime: asNullableString(row.worldTime),
+		memoryImpact: asRecord(row.memoryImpact),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourcePatchIds: asStringArray(row.sourcePatchIds),
 		metadata: asRecord(row.metadata),
+		serverVersion: asNumber(row.serverVersion, 1),
+		createdAt: asString(row.createdAt, importedAt),
+		updatedAt: asString(row.updatedAt, importedAt),
+	};
+}
+
+function npcEventLinkValue(row: JsonRecord, storyId: string, importedAt: string): typeof npcEventLinks.$inferInsert {
+	return {
+		id: asString(row.id, id('npc_event_link')),
+		storyId,
+		eventId: asString(row.eventId),
+		npcEntityId: asString(row.npcEntityId),
+		role: asString(row.role, 'affected'),
+		visibility: asString(row.visibility, 'player_known'),
+		evidenceStrength: asNumber(row.evidenceStrength, 0.75),
+		sourceEntryIds: asStringArray(row.sourceEntryIds),
+		sourcePatchIds: asStringArray(row.sourcePatchIds),
 		serverVersion: asNumber(row.serverVersion, 1),
 		createdAt: asString(row.createdAt, importedAt),
 		updatedAt: asString(row.updatedAt, importedAt),
@@ -614,6 +644,9 @@ export async function importWorldDatabaseBundle(input: unknown) {
 
 		for (const row of tables.events) await tx.insert(storyEvents).values(eventValue(row, storyId, importedAt)).onConflictDoNothing();
 		increment(counts, 'events', tables.events.length);
+
+		for (const row of tables.npcEventLinks) await tx.insert(npcEventLinks).values(npcEventLinkValue(row, storyId, importedAt)).onConflictDoNothing();
+		increment(counts, 'npcEventLinks', tables.npcEventLinks.length);
 
 		for (const row of tables.statePatches) await tx.insert(statePatches).values(patchValue(row, storyId, importedAt)).onConflictDoNothing();
 		increment(counts, 'statePatches', tables.statePatches.length);

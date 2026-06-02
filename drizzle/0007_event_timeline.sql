@@ -20,6 +20,11 @@ UPDATE "story_events"
 	SET "occurred_turn" = COALESCE("occurred_turn", "created_turn", 0)
 	WHERE "status" = 'committed' AND "occurred_turn" IS NULL;
 
+UPDATE "story_events"
+	SET "location_ids" = jsonb_build_array("location_id")
+	WHERE "location_id" IS NOT NULL
+		AND jsonb_array_length("location_ids") = 0;
+
 CREATE TABLE IF NOT EXISTS "npc_event_links" (
 	"id" text PRIMARY KEY NOT NULL,
 	"story_id" text NOT NULL REFERENCES "stories"("id") ON DELETE cascade,
