@@ -9,12 +9,14 @@ import {
 	factionMemberships,
 	factionResources,
 	memoryNodes,
+	npcEventLinks,
 	npcBeliefs,
 	relationships,
 	statePatches,
 	stories,
 	storyEvents,
 } from '$lib/server/db/schema';
+import { buildNpcEventLinksForEvent } from '$lib/server/events/timeline';
 import { enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
 import { worldStateUpdateSchema, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
 
@@ -59,6 +61,16 @@ async function findEntityByName(storyId: string, name: string, type?: string): P
 	return rows.find((row) => normalizeName(row.name) === normalized && (!type || row.type === type))
 		?? rows.find((row) => normalizeName(row.name) === normalized)
 		?? null;
+}
+
+async function findCharacterEntityByName(storyId: string, name: string): Promise<typeof entities.$inferSelect | null> {
+	const rows = await getDb()
+		.select()
+		.from(entities)
+		.where(and(eq(entities.storyId, storyId), eq(entities.name, name)))
+		.limit(20);
+	const normalized = normalizeName(name);
+	return rows.find((row) => normalizeName(row.name) === normalized && row.type === 'character') ?? null;
 }
 
 async function upsertEntity(
@@ -124,6 +136,25 @@ function makeOperations(update: WorldStateUpdate): Array<Record<string, unknown>
 	return operations;
 }
 
+function timelineDefaults(input: {
+	currentTurn: number;
+	currentWorldTime: string | null;
+	status?: string;
+	scheduledTurn?: number | null;
+}) {
+	const status = input.status ?? 'committed';
+	return {
+		status,
+		createdTurn: input.currentTurn,
+		occurredTurn: status === 'committed' ? input.currentTurn : null,
+		scheduledTurn: input.scheduledTurn ?? null,
+		worldTime: input.currentWorldTime,
+		locationIds: [],
+		factionIds: [],
+		memoryImpact: {},
+	};
+}
+
 export interface ApplyTurnUpdateInput {
 	storyId: string;
 	playerEntryId: string;
@@ -150,11 +181,39 @@ export interface ApplyTurnUpdateResult {
 export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Promise<ApplyTurnUpdateResult> {
 	const db = getDb();
 	const createdAt = nowIso();
+	const [story] = await db.select().from(stories).where(eq(stories.id, input.storyId)).limit(1);
+	if (!story) throw new Error(`Story not found: ${input.storyId}`);
+
+	const currentTurn = story.currentTurn ?? 0;
+	const currentWorldTime = story.currentWorldTime ?? null;
 	const eventIds: string[] = [];
 	const memoryNodeIds: string[] = [];
 	const warnings = [...input.parseWarnings];
 	const operations = makeOperations(input.update);
 	const patchId = id('patch');
+	const insertNpcLinksForEvent = async (event: {
+		eventId: string;
+		actorNpcEntityIds?: string[];
+		targetNpcEntityIds?: string[];
+		visibility: string;
+		sourceEntryIds: string[];
+		sourcePatchIds: string[];
+	}) => {
+		const links = buildNpcEventLinksForEvent({
+			storyId: input.storyId,
+			eventId: event.eventId,
+			actorNpcEntityIds: event.actorNpcEntityIds,
+			targetNpcEntityIds: event.targetNpcEntityIds,
+			visibility: event.visibility,
+			sourceEntryIds: event.sourceEntryIds,
+			sourcePatchIds: event.sourcePatchIds,
+			serverVersion: input.serverVersion,
+			now: createdAt,
+		});
+		if (links.length > 0) {
+			await db.insert(npcEventLinks).values(links).onConflictDoNothing();
+		}
+	};
 
 	await db.insert(statePatches).values({
 		id: patchId,
@@ -171,7 +230,6 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 	});
 
 	if (input.update.player_reputation) {
-		const [story] = await db.select().from(stories).where(eq(stories.id, input.storyId)).limit(1);
 		const metadata = story?.metadata && typeof story.metadata === 'object' ? story.metadata as Record<string, unknown> : {};
 		await db.update(stories).set({
 			metadata: { ...metadata, playerReputation: input.update.player_reputation },
@@ -187,6 +245,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 		type: 'scene_transition',
 		title: 'Turn resolved',
 		body: input.narration.replace(/\s+/g, ' ').slice(0, 500),
+		...timelineDefaults({ currentTurn, currentWorldTime }),
 		visibility: 'player_known',
 		sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
 		sourcePatchIds: [patchId],
@@ -194,6 +253,12 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 		serverVersion: input.serverVersion,
 		createdAt,
 		updatedAt: createdAt,
+	});
+	await insertNpcLinksForEvent({
+		eventId: turnEventId,
+		visibility: 'player_known',
+		sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
+		sourcePatchIds: [patchId],
 	});
 	eventIds.push(turnEventId);
 
@@ -393,19 +458,35 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 
 	for (const agreement of input.update.agreements) {
 		const eventId = id('event');
+		const visibility = agreement.secrecy === 'secret' ? 'secret' : 'player_known';
+		const resolvedPartyIds: string[] = [];
+		for (const party of agreement.parties) {
+			const entity = await findCharacterEntityByName(input.storyId, party);
+			if (entity) resolvedPartyIds.push(entity.id);
+		}
+		const uniqueResolvedPartyIds = sourceIds(...resolvedPartyIds);
 		await db.insert(storyEvents).values({
 			id: eventId,
 			storyId: input.storyId,
 			type: 'agreement',
 			title: `${agreement.action} agreement`,
 			body: agreement.terms ?? agreement.reason ?? `${agreement.action} ${agreement.category ?? 'agreement'}`,
-			visibility: agreement.secrecy === 'secret' ? 'secret' : 'player_known',
+			...timelineDefaults({ currentTurn, currentWorldTime }),
+			visibility,
 			sourceEntryIds: [input.assistantEntryId],
 			sourcePatchIds: [patchId],
 			metadata: { agreement },
 			serverVersion: input.serverVersion,
 			createdAt,
 			updatedAt: createdAt,
+		});
+		await insertNpcLinksForEvent({
+			eventId,
+			actorNpcEntityIds: uniqueResolvedPartyIds.slice(0, 1),
+			targetNpcEntityIds: uniqueResolvedPartyIds.slice(1),
+			visibility,
+			sourceEntryIds: [input.assistantEntryId],
+			sourcePatchIds: [patchId],
 		});
 		eventIds.push(eventId);
 		if (agreement.action === 'create' && agreement.category && agreement.terms && agreement.parties.length > 0) {
@@ -436,6 +517,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			type: 'reveal',
 			title: beat.title,
 			body: beat.description,
+			...timelineDefaults({ currentTurn, currentWorldTime }),
 			visibility: 'player_known',
 			sourceEntryIds: [input.assistantEntryId],
 			sourcePatchIds: [patchId],
@@ -471,6 +553,12 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 		updatedAt: createdAt,
 	});
 	memoryNodeIds.push(memoryId);
+
+	await db.update(stories).set({
+		currentTurn: currentTurn + 1,
+		serverVersion: input.serverVersion,
+		updatedAt: createdAt,
+	}).where(eq(stories.id, input.storyId));
 
 	try {
 		await enqueueTurnProjectionJobs({

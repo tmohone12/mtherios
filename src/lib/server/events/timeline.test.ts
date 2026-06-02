@@ -194,13 +194,23 @@ describe('timeline selection helpers', () => {
 			eventId: 'event_scheme',
 			actorNpcEntityIds: ['npc_anya', 'npc_borin'],
 			targetNpcEntityIds: ['npc_borin', 'npc_cass'],
-			visibility: 'player_known',
-			sourceEntryIds: [],
-			sourcePatchIds: [],
-			serverVersion: 1,
+			visibility: 'secret',
+			sourceEntryIds: ['entry_1'],
+			sourcePatchIds: ['patch_1'],
+			serverVersion: 4,
 			now,
 		});
 
+		expect(links[0]).toMatchObject({
+			id: 'npc_event_event_scheme_npc_anya',
+			storyId: 'story_1',
+			eventId: 'event_scheme',
+			npcEntityId: 'npc_anya',
+			visibility: 'secret',
+			sourceEntryIds: ['entry_1'],
+			sourcePatchIds: ['patch_1'],
+			serverVersion: 4,
+		});
 		expect(links).toMatchObject([
 			{
 				id: 'npc_event_event_scheme_npc_anya',
