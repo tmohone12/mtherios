@@ -427,22 +427,33 @@ function threadValue(row: JsonRecord, storyId: string, importedAt: string): type
 }
 
 function eventValue(row: JsonRecord, storyId: string, importedAt: string): typeof storyEvents.$inferInsert {
+	const status = asString(row.status, 'committed');
+	const createdTurn = asNumber(row.createdTurn, 0);
+	const occurredTurn = typeof row.occurredTurn === 'number' && Number.isFinite(row.occurredTurn)
+		? row.occurredTurn
+		: status === 'committed'
+			? createdTurn
+			: null;
+	const locationId = asNullableString(row.locationId);
+	const importedLocationIds = asStringArray(row.locationIds);
+	const locationIds = importedLocationIds.length > 0 ? importedLocationIds : locationId ? [locationId] : [];
+
 	return {
 		id: asString(row.id, id('event')),
 		storyId,
 		type: asString(row.type, 'imported_memory'),
-		status: asString(row.status, 'committed'),
+		status,
 		title: asString(row.title, 'Imported Event'),
 		body: asString(row.body),
 		actorEntityIds: asStringArray(row.actorEntityIds),
 		targetEntityIds: asStringArray(row.targetEntityIds),
-		locationId: asNullableString(row.locationId),
-		locationIds: asStringArray(row.locationIds),
+		locationId,
+		locationIds,
 		factionIds: asStringArray(row.factionIds),
 		threadIds: asStringArray(row.threadIds),
 		visibility: asString(row.visibility, 'player_known'),
-		createdTurn: asNumber(row.createdTurn, 0),
-		occurredTurn: typeof row.occurredTurn === 'number' && Number.isFinite(row.occurredTurn) ? row.occurredTurn : null,
+		createdTurn,
+		occurredTurn,
 		scheduledTurn: typeof row.scheduledTurn === 'number' && Number.isFinite(row.scheduledTurn) ? row.scheduledTurn : null,
 		worldTime: asNullableString(row.worldTime),
 		memoryImpact: asRecord(row.memoryImpact),

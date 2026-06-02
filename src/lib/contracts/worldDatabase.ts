@@ -20,6 +20,8 @@ export const worldDatabaseTablesSchema = z.object({
 	storyThreads: z.array(worldDatabaseJsonRecordSchema).optional(),
 	events: z.array(worldDatabaseJsonRecordSchema).optional(),
 	storyEvents: z.array(worldDatabaseJsonRecordSchema).optional(),
+	npcEventLinks: z.array(worldDatabaseJsonRecordSchema).optional(),
+	npc_event_links: z.array(worldDatabaseJsonRecordSchema).optional(),
 	statePatches: z.array(worldDatabaseJsonRecordSchema).optional(),
 	memoryNodes: z.array(worldDatabaseJsonRecordSchema).optional(),
 	chapters: z.array(worldDatabaseJsonRecordSchema).optional(),

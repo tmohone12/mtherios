@@ -22,6 +22,7 @@ import {
 	storyThreads,
 	syncOps,
 } from '$lib/server/db/schema';
+import { TERMINAL_WORLD_DATABASE_SCHEMA_VERSION } from '$lib/server/db/worldDatabaseSchema';
 import { getServerMemoryConfig } from '$lib/server/env';
 import {
 	createStoryRequestSchema,
@@ -1786,7 +1787,8 @@ export async function exportBackendStory(storyId: string) {
 	};
 
 	return {
-		version: 1,
+		schemaVersion: TERMINAL_WORLD_DATABASE_SCHEMA_VERSION,
+		version: TERMINAL_WORLD_DATABASE_SCHEMA_VERSION,
 		exportedAt: Date.now(),
 		source: 'terminal_world_database',
 		worldDatabase,
