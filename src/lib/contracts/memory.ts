@@ -26,6 +26,11 @@ export const storyEventTypeSchema = z.enum([
 	'clue_discovery',
 	'correction',
 	'imported_memory',
+	'world_tick',
+	'scheme',
+	'rumor',
+	'marriage',
+	'alliance',
 ]);
 
 export const memoryNodeTypeSchema = z.enum([
@@ -39,6 +44,8 @@ export const memoryNodeTypeSchema = z.enum([
 ]);
 
 export const memoryVisibilitySchema = z.enum(['public', 'player_known', 'secret']);
+
+export const storyEventStatusSchema = z.enum(['proposed', 'scheduled', 'due', 'committed', 'cancelled']);
 
 export const jsonPatchOperationSchema = z.object({
 	op: z.enum(['add', 'remove', 'replace', 'move', 'copy', 'test', 'upsert', 'create', 'update', 'break', 'fulfill', 'expire']),
@@ -65,19 +72,73 @@ export const storyEventSchema = z.object({
 	id: z.string(),
 	storyId: z.string(),
 	type: storyEventTypeSchema,
+	status: storyEventStatusSchema.default('committed'),
 	title: z.string(),
 	body: z.string(),
 	actorEntityIds: z.array(z.string()).default([]),
 	targetEntityIds: z.array(z.string()).default([]),
 	locationId: z.string().nullable().default(null),
+	locationIds: z.array(z.string()).default([]),
+	factionIds: z.array(z.string()).default([]),
 	threadIds: z.array(z.string()).default([]),
 	visibility: memoryVisibilitySchema.default('player_known'),
+	createdTurn: z.number().int().nonnegative().default(0),
+	occurredTurn: z.number().int().nonnegative().nullable().default(null),
+	scheduledTurn: z.number().int().nonnegative().nullable().default(null),
+	worldTime: z.string().nullable().default(null),
+	memoryImpact: jsonObjectSchema.default({}),
 	sourceEntryIds: z.array(z.string()).default([]),
 	sourcePatchIds: z.array(z.string()).default([]),
 	metadata: jsonObjectSchema.optional(),
 	serverVersion: z.number().int().nonnegative(),
 	createdAt: z.string(),
 	updatedAt: z.string(),
+});
+
+export const npcEventLinkRoleSchema = z.enum(['actor', 'target', 'witness', 'affected']);
+
+export const npcEventLinkSchema = z.object({
+	id: z.string(),
+	storyId: z.string(),
+	eventId: z.string(),
+	npcEntityId: z.string(),
+	role: npcEventLinkRoleSchema.default('affected'),
+	visibility: memoryVisibilitySchema.default('player_known'),
+	evidenceStrength: z.number().min(0).max(1).default(0.75),
+	sourceEntryIds: z.array(z.string()).default([]),
+	sourcePatchIds: z.array(z.string()).default([]),
+	serverVersion: z.number().int().nonnegative(),
+	createdAt: z.string(),
+	updatedAt: z.string(),
+});
+
+export const gmTimelineBriefEventSchema = z.object({
+	id: z.string(),
+	type: storyEventTypeSchema,
+	status: storyEventStatusSchema,
+	title: z.string(),
+	body: z.string(),
+	turnsUntilDue: z.number().int(),
+	worldTime: z.string().nullable().default(null),
+	npcEntityIds: z.array(z.string()).default([]),
+	factionIds: z.array(z.string()).default([]),
+	locationIds: z.array(z.string()).default([]),
+	visibility: memoryVisibilitySchema.default('player_known'),
+});
+
+export const gmTimelineNpcEventSchema = z.object({
+	npcEntityId: z.string(),
+	events: z.array(gmTimelineBriefEventSchema).default([]),
+});
+
+export const gmTimelineBriefSchema = z.object({
+	storyId: z.string(),
+	currentTurn: z.number().int().nonnegative().default(0),
+	currentWorldTime: z.string().nullable().default(null),
+	dueEvents: z.array(gmTimelineBriefEventSchema).default([]),
+	recentEvents: z.array(gmTimelineBriefEventSchema).default([]),
+	scheduledEvents: z.array(gmTimelineBriefEventSchema).default([]),
+	npcEvents: z.array(gmTimelineNpcEventSchema).default([]),
 });
 
 export const memoryNodeSchema = z.object({
@@ -376,8 +437,14 @@ export const turnResponseSchema = z.object({
 export type StoryEventType = z.infer<typeof storyEventTypeSchema>;
 export type MemoryNodeType = z.infer<typeof memoryNodeTypeSchema>;
 export type MemoryVisibility = z.infer<typeof memoryVisibilitySchema>;
+export type StoryEventStatus = z.infer<typeof storyEventStatusSchema>;
 export type StatePatch = z.infer<typeof statePatchSchema>;
 export type StoryEvent = z.infer<typeof storyEventSchema>;
+export type NpcEventLinkRole = z.infer<typeof npcEventLinkRoleSchema>;
+export type NpcEventLink = z.infer<typeof npcEventLinkSchema>;
+export type GmTimelineBriefEvent = z.infer<typeof gmTimelineBriefEventSchema>;
+export type GmTimelineNpcEvent = z.infer<typeof gmTimelineNpcEventSchema>;
+export type GmTimelineBrief = z.infer<typeof gmTimelineBriefSchema>;
 export type MemoryNode = z.infer<typeof memoryNodeSchema>;
 export type RetrievedMemoryPacket = z.infer<typeof retrievedMemoryPacketSchema>;
 export type BootstrapResponse = z.infer<typeof bootstrapResponseSchema>;
