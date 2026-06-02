@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { storyEvents } from '$lib/server/db/schema';
+import { npcEventLinks, stories, storyEvents } from '$lib/server/db/schema';
 import {
 	buildDueTimelineEventPromotionPatch,
 	buildGmTimelineBrief,
@@ -81,16 +81,50 @@ function link(overrides: Partial<TestNpcLink>): TestNpcLink {
 	};
 }
 
-function sqlExpressionIncludes(value: unknown, expected: unknown): boolean {
+function sqlExpressionIncludes(value: unknown, expected: unknown, seen = new WeakSet<object>()): boolean {
 	if (value === expected) return true;
+	if (Array.isArray(value)) return value.some(item => sqlExpressionIncludes(item, expected, seen));
+	if (typeof value === 'string' && typeof expected === 'string') return value.includes(expected);
 	if (!value || typeof value !== 'object') return false;
+	if (seen.has(value)) return false;
+	seen.add(value);
 
-	const record = value as { queryChunks?: unknown[]; value?: unknown };
+	const record = value as { queryChunks?: unknown[]; value?: unknown; conditions?: unknown[] };
 	if (record.value === expected) return true;
 	if (Array.isArray(record.value) && record.value.includes(expected)) return true;
-	if (!Array.isArray(record.queryChunks)) return false;
+	if (Array.isArray(record.queryChunks) && record.queryChunks.some(chunk => sqlExpressionIncludes(chunk, expected, seen))) {
+		return true;
+	}
+	if (Array.isArray(record.conditions) && record.conditions.some(condition => sqlExpressionIncludes(condition, expected, seen))) {
+		return true;
+	}
 
-	return record.queryChunks.some(chunk => sqlExpressionIncludes(chunk, expected));
+	return Object.values(record).some(child => sqlExpressionIncludes(child, expected, seen));
+}
+
+function conditionIncludesEq(value: unknown, left: unknown, right: unknown): boolean {
+	if (!value || typeof value !== 'object') return false;
+
+	const record = value as { kind?: unknown; left?: unknown; right?: unknown; conditions?: unknown[]; queryChunks?: unknown[] };
+	if (record.kind === 'eq' && record.left === left && record.right === right) return true;
+	if (Array.isArray(record.conditions) && record.conditions.some(condition => conditionIncludesEq(condition, left, right))) {
+		return true;
+	}
+	if (Array.isArray(record.queryChunks) && record.queryChunks.some(chunk => conditionIncludesEq(chunk, left, right))) {
+		return true;
+	}
+	return false;
+}
+
+function createSelectChain(rows: unknown[]) {
+	const chain = {
+		from: vi.fn(() => chain),
+		innerJoin: vi.fn(() => chain),
+		where: vi.fn((_condition: unknown) => chain),
+		orderBy: vi.fn((..._expressions: unknown[]) => chain),
+		limit: vi.fn(() => Promise.resolve(rows)),
+	};
+	return chain;
 }
 
 beforeEach(() => {
@@ -437,8 +471,9 @@ describe('timeline selection helpers', () => {
 			.map((rows) => {
 				const chain = {
 					from: vi.fn(() => chain),
-					where: vi.fn(() => chain),
-					orderBy: vi.fn(() => chain),
+					innerJoin: vi.fn(() => chain),
+					where: vi.fn((_condition: unknown) => chain),
+					orderBy: vi.fn((..._expressions: unknown[]) => chain),
 					limit: vi.fn(() => Promise.resolve(rows)),
 				};
 				return chain;
@@ -482,6 +517,202 @@ describe('timeline selection helpers', () => {
 				visibility: 'player_known',
 			},
 		]);
+	});
+
+	it('applies public visibility filters before bounded timeline query limits', async () => {
+		const storyRow = {
+			id: 'story_1',
+			currentTurn: 8,
+			currentWorldTime: 'Dawn court',
+		};
+		const chains = [[storyRow], [], [], [], []].map(createSelectChain);
+		const select = vi.fn()
+			.mockReturnValueOnce(chains[0])
+			.mockReturnValueOnce(chains[1])
+			.mockReturnValueOnce(chains[2])
+			.mockReturnValueOnce(chains[3])
+			.mockReturnValueOnce(chains[4]);
+		dbMocks.getDb.mockReturnValue({ select });
+
+		await loadGmTimelineBrief({
+			storyId: 'story_1',
+			presentNpcIds: ['npc_visible'],
+			includeSecret: false,
+			dueLimit: 1,
+			recentLimit: 1,
+			scheduledLimit: 1,
+			npcLimit: 1,
+			npcEventLimit: 1,
+		});
+
+		const dueWhere = chains[1].where.mock.calls[0]?.[0];
+		const recentWhere = chains[2].where.mock.calls[0]?.[0];
+		const scheduledWhere = chains[3].where.mock.calls[0]?.[0];
+		const linkWhere = chains[4].where.mock.calls[0]?.[0];
+
+		for (const condition of [dueWhere, recentWhere, scheduledWhere]) {
+			expect(sqlExpressionIncludes(condition, storyEvents.visibility)).toBe(true);
+			expect(sqlExpressionIncludes(condition, 'public')).toBe(true);
+			expect(sqlExpressionIncludes(condition, 'player_known')).toBe(true);
+		}
+		expect(sqlExpressionIncludes(linkWhere, npcEventLinks.visibility)).toBe(true);
+		expect(sqlExpressionIncludes(linkWhere, storyEvents.visibility)).toBe(true);
+		expect(sqlExpressionIncludes(linkWhere, 'public')).toBe(true);
+		expect(sqlExpressionIncludes(linkWhere, 'player_known')).toBe(true);
+	});
+
+	it('orders recent bounded queries by occurred turn falling back to created turn', async () => {
+		const storyRow = {
+			id: 'story_1',
+			currentTurn: 8,
+			currentWorldTime: 'Dawn court',
+		};
+		const chains = [[storyRow], [], [], []].map(createSelectChain);
+		const select = vi.fn()
+			.mockReturnValueOnce(chains[0])
+			.mockReturnValueOnce(chains[1])
+			.mockReturnValueOnce(chains[2])
+			.mockReturnValueOnce(chains[3]);
+		dbMocks.getDb.mockReturnValue({ select });
+
+		await loadGmTimelineBrief({
+			storyId: 'story_1',
+			includeSecret: false,
+			dueLimit: 0,
+			recentLimit: 1,
+			scheduledLimit: 0,
+			npcLimit: 0,
+		});
+
+		const recentOrderArgs = chains[2].orderBy.mock.calls[0] ?? [];
+
+		expect(sqlExpressionIncludes(recentOrderArgs[0], 'coalesce')).toBe(true);
+		expect(sqlExpressionIncludes(recentOrderArgs[0], storyEvents.occurredTurn)).toBe(true);
+		expect(sqlExpressionIncludes(recentOrderArgs[0], storyEvents.createdTurn)).toBe(true);
+	});
+
+	it('loads npc links with a fair per-npc bound so later present npcs are not starved', async () => {
+		const storyRow = {
+			id: 'story_1',
+			currentTurn: 12,
+			currentWorldTime: 'Dawn court',
+		};
+		const firstNpcLinks = [
+			link({
+				id: 'link_first_high_1',
+				eventId: 'first_old_high_1',
+				npcEntityId: 'npc_first',
+				evidenceStrength: 0.95,
+			}),
+			link({
+				id: 'link_first_high_2',
+				eventId: 'first_old_high_2',
+				npcEntityId: 'npc_first',
+				evidenceStrength: 0.94,
+			}),
+			link({
+				id: 'link_first_high_3',
+				eventId: 'first_old_high_3',
+				npcEntityId: 'npc_first',
+				evidenceStrength: 0.93,
+			}),
+			link({
+				id: 'link_first_high_4',
+				eventId: 'first_old_high_4',
+				npcEntityId: 'npc_first',
+				evidenceStrength: 0.92,
+			}),
+		];
+		const laterNpcLinks = [
+			link({
+				id: 'link_later_due',
+				eventId: 'later_due_visible',
+				npcEntityId: 'npc_later',
+				evidenceStrength: 0.1,
+			}),
+		];
+		const linkedRows = [
+			event({
+				id: 'first_old_high_1',
+				status: 'committed',
+				title: 'First old memory',
+				occurredTurn: 1,
+				createdTurn: 1,
+			}),
+			event({
+				id: 'first_old_high_2',
+				status: 'committed',
+				title: 'First older memory',
+				occurredTurn: 2,
+				createdTurn: 2,
+			}),
+			event({
+				id: 'first_old_high_3',
+				status: 'committed',
+				title: 'First third memory',
+				occurredTurn: 3,
+				createdTurn: 3,
+			}),
+			event({
+				id: 'first_old_high_4',
+				status: 'committed',
+				title: 'First fourth memory',
+				occurredTurn: 4,
+				createdTurn: 4,
+			}),
+			event({
+				id: 'later_due_visible',
+				status: 'due',
+				title: 'Later NPC danger arrives',
+				scheduledTurn: null,
+				createdTurn: 11,
+			}),
+		];
+		const select = vi.fn(() => {
+			let selectedTable: unknown;
+			let whereCondition: unknown;
+			const chain = {
+				from: vi.fn((table: unknown) => {
+					selectedTable = table;
+					return chain;
+				}),
+				innerJoin: vi.fn(() => chain),
+				where: vi.fn((condition: unknown) => {
+					whereCondition = condition;
+					return chain;
+				}),
+				orderBy: vi.fn(() => chain),
+				limit: vi.fn((limitValue: number) => {
+					if (selectedTable === stories) return Promise.resolve([storyRow]);
+					if (selectedTable === npcEventLinks) {
+						if (conditionIncludesEq(whereCondition, npcEventLinks.npcEntityId, 'npc_later')) {
+							return Promise.resolve(laterNpcLinks);
+						}
+						return Promise.resolve(firstNpcLinks.slice(0, limitValue));
+					}
+					if (selectedTable === storyEvents && sqlExpressionIncludes(whereCondition, storyEvents.id)) {
+						return Promise.resolve(linkedRows);
+					}
+					return Promise.resolve([]);
+				}),
+			};
+			return chain;
+		});
+		dbMocks.getDb.mockReturnValue({ select });
+
+		const brief = await loadGmTimelineBrief({
+			storyId: 'story_1',
+			presentNpcIds: ['npc_first', 'npc_later'],
+			includeSecret: false,
+			dueLimit: 0,
+			recentLimit: 0,
+			scheduledLimit: 0,
+			npcLimit: 2,
+			npcEventLimit: 1,
+		});
+
+		expect(brief.npcEvents.map(item => item.npcEntityId)).toEqual(['npc_first', 'npc_later']);
+		expect(brief.npcEvents.find(item => item.npcEntityId === 'npc_later')?.eventIds).toEqual(['later_due_visible']);
 	});
 
 	it('builds due, recent, scheduled, and npc event slices with due statuses overridden', () => {

@@ -25,7 +25,22 @@ export const DEFAULT_NPC_EVENT_LIMIT = 4;
 const NPC_EVENT_QUERY_MULTIPLIER = 4;
 const NPC_EVENT_SUMMARY_CHAR_LIMIT = 280;
 
-const PUBLIC_VISIBILITIES = new Set<string>(['public', 'player_known']);
+const PUBLIC_VISIBILITY_VALUES = ['public', 'player_known'] as const;
+const PUBLIC_VISIBILITIES = new Set<string>(PUBLIC_VISIBILITY_VALUES);
+const NPC_EVENT_LINK_SELECT = {
+	id: npcEventLinks.id,
+	storyId: npcEventLinks.storyId,
+	eventId: npcEventLinks.eventId,
+	npcEntityId: npcEventLinks.npcEntityId,
+	role: npcEventLinks.role,
+	visibility: npcEventLinks.visibility,
+	evidenceStrength: npcEventLinks.evidenceStrength,
+	sourceEntryIds: npcEventLinks.sourceEntryIds,
+	sourcePatchIds: npcEventLinks.sourcePatchIds,
+	serverVersion: npcEventLinks.serverVersion,
+	createdAt: npcEventLinks.createdAt,
+	updatedAt: npcEventLinks.updatedAt,
+};
 
 export function selectDueTimelineEvents(events: StoryEventRow[], currentTurn: number): StoryEventRow[] {
 	return events
@@ -232,19 +247,23 @@ export async function loadGmTimelineBrief(input: {
 	const npcEventLimit = normalizeLimit(input.npcEventLimit, DEFAULT_NPC_EVENT_LIMIT);
 	const npcEntityIds = unique([...(input.presentNpcIds ?? []), ...(input.sceneEntityIds ?? [])])
 		.slice(0, npcLimit);
-	const npcLinkLimit = npcEntityIds.length * npcEventLimit * NPC_EVENT_QUERY_MULTIPLIER;
+	const npcLinkLimit = npcEventLimit * NPC_EVENT_QUERY_MULTIPLIER;
+	const includeSecret = input.includeSecret ?? false;
+	const eventVisibilityCondition = storyEventVisibilityCondition(includeSecret);
+	const linkVisibilityCondition = npcEventLinkVisibilityCondition(includeSecret);
+	const recentTurnExpression = storyEventRecentTurnExpression();
 
-	const [dueRows, recentRows, scheduledRows, linkRows] = await Promise.all([
+	const [dueRows, recentRows, scheduledRows, linkRowsByNpc] = await Promise.all([
 		db.select().from(storyEvents)
 			.where(and(
 				eq(storyEvents.storyId, input.storyId),
+				eventVisibilityCondition,
 				sql`(${storyEvents.status} = 'due' OR (${storyEvents.status} = 'scheduled' AND ${storyEvents.scheduledTurn} <= ${currentTurn}))`,
 			))
 			.orderBy(
 				sql`CASE WHEN ${storyEvents.status} = 'due' AND ${storyEvents.scheduledTurn} IS NULL THEN 0 ELSE 1 END`,
 				asc(storyEvents.scheduledTurn),
-				desc(storyEvents.occurredTurn),
-				desc(storyEvents.createdTurn),
+				desc(recentTurnExpression),
 				desc(storyEvents.updatedAt),
 				asc(storyEvents.id),
 			)
@@ -252,11 +271,11 @@ export async function loadGmTimelineBrief(input: {
 		db.select().from(storyEvents)
 			.where(and(
 				eq(storyEvents.storyId, input.storyId),
+				eventVisibilityCondition,
 				eq(storyEvents.status, 'committed'),
 			))
 			.orderBy(
-				desc(storyEvents.occurredTurn),
-				desc(storyEvents.createdTurn),
+				desc(recentTurnExpression),
 				desc(storyEvents.updatedAt),
 				desc(storyEvents.createdAt),
 				asc(storyEvents.id),
@@ -265,42 +284,55 @@ export async function loadGmTimelineBrief(input: {
 		db.select().from(storyEvents)
 			.where(and(
 				eq(storyEvents.storyId, input.storyId),
+				eventVisibilityCondition,
 				eq(storyEvents.status, 'scheduled'),
 				sql`${storyEvents.scheduledTurn} > ${currentTurn}`,
 			))
 			.orderBy(
 				asc(storyEvents.scheduledTurn),
+				desc(recentTurnExpression),
 				desc(storyEvents.updatedAt),
 				desc(storyEvents.createdAt),
 				asc(storyEvents.id),
 			)
 			.limit(scheduledLimit),
 		npcLinkLimit > 0
-			? db.select().from(npcEventLinks)
+			? Promise.all(npcEntityIds.map(npcEntityId => db.select(NPC_EVENT_LINK_SELECT)
+				.from(npcEventLinks)
+				.innerJoin(storyEvents, and(
+					eq(storyEvents.storyId, npcEventLinks.storyId),
+					eq(storyEvents.id, npcEventLinks.eventId),
+				))
 				.where(and(
 					eq(npcEventLinks.storyId, input.storyId),
-					inArray(npcEventLinks.npcEntityId, npcEntityIds),
+					eq(npcEventLinks.npcEntityId, npcEntityId),
+					linkVisibilityCondition,
+					eventVisibilityCondition,
 				))
 				.orderBy(
-					asc(npcEventLinks.npcEntityId),
+					npcLinkedEventUrgencyRankExpression(currentTurn),
+					sql`CASE WHEN ${storyEvents.status} = 'due' AND ${storyEvents.scheduledTurn} IS NULL THEN 0 ELSE 1 END`,
+					asc(storyEvents.scheduledTurn),
 					desc(npcEventLinks.evidenceStrength),
+					desc(recentTurnExpression),
 					desc(npcEventLinks.updatedAt),
 					desc(npcEventLinks.createdAt),
 					asc(npcEventLinks.eventId),
 				)
-				.limit(npcLinkLimit)
+				.limit(npcLinkLimit)))
 			: Promise.resolve([]),
 	]);
+	const linkRows = linkRowsByNpc.flat();
 	const linkedEventIds = unique(linkRows.map(link => link.eventId));
 	const linkedEventRows = linkedEventIds.length > 0
 		? await db.select().from(storyEvents)
 			.where(and(
 				eq(storyEvents.storyId, input.storyId),
+				eventVisibilityCondition,
 				inArray(storyEvents.id, linkedEventIds),
 			))
 			.orderBy(
-				desc(storyEvents.occurredTurn),
-				desc(storyEvents.createdTurn),
+				desc(recentTurnExpression),
 				desc(storyEvents.updatedAt),
 				desc(storyEvents.createdAt),
 				asc(storyEvents.id),
@@ -553,6 +585,27 @@ function truncateText(value: string, limit: number): string {
 function normalizeLimit(value: number | undefined, fallback: number): number {
 	const candidate = value ?? fallback;
 	return Math.max(0, Math.floor(Number.isFinite(candidate) ? candidate : fallback));
+}
+
+function storyEventVisibilityCondition(includeSecret: boolean) {
+	return includeSecret ? undefined : inArray(storyEvents.visibility, PUBLIC_VISIBILITY_VALUES);
+}
+
+function npcEventLinkVisibilityCondition(includeSecret: boolean) {
+	return includeSecret ? undefined : inArray(npcEventLinks.visibility, PUBLIC_VISIBILITY_VALUES);
+}
+
+function storyEventRecentTurnExpression() {
+	return sql`coalesce(${storyEvents.occurredTurn}, ${storyEvents.createdTurn})`;
+}
+
+function npcLinkedEventUrgencyRankExpression(currentTurn: number) {
+	return sql`CASE
+		WHEN ${storyEvents.status} = 'due' THEN 0
+		WHEN ${storyEvents.status} = 'scheduled' AND ${storyEvents.scheduledTurn} IS NOT NULL AND ${storyEvents.scheduledTurn} <= ${currentTurn} THEN 0
+		WHEN ${storyEvents.status} = 'scheduled' AND ${storyEvents.scheduledTurn} IS NOT NULL THEN 1
+		ELSE 2
+	END`;
 }
 
 function uniqueStoryEventRows(rows: StoryEventRow[]): StoryEventRow[] {
