@@ -118,7 +118,7 @@ import { processBackendTurn, pullBackendChanges, pushPendingBackendOps, queueBac
 import { openEngineEventStream, type EngineStreamEvent, type EngineStreamSubscription } from '$lib/services/engineStream';
 import { cacheBackendStoryFromBootstrap, fetchBackendStoryBootstrap, fetchBackendStoryEntriesPage, fetchBackendStoryProjection } from '$lib/services/serverStories';
 import { settings } from '$lib/stores/settings.svelte';
-import type { BootstrapResponse, SyncChange, TurnRequest, TurnResponse } from '$lib/contracts/memory';
+import type { BootstrapResponse, SyncChange, TurnPerformanceSummary, TurnRequest, TurnResponse } from '$lib/contracts/memory';
 import type { CampaignProjection } from '$lib/contracts/engine';
 import {
 	DEFAULT_CONTROL_SURFACE_ENTRY_WINDOW,
@@ -468,6 +468,7 @@ class StoryStore {
 	lastPromptSectionUsage = $state<Record<string, number> | null>(null);
 	/** Last known total context tokens sent to API */
 	lastContextTotal = $state<number>(0);
+	lastTurnPerformance = $state<TurnPerformanceSummary | null>(null);
 	/** Entry index floor for conversation history — set when a chapter is created to prevent context rot.
 	 *  buildConversationMessages() won't include entries before this index. */
 	chatHistoryFloor = $state<number>(0);
@@ -588,6 +589,7 @@ class StoryStore {
 		this.lastTierUsage = null;
 		this.lastPromptSectionUsage = null;
 		this.lastContextTotal = 0;
+		this.lastTurnPerformance = null;
 		this.chatHistoryFloor = 0;
 	}
 
@@ -780,6 +782,10 @@ class StoryStore {
 				onCacheStatus: (cache) => {
 					if (!this.isCurrentLoad(localStoryId, generation) || !this.campaignProjection) return;
 					this.campaignProjection = { ...this.campaignProjection, cache };
+				},
+				onTurnPerformance: (performance) => {
+					if (!this.isCurrentLoad(localStoryId, generation)) return;
+					this.lastTurnPerformance = performance;
 				},
 				onRefreshRequested: () => this.queueEngineProjectionRefresh(localStoryId, generation),
 				onError: (error) => this.recordEngineStreamError(error, localStoryId, generation),
@@ -1884,6 +1890,7 @@ class StoryStore {
 		});
 		await this.mirrorBackendEntries(response.entries);
 		await this.applyBackendSyncChanges(response.syncChanges);
+		this.lastTurnPerformance = response.performance;
 		this.currentStory = {
 			...this.currentStory,
 			serverVersion: response.serverVersion,
@@ -3925,6 +3932,7 @@ class StoryStore {
 		this.lastTierUsage = null;
 		this.lastPromptSectionUsage = null;
 		this.lastContextTotal = 0;
+		this.lastTurnPerformance = null;
 		this.chatHistoryFloor = 0;
 	}
 }

@@ -460,6 +460,32 @@ export const turnRequestSchema = z.object({
 	}).optional(),
 });
 
+export const turnPerformanceSummarySchema = z.object({
+	preparedCacheHit: z.boolean().default(false),
+	prompt: z.object({
+		tokenEstimate: z.number().int().nonnegative().default(0),
+		totalChars: z.number().int().nonnegative().default(0),
+		messageCount: z.number().int().nonnegative().default(0),
+	}),
+	cache: z.object({
+		hitCount: z.number().int().nonnegative().default(0),
+		missCount: z.number().int().nonnegative().default(0),
+		tokenEstimate: z.number().int().nonnegative().default(0),
+		segmentCount: z.number().int().nonnegative().default(0),
+	}).nullable().default(null),
+	generation: z.object({
+		operationCount: z.number().int().nonnegative().default(0),
+		durationMs: z.number().int().nonnegative().default(0),
+		requestTokens: z.number().int().nonnegative().nullable().default(null),
+		responseTokens: z.number().int().nonnegative().nullable().default(null),
+		totalTokens: z.number().int().nonnegative().nullable().default(null),
+	}),
+	slowTimings: z.array(z.object({
+		operation: z.string(),
+		durationMs: z.number().int().nonnegative(),
+	})).default([]),
+});
+
 export const turnResponseSchema = z.object({
 	narration: z.string(),
 	entries: z.array(jsonObjectSchema).default([]),
@@ -505,6 +531,7 @@ export const turnResponseSchema = z.object({
 		responseTokens: z.number().int().nonnegative().nullable().default(null),
 		totalTokens: z.number().int().nonnegative().nullable().default(null),
 	})).default([]),
+	performance: turnPerformanceSummarySchema.nullable().default(null),
 });
 
 export type StoryEventType = z.infer<typeof storyEventTypeSchema>;
@@ -532,4 +559,5 @@ export type MemoryRetrieveRequest = z.infer<typeof memoryRetrieveRequestSchema>;
 export type SyncOperation = z.infer<typeof syncOperationSchema>;
 export type SyncChange = z.infer<typeof syncChangeSchema>;
 export type TurnRequest = z.infer<typeof turnRequestSchema>;
+export type TurnPerformanceSummary = z.infer<typeof turnPerformanceSummarySchema>;
 export type TurnResponse = z.infer<typeof turnResponseSchema>;

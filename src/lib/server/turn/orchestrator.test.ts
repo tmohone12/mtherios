@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMemoryEngineCacheRepository } from '$lib/server/engine/cache';
-import { applyPromptContextBudget, loadServerWikiContextWithCache } from './orchestrator';
+import { applyPromptContextBudget, buildTurnPerformanceSummary, loadServerWikiContextWithCache } from './orchestrator';
 
 describe('turn orchestrator prompt budgeting', () => {
 	it('keeps unbounded dynamic prompt text unchanged', () => {
@@ -104,5 +104,61 @@ describe('turn orchestrator prompt budgeting', () => {
 		expect(loadCount).toBe(2);
 		expect(second.cacheHit).toBe(false);
 		expect(second.markdown).toBe('# Wiki Context\nVersion 2.');
+	});
+
+	it('builds compact turn performance diagnostics for generation speed debugging', () => {
+		const summary = buildTurnPerformanceSummary({
+			preparedCacheHit: true,
+			prompt: {
+				tokenEstimate: 1663,
+				totalChars: 6652,
+				messageCount: 12,
+			},
+			cache: {
+				hitCount: 3,
+				missCount: 1,
+				tokenEstimate: 2400,
+				segments: [
+					{ kind: 'prompt_system', cacheKey: 'cache-system', hit: true, invalidated: false, tokenEstimate: 800, contentHash: 'hash-a' },
+					{ kind: 'retrieved_memory', cacheKey: 'cache-memory', hit: false, invalidated: false, tokenEstimate: 1600, contentHash: 'hash-b' },
+				],
+			},
+			generationTimings: [
+				{ operation: 'turn.narration', serviceId: 'narrative', model: 'gpt-test', status: 'success', durationMs: 900, requestTokens: 1000, responseTokens: 150, totalTokens: 1150 },
+				{ operation: 'turn.state_extraction', serviceId: 'classifier', model: 'gpt-test-mini', status: 'success', durationMs: 320, requestTokens: 300, responseTokens: 40, totalTokens: 340 },
+			],
+			timings: [
+				{ phase: 'turn.context_assembly', durationMs: 410, metadata: { parallel: true } },
+				{ phase: 'turn.prompt_assembly', durationMs: 12 },
+				{ phase: 'turn.final_response.readback', durationMs: 275 },
+			],
+			slowTimingThresholdMs: 250,
+		});
+
+		expect(summary).toEqual({
+			preparedCacheHit: true,
+			prompt: {
+				tokenEstimate: 1663,
+				totalChars: 6652,
+				messageCount: 12,
+			},
+			cache: {
+				hitCount: 3,
+				missCount: 1,
+				tokenEstimate: 2400,
+				segmentCount: 2,
+			},
+			generation: {
+				operationCount: 2,
+				durationMs: 1220,
+				requestTokens: 1300,
+				responseTokens: 190,
+				totalTokens: 1490,
+			},
+			slowTimings: [
+				{ operation: 'turn.context_assembly', durationMs: 410 },
+				{ operation: 'turn.final_response.readback', durationMs: 275 },
+			],
+		});
 	});
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	extractCampaignProjection,
 	extractEngineCacheStatus,
+	extractTurnPerformance,
 	openEngineEventStream,
 	parseEngineStreamEvent,
 	shouldRefreshCampaignProjection,
@@ -84,6 +85,30 @@ describe('engine stream client helpers', () => {
 		expect(shouldRefreshCampaignProjection(event('engine.heartbeat', {}))).toBe(false);
 	});
 
+	it('extracts compact turn performance diagnostics from command projection changes', () => {
+		const performance = {
+			preparedCacheHit: true,
+			prompt: { tokenEstimate: 1663, totalChars: 6652, messageCount: 12 },
+			cache: { hitCount: 4, missCount: 1, tokenEstimate: 6000, segmentCount: 4 },
+			generation: {
+				operationCount: 2,
+				durationMs: 900,
+				requestTokens: 1000,
+				responseTokens: 120,
+				totalTokens: 1120,
+			},
+			slowTimings: [{ operation: 'turn.context_assembly', durationMs: 410 }],
+		};
+		const parsed = parseEngineStreamEvent(JSON.stringify(event('command.succeeded', {
+			commandId: 'cmd_turn',
+			command: 'turn.submit',
+			projectionChanges: { performance },
+		})));
+
+		expect(extractTurnPerformance(parsed)).toEqual(performance);
+		expect(shouldRefreshCampaignProjection(parsed)).toBe(true);
+	});
+
 	it('treats compact campaign status events as refresh requests instead of full projections', () => {
 		const parsed = parseEngineStreamEvent(JSON.stringify(event('campaign.status', {
 			mode: 'control_surface',
@@ -102,6 +127,7 @@ describe('engine stream client helpers', () => {
 		const seen: string[] = [];
 		const projections: unknown[] = [];
 		const cacheStatuses: unknown[] = [];
+		const turnPerformance: unknown[] = [];
 		const refreshes: string[] = [];
 
 		const subscription = openEngineEventStream({
@@ -115,6 +141,7 @@ describe('engine stream client helpers', () => {
 			onEvent: (engineEvent) => seen.push(engineEvent.type),
 			onProjection: (next) => projections.push(next),
 			onCacheStatus: (next) => cacheStatuses.push(next),
+			onTurnPerformance: (next) => turnPerformance.push(next),
 			onRefreshRequested: (engineEvent) => refreshes.push(engineEvent.type),
 		});
 
@@ -127,11 +154,39 @@ describe('engine stream client helpers', () => {
 			command: 'timeline.advance',
 			projectionChanges: { counts: { events: 4 } },
 		}));
+		source.emit('state.changed', event('state.changed', {
+			performance: {
+				preparedCacheHit: false,
+				prompt: { tokenEstimate: 800, totalChars: 3200, messageCount: 8 },
+				cache: null,
+				generation: {
+					operationCount: 1,
+					durationMs: 600,
+					requestTokens: null,
+					responseTokens: null,
+					totalTokens: null,
+				},
+				slowTimings: [],
+			},
+		}));
 
-		expect(seen).toEqual(['campaign.status', 'command.succeeded']);
+		expect(seen).toEqual(['campaign.status', 'command.succeeded', 'state.changed']);
 		expect(projections).toEqual([projection]);
 		expect(cacheStatuses).toEqual([projection.cache]);
-		expect(refreshes).toEqual(['command.succeeded']);
+		expect(turnPerformance).toEqual([{
+			preparedCacheHit: false,
+			prompt: { tokenEstimate: 800, totalChars: 3200, messageCount: 8 },
+			cache: null,
+			generation: {
+				operationCount: 1,
+				durationMs: 600,
+				requestTokens: null,
+				responseTokens: null,
+				totalTokens: null,
+			},
+			slowTimings: [],
+		}]);
+		expect(refreshes).toEqual(['command.succeeded', 'state.changed']);
 
 		subscription.close();
 		expect(source.closed).toBe(true);

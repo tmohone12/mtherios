@@ -383,7 +383,7 @@ function isPlainObject(value) {
 	return value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function printResult(result, payload) {
+export function printResult(result, payload) {
 	if (payload.json) {
 		console.log(JSON.stringify(result, null, 2));
 		return;
@@ -402,6 +402,27 @@ function printResult(result, payload) {
 	if (result.command === 'turn.submit' && result.result?.narration) {
 		console.log('');
 		console.log(String(result.result.narration).trim());
+	}
+	if (result.command === 'turn.submit' && result.result?.performance) {
+		const performance = result.result.performance;
+		const cache = performance.cache;
+		const generation = performance.generation;
+		console.log('');
+		console.log(`  performance: prepared-cache ${performance.preparedCacheHit ? 'hit' : 'miss'}`);
+		if (performance.prompt) {
+			console.log(`  prompt: ${performance.prompt.tokenEstimate ?? 0} tokens, ${performance.prompt.totalChars ?? 0} chars, ${performance.prompt.messageCount ?? 0} messages`);
+		}
+		if (cache) {
+			console.log(`  cache: ${cache.hitCount ?? 0} hits, ${cache.missCount ?? 0} misses, ${cache.segmentCount ?? 0} segments, ${cache.tokenEstimate ?? 0} tokens`);
+		}
+		if (generation) {
+			console.log(`  generation: ${generation.durationMs ?? 0}ms, tokens ${generation.requestTokens ?? 'n/a'} in / ${generation.responseTokens ?? 'n/a'} out / ${generation.totalTokens ?? 'n/a'} total`);
+		}
+		if (Array.isArray(performance.slowTimings) && performance.slowTimings.length > 0) {
+			for (const timing of performance.slowTimings.slice(0, 5)) {
+				console.log(`  slow: ${timing.operation} ${timing.durationMs}ms`);
+			}
+		}
 	}
 	console.log('');
 }

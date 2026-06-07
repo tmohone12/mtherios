@@ -1449,6 +1449,30 @@ describe('engine command envelope', () => {
 				syncChanges: [],
 				warnings: [],
 				generationTimings: [],
+				performance: {
+					preparedCacheHit: true,
+					prompt: {
+						tokenEstimate: 1663,
+						totalChars: 6652,
+						messageCount: 12,
+					},
+					cache: {
+						hitCount: 4,
+						missCount: 1,
+						tokenEstimate: 6000,
+						segmentCount: 4,
+					},
+					generation: {
+						operationCount: 1,
+						durationMs: 900,
+						requestTokens: 1000,
+						responseTokens: 120,
+						totalTokens: 1120,
+					},
+					slowTimings: [
+						{ operation: 'turn.context_assembly', durationMs: 410 },
+					],
+				},
 				campaignVault: {
 					files: [{
 						relativePath: 'raw/turns/000100-turn-1.md',
@@ -1506,6 +1530,30 @@ describe('engine command envelope', () => {
 					contentHash: 'hash-raw-turn',
 					byteLength: 1234,
 				}],
+			},
+			performance: {
+				preparedCacheHit: true,
+				prompt: {
+					tokenEstimate: 1663,
+					totalChars: 6652,
+					messageCount: 12,
+				},
+				cache: {
+					hitCount: 4,
+					missCount: 1,
+					tokenEstimate: 6000,
+					segmentCount: 4,
+				},
+				generation: {
+					operationCount: 1,
+					durationMs: 900,
+					requestTokens: 1000,
+					responseTokens: 120,
+					totalTokens: 1120,
+				},
+				slowTimings: [
+					{ operation: 'turn.context_assembly', durationMs: 410 },
+				],
 			},
 		});
 	});

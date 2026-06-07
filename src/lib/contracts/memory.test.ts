@@ -3,6 +3,7 @@ import {
 	gmTimelineBriefSchema,
 	npcEventLinkSchema,
 	storyEventSchema,
+	turnResponseSchema,
 } from './memory';
 
 describe('timeline contracts', () => {
@@ -225,5 +226,66 @@ describe('timeline contracts', () => {
 			createdAt: '2026-06-02T00:00:00.000Z',
 			updatedAt: '2026-06-02T00:00:00.000Z',
 		})).toThrow();
+	});
+
+	it('keeps compact turn performance diagnostics in backend turn responses', () => {
+		const parsed = turnResponseSchema.parse({
+			narration: 'The court falls silent.',
+			entries: [],
+			statePatchIds: [],
+			eventIds: [],
+			retrievedMemoryIds: [],
+			serverVersion: 7,
+			syncChanges: [],
+			performance: {
+				preparedCacheHit: true,
+				prompt: {
+					tokenEstimate: 1200,
+					totalChars: 4800,
+					messageCount: 8,
+				},
+				cache: {
+					hitCount: 3,
+					missCount: 1,
+					tokenEstimate: 2400,
+					segmentCount: 4,
+				},
+				generation: {
+					operationCount: 1,
+					durationMs: 900,
+					requestTokens: 1000,
+					responseTokens: 120,
+					totalTokens: 1120,
+				},
+				slowTimings: [
+					{ operation: 'turn.context_assembly', durationMs: 410 },
+				],
+			},
+		});
+
+		expect(parsed.performance).toEqual({
+			preparedCacheHit: true,
+			prompt: {
+				tokenEstimate: 1200,
+				totalChars: 4800,
+				messageCount: 8,
+			},
+			cache: {
+				hitCount: 3,
+				missCount: 1,
+				tokenEstimate: 2400,
+				segmentCount: 4,
+			},
+			generation: {
+				operationCount: 1,
+				durationMs: 900,
+				requestTokens: 1000,
+				responseTokens: 120,
+				totalTokens: 1120,
+			},
+			slowTimings: [
+				{ operation: 'turn.context_assembly', durationMs: 410 },
+			],
+		});
 	});
 });

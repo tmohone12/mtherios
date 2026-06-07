@@ -4,6 +4,10 @@ import {
 	type CampaignProjection,
 	type EngineCacheStatus,
 } from '$lib/contracts/engine';
+import {
+	turnPerformanceSummarySchema,
+	type TurnPerformanceSummary,
+} from '$lib/contracts/memory';
 
 export interface EngineStreamEvent {
 	id: string;
@@ -34,6 +38,7 @@ export interface OpenEngineEventStreamOptions {
 	onEvent?: (event: EngineStreamEvent) => void;
 	onProjection?: (projection: CampaignProjection, event: EngineStreamEvent) => void;
 	onCacheStatus?: (cache: EngineCacheStatus, event: EngineStreamEvent) => void;
+	onTurnPerformance?: (performance: TurnPerformanceSummary, event: EngineStreamEvent) => void;
 	onRefreshRequested?: (event: EngineStreamEvent) => void;
 	onError?: (error: unknown) => void;
 }
@@ -135,6 +140,21 @@ export function extractEngineCacheStatus(event: EngineStreamEvent | null | undef
 	return null;
 }
 
+export function extractTurnPerformance(event: EngineStreamEvent | null | undefined): TurnPerformanceSummary | null {
+	if (!event) return null;
+	const candidates = [
+		event.data.performance,
+		asRecord(event.data.projectionChanges).performance,
+		asRecord(event.data.result).performance,
+		asRecord(asRecord(event.data.result).projectionChanges).performance,
+	];
+	for (const candidate of candidates) {
+		const parsed = turnPerformanceSummarySchema.safeParse(candidate);
+		if (parsed.success) return parsed.data;
+	}
+	return null;
+}
+
 export function shouldRefreshCampaignProjection(event: EngineStreamEvent | null | undefined): boolean {
 	if (!event) return false;
 	if (extractCampaignProjection(event)) return false;
@@ -160,6 +180,8 @@ export function openEngineEventStream(options: OpenEngineEventStreamOptions): En
 		if (projection) options.onProjection?.(projection, event);
 		const cache = extractEngineCacheStatus(event);
 		if (cache) options.onCacheStatus?.(cache, event);
+		const performance = extractTurnPerformance(event);
+		if (performance) options.onTurnPerformance?.(performance, event);
 		if (shouldRefreshCampaignProjection(event)) options.onRefreshRequested?.(event);
 	};
 

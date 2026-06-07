@@ -490,6 +490,7 @@
 	const engineCacheHitRate = $derived(engineCacheTotal > 0 ? Math.round(((engineProjection?.cache.hitCount ?? 0) / engineCacheTotal) * 100) : null);
 	const engineCacheSegments = $derived((engineProjection?.cache.segments ?? []).slice(0, 5));
 	const engineCacheInvalidations = $derived((engineProjection?.cache.byKind ?? []).reduce((sum, kind) => sum + kind.invalidatedCount, 0));
+	const lastTurnPerformance = $derived(story.lastTurnPerformance);
 
 	async function handleExportWiki() {
 		if (!story.currentStory || exportingWiki) return;
@@ -678,6 +679,15 @@
 
 	function formatCacheRate(value: number | null): string {
 		return value === null ? 'n/a' : `${value}%`;
+	}
+
+	function formatDurationMs(value: number | null | undefined): string {
+		const duration = Math.max(0, Math.trunc(value ?? 0));
+		return duration >= 1000 ? `${(duration / 1000).toFixed(1)}s` : `${duration}ms`;
+	}
+
+	function formatOptionalTokens(value: number | null | undefined): string {
+		return value === null || value === undefined ? 'n/a' : formatTokens(value);
 	}
 
 	function formatHash(value?: string | null): string {
@@ -890,6 +900,48 @@
 					{:else if (engineProjection?.cache.entryCount ?? 0) > 0}
 						<div class="mt-2 rounded bg-[var(--bg-primary)] px-2 py-1 text-[9px] text-[var(--text-muted)]">
 							Segment diagnostics pending refresh
+						</div>
+					{/if}
+
+					{#if lastTurnPerformance}
+						<div class="mt-2 rounded bg-[var(--bg-primary)] px-2 py-1.5 text-[9px]">
+							<div class="mb-1 flex items-center justify-between gap-2">
+								<span class="uppercase tracking-wider text-[var(--text-muted)]">Last Turn</span>
+								<span class="tabular-nums {lastTurnPerformance.preparedCacheHit ? 'text-emerald-400' : 'text-amber-400'}">
+									Prepared {lastTurnPerformance.preparedCacheHit ? 'hit' : 'miss'}
+								</span>
+							</div>
+							<div class="grid grid-cols-3 gap-2 text-[9px]">
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Prompt</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{formatTokens(lastTurnPerformance.prompt.tokenEstimate)}</div>
+								</div>
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Gen</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{formatDurationMs(lastTurnPerformance.generation.durationMs)}</div>
+								</div>
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Tokens</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{formatOptionalTokens(lastTurnPerformance.generation.totalTokens)}</div>
+								</div>
+							</div>
+							<div class="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--text-muted)]">
+								<span>{lastTurnPerformance.prompt.messageCount} messages</span>
+								<span>{lastTurnPerformance.prompt.totalChars} chars</span>
+								{#if lastTurnPerformance.cache}
+									<span>cache {lastTurnPerformance.cache.hitCount}/{lastTurnPerformance.cache.hitCount + lastTurnPerformance.cache.missCount}</span>
+									<span>{lastTurnPerformance.cache.segmentCount} segments</span>
+								{/if}
+							</div>
+							{#if lastTurnPerformance.slowTimings.length}
+								<div class="mt-1 flex flex-wrap gap-1">
+									{#each lastTurnPerformance.slowTimings.slice(0, 3) as timing}
+										<span class="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[9px] text-amber-300" title={timing.operation}>
+											{timing.operation.replace('turn.', '')} {formatDurationMs(timing.durationMs)}
+										</span>
+									{/each}
+								</div>
+							{/if}
 						</div>
 					{/if}
 

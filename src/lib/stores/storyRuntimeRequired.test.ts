@@ -17,4 +17,12 @@ describe('terminal runtime required story store boundary', () => {
 		expect(source).not.toContain('queued_backend_turn');
 		expect(source).not.toContain('turn_command');
 	});
+
+	it('keeps streamed turn diagnostics as control-surface state only', () => {
+		const source = readFileSync(resolve('src/lib/stores/story.svelte.ts'), 'utf8');
+
+		expect(source).toContain('lastTurnPerformance');
+		expect(source).toContain('onTurnPerformance');
+		expect(source).not.toContain('putTurnPerformance');
+	});
 });

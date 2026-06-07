@@ -181,10 +181,37 @@ export interface PreparedServerTurnSummary {
 	timings: TimingEntry[];
 }
 
+export interface TurnPerformanceSummary {
+	preparedCacheHit: boolean;
+	prompt: {
+		tokenEstimate: number;
+		totalChars: number;
+		messageCount: number;
+	};
+	cache: {
+		hitCount: number;
+		missCount: number;
+		tokenEstimate: number;
+		segmentCount: number;
+	} | null;
+	generation: {
+		operationCount: number;
+		durationMs: number;
+		requestTokens: number | null;
+		responseTokens: number | null;
+		totalTokens: number | null;
+	};
+	slowTimings: Array<{
+		operation: string;
+		durationMs: number;
+	}>;
+}
+
 interface PreparedServerTurnContext {
 	request: TurnRequest;
 	playerEntryId: string;
 	preparedAt: string;
+	preparedCacheHit: boolean;
 	warnings: string[];
 	memoryTokenBudget: number;
 	memorySettings: MemorySettings;
@@ -224,6 +251,17 @@ function asNumber(value: unknown, fallback = 0): number {
 	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+function sumNullable(values: Array<number | null | undefined>): number | null {
+	let total = 0;
+	let found = false;
+	for (const value of values) {
+		if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+		total += value;
+		found = true;
+	}
+	return found ? total : null;
+}
+
 function clampInt(value: number | null | undefined, min: number, max: number, fallback: number): number {
 	if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
 	return Math.min(max, Math.max(min, Math.trunc(value)));
@@ -246,6 +284,48 @@ export function applyPromptContextBudget(
 	return {
 		value: `${value.slice(0, headBudget).trimEnd()}${marker}${finalInstruction}`,
 		truncated: true,
+	};
+}
+
+export function buildTurnPerformanceSummary(input: {
+	preparedCacheHit: boolean;
+	prompt: {
+		tokenEstimate: number;
+		totalChars: number;
+		messageCount: number;
+	};
+	cache: EngineCacheDebug | null;
+	generationTimings: GenerationTiming[];
+	timings: TimingEntry[];
+	slowTimingThresholdMs?: number;
+}): TurnPerformanceSummary {
+	const slowTimingThresholdMs = Math.max(0, Math.trunc(input.slowTimingThresholdMs ?? 500));
+	return {
+		preparedCacheHit: input.preparedCacheHit,
+		prompt: {
+			tokenEstimate: Math.max(0, Math.trunc(input.prompt.tokenEstimate)),
+			totalChars: Math.max(0, Math.trunc(input.prompt.totalChars)),
+			messageCount: Math.max(0, Math.trunc(input.prompt.messageCount)),
+		},
+		cache: input.cache ? {
+			hitCount: Math.max(0, Math.trunc(input.cache.hitCount)),
+			missCount: Math.max(0, Math.trunc(input.cache.missCount)),
+			tokenEstimate: Math.max(0, Math.trunc(input.cache.tokenEstimate ?? 0)),
+			segmentCount: input.cache.segments.length,
+		} : null,
+		generation: {
+			operationCount: input.generationTimings.length,
+			durationMs: input.generationTimings.reduce((sum, timing) => sum + Math.max(0, Math.trunc(timing.durationMs)), 0),
+			requestTokens: sumNullable(input.generationTimings.map((timing) => timing.requestTokens)),
+			responseTokens: sumNullable(input.generationTimings.map((timing) => timing.responseTokens)),
+			totalTokens: sumNullable(input.generationTimings.map((timing) => timing.totalTokens)),
+		},
+		slowTimings: input.timings
+			.filter((timing) => timing.durationMs >= slowTimingThresholdMs)
+			.map((timing) => ({
+				operation: timing.phase,
+				durationMs: Math.max(0, Math.trunc(timing.durationMs)),
+			})),
 	};
 }
 
@@ -539,6 +619,7 @@ async function existingTurn(storyId: string, clientTurnId: string): Promise<Turn
 		syncChanges: await getSyncChanges(storyId, 0),
 		warnings: ['Turn was already processed; returning existing backend entries.'],
 		generationTimings: [],
+		performance: null,
 	};
 }
 
@@ -614,7 +695,7 @@ export async function prepareServerTurnContext(
 			preparedAt: cached.preparedAt,
 			contextCounts: cached.contextCounts,
 		});
-		return cached;
+		return { ...cached, preparedCacheHit: true };
 	}
 
 	const playerEntryId = `entry_${request.clientTurnId}`;
@@ -787,6 +868,7 @@ export async function prepareServerTurnContext(
 		request,
 		playerEntryId,
 		preparedAt: nowIso(),
+		preparedCacheHit: false,
 		warnings,
 		memoryTokenBudget,
 		memorySettings,
@@ -1243,6 +1325,18 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		warnings: warnings.length,
 		phaseCount: recorder.timings.length,
 	});
+	const preparedSummary = summarizePreparedTurnContext(prepared);
+	const performance = buildTurnPerformanceSummary({
+		preparedCacheHit: prepared.preparedCacheHit,
+		prompt: {
+			tokenEstimate: preparedSummary.prompt.tokenEstimate,
+			totalChars: preparedSummary.prompt.totalChars,
+			messageCount: preparedSummary.prompt.messageCount,
+		},
+		cache: engineCacheDebug,
+		generationTimings,
+		timings: recorder.timings,
+	});
 
 	return {
 		narration,
@@ -1268,5 +1362,6 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 			} : null,
 		} : null,
 		generationTimings,
+		performance,
 	};
 }

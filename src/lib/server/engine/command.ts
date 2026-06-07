@@ -1462,6 +1462,7 @@ export async function executeEngineCommand(
 						vault: turn.campaignVault ? {
 							files: turn.campaignVault.files,
 						} : null,
+						performance: turn.performance ?? null,
 					},
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;

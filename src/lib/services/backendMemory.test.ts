@@ -34,6 +34,7 @@ const turnResult = {
 	syncChanges: [],
 	warnings: [],
 	generationTimings: [],
+	performance: null,
 };
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {

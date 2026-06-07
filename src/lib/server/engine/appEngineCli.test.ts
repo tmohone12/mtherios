@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 // @ts-ignore The CLI is a plain ESM script module exercised through Vitest.
-const { buildEngineCommandPayload, formatEngineHelp } = await import('../../../../scripts/app-engine.mjs') as {
+const { buildEngineCommandPayload, formatEngineHelp, printResult } = await import('../../../../scripts/app-engine.mjs') as {
 	buildEngineCommandPayload: (argv: string[]) => {
 		help?: boolean;
 		requestPath: string;
@@ -9,6 +9,7 @@ const { buildEngineCommandPayload, formatEngineHelp } = await import('../../../.
 		body: Record<string, unknown>;
 	};
 	formatEngineHelp: () => string;
+	printResult: (result: Record<string, unknown>, payload: Record<string, unknown>) => void;
 };
 
 describe('app-engine CLI payload builder', () => {
@@ -276,5 +277,63 @@ describe('app-engine CLI payload builder', () => {
 				dueLimit: 3,
 			},
 		});
+	});
+
+	it('prints compact turn performance diagnostics for CLI speed checks', () => {
+		const lines: string[] = [];
+		const originalLog = console.log;
+		console.log = (...args: unknown[]) => {
+			lines.push(args.join(' '));
+		};
+		try {
+			printResult({
+				command: 'turn.submit',
+				status: 'succeeded',
+				storyId: 'story_alpha',
+				commandId: 'cmd_turn',
+				result: {
+					narration: 'Mira answers from the harbor steps.',
+					performance: {
+						preparedCacheHit: true,
+						prompt: {
+							tokenEstimate: 1663,
+							totalChars: 6652,
+							messageCount: 12,
+						},
+						cache: {
+							hitCount: 4,
+							missCount: 1,
+							tokenEstimate: 6000,
+							segmentCount: 4,
+						},
+						generation: {
+							operationCount: 1,
+							durationMs: 900,
+							requestTokens: 1000,
+							responseTokens: 120,
+							totalTokens: 1120,
+						},
+						slowTimings: [
+							{ operation: 'turn.context_assembly', durationMs: 410 },
+						],
+					},
+				},
+			}, {
+				json: false,
+				body: {
+					storyId: 'story_alpha',
+					command: 'turn.submit',
+					clientCommandId: 'cmd_turn',
+				},
+			});
+		} finally {
+			console.log = originalLog;
+		}
+
+		expect(lines.join('\n')).toContain('performance: prepared-cache hit');
+		expect(lines.join('\n')).toContain('prompt: 1663 tokens, 6652 chars, 12 messages');
+		expect(lines.join('\n')).toContain('cache: 4 hits, 1 misses, 4 segments, 6000 tokens');
+		expect(lines.join('\n')).toContain('generation: 900ms, tokens 1000 in / 120 out / 1120 total');
+		expect(lines.join('\n')).toContain('slow: turn.context_assembly 410ms');
 	});
 });
