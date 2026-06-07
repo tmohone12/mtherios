@@ -1,6 +1,5 @@
 <script>
 	import '../app.css';
-	import AppShell from '$lib/components/layout/AppShell.svelte';
 	import OnboardingWizard from '$lib/components/wizard/OnboardingWizard.svelte';
 	import StoryView from '$lib/components/story/StoryView.svelte';
 	import { app } from '$lib/stores/app.svelte';
@@ -66,5 +65,5 @@
 		</svg>
 	</div>
 {:else}
-	<AppShell />
+	{@render children()}
 {/if}

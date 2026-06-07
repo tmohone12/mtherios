@@ -42,6 +42,11 @@ const NPC_EVENT_LINK_SELECT = {
 	updatedAt: npcEventLinks.updatedAt,
 };
 
+function looksLikeNpcEntityId(entityId: string): boolean {
+	const clean = entityId.trim().toLowerCase();
+	return clean.startsWith('npc_') || clean.startsWith('character_') || clean.startsWith('char_');
+}
+
 export function selectDueTimelineEvents(events: StoryEventRow[], currentTurn: number): StoryEventRow[] {
 	return events
 		.filter((event) => {
@@ -67,8 +72,14 @@ export function buildNpcEventLinksForEvent(input: {
 	now: string;
 }): NpcEventLinkInsert[] {
 	const byNpc = new Map<string, NpcEventLinkRole>();
-	const actorNpcEntityIds = input.actorNpcEntityIds ?? [];
-	const targetNpcEntityIds = input.targetNpcEntityIds ?? [];
+	const actorNpcEntityIds = unique([
+		...(input.actorNpcEntityIds ?? []),
+		...(input.actorEntityIds ?? []).filter(looksLikeNpcEntityId),
+	]);
+	const targetNpcEntityIds = unique([
+		...(input.targetNpcEntityIds ?? []),
+		...(input.targetEntityIds ?? []).filter(looksLikeNpcEntityId),
+	]);
 
 	for (const npcEntityId of actorNpcEntityIds) {
 		if (npcEntityId) byNpc.set(npcEntityId, 'actor');
@@ -392,6 +403,8 @@ export async function scheduleTimelineEvent(input: Parameters<typeof buildSchedu
 		const links = buildNpcEventLinksForEvent({
 			storyId: row.storyId,
 			eventId: row.id,
+			actorEntityIds: input.actorEntityIds,
+			targetEntityIds: input.targetEntityIds,
 			actorNpcEntityIds: input.actorNpcEntityIds,
 			targetNpcEntityIds: input.targetNpcEntityIds,
 			visibility: row.visibility,

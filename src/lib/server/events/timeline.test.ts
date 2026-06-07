@@ -188,6 +188,25 @@ describe('timeline selection helpers', () => {
 		expect(links).toEqual([]);
 	});
 
+	it('promotes npc-looking generic actor and target entity ids into npc event memory links', () => {
+		const links = buildNpcEventLinksForEvent({
+			storyId: 'story_1',
+			eventId: 'event_scheme',
+			actorEntityIds: ['npc_mira', 'faction_river_guard'],
+			targetEntityIds: ['npc_harbor_lord', 'location_gatehouse', 'npc_mira'],
+			visibility: 'player_known',
+			sourceEntryIds: ['entry_1'],
+			sourcePatchIds: [],
+			serverVersion: 3,
+			now,
+		});
+
+		expect(links.map(item => [item.npcEntityId, item.role, item.evidenceStrength])).toEqual([
+			['npc_mira', 'actor', 0.9],
+			['npc_harbor_lord', 'target', 0.75],
+		]);
+	});
+
 	it('creates explicit actor and target npc links without duplicates and lets actor role win', () => {
 		const links = buildNpcEventLinksForEvent({
 			storyId: 'story_1',
@@ -365,6 +384,8 @@ describe('timeline selection helpers', () => {
 			currentTurn: 5,
 			delayTurns: 2,
 			now,
+			actorEntityIds: ['npc_mira', 'faction_river_guard'],
+			targetEntityIds: ['npc_borin', 'location_gatehouse'],
 			actorNpcEntityIds: ['npc_anya'],
 		});
 
@@ -388,6 +409,18 @@ describe('timeline selection helpers', () => {
 				sourceEntryIds: ['entry_1'],
 				sourcePatchIds: ['patch_1'],
 				serverVersion: 3,
+			}),
+			expect.objectContaining({
+				eventId: 'event_tx',
+				npcEntityId: 'npc_mira',
+				role: 'actor',
+				evidenceStrength: 0.9,
+			}),
+			expect.objectContaining({
+				eventId: 'event_tx',
+				npcEntityId: 'npc_borin',
+				role: 'target',
+				evidenceStrength: 0.75,
 			}),
 		]);
 		expect(linkOnConflictDoNothing).toHaveBeenCalledTimes(1);

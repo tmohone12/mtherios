@@ -10,8 +10,8 @@
 	import { GM_TOOLS, worldStateUpdateSchema, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
 	import { declarePlayerScheme } from '$lib/services/ai/scheme/SchemeService';
 	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
-	import { isTerminalReachabilityError } from '$lib/services/backendMemory';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
+	import { shouldUseTerminalEngineTurn } from './engineTurnRouting';
 
 	type ActionType = 'do' | 'say' | 'think' | 'story' | 'free';
 
@@ -63,11 +63,13 @@
 	}
 
 	function shouldUseBackendTurn(): boolean {
-		return Boolean(
-			settings.uiSettings.serverAuthoritativeTurns &&
-			story.currentStory?.serverStoryId,
-		);
+		return shouldUseTerminalEngineTurn(story.currentStory);
 	}
+
+	const terminalRuntimeUnavailable = $derived(Boolean(
+		story.currentStory?.serverStoryId &&
+		story.currentStory.syncStatus === 'offline',
+	));
 
 	function buildBackendClientContext() {
 		return {
@@ -293,7 +295,7 @@
 	}
 
 	async function handleSubmit() {
-		if (!inputValue.trim() || isGenerating || !story.currentStory || story.hydratingWorld) return;
+		if (!inputValue.trim() || isGenerating || !story.currentStory || story.hydratingWorld || terminalRuntimeUnavailable) return;
 
 		const rawInput = inputValue.trim();
 
@@ -653,16 +655,9 @@
 			onStreamEnd?.(response.narration);
 			return true;
 		} catch (error) {
-			if (!isTerminalReachabilityError(error)) {
-				const message = error instanceof Error ? error.message : String(error);
-				console.warn('[BackendTurn] Terminal turn failed without offline queue:', error);
-				await story.addEntry('system', `Terminal turn failed: ${message}`);
-				onStreamClear?.();
-				onStreamEnd?.('');
-				return true;
-			}
-			console.warn('[BackendTurn] Backend unavailable; queued turn command for terminal sync:', error);
-			await story.queueOfflineBackendTurn(content, clientContext, clientTurnId);
+			const message = error instanceof Error ? error.message : String(error);
+			console.warn('[BackendTurn] Terminal runtime unavailable; refusing local turn queue:', error);
+			await story.addEntry('system', `Terminal agent runtime required: ${message}`);
 			onStreamClear?.();
 			onStreamEnd?.('');
 			return true;
@@ -843,7 +838,11 @@
 		</div>
 	{:else if story.worldHydrationError}
 		<div class="px-1 text-[11px] text-amber-300">
-			Memory load had trouble; transcript is available, but context may be thin.
+			{#if terminalRuntimeUnavailable}
+				Terminal agent runtime required. Start the terminal process to use this campaign.
+			{:else}
+				Memory load had trouble; context may be thin.
+			{/if}
 		</div>
 	{/if}
 
@@ -870,12 +869,12 @@
 		{:else}
 			<button
 				onclick={handleSubmit}
-				disabled={!inputValue.trim() || story.hydratingWorld}
+				disabled={!inputValue.trim() || story.hydratingWorld || terminalRuntimeUnavailable}
 				class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all active:scale-95 disabled:opacity-30
 					{isCreativeMode
 						? 'text-[var(--text-accent)] hover:bg-[rgba(212,168,83,0.1)]'
 						: actionConfig[actionType].buttonStyle}"
-				title={story.hydratingWorld ? 'Memory is still loading' : 'Send'}
+				title={terminalRuntimeUnavailable ? 'Terminal agent runtime required' : story.hydratingWorld ? 'Memory is still loading' : 'Send'}
 			>
 				<Send class="h-5 w-5" />
 			</button>

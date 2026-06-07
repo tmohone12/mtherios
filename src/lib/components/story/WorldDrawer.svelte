@@ -6,11 +6,14 @@
 	import { settings } from '$lib/stores/settings.svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { getChapters, getArcs, getSyncOpsForStory } from '$lib/services/database';
+	import { fetchEngineCacheStatus } from '$lib/services/serverStories';
 	import { saveCanonicalArc } from '$lib/services/canonicalWrites';
 	import { ai } from '$lib/services/ai';
 	import { uuid } from '$lib/utils/uuid';
 	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
 	import { downloadStoryVaultArchive, fetchStoryVaultStatus, runStoryVaultJob, type StoryVaultStatus } from '$lib/services/storyVault';
+	import { terminalSyncDisplay, terminalSyncToneClass } from './terminalSyncDisplay';
+	import type { EngineCacheSegmentDiagnostics } from '$lib/contracts/engine';
 	import type { Arc, Entry, FactionActionRecord, FactionEntryState, Story, SyncOutboxOp } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import type { Chapter } from '$lib/types';
@@ -461,9 +464,13 @@
 	let syncOutboxError = $state<string | null>(null);
 	let lastSyncOutboxKey = $state<string | null>(null);
 	let syncRepairAction = $state<string | null>(null);
+	let engineProjectionLoading = $state(false);
+	let engineProjectionError = $state<string | null>(null);
+	let lastEngineProjectionKey = $state<string | null>(null);
 	const terminalStoryId = $derived(story.currentStory?.serverStoryId ?? null);
 	const localStoryId = $derived(story.currentStory?.id ?? null);
 	const wikiVaultStatusKey = $derived(terminalStoryId ? `${terminalStoryId}:${story.currentStory?.serverVersion ?? 0}` : null);
+	const engineProjectionKey = $derived(terminalStoryId ? `${terminalStoryId}:${story.currentStory?.serverVersion ?? 0}` : null);
 	const syncOutboxKey = $derived(localStoryId && terminalStoryId
 		? `${localStoryId}:${story.currentStory?.syncStatus ?? 'synced'}:${story.currentStory?.serverVersion ?? 0}`
 		: null);
@@ -471,6 +478,18 @@
 	const openSyncOps = $derived(syncOutboxRows.filter((op) => ['pending', 'pushing', 'rejected', 'needs_repair'].includes(op.status)));
 	const repairSyncOps = $derived(openSyncOps.filter((op) => op.status === 'needs_repair' || op.status === 'rejected'));
 	const pendingSyncOps = $derived(openSyncOps.filter((op) => op.status === 'pending' || op.status === 'pushing'));
+	const terminalSync = $derived(terminalSyncDisplay({
+		syncStatus: story.currentStory?.syncStatus,
+		gatewayConnected: story.engineStreamStatus.connected,
+		pendingCount: pendingSyncOps.length,
+		repairCount: repairSyncOps.length,
+	}));
+	const terminalSyncClass = $derived(terminalSyncToneClass(terminalSync.tone));
+	const engineProjection = $derived(story.campaignProjection);
+	const engineCacheTotal = $derived((engineProjection?.cache.hitCount ?? 0) + (engineProjection?.cache.missCount ?? 0));
+	const engineCacheHitRate = $derived(engineCacheTotal > 0 ? Math.round(((engineProjection?.cache.hitCount ?? 0) / engineCacheTotal) * 100) : null);
+	const engineCacheSegments = $derived((engineProjection?.cache.segments ?? []).slice(0, 5));
+	const engineCacheInvalidations = $derived((engineProjection?.cache.byKind ?? []).reduce((sum, kind) => sum + kind.invalidatedCount, 0));
 
 	async function handleExportWiki() {
 		if (!story.currentStory || exportingWiki) return;
@@ -525,6 +544,44 @@
 			void refreshSyncOutbox(storyId);
 		}
 	});
+
+	$effect(() => {
+		const key = engineProjectionKey;
+		if (!open) {
+			lastEngineProjectionKey = null;
+			return;
+		}
+		if (!terminalStoryId || !key) {
+			engineProjectionError = null;
+			lastEngineProjectionKey = null;
+			return;
+		}
+		if (lastEngineProjectionKey !== key) {
+			lastEngineProjectionKey = key;
+			void refreshEngineProjection();
+		}
+	});
+
+	async function refreshEngineProjection() {
+		const storyId = terminalStoryId;
+		if (!storyId || engineProjectionLoading) return;
+		engineProjectionLoading = true;
+		engineProjectionError = null;
+		try {
+			await story.refreshCampaignProjection();
+			const cache = await fetchEngineCacheStatus(storyId, {
+				includeSegments: true,
+				segmentLimit: 5,
+			});
+			if (story.currentStory?.serverStoryId === storyId && story.campaignProjection) {
+				story.campaignProjection = { ...story.campaignProjection, cache };
+			}
+			lastEngineProjectionKey = engineProjectionKey;
+		} catch (e) {
+			engineProjectionError = e instanceof Error ? e.message : 'Could not refresh engine projection.';
+		}
+		engineProjectionLoading = false;
+	}
 
 	async function refreshWikiVaultStatus(storyId = terminalStoryId) {
 		if (!storyId || wikiVaultLoading) return;
@@ -603,11 +660,6 @@
 		return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 	}
 
-	function syncStatusLabel(value?: Story['syncStatus']): string {
-		if (!value) return 'synced';
-		return value.replace('-', ' ');
-	}
-
 	function syncOpTitle(op: SyncOutboxOp): string {
 		if (op.type === 'turn_command') return 'Queued turn';
 		if (op.type === 'delete_entry') return 'Delete entry';
@@ -622,6 +674,25 @@
 	function shortPath(value?: string | null): string {
 		if (!value) return '';
 		return value.split(/[\\/]/).filter(Boolean).slice(-3).join('/');
+	}
+
+	function formatCacheRate(value: number | null): string {
+		return value === null ? 'n/a' : `${value}%`;
+	}
+
+	function formatHash(value?: string | null): string {
+		return value ? value.slice(0, 8) : 'none';
+	}
+
+	function cacheSegmentTitle(segment: EngineCacheSegmentDiagnostics): string {
+		const dependencyCount = segment.dependencyHashes.length;
+		return [
+			`${segment.kind}: ${segment.hitCount} hits, ${segment.missCount} misses`,
+			`${segment.tokenEstimate} tokens`,
+			`${segment.invalidatedCount} invalidations`,
+			`${dependencyCount} dependencies`,
+			`hash ${formatHash(segment.contentHash)}`,
+		].join(' | ');
 	}
 
 	function vaultFreshText(status: StoryVaultStatus | null): string {
@@ -726,6 +797,119 @@
 						class="h-full transition-all duration-300 rounded-full {contextPercent > 80 ? 'bg-rose-500' : contextPercent > 50 ? 'bg-amber-500' : 'bg-cyan-500'}"
 						style="width: {contextPercent}%"
 					></div>
+				</div>
+			</div>
+			{/if}
+
+			<!-- Terminal engine projection -->
+			{#if backendWorldSim}
+			<div>
+				<div class="mb-2 flex items-center justify-between">
+					<div class="flex items-center gap-1.5">
+						<Activity class="h-3.5 w-3.5 text-sky-400" />
+						<span class="font-display text-[10px] tracking-wider uppercase text-sky-400">Engine Core</span>
+					</div>
+					<button
+						onclick={() => refreshEngineProjection()}
+						disabled={engineProjectionLoading}
+						class="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-sky-400 disabled:opacity-40"
+						title="Refresh terminal engine projection"
+						aria-label="Refresh terminal engine projection"
+					>
+						<RefreshCw class="h-3.5 w-3.5 {engineProjectionLoading ? 'animate-spin' : ''}" />
+					</button>
+				</div>
+
+				<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2">
+					<div class="grid grid-cols-4 gap-2 text-[10px]">
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Transcript</div>
+							<div class="tabular-nums text-[var(--text-primary)]">{story.entries.length}/{engineProjection?.counts.entries ?? story.entryCount}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Entities</div>
+							<div class="tabular-nums text-[var(--text-primary)]">{engineProjection?.counts.entities ?? story.lorebookEntries.length}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Vault</div>
+							<div class="tabular-nums {engineProjection?.vault.fileCount ? 'text-emerald-400' : 'text-amber-400'}">{engineProjection?.vault.fileCount ?? 0}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Cache Hit</div>
+							<div class="tabular-nums {engineCacheHitRate !== null && engineCacheHitRate >= 50 ? 'text-emerald-400' : engineCacheHitRate !== null ? 'text-amber-400' : 'text-[var(--text-primary)]'}">
+								{formatCacheRate(engineCacheHitRate)}
+							</div>
+						</div>
+					</div>
+
+					<div class="mt-2 grid grid-cols-3 gap-2 text-[10px]">
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Version</div>
+							<div class="tabular-nums text-[var(--text-primary)]">v{engineProjection?.vault.lastIndexedVersion ?? story.currentStory?.serverVersion ?? 0}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Segments</div>
+							<div class="tabular-nums text-[var(--text-primary)]">{engineProjection?.cache.entryCount ?? 0}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Cached Tokens</div>
+							<div class="tabular-nums text-[var(--text-primary)]">{formatTokens(engineProjection?.cache.tokenEstimate ?? 0)}</div>
+						</div>
+					</div>
+
+					{#if engineProjection?.cache.byKind?.length}
+						<div class="mt-2 flex flex-wrap gap-1">
+							{#each engineProjection.cache.byKind as kind}
+								<span class="rounded bg-[var(--bg-primary)] px-1.5 py-0.5 text-[9px] text-[var(--text-muted)]" title={`${kind.kind}: ${kind.hitCount} hits, ${kind.missCount} misses, ${kind.invalidatedCount} invalidations`}>
+									{kind.kind.replaceAll('_', ' ')} {kind.hitCount}/{kind.hitCount + kind.missCount}
+									{#if kind.invalidatedCount > 0}
+										<span class="text-amber-400">inv {kind.invalidatedCount}</span>
+									{/if}
+								</span>
+							{/each}
+						</div>
+					{/if}
+
+					{#if engineCacheSegments.length}
+						<div class="mt-2 space-y-1">
+							{#each engineCacheSegments as segment}
+								<div class="rounded bg-[var(--bg-primary)] px-2 py-1 text-[9px]" title={cacheSegmentTitle(segment)}>
+									<div class="flex items-center justify-between gap-2">
+										<span class="truncate text-[var(--text-primary)]">{segment.kind.replaceAll('_', ' ')}</span>
+										<span class="shrink-0 tabular-nums text-cyan-300">{formatTokens(segment.tokenEstimate)}</span>
+									</div>
+									<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[var(--text-muted)]">
+										<span class="tabular-nums">hit {segment.hitCount}/{segment.hitCount + segment.missCount}</span>
+										<span class="tabular-nums {segment.invalidatedCount > 0 ? 'text-amber-400' : ''}">inv {segment.invalidatedCount}</span>
+										<span class="tabular-nums">deps {segment.dependencyHashes.length}</span>
+										<span class="tabular-nums">hash {formatHash(segment.contentHash)}</span>
+									</div>
+								</div>
+							{/each}
+						</div>
+					{:else if (engineProjection?.cache.entryCount ?? 0) > 0}
+						<div class="mt-2 rounded bg-[var(--bg-primary)] px-2 py-1 text-[9px] text-[var(--text-muted)]">
+							Segment diagnostics pending refresh
+						</div>
+					{/if}
+
+					<div class="mt-2 space-y-1 text-[10px] text-[var(--text-muted)]">
+						<div class="truncate" title={engineProjection?.vault.vaultPath ?? ''}>
+							{shortPath(engineProjection?.vault.vaultPath) || 'campaign vault pending'}
+						</div>
+						<div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+							<span>Projection {engineProjection?.mode ?? 'loading'}</span>
+							<span>Manifest {engineProjection?.vault.manifestHash ? engineProjection.vault.manifestHash.slice(0, 8) : 'none'}</span>
+							<span>Invalidations {engineCacheInvalidations}</span>
+							<span>Updated {formatIso(engineProjection?.vault.updatedAt)}</span>
+						</div>
+					</div>
+
+					{#if engineProjectionError}
+						<div class="mt-2 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[10px] text-rose-300">
+							{engineProjectionError}
+						</div>
+					{/if}
 				</div>
 			</div>
 			{/if}
@@ -845,8 +1029,8 @@
 			<div>
 				<div class="mb-2 flex items-center justify-between">
 					<div class="flex items-center gap-1.5">
-						<AlertTriangle class="h-3.5 w-3.5 {repairSyncOps.length > 0 ? 'text-rose-400' : pendingSyncOps.length > 0 ? 'text-amber-400' : 'text-teal-400'}" />
-						<span class="font-display text-[10px] tracking-wider uppercase {repairSyncOps.length > 0 ? 'text-rose-400' : pendingSyncOps.length > 0 ? 'text-amber-400' : 'text-teal-400'}">
+						<AlertTriangle class="h-3.5 w-3.5 {terminalSyncClass}" />
+						<span class="font-display text-[10px] tracking-wider uppercase {terminalSyncClass}">
 							Terminal Sync
 						</span>
 					</div>
@@ -863,8 +1047,8 @@
 					<div class="grid grid-cols-3 gap-2 text-[10px]">
 						<div>
 							<div class="uppercase tracking-wider text-[var(--text-muted)]">Status</div>
-							<div class="{story.currentStory?.syncStatus === 'conflict' ? 'text-rose-400' : story.currentStory?.syncStatus === 'offline' ? 'text-amber-400' : 'text-teal-400'}">
-								{syncStatusLabel(story.currentStory?.syncStatus)}
+							<div class="{terminalSyncClass}">
+								{terminalSync.label}
 							</div>
 						</div>
 						<div>

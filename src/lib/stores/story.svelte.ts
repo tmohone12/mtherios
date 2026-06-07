@@ -115,9 +115,28 @@ import {
 	type PromptSection,
 } from '$lib/services/ai/context/ContextBudgetService';
 import { processBackendTurn, pullBackendChanges, pushPendingBackendOps, queueBackendSyncOp, retrieveBackendMemory } from '$lib/services/backendMemory';
-import { cacheBackendStoryFromBootstrap, fetchBackendStoryBootstrap, fetchBackendStoryEntriesPage } from '$lib/services/serverStories';
+import { openEngineEventStream, type EngineStreamEvent, type EngineStreamSubscription } from '$lib/services/engineStream';
+import { cacheBackendStoryFromBootstrap, fetchBackendStoryBootstrap, fetchBackendStoryEntriesPage, fetchBackendStoryProjection } from '$lib/services/serverStories';
 import { settings } from '$lib/stores/settings.svelte';
 import type { BootstrapResponse, SyncChange, TurnRequest, TurnResponse } from '$lib/contracts/memory';
+import type { CampaignProjection } from '$lib/contracts/engine';
+import {
+	DEFAULT_CONTROL_SURFACE_ENTRY_WINDOW,
+	DEFAULT_PROMPT_ENTRY_WINDOW,
+	mergeControlSurfaceEntryWindow,
+	mergePromptEntryWindow,
+	removePromptEntriesById,
+	removePromptEntriesFromPosition,
+	sortPromptEntries,
+} from './promptEntries';
+
+interface EngineStreamStatus {
+	connected: boolean;
+	lastEventType: string | null;
+	lastEventAt: string | null;
+	error: string | null;
+	refreshPending: boolean;
+}
 
 /**
  * Strip leading type-prefixes (e.g. "Lore: ", "Item: ", "House: ", "General Lore: ")
@@ -216,6 +235,20 @@ function asStringArray(value: unknown): string[] {
 
 function asArray<T = unknown>(value: unknown): T[] {
 	return Array.isArray(value) ? value as T[] : [];
+}
+
+function emptyEngineStreamStatus(): EngineStreamStatus {
+	return {
+		connected: false,
+		lastEventType: null,
+		lastEventAt: null,
+		error: null,
+		refreshPending: false,
+	};
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function asTime(value: unknown, fallback = Date.now()): number {
@@ -399,7 +432,10 @@ function selectConversationMemories(
 class StoryStore {
 	currentStory = $state<Story | null>(null);
 	entries = $state<StoryEntry[]>([]);
+	promptEntries = $state<StoryEntry[]>([]);
 	entryCount = $state(0);
+	campaignProjection = $state<CampaignProjection | null>(null);
+	engineStreamStatus = $state<EngineStreamStatus>(emptyEngineStreamStatus());
 	oldestLoadedEntryPosition = $state<number | null>(null);
 	loadingOlderEntries = $state(false);
 	characters = $state<Character[]>([]);
@@ -419,6 +455,9 @@ class StoryStore {
 	worldHydrationError = $state<string | null>(null);
 	private _entryLock: Promise<void> = Promise.resolve();
 	private _loadGeneration = 0;
+	private _engineStream: EngineStreamSubscription | null = null;
+	private _engineProjectionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+	private _engineProjectionRefreshInFlight = false;
 	lastWorldSimResult = $state<import('$lib/services/ai/sdk/schemas/worldsim').WorldSimulationResult & { seasonEffect?: import('$lib/services/ai/generation/WorldSimulationService').SeasonEffect } | null>(null);
 	/** Last generated plot momentum — read from lastWorldSimResult.plotMomentum */
 	get lastPlotMomentum(): PlotMomentum | null {
@@ -448,6 +487,7 @@ class StoryStore {
 
 	async loadStory(storyId: string) {
 		const generation = ++this._loadGeneration;
+		this.disconnectEngineStream();
 		this.loading = true;
 		this.hydratingWorld = false;
 		this.worldHydrationError = null;
@@ -474,7 +514,9 @@ class StoryStore {
 					await this.applyBackendBootstrap(cachedStory, bootstrap, generation);
 					return;
 				} catch (error) {
-					console.warn('[Story] backend bootstrap unavailable; falling back to local cache:', error);
+					console.warn('[Story] terminal runtime unavailable; refusing cached story fallback:', error);
+					await this.applyTerminalRuntimeUnavailable(s, generation, error);
+					return;
 				}
 			}
 
@@ -491,6 +533,7 @@ class StoryStore {
 			if (this._loadGeneration !== generation || this.currentStory?.id !== storyId) return;
 			this.entryCount = entryCount;
 			this.entries = entries;
+			this.promptEntries = mergePromptEntryWindow([], entries);
 			this.oldestLoadedEntryPosition = entries[0]?.position ?? null;
 			this.characters = characters;
 			this.locations = locations;
@@ -506,9 +549,28 @@ class StoryStore {
 		}
 	}
 
+	private async applyTerminalRuntimeUnavailable(story: Story, generation: number, error: unknown): Promise<void> {
+		const storyId = story.id;
+		this.currentStory = { ...story, syncStatus: 'offline' };
+		this.resetLoadedCollections();
+		const message = error instanceof Error ? error.message : String(error);
+		this.worldHydrationError = `Terminal agent runtime required. ${message}`;
+		this.engineStreamStatus = {
+			...this.engineStreamStatus,
+			error: this.worldHydrationError,
+		};
+		this.hydratingWorld = false;
+		await updateStory(storyId, { syncStatus: 'offline', updatedAt: Date.now() }).catch(() => undefined);
+		if (!this.isCurrentLoad(storyId, generation)) return;
+		this.chatHistoryFloor = 0;
+	}
+
 	private resetLoadedCollections(): void {
 		this.entries = [];
+		this.promptEntries = [];
 		this.entryCount = 0;
+		this.campaignProjection = null;
+		this.engineStreamStatus = emptyEngineStreamStatus();
 		this.oldestLoadedEntryPosition = null;
 		this.images = [];
 		this.characters = [];
@@ -546,14 +608,17 @@ class StoryStore {
 		this.worldHydrationError = null;
 
 		try {
-			const entries = bootstrap.entries
+			this.campaignProjection = bootstrap.projection ?? null;
+			const projectionEntryRows = bootstrap.projection?.entries?.length ? bootstrap.projection.entries : bootstrap.entries;
+			const entries = projectionEntryRows
 				.map((row) => this.serverEntryToLocal(row))
 				.filter((entry): entry is StoryEntry => Boolean(entry));
 			for (const entry of entries) await putStoryEntry(entry);
 			if (!this.isCurrentLoad(localStory.id, generation)) return;
 
-			this.entries = entries.sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
-			this.entryCount = Math.max(bootstrap.entryCount, this.entries.length);
+			this.entries = sortPromptEntries(entries);
+			this.promptEntries = mergePromptEntryWindow([], this.entries);
+			this.entryCount = Math.max(bootstrap.projection?.counts.entries ?? bootstrap.entryCount, this.entries.length);
 			this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
 
 			const storyRow = asRecord(bootstrap.story);
@@ -654,8 +719,129 @@ class StoryStore {
 				console.warn('[Story] backend bootstrap hydration failed:', error);
 			}
 		} finally {
-			if (this.isCurrentLoad(localStory.id, generation)) this.hydratingWorld = false;
+			if (this.isCurrentLoad(localStory.id, generation)) {
+				this.hydratingWorld = false;
+				this.connectEngineStream(localStory.id, serverStoryId, generation);
+			}
 		}
+	}
+
+	private async applyCampaignProjection(projection: CampaignProjection): Promise<void> {
+		if (!this.currentStory?.serverStoryId || this.currentStory.serverStoryId !== asString(projection.story.id, this.currentStory.serverStoryId)) {
+			return;
+		}
+		this.campaignProjection = projection;
+		const entries = projection.entries
+			.map((row) => this.serverEntryToLocal(row))
+			.filter((entry): entry is StoryEntry => Boolean(entry));
+		for (const entry of entries) await putStoryEntry(entry);
+		this.entries = mergeControlSurfaceEntryWindow(this.entries, entries, {
+			limit: DEFAULT_CONTROL_SURFACE_ENTRY_WINDOW,
+			anchor: 'newest',
+		});
+		this.promptEntries = mergePromptEntryWindow(this.promptEntries, entries);
+		this.entryCount = Math.max(projection.counts.entries, this.entries.length);
+		this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+		const serverVersion = asNumber(projection.story.serverVersion, this.currentStory.serverVersion ?? 1);
+		this.currentStory = {
+			...this.currentStory,
+			serverVersion,
+			syncStatus: 'synced',
+		};
+		await updateStory(this.currentStory.id, {
+			serverVersion,
+			syncStatus: 'synced',
+		});
+	}
+
+	async refreshCampaignProjection(limit = INITIAL_TRANSCRIPT_LOAD_LIMIT): Promise<CampaignProjection | null> {
+		const current = this.currentStory;
+		if (!current?.serverStoryId) return null;
+		const projection = await fetchBackendStoryProjection(current.serverStoryId, limit);
+		if (this.currentStory?.id !== current.id) return null;
+		await this.applyCampaignProjection(projection);
+		return projection;
+	}
+
+	private connectEngineStream(localStoryId: string, serverStoryId: string, generation: number): void {
+		if (!this.isCurrentLoad(localStoryId, generation)) return;
+		this.disconnectEngineStream();
+		try {
+			this._engineStream = openEngineEventStream({
+				storyId: serverStoryId,
+				replay: 25,
+				onEvent: (event) => this.recordEngineStreamEvent(event, localStoryId, generation),
+				onProjection: (projection) => {
+					if (!this.isCurrentLoad(localStoryId, generation)) return;
+					void this.applyCampaignProjection(projection).catch((error) => {
+						this.recordEngineStreamError(error, localStoryId, generation);
+					});
+				},
+				onCacheStatus: (cache) => {
+					if (!this.isCurrentLoad(localStoryId, generation) || !this.campaignProjection) return;
+					this.campaignProjection = { ...this.campaignProjection, cache };
+				},
+				onRefreshRequested: () => this.queueEngineProjectionRefresh(localStoryId, generation),
+				onError: (error) => this.recordEngineStreamError(error, localStoryId, generation),
+			});
+			this.engineStreamStatus = {
+				...this.engineStreamStatus,
+				connected: true,
+				error: null,
+			};
+		} catch (error) {
+			this.recordEngineStreamError(error, localStoryId, generation);
+		}
+	}
+
+	private disconnectEngineStream(): void {
+		if (this._engineProjectionRefreshTimer) {
+			clearTimeout(this._engineProjectionRefreshTimer);
+			this._engineProjectionRefreshTimer = null;
+		}
+		this._engineProjectionRefreshInFlight = false;
+		this._engineStream?.close();
+		this._engineStream = null;
+		this.engineStreamStatus = emptyEngineStreamStatus();
+	}
+
+	private recordEngineStreamEvent(event: EngineStreamEvent, localStoryId: string, generation: number): void {
+		if (!this.isCurrentLoad(localStoryId, generation)) return;
+		this.engineStreamStatus = {
+			...this.engineStreamStatus,
+			connected: event.type !== 'engine.error',
+			lastEventType: event.type,
+			lastEventAt: event.createdAt || new Date().toISOString(),
+			error: event.type === 'engine.error' ? asString(event.data.error, 'Backend engine stream error.') : this.engineStreamStatus.error,
+		};
+	}
+
+	private recordEngineStreamError(error: unknown, localStoryId: string, generation: number): void {
+		if (!this.isCurrentLoad(localStoryId, generation)) return;
+		this.engineStreamStatus = {
+			...this.engineStreamStatus,
+			connected: false,
+			error: errorMessage(error),
+		};
+	}
+
+	private queueEngineProjectionRefresh(localStoryId: string, generation: number): void {
+		if (!this.isCurrentLoad(localStoryId, generation)) return;
+		this.engineStreamStatus = { ...this.engineStreamStatus, refreshPending: true };
+		if (this._engineProjectionRefreshTimer) return;
+		this._engineProjectionRefreshTimer = setTimeout(() => {
+			this._engineProjectionRefreshTimer = null;
+			if (!this.isCurrentLoad(localStoryId, generation) || this._engineProjectionRefreshInFlight) return;
+			this._engineProjectionRefreshInFlight = true;
+			void this.refreshCampaignProjection(INITIAL_TRANSCRIPT_LOAD_LIMIT)
+				.catch((error) => this.recordEngineStreamError(error, localStoryId, generation))
+				.finally(() => {
+					this._engineProjectionRefreshInFlight = false;
+					if (this.isCurrentLoad(localStoryId, generation)) {
+						this.engineStreamStatus = { ...this.engineStreamStatus, refreshPending: false };
+					}
+				});
+		}, 200);
 	}
 
 	private serverEntityToLorebookEntry(row: JsonRecord): Entry | null {
@@ -1274,21 +1460,27 @@ class StoryStore {
 			if (!this.currentStory || this.currentStory.id !== storyId) return;
 
 			if (older.length === 0) {
-				if (backendEntryCount !== null && backendHasMore === false) {
-					this.entryCount = this.entries.length;
-				} else if (backendEntryCount === null) {
+				if (backendEntryCount !== null) {
+					this.entryCount = Math.max(backendEntryCount, this.entries.length);
+					if (backendHasMore === false) this.oldestLoadedEntryPosition = null;
+				} else {
 					this.entryCount = this.entries.length;
 				}
 				return;
 			}
-			const byId = new Map<string, StoryEntry>();
-			for (const entry of [...older, ...this.entries]) byId.set(entry.id, entry);
-			this.entries = [...byId.values()].sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
-			this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+			if (serverStoryId) {
+				this.entries = mergeControlSurfaceEntryWindow(this.entries, older, {
+					limit: DEFAULT_CONTROL_SURFACE_ENTRY_WINDOW,
+					anchor: 'oldest',
+				});
+			} else {
+				const byId = new Map<string, StoryEntry>();
+				for (const entry of [...older, ...this.entries]) byId.set(entry.id, entry);
+				this.entries = sortPromptEntries([...byId.values()]);
+			}
+			this.oldestLoadedEntryPosition = backendHasMore === false ? null : this.entries[0]?.position ?? null;
 			if (backendEntryCount !== null) {
-				this.entryCount = backendHasMore === false
-					? this.entries.length
-					: Math.max(backendEntryCount, this.entries.length);
+				this.entryCount = Math.max(backendEntryCount, this.entries.length);
 			}
 
 			const olderImages = await getEmbeddedImagesForEntryIds(storyId, older.map((entry) => entry.id));
@@ -1360,7 +1552,13 @@ class StoryStore {
 				reasoning,
 			};
 			await createStoryEntry(entry);
-			this.entries = [...this.entries, entry];
+			this.entries = this.currentStory.serverStoryId
+				? mergeControlSurfaceEntryWindow(this.entries, [entry], {
+					limit: DEFAULT_CONTROL_SURFACE_ENTRY_WINDOW,
+					anchor: 'newest',
+				})
+				: [...this.entries, entry];
+			this.promptEntries = mergePromptEntryWindow(this.promptEntries, [entry]);
 			this.entryCount = Math.max(this.entryCount + 1, this.entries.length);
 			await updateStory(this.currentStory.id, { updatedAt: Date.now() });
 			if (this.currentStory.serverStoryId) {
@@ -1381,77 +1579,6 @@ class StoryStore {
 				}
 			}
 			return entry;
-		} finally {
-			releaseLock();
-		}
-	}
-
-	async queueOfflineBackendTurn(
-		playerText: string,
-		clientContext: Record<string, unknown> = {},
-		clientTurnId = uuid(),
-	): Promise<StoryEntry> {
-		if (!this.currentStory?.serverStoryId) throw new Error('Story is not bound to the terminal world database.');
-
-		const previous = this._entryLock;
-		let releaseLock!: () => void;
-		this._entryLock = new Promise(r => { releaseLock = r; });
-		await previous;
-
-		try {
-			const current = this.currentStory;
-			const now = Date.now();
-			const lastLoadedPosition = this.entries.reduce((max, e) => Math.max(max, e.position), -1);
-			const lastPersistedPosition = lastLoadedPosition >= 0
-				? lastLoadedPosition
-				: await getLastStoryEntryPosition(current.id, current.currentBranchId ?? null);
-			const position = lastPersistedPosition + 1;
-			const queuedAt = new Date(now).toISOString();
-			const playerEntry: StoryEntry = {
-				id: `entry_${clientTurnId}`,
-				storyId: current.id,
-				type: 'user_action',
-				content: playerText,
-				parentId: null,
-				position,
-				createdAt: now,
-				metadata: {
-					source: 'queued_backend_turn',
-					originalInput: playerText,
-				},
-				branchId: current.currentBranchId ?? null,
-			};
-			const systemEntry: StoryEntry = {
-				id: `queued_${clientTurnId}`,
-				storyId: current.id,
-				type: 'system',
-				content: 'Backend is unavailable. This turn was queued for the terminal process and will sync when the server is reachable.',
-				parentId: playerEntry.id,
-				position: position + 1,
-				createdAt: now + 1,
-				metadata: {
-					source: 'queued_backend_turn_notice',
-					originalInput: playerText,
-				},
-				branchId: current.currentBranchId ?? null,
-			};
-
-			await createStoryEntry(playerEntry);
-			await createStoryEntry(systemEntry);
-			await queueBackendSyncOp(current, 'turn_command', {
-				clientTurnId,
-				playerText,
-				clientContext,
-				entryId: playerEntry.id,
-				position,
-				queuedAt,
-			});
-			this.entries = [...this.entries, playerEntry, systemEntry]
-				.sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
-			this.entryCount = Math.max(this.entryCount + 2, this.entries.length);
-			this.currentStory = { ...current, syncStatus: 'offline' };
-			await updateStory(current.id, { syncStatus: 'offline', updatedAt: now });
-			return playerEntry;
 		} finally {
 			releaseLock();
 		}
@@ -1493,9 +1620,17 @@ class StoryStore {
 		if (entries.length === 0) return [];
 
 		for (const entry of entries) await putStoryEntry(entry);
-		const byId = new Map(this.entries.map((entry) => [entry.id, entry]));
-		for (const entry of entries) byId.set(entry.id, entry);
-		this.entries = [...byId.values()].sort((a, b) => a.position - b.position || a.createdAt - b.createdAt);
+		if (this.currentStory.serverStoryId) {
+			this.entries = mergeControlSurfaceEntryWindow(this.entries, entries, {
+				limit: DEFAULT_CONTROL_SURFACE_ENTRY_WINDOW,
+				anchor: 'newest',
+			});
+		} else {
+			const byId = new Map(this.entries.map((entry) => [entry.id, entry]));
+			for (const entry of entries) byId.set(entry.id, entry);
+			this.entries = sortPromptEntries([...byId.values()]);
+		}
+		this.promptEntries = mergePromptEntryWindow(this.promptEntries, entries);
 		this.entryCount = Math.max(this.entryCount, this.entries.length);
 		this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
 		await updateStory(this.currentStory.id, { updatedAt: Date.now() });
@@ -1686,23 +1821,7 @@ class StoryStore {
 		const current = this.currentStory;
 		if (!current?.serverStoryId) return;
 		const rows = await getSyncOpsForStory(current.id);
-		const discarded = rows.find((op) => op.id === opId);
 		await deleteSyncOp(opId);
-		if (discarded?.type === 'turn_command') {
-			const payload = asRecord(discarded.payload);
-			const clientTurnId = asNullableString(payload.clientTurnId);
-			const entryIds = [
-				asNullableString(payload.entryId),
-				clientTurnId ? `queued_${clientTurnId}` : null,
-			].filter((id): id is string => Boolean(id));
-			for (const entryId of entryIds) await deleteStoryEntry(entryId);
-			if (entryIds.length > 0) {
-				const removed = new Set(entryIds);
-				this.entries = this.entries.filter((entry) => !removed.has(entry.id));
-				this.entryCount = await countStoryEntries(current.id, current.currentBranchId ?? null);
-				this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
-			}
-		}
 		const remaining = rows.filter((op) => op.id !== opId);
 		if (this.currentStory?.id !== current.id) return;
 		const hasRepair = remaining.some((op) => op.status === 'needs_repair' || op.status === 'rejected');
@@ -1723,9 +1842,20 @@ class StoryStore {
 			if (!result || this.currentStory?.id !== current.id) return;
 			await this.applyBackendSyncChanges(result.changes);
 			if (!this.currentStory || this.currentStory.id !== current.id) return;
-			this.currentStory = { ...this.currentStory, serverVersion: result.serverVersion, syncStatus: 'synced' };
+			const serverStoryId = refreshed.serverStoryId;
+			if (serverStoryId) {
+				try {
+					const projection = await fetchBackendStoryProjection(serverStoryId, INITIAL_TRANSCRIPT_LOAD_LIMIT);
+					if (this.currentStory?.id === current.id) await this.applyCampaignProjection(projection);
+				} catch (error) {
+					console.warn('[Story] backend campaign projection unavailable; continuing with sync changes:', error);
+				}
+			}
+			if (!this.currentStory || this.currentStory.id !== current.id) return;
+			const serverVersion = Math.max(result.serverVersion, this.currentStory.serverVersion ?? 0);
+			this.currentStory = { ...this.currentStory, serverVersion, syncStatus: 'synced' };
 			await updateStory(this.currentStory.id, {
-				serverVersion: result.serverVersion,
+				serverVersion,
 				syncStatus: 'synced',
 			});
 		} catch (error) {
@@ -1773,6 +1903,7 @@ class StoryStore {
 		if (!target) return;
 		await deleteStoryEntry(id);
 		this.entries = this.entries.filter((entry) => entry.id !== id);
+		this.promptEntries = removePromptEntriesById(this.promptEntries, new Set([id]));
 		this.entryCount = Math.max(0, this.entryCount - 1);
 		this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
 		await updateStory(this.currentStory.id, { updatedAt: Date.now() });
@@ -1799,6 +1930,7 @@ class StoryStore {
 		if (removed.length === 0) return;
 		await deleteStoryEntriesFromPosition(this.currentStory.id, position);
 		this.entries = this.entries.filter((entry) => entry.position < position);
+		this.promptEntries = removePromptEntriesFromPosition(this.promptEntries, position);
 		this.entryCount = await countStoryEntries(this.currentStory.id, this.currentStory.currentBranchId ?? null);
 		this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
 		await updateStory(this.currentStory.id, { updatedAt: Date.now() });
@@ -2452,7 +2584,7 @@ class StoryStore {
 			lines.push('', `### Present`);
 			lines.push('NPCs below carry their own pressures, knowledge, and grievances. They will act on these — refuse, lie, manipulate, or pursue private agendas — when it serves them. Reference what they know. Honor what they want. Do not flatten them into helpers.');
 			lines.push('');
-			const totalEntries = this.entries.length;
+			const totalEntries = Math.max(this.entryCount, this.promptEntries.at(-1)?.position ?? this.entries.length);
 			for (const c of present) {
 				// Find the matching lorebook entry (canonical or alias) — that's
 				// where the rich state lives. Falls back to the bare Character
@@ -2811,9 +2943,13 @@ class StoryStore {
 		if (chapters.length === 0) return '';
 		const sorted = [...chapters].sort((a, b) => a.number - b.number);
 		const last = sorted[sorted.length - 1];
-		const lastEndIdx = this.entries.findIndex(e => e.id === last.endEntryId);
+		const recentEntries = this.promptEntries.length > 0
+			? this.promptEntries
+			: this.entries.slice(-DEFAULT_PROMPT_ENTRY_WINDOW);
+		const lastEndIdx = recentEntries.findIndex(e => e.id === last.endEntryId);
+		if (lastEndIdx === -1) return '';
 		// Entries authored AFTER the most-recent chapter ended.
-		const entriesPast = lastEndIdx === -1 ? 0 : this.entries.length - 1 - lastEndIdx;
+		const entriesPast = recentEntries.length - 1 - lastEndIdx;
 		if (entriesPast > 3) return '';
 
 		const out: string[] = ['## Chapter Opening'];
@@ -3230,7 +3366,7 @@ class StoryStore {
 			const candidateEntries = this.lorebookEntries.filter(e => !e.deleted);
 			const loreLimit = settings.uiSettings.retrievedLoreEntryLimit ?? 8;
 			if (!backendMemoryPacket && loreLimit > 0 && candidateEntries.length > 0) {
-				const result = await ai.entryRetrieval.retrieve(candidateEntries, this.entries, Math.max(loreLimit, 1), currentActionText);
+				const result = await ai.entryRetrieval.retrieve(candidateEntries, this.promptEntries, Math.max(loreLimit, 1), currentActionText);
 				const factionIds = new Set(relevantFactions.map(f => f.id));
 				// Build the "already rendered" name set: present NPCs + the protagonist,
 				// since the protagonist is dumped in the Header/Roles + Characters sections
@@ -3253,7 +3389,7 @@ class StoryStore {
 
 		const episodic = backendMemoryPacket
 			? { chapters: [], reason: 'Backend memory packet supplied episodic context.' }
-			: retrieveChaptersForAction(chapters, this.entries, currentActionText, settings.uiSettings.retrievedChapterLimit ?? 3);
+			: retrieveChaptersForAction(chapters, this.promptEntries, currentActionText, settings.uiSettings.retrievedChapterLimit ?? 3);
 		const relevantConversationMemories = selectConversationMemories(
 			this.conversationMemories,
 			presentCharacters,
@@ -3266,7 +3402,7 @@ class StoryStore {
 		if (currentActionText && proceduralLimit > 0 && settings.getServiceConfig('proceduralMemory').enabled) {
 			try {
 				const { ai } = await import('$lib/services/ai');
-				const recentNarrative = this.entries.slice(-8).map(e => e.content).join('\n');
+				const recentNarrative = this.promptEntries.slice(-8).map(e => e.content).join('\n');
 				proceduralRules = await ai.proceduralMemory.getRelevantRules(
 					s.id,
 					currentActionText,
@@ -3440,20 +3576,21 @@ class StoryStore {
 		}
 
 		const maxHistoryEntries = settings.uiSettings.maxHistoryEntries || 250;
-		const historyFloor = Math.max(this.chatHistoryFloor, this.entries.length - maxHistoryEntries);
+		const sourceEntries = this.promptEntries.length > 0 ? this.promptEntries : this.entries.slice(-DEFAULT_PROMPT_ENTRY_WINDOW);
+		const historyFloor = Math.max(this.chatHistoryFloor, sourceEntries.length - maxHistoryEntries);
 
 		let tokensSoFar = 0;
 		const floor = Math.max(0, historyFloor);
-		let startIdx = this.entries.length;
+		let startIdx = sourceEntries.length;
 
-		for (let i = this.entries.length - 1; i >= floor; i--) {
-			const tokens = countTokens(this.entries[i].content);
+		for (let i = sourceEntries.length - 1; i >= floor; i--) {
+			const tokens = countTokens(sourceEntries[i].content);
 			if (tokensSoFar + tokens > TOKEN_BUDGET) break;
 			tokensSoFar += tokens;
 			startIdx = i;
 		}
 
-		const recentEntries = this.entries.slice(startIdx);
+		const recentEntries = sourceEntries.slice(startIdx);
 		const messages: ChatMessage[] = [];
 		let pendingSystem = '';
 
@@ -3694,7 +3831,8 @@ class StoryStore {
 				}
 				// Broken agreements leave a trace in the timeline.
 				if (change.action === 'break') {
-					const lastEntry = this.entries[this.entries.length - 1];
+					const lastEntry = this.promptEntries[this.promptEntries.length - 1]
+						?? this.entries[this.entries.length - 1];
 					if (lastEntry) {
 						const ev: WorldEvent = {
 							id: uuid(),
@@ -3760,9 +3898,13 @@ class StoryStore {
 
 	clear() {
 		this._loadGeneration++;
+		this.disconnectEngineStream();
 		this.currentStory = null;
 		this.entries = [];
+		this.promptEntries = [];
 		this.entryCount = 0;
+		this.campaignProjection = null;
+		this.engineStreamStatus = emptyEngineStreamStatus();
 		this.oldestLoadedEntryPosition = null;
 		this.loadingOlderEntries = false;
 		this.hydratingWorld = false;

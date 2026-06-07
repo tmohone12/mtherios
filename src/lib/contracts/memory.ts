@@ -212,6 +212,53 @@ export const bootstrapResponseSchema = z.object({
 	recentEvents: z.array(storyEventSchema),
 	recentPatches: z.array(statePatchSchema),
 	memoryNodes: z.array(memoryNodeSchema),
+	projection: z.object({
+		mode: z.literal('control_surface'),
+		story: jsonObjectSchema,
+		entries: z.array(jsonObjectSchema).default([]),
+		counts: z.object({
+			entries: z.number().int().nonnegative().default(0),
+			entities: z.number().int().nonnegative().default(0),
+			events: z.number().int().nonnegative().default(0),
+			memoryNodes: z.number().int().nonnegative().default(0),
+		}),
+		vault: z.object({
+			vaultPath: z.string(),
+			fileCount: z.number().int().nonnegative().default(0),
+			lastIndexedVersion: z.number().int().nonnegative().default(0),
+			manifestHash: z.string().nullable().optional(),
+			updatedAt: z.string().nullable().optional(),
+		}),
+		cache: z.object({
+			storyId: z.string().nullable().default(null),
+			entryCount: z.number().int().nonnegative().default(0),
+			hitCount: z.number().int().nonnegative().default(0),
+			missCount: z.number().int().nonnegative().default(0),
+			tokenEstimate: z.number().int().nonnegative().default(0),
+			byKind: z.array(z.object({
+				kind: z.string(),
+				entryCount: z.number().int().nonnegative().default(0),
+				hitCount: z.number().int().nonnegative().default(0),
+				missCount: z.number().int().nonnegative().default(0),
+				invalidatedCount: z.number().int().nonnegative().default(0),
+				tokenEstimate: z.number().int().nonnegative().default(0),
+			})).default([]),
+			segments: z.array(z.object({
+				kind: z.string(),
+				cacheKey: z.string(),
+				contentHash: z.string(),
+				tokenEstimate: z.number().int().nonnegative().default(0),
+				hitCount: z.number().int().nonnegative().default(0),
+				missCount: z.number().int().nonnegative().default(0),
+				invalidatedCount: z.number().int().nonnegative().default(0),
+				dependencyHashes: z.array(z.string()).default([]),
+				metadata: jsonObjectSchema.default({}),
+				lastHitAt: z.string().nullable().default(null),
+				createdAt: z.string(),
+				updatedAt: z.string(),
+			})).default([]),
+		}),
+	}).optional(),
 });
 
 export const storyEntriesPageResponseSchema = z.object({
@@ -409,6 +456,7 @@ export const turnRequestSchema = z.object({
 		chapterThreshold: z.number().int().min(5).max(200).optional(),
 		postChapterBuffer: z.number().int().min(0).max(100).optional(),
 		chaptersPerArc: z.number().int().min(2).max(50).optional(),
+		deferStateExtraction: z.boolean().optional(),
 	}).optional(),
 });
 
@@ -424,6 +472,29 @@ export const turnResponseSchema = z.object({
 	serverVersion: z.number().int().nonnegative(),
 	syncChanges: z.array(syncChangeSchema),
 	warnings: z.array(z.string()).default([]),
+	campaignVault: z.object({
+		files: z.array(z.object({
+			relativePath: z.string(),
+			kind: z.string(),
+			contentHash: z.string(),
+			byteLength: z.number().int().nonnegative(),
+		})).default([]),
+	}).nullable().optional(),
+	projection: z.object({
+		mode: z.literal('control_surface'),
+		entryLimit: z.number().int().positive(),
+		counts: z.object({
+			entries: z.number().int().nonnegative().default(0),
+			entities: z.number().int().nonnegative().default(0),
+			events: z.number().int().nonnegative().default(0),
+			memoryNodes: z.number().int().nonnegative().default(0),
+		}),
+		cache: z.object({
+			hitCount: z.number().int().nonnegative().default(0),
+			missCount: z.number().int().nonnegative().default(0),
+			tokenEstimate: z.number().int().nonnegative().default(0),
+		}).nullable().default(null),
+	}).nullable().optional(),
 	generationTimings: z.array(z.object({
 		operation: z.string(),
 		serviceId: z.string().nullable().default(null),
@@ -456,6 +527,7 @@ export type EntityDeleteResponse = z.infer<typeof entityDeleteResponseSchema>;
 export type ChapterCommandResponse = z.infer<typeof chapterCommandResponseSchema>;
 export type ArcCommandResponse = z.infer<typeof arcCommandResponseSchema>;
 export type SagaCommandResponse = z.infer<typeof sagaCommandResponseSchema>;
+export type LivingMemoryCommandResponse = z.infer<typeof livingMemoryCommandResponseSchema>;
 export type MemoryRetrieveRequest = z.infer<typeof memoryRetrieveRequestSchema>;
 export type SyncOperation = z.infer<typeof syncOperationSchema>;
 export type SyncChange = z.infer<typeof syncChangeSchema>;

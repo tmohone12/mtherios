@@ -118,41 +118,46 @@ export interface TerminalWikiBriefInput extends TerminalWikiContextInput {
 	orphanLayer?: 'derived' | 'all';
 }
 
-export async function searchTerminalWiki(input: TerminalWikiSearchInput): Promise<TerminalWikiSearchResponse> {
-	const response = await fetch('/api/wiki/search', {
+type EngineCommandResponse = {
+	status: 'queued' | 'running' | 'succeeded' | 'failed';
+	result?: unknown;
+	error?: string | null;
+};
+
+function commandStoryId(input: { storyId?: string | null }): string {
+	const storyId = typeof input.storyId === 'string' ? input.storyId.trim() : '';
+	return storyId || '__wiki__';
+}
+
+async function runWikiCommand<T>(command: string, input: Record<string, unknown>): Promise<T> {
+	const response = await fetch('/api/engine/command', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(input),
+		body: JSON.stringify({
+			storyId: commandStoryId(input),
+			command,
+			args: input,
+		}),
 	});
 	if (!response.ok) {
 		const body = await response.json().catch(() => ({}));
-		throw new Error(typeof body.error === 'string' ? body.error : `Terminal wiki search failed: ${response.status}`);
+		throw new Error(typeof body.error === 'string' ? body.error : `Terminal wiki command failed: ${response.status}`);
 	}
-	return response.json() as Promise<TerminalWikiSearchResponse>;
+	const envelope = await response.json() as EngineCommandResponse;
+	if (envelope.status !== 'succeeded') {
+		throw new Error(envelope.error ?? `Terminal wiki command failed: ${command}`);
+	}
+	return envelope.result as T;
+}
+
+export async function searchTerminalWiki(input: TerminalWikiSearchInput): Promise<TerminalWikiSearchResponse> {
+	return await runWikiCommand<TerminalWikiSearchResponse>('wiki.search', { ...input });
 }
 
 export async function contextTerminalWiki(input: TerminalWikiContextInput): Promise<TerminalWikiContextResponse> {
-	const response = await fetch('/api/wiki/context', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(input),
-	});
-	if (!response.ok) {
-		const body = await response.json().catch(() => ({}));
-		throw new Error(typeof body.error === 'string' ? body.error : `Terminal wiki context failed: ${response.status}`);
-	}
-	return response.json() as Promise<TerminalWikiContextResponse>;
+	return await runWikiCommand<TerminalWikiContextResponse>('wiki.context', { ...input });
 }
 
 export async function briefTerminalWiki(input: TerminalWikiBriefInput): Promise<TerminalWikiBriefResponse> {
-	const response = await fetch('/api/wiki/brief', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(input),
-	});
-	if (!response.ok) {
-		const body = await response.json().catch(() => ({}));
-		throw new Error(typeof body.error === 'string' ? body.error : `Terminal wiki brief failed: ${response.status}`);
-	}
-	return response.json() as Promise<TerminalWikiBriefResponse>;
+	return await runWikiCommand<TerminalWikiBriefResponse>('wiki.brief', { ...input });
 }

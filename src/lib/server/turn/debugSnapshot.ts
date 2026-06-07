@@ -24,6 +24,46 @@ type WikiDebugContext = {
 	semanticError?: string | null;
 };
 
+export type EngineCacheDebugSegment = {
+	kind: string;
+	cacheKey: string;
+	contentHash?: string | null;
+	hit: boolean;
+	invalidated: boolean;
+	tokenEstimate?: number | null;
+	hitCount?: number | null;
+	missCount?: number | null;
+	dependencyCount?: number | null;
+	dependencyHashes?: string[];
+};
+
+export type EngineCacheDebug = {
+	hitCount: number;
+	missCount: number;
+	tokenEstimate?: number | null;
+	segments: EngineCacheDebugSegment[];
+};
+
+type PromptCacheSegmentResultLike = {
+	hit: boolean;
+	invalidated: boolean;
+	entry: {
+		kind: string;
+		cacheKey: string;
+		contentHash?: string | null;
+		tokenEstimate?: number | null;
+		hitCount?: number | null;
+		missCount?: number | null;
+		dependencyHashes?: string[];
+	};
+};
+
+type PromptCacheStatsLike = {
+	hitCount: number;
+	missCount: number;
+	segments: PromptCacheSegmentResultLike[];
+};
+
 export type TurnDebugSnapshot = {
 	kind: 'narration' | 'state_extraction';
 	playerText: string;
@@ -37,15 +77,17 @@ export type TurnDebugSnapshot = {
 	};
 	wikiContext?: WikiDebugContext | null;
 	contextCounts?: Record<string, number>;
+	engineCache?: EngineCacheDebug;
 	output?: string;
 };
 
-type BuildTurnDebugSnapshotInput = Omit<TurnDebugSnapshot, 'retrievedMemory' | 'wikiContext' | 'system' | 'prompt' | 'messages' | 'output'> & {
+type BuildTurnDebugSnapshotInput = Omit<TurnDebugSnapshot, 'retrievedMemory' | 'wikiContext' | 'system' | 'prompt' | 'messages' | 'engineCache' | 'output'> & {
 	system?: string | null;
 	prompt?: string | null;
 	messages?: PromptMessage[] | null;
 	retrievedMemory?: Partial<RetrievedMemoryPacket> | null;
 	wikiContext?: WikiDebugContext | null;
+	engineCache?: EngineCacheDebug | null;
 	output?: string | null;
 };
 
@@ -71,6 +113,55 @@ function memoryNodes(packet: Partial<RetrievedMemoryPacket>): MemoryDebugNode[] 
 			sourcePatchIds: stringArray(node.sourcePatchIds),
 		}))
 		: [];
+}
+
+function nonnegativeInteger(value: unknown): number {
+	return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
+}
+
+function engineCacheSnapshot(cache: EngineCacheDebug | null | undefined): EngineCacheDebug | undefined {
+	if (!cache) return undefined;
+	return {
+		hitCount: nonnegativeInteger(cache.hitCount),
+		missCount: nonnegativeInteger(cache.missCount),
+		tokenEstimate: nonnegativeInteger(cache.tokenEstimate),
+		segments: Array.isArray(cache.segments)
+			? cache.segments.slice(0, 24).map((segment) => ({
+				kind: segment.kind,
+				cacheKey: segment.cacheKey,
+				contentHash: segment.contentHash ?? null,
+				hit: Boolean(segment.hit),
+				invalidated: Boolean(segment.invalidated),
+				tokenEstimate: nonnegativeInteger(segment.tokenEstimate),
+				hitCount: nonnegativeInteger(segment.hitCount),
+				missCount: nonnegativeInteger(segment.missCount),
+				dependencyCount: nonnegativeInteger(segment.dependencyCount ?? segment.dependencyHashes?.length),
+			}))
+			: [],
+	};
+}
+
+export function buildEngineCacheDebug(cache: PromptCacheStatsLike | null | undefined): EngineCacheDebug | undefined {
+	if (!cache) return undefined;
+	const segments = Array.isArray(cache.segments)
+		? cache.segments.slice(0, 24).map((segment) => ({
+			kind: segment.entry.kind,
+			cacheKey: segment.entry.cacheKey,
+			contentHash: segment.entry.contentHash ?? null,
+			hit: Boolean(segment.hit),
+			invalidated: Boolean(segment.invalidated),
+			tokenEstimate: nonnegativeInteger(segment.entry.tokenEstimate),
+			hitCount: nonnegativeInteger(segment.entry.hitCount),
+			missCount: nonnegativeInteger(segment.entry.missCount),
+			dependencyCount: nonnegativeInteger(segment.entry.dependencyHashes?.length),
+		}))
+		: [];
+	return {
+		hitCount: nonnegativeInteger(cache.hitCount),
+		missCount: nonnegativeInteger(cache.missCount),
+		tokenEstimate: segments.reduce((sum, segment) => sum + nonnegativeInteger(segment.tokenEstimate), 0),
+		segments,
+	};
 }
 
 export function buildTurnDebugSnapshot(input: BuildTurnDebugSnapshotInput): TurnDebugSnapshot {
@@ -100,6 +191,7 @@ export function buildTurnDebugSnapshot(input: BuildTurnDebugSnapshotInput): Turn
 			}
 			: input.wikiContext,
 		contextCounts: input.contextCounts,
+		engineCache: engineCacheSnapshot(input.engineCache),
 		output: input.output == null ? undefined : clip(input.output, OUTPUT_TEXT_LIMIT),
 	};
 }

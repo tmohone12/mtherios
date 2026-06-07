@@ -1,7 +1,9 @@
 #!/usr/bin/env node
+// @ts-nocheck
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
 const DEFAULT_PORT = process.env.PORT || '5173';
@@ -9,7 +11,7 @@ const DEFAULT_URL = process.env.MTHERIOS_APP_URL || `http://${DEFAULT_HOST}:${DE
 const APP_URL = DEFAULT_URL.replace(/\/$/, '');
 const SERVER_VERSION = '0.1.0';
 
-const tools = [
+export const tools = [
 	{
 		name: 'mtherios_status',
 		description: 'Read the running Mtherios terminal process status.',
@@ -169,6 +171,167 @@ const tools = [
 		},
 	},
 	{
+		name: 'mtherios_engine_command',
+		description: 'Call the terminal-owned engine command envelope. Use for agent services that should share the gateway/control-surface backend.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId', 'command'],
+			properties: {
+				storyId: { type: 'string' },
+				command: { type: 'string' },
+				args: { type: 'object' },
+				clientCommandId: { type: 'string' },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_orchestrator_run',
+		description: 'Run the terminal-owned AI orchestrator planner. It coordinates RPG agent roles and can execute existing backend services as engine tool calls.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId', 'goal'],
+			properties: {
+				storyId: { type: 'string' },
+				mode: { type: 'string', enum: ['turn', 'world_tick', 'audit', 'memory', 'custom'], default: 'turn' },
+				goal: { type: 'string' },
+				playerText: { type: 'string' },
+				clientTurnId: { type: 'string' },
+				context: { type: 'object' },
+				roles: {
+					type: 'array',
+					items: {
+						type: 'string',
+						enum: ['dm_narrator', 'rules_referee', 'state_scribe', 'lorekeeper', 'faction_simulator', 'npc_memory', 'continuity_auditor'],
+					},
+				},
+				execute: { type: 'boolean', default: false },
+				maxToolCalls: { type: 'integer', minimum: 1, maximum: 20 },
+				clientCommandId: { type: 'string' },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_timeline_brief',
+		description: 'Query the GM timeline through the engine command envelope, including due, recent, scheduled, and NPC-linked events.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId'],
+			properties: {
+				storyId: { type: 'string' },
+				presentNpcIds: { type: 'array', items: { type: 'string' } },
+				sceneEntityIds: { type: 'array', items: { type: 'string' } },
+				includeSecret: { type: 'boolean', default: false },
+				currentTurn: { type: 'integer', minimum: 0 },
+				dueLimit: { type: 'integer', minimum: 0, maximum: 200 },
+				recentLimit: { type: 'integer', minimum: 0, maximum: 200 },
+				scheduledLimit: { type: 'integer', minimum: 0, maximum: 200 },
+				npcLimit: { type: 'integer', minimum: 0, maximum: 200 },
+				npcEventLimit: { type: 'integer', minimum: 0, maximum: 200 },
+				clientCommandId: { type: 'string' },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_timeline_schedule',
+		description: 'Schedule a delayed in-world event with faction, NPC, location, and source tags through the engine command envelope.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId', 'type', 'title', 'body'],
+			properties: {
+				storyId: { type: 'string' },
+				type: { type: 'string' },
+				title: { type: 'string' },
+				body: { type: 'string' },
+				delayTurns: { type: 'integer', minimum: 0, default: 0 },
+				currentTurn: { type: 'integer', minimum: 0 },
+				currentWorldTime: { type: ['string', 'null'] },
+				worldTime: { type: ['string', 'null'] },
+				actorEntityIds: { type: 'array', items: { type: 'string' } },
+				targetEntityIds: { type: 'array', items: { type: 'string' } },
+				actorNpcEntityIds: { type: 'array', items: { type: 'string' } },
+				targetNpcEntityIds: { type: 'array', items: { type: 'string' } },
+				locationId: { type: ['string', 'null'] },
+				locationIds: { type: 'array', items: { type: 'string' } },
+				factionIds: { type: 'array', items: { type: 'string' } },
+				threadIds: { type: 'array', items: { type: 'string' } },
+				visibility: { type: 'string' },
+				memoryImpact: { type: 'object' },
+				sourceEntryIds: { type: 'array', items: { type: 'string' } },
+				sourcePatchIds: { type: 'array', items: { type: 'string' } },
+				metadata: { type: 'object' },
+				serverVersion: { type: 'integer', minimum: 1 },
+				clientCommandId: { type: 'string' },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_timeline_advance',
+		description: 'Advance the campaign turn clock and promote due timeline events through the engine command envelope.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId'],
+			properties: {
+				storyId: { type: 'string' },
+				delta: { type: 'integer', minimum: 0, default: 1 },
+				presentNpcIds: { type: 'array', items: { type: 'string' } },
+				sceneEntityIds: { type: 'array', items: { type: 'string' } },
+				includeSecret: { type: 'boolean', default: false },
+				dueLimit: { type: 'integer', minimum: 0, maximum: 200 },
+				recentLimit: { type: 'integer', minimum: 0, maximum: 200 },
+				scheduledLimit: { type: 'integer', minimum: 0, maximum: 200 },
+				npcLimit: { type: 'integer', minimum: 0, maximum: 200 },
+				npcEventLimit: { type: 'integer', minimum: 0, maximum: 200 },
+				serverVersion: { type: 'integer', minimum: 1 },
+				clientCommandId: { type: 'string' },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_read_campaign_page',
+		description: 'Read one maintained campaign vault Markdown page from the terminal backend.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId', 'kind'],
+			properties: {
+				storyId: { type: 'string' },
+				kind: { type: 'string' },
+				name: { type: 'string' },
+				path: { type: 'string' },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_write_campaign_page',
+		description: 'Write one maintained campaign vault Markdown page through the terminal backend.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId', 'kind', 'name', 'body'],
+			properties: {
+				storyId: { type: 'string' },
+				kind: { type: 'string' },
+				name: { type: 'string' },
+				title: { type: ['string', 'null'] },
+				body: { type: 'string' },
+				tags: { type: 'array', items: { type: 'string' } },
+				entityIds: { type: 'array', items: { type: 'string' } },
+				factionIds: { type: 'array', items: { type: 'string' } },
+				sourceEntryIds: { type: 'array', items: { type: 'string' } },
+				sourceEventIds: { type: 'array', items: { type: 'string' } },
+				sourcePatchIds: { type: 'array', items: { type: 'string' } },
+				path: { type: 'string' },
+				metadata: { type: 'object' },
+				serverVersion: { type: 'integer', minimum: 1 },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
 		name: 'mtherios_llm_settings',
 		description: 'Read terminal-side LLM service settings and API key references.',
 		inputSchema: {
@@ -237,7 +400,7 @@ const tools = [
 	},
 ];
 
-async function requestJson(requestPath, options = {}) {
+async function defaultRequestJson(requestPath, options = {}) {
 	const response = await fetch(`${APP_URL}${requestPath}`, {
 		...options,
 		headers: {
@@ -263,7 +426,8 @@ function queryPath(requestPath, params = {}) {
 	return query ? `${requestPath}?${query}` : requestPath;
 }
 
-async function callTool(name, args = {}) {
+export async function callTool(name, args = {}, options = {}) {
+	const requestJson = options.requestJson ?? defaultRequestJson;
 	if (name === 'mtherios_status') return requestJson('/api/app/status', { timeoutMs: 15_000 });
 	if (name === 'mtherios_database_schema') return requestJson('/api/database/schema', { timeoutMs: 15_000 });
 	if (name === 'mtherios_list_databases') return requestJson('/api/stories', { timeoutMs: 30_000 });
@@ -344,17 +508,146 @@ async function callTool(name, args = {}) {
 		}), { timeoutMs: 60_000 });
 	}
 	if (name === 'mtherios_run_turn') {
+		const storyId = requiredString(args.storyId, 'storyId');
 		const clientTurnId = optionalString(args.clientTurnId) || `mcp_${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
-		return requestJson('/api/turn', {
+		const turnArgs = {
+			storyId,
+			clientTurnId,
+			playerText: requiredString(args.playerText, 'playerText'),
+			localVersion: optionalInteger(args.localVersion, 0),
+			clientContext: asRecord(args.clientContext),
+		};
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify({
+				storyId,
+				command: 'turn.submit',
+				clientCommandId: clientTurnId,
+				args: turnArgs,
+			}),
+			timeoutMs: 180_000,
+		});
+	}
+	if (name === 'mtherios_engine_command') {
+		return requestJson('/api/engine/command', {
 			method: 'POST',
 			body: JSON.stringify({
 				storyId: requiredString(args.storyId, 'storyId'),
-				clientTurnId,
-				playerText: requiredString(args.playerText, 'playerText'),
-				localVersion: optionalInteger(args.localVersion, 0),
-				clientContext: asRecord(args.clientContext),
+				command: requiredString(args.command, 'command'),
+				clientCommandId: optionalString(args.clientCommandId),
+				args: asRecord(args.args),
 			}),
 			timeoutMs: 180_000,
+		});
+	}
+	if (name === 'mtherios_orchestrator_run') {
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'orchestrator.run', {
+				mode: optionalString(args.mode),
+				goal: requiredString(args.goal, 'goal'),
+				playerText: optionalString(args.playerText),
+				clientTurnId: optionalString(args.clientTurnId),
+				context: optionalRecord(args.context),
+				roles: stringArray(args.roles),
+				execute: typeof args.execute === 'boolean' ? args.execute : undefined,
+				maxToolCalls: optionalPositiveInteger(args.maxToolCalls),
+			})),
+			timeoutMs: 180_000,
+		});
+	}
+	if (name === 'mtherios_timeline_brief') {
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'timeline.brief', {
+				currentTurn: optionalNonnegativeInteger(args.currentTurn),
+				presentNpcIds: stringArray(args.presentNpcIds),
+				sceneEntityIds: stringArray(args.sceneEntityIds),
+				includeSecret: args.includeSecret === true ? true : undefined,
+				dueLimit: optionalNonnegativeInteger(args.dueLimit),
+				recentLimit: optionalNonnegativeInteger(args.recentLimit),
+				scheduledLimit: optionalNonnegativeInteger(args.scheduledLimit),
+				npcLimit: optionalNonnegativeInteger(args.npcLimit),
+				npcEventLimit: optionalNonnegativeInteger(args.npcEventLimit),
+			})),
+			timeoutMs: 60_000,
+		});
+	}
+	if (name === 'mtherios_timeline_schedule') {
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'timeline.schedule', {
+				type: requiredString(args.type, 'type'),
+				title: requiredString(args.title, 'title'),
+				body: requiredString(args.body, 'body'),
+				delayTurns: optionalNonnegativeInteger(args.delayTurns) ?? 0,
+				currentTurn: optionalNonnegativeInteger(args.currentTurn),
+				currentWorldTime: optionalNullableString(args.currentWorldTime),
+				worldTime: optionalNullableString(args.worldTime),
+				actorEntityIds: stringArray(args.actorEntityIds),
+				targetEntityIds: stringArray(args.targetEntityIds),
+				actorNpcEntityIds: stringArray(args.actorNpcEntityIds),
+				targetNpcEntityIds: stringArray(args.targetNpcEntityIds),
+				locationId: optionalNullableString(args.locationId),
+				locationIds: stringArray(args.locationIds),
+				factionIds: stringArray(args.factionIds),
+				threadIds: stringArray(args.threadIds),
+				visibility: optionalString(args.visibility),
+				memoryImpact: optionalRecord(args.memoryImpact),
+				sourceEntryIds: stringArray(args.sourceEntryIds),
+				sourcePatchIds: stringArray(args.sourcePatchIds),
+				metadata: optionalRecord(args.metadata),
+				serverVersion: optionalPositiveInteger(args.serverVersion),
+			})),
+			timeoutMs: 60_000,
+		});
+	}
+	if (name === 'mtherios_timeline_advance') {
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'timeline.advance', {
+				delta: optionalNonnegativeInteger(args.delta) ?? 1,
+				presentNpcIds: stringArray(args.presentNpcIds),
+				sceneEntityIds: stringArray(args.sceneEntityIds),
+				includeSecret: args.includeSecret === true ? true : undefined,
+				dueLimit: optionalNonnegativeInteger(args.dueLimit),
+				recentLimit: optionalNonnegativeInteger(args.recentLimit),
+				scheduledLimit: optionalNonnegativeInteger(args.scheduledLimit),
+				npcLimit: optionalNonnegativeInteger(args.npcLimit),
+				npcEventLimit: optionalNonnegativeInteger(args.npcEventLimit),
+				serverVersion: optionalPositiveInteger(args.serverVersion),
+			})),
+			timeoutMs: 60_000,
+		});
+	}
+	if (name === 'mtherios_read_campaign_page') {
+		const storyId = requiredString(args.storyId, 'storyId');
+		return requestJson(queryPath(`/api/stories/${encodeURIComponent(storyId)}/vault/page`, {
+			kind: requiredString(args.kind, 'kind'),
+			name: optionalString(args.name),
+			path: optionalString(args.path),
+		}), { timeoutMs: 30_000 });
+	}
+	if (name === 'mtherios_write_campaign_page') {
+		const storyId = requiredString(args.storyId, 'storyId');
+		return requestJson(`/api/stories/${encodeURIComponent(storyId)}/vault/page`, {
+			method: 'POST',
+			body: JSON.stringify(compactRecord({
+				kind: requiredString(args.kind, 'kind'),
+				name: requiredString(args.name, 'name'),
+				title: optionalNullableString(args.title),
+				body: requiredString(args.body, 'body'),
+				tags: stringArray(args.tags),
+				entityIds: stringArray(args.entityIds),
+				factionIds: stringArray(args.factionIds),
+				sourceEntryIds: stringArray(args.sourceEntryIds),
+				sourceEventIds: stringArray(args.sourceEventIds),
+				sourcePatchIds: stringArray(args.sourcePatchIds),
+				path: optionalString(args.path),
+				metadata: optionalRecord(args.metadata),
+				serverVersion: optionalPositiveInteger(args.serverVersion),
+			})),
+			timeoutMs: 60_000,
 		});
 	}
 	if (name === 'mtherios_llm_settings') return requestJson('/api/settings/llm', { timeoutMs: 15_000 });
@@ -418,6 +711,11 @@ function asRecord(value) {
 	return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function optionalRecord(value) {
+	const record = asRecord(value);
+	return Object.keys(record).length > 0 ? record : undefined;
+}
+
 function requiredRecord(value, name) {
 	const record = asRecord(value);
 	if (Object.keys(record).length === 0) throw new Error(`${name} is required.`);
@@ -430,15 +728,55 @@ function optionalString(value) {
 	return clean || undefined;
 }
 
+function optionalNullableString(value) {
+	if (value === null) return null;
+	return optionalString(value);
+}
+
 function optionalInteger(value, fallback) {
 	const parsed = Number.parseInt(String(value ?? ''), 10);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function optionalPositiveInteger(value) {
+	const parsed = Number.parseInt(String(value ?? ''), 10);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function optionalNonnegativeInteger(value) {
+	const parsed = Number.parseInt(String(value ?? ''), 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function requiredString(value, name) {
 	const clean = optionalString(value);
 	if (!clean) throw new Error(`${name} is required.`);
 	return clean;
+}
+
+function stringArray(value) {
+	if (!Array.isArray(value)) return [];
+	return value.map((item) => optionalString(item)).filter(Boolean);
+}
+
+function compactRecord(record) {
+	const output = {};
+	for (const [key, value] of Object.entries(record)) {
+		if (value === undefined || value === '') continue;
+		if (Array.isArray(value) && value.length === 0) continue;
+		if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) continue;
+		output[key] = value;
+	}
+	return output;
+}
+
+function engineCommandPayload(args, command, commandArgs) {
+	return compactRecord({
+		storyId: requiredString(args.storyId, 'storyId'),
+		command,
+		clientCommandId: optionalString(args.clientCommandId),
+		args: compactRecord(commandArgs),
+	});
 }
 
 function textResult(value) {
@@ -508,30 +846,36 @@ function writeMessage(message) {
 	process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
-let buffer = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk) => {
-	buffer += chunk;
-	let newline = buffer.indexOf('\n');
-	while (newline !== -1) {
-		const line = buffer.slice(0, newline).trim();
-		buffer = buffer.slice(newline + 1);
-		if (line) {
-			void Promise.resolve()
-				.then(() => JSON.parse(line))
-				.then(handleRequest)
-				.then(writeMessage)
-				.catch((error) => {
-					writeMessage({
-						jsonrpc: '2.0',
-						id: null,
-						error: {
-							code: -32700,
-							message: error instanceof Error ? error.message : String(error),
-						},
+function startStdioServer() {
+	let buffer = '';
+	process.stdin.setEncoding('utf8');
+	process.stdin.on('data', (chunk) => {
+		buffer += chunk;
+		let newline = buffer.indexOf('\n');
+		while (newline !== -1) {
+			const line = buffer.slice(0, newline).trim();
+			buffer = buffer.slice(newline + 1);
+			if (line) {
+				void Promise.resolve()
+					.then(() => JSON.parse(line))
+					.then(handleRequest)
+					.then(writeMessage)
+					.catch((error) => {
+						writeMessage({
+							jsonrpc: '2.0',
+							id: null,
+							error: {
+								code: -32700,
+								message: error instanceof Error ? error.message : String(error),
+							},
+						});
 					});
-				});
+			}
+			newline = buffer.indexOf('\n');
 		}
-		newline = buffer.indexOf('\n');
-	}
-});
+	});
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	startStdioServer();
+}

@@ -471,6 +471,44 @@ export const searchIndexRecords = pgTable('search_index_records', {
 	typeStatusIdx: index('search_index_records_type_idx').on(table.recordType, table.status),
 }));
 
+export const campaignFiles = pgTable('campaign_files', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	path: text('path').notNull(),
+	kind: text('kind').notNull(),
+	contentHash: text('content_hash').notNull(),
+	byteLength: integer('byte_length').notNull().default(0),
+	serverVersion: integer('server_version').notNull().default(1),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (table) => ({
+	storyPathIdx: index('campaign_files_story_path_idx').on(table.storyId, table.path),
+	storyKindIdx: index('campaign_files_story_kind_idx').on(table.storyId, table.kind),
+	hashIdx: index('campaign_files_content_hash_idx').on(table.contentHash),
+}));
+
+export const engineCacheEntries = pgTable('engine_cache_entries', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').references(() => stories.id, { onDelete: 'cascade' }),
+	cacheKey: text('cache_key').notNull(),
+	kind: text('kind').notNull(),
+	contentHash: text('content_hash').notNull(),
+	value: text('value').notNull().default(''),
+	tokenEstimate: integer('token_estimate').notNull().default(0),
+	hitCount: integer('hit_count').notNull().default(0),
+	missCount: integer('miss_count').notNull().default(0),
+	dependencyHashes: jsonb('dependency_hashes').$type<string[]>().notNull().default(jsonArray),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	lastHitAt: timestamp('last_hit_at', { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (table) => ({
+	storyKindIdx: index('engine_cache_entries_story_kind_idx').on(table.storyId, table.kind),
+	cacheKeyIdx: index('engine_cache_entries_cache_key_idx').on(table.cacheKey),
+	hashIdx: index('engine_cache_entries_content_hash_idx').on(table.contentHash),
+}));
+
 export const apiCallLogs = pgTable('api_call_logs', {
 	id: text('id').primaryKey(),
 	storyId: text('story_id').references(() => stories.id, { onDelete: 'cascade' }),
@@ -521,5 +559,7 @@ export const schema = {
 	backendJobs,
 	llmServiceSettings,
 	searchIndexRecords,
+	campaignFiles,
+	engineCacheEntries,
 	apiCallLogs,
 };

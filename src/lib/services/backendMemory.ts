@@ -11,6 +11,7 @@ import {
 	type TurnRequest,
 	type TurnResponse,
 } from '$lib/contracts/memory';
+import { engineCommandResponseSchema } from '$lib/contracts/engine';
 import { importStoryBundleToBackend } from '$lib/services/backendImport';
 import { exportStory } from '$lib/services/storySync';
 import {
@@ -58,17 +59,27 @@ async function postJson(url: string, payload: unknown): Promise<unknown> {
 	return response.json();
 }
 
-async function getJson(url: string): Promise<unknown> {
-	const response = await fetch(url);
-	if (!response.ok) {
-		const body = await response.json().catch(() => ({})) as { error?: unknown; code?: unknown };
+async function postEngineCommand(
+	storyId: string,
+	command: string,
+	args: Record<string, unknown>,
+	clientCommandId?: string,
+): Promise<unknown> {
+	const raw = await postJson('/api/engine/command', {
+		storyId,
+		command,
+		...(clientCommandId ? { clientCommandId } : {}),
+		args,
+	});
+	const response = engineCommandResponseSchema.parse(raw);
+	if (response.status !== 'succeeded') {
 		throw new TerminalRequestError(
-			typeof body.error === 'string' ? body.error : `Terminal request failed: ${response.status}`,
-			response.status,
-			typeof body.code === 'string' ? body.code : null,
+			response.error ?? `Engine command failed: ${response.command}`,
+			502,
+			'ENGINE_COMMAND_FAILED',
 		);
 	}
-	return response.json();
+	return response.result;
 }
 
 export async function retrieveBackendMemory(
@@ -76,7 +87,7 @@ export async function retrieveBackendMemory(
 ): Promise<RetrievedMemoryPacket | null> {
 	const parsed = memoryRetrieveRequestSchema.parse(request);
 	try {
-		const raw = await postJson('/api/memory/retrieve', parsed);
+		const raw = await postEngineCommand(parsed.storyId, 'memory.retrieve', parsed);
 		return retrievedMemoryPacketSchema.parse(raw);
 	} catch (error) {
 		console.warn('[BackendMemory] Retrieval fell back to local memory:', error);
@@ -85,14 +96,17 @@ export async function retrieveBackendMemory(
 }
 
 export async function processBackendTurn(request: TurnRequest): Promise<TurnResponse> {
-	const raw = await postJson('/api/turn', request);
-	return turnResponseSchema.parse(raw);
+	return turnResponseSchema.parse(await postEngineCommand(
+		request.storyId,
+		'turn.submit',
+		request,
+		request.clientTurnId,
+	));
 }
 
 export async function runBackendWorldSimTick(story: Story): Promise<Record<string, unknown> | null> {
 	if (!story.serverStoryId) return null;
-	return postJson('/api/app/jobs/world-sim', {
-		storyId: story.serverStoryId,
+	return postEngineCommand(story.serverStoryId, 'jobs.worldSim', {
 		localVersion: story.serverVersion ?? 0,
 		force: true,
 	}) as Promise<Record<string, unknown>>;
@@ -141,11 +155,9 @@ function toServerOp(op: SyncOutboxOp): SyncOperation {
 export async function pullBackendChanges(story: Story): Promise<{ serverVersion: number; changes: SyncChange[] } | null> {
 	const serverStoryId = story.serverStoryId;
 	if (!serverStoryId) return null;
-	const params = new URLSearchParams({
-		storyId: serverStoryId,
-		since: String(story.serverVersion ?? 0),
+	const raw = await postEngineCommand(serverStoryId, 'sync.pull', {
+		since: story.serverVersion ?? 0,
 	});
-	const raw = await getJson(`/api/sync/pull?${params.toString()}`);
 	const response = syncPullResponseSchema.parse(raw);
 	return {
 		serverVersion: response.serverVersion,
@@ -162,8 +174,7 @@ export async function pushPendingBackendOps(story: Story): Promise<{ serverVersi
 	for (const op of pending) await updateSyncOp(op.id, { status: 'pushing', error: null });
 
 	try {
-		const raw = await postJson('/api/sync/push', {
-			storyId: serverStoryId,
+		const raw = await postEngineCommand(serverStoryId, 'sync.push', {
 			localVersion: story.serverVersion ?? 0,
 			ops: pending.map(toServerOp),
 		});

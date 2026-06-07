@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { entities, npcEventLinks, statePatches, stories, storyEvents } from '$lib/server/db/schema';
+import { entities, memoryNodes, npcEventLinks, statePatches, stories, storyEvents } from '$lib/server/db/schema';
 import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
 import { applyValidatedTurnUpdate } from './patchValidator';
 
@@ -323,5 +323,98 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(insertCalls.some(call => call.source === 'tx' && call.table === statePatches)).toBe(true);
 		expect(result.patchIds).toHaveLength(1);
 		expect(result.warnings).toEqual(['Queued projection jobs failed: outbox unavailable']);
+	});
+
+	it('does not persist anything for an empty supplemental state extraction', async () => {
+		const { db, insertCalls, updateCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'The deferred classifier found no extra state.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 13,
+			mode: 'supplemental',
+			timelineTurn: 7,
+		});
+
+		expect(result).toEqual({
+			eventIds: [],
+			patchIds: [],
+			memoryNodeIds: [],
+			warnings: [],
+		});
+		expect(insertCalls).toEqual([]);
+		expect(updateCalls).toEqual([]);
+		expect(dbMocks.enqueueTurnProjectionJobs).not.toHaveBeenCalled();
+	});
+
+	it('applies supplemental extraction without duplicating base turn artifacts or advancing the turn', async () => {
+		const { db, insertCalls, storyUpdates } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			story_beats: [
+				{
+					title: 'Ash bridge secured',
+					description: 'The crossing holds for another night.',
+					significance: 'major',
+				},
+			],
+			time_delta: 'one hour after the oath',
+		});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Valen and Mira seal the bridge oath while the crowd watches.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: ['mem_old'],
+			serverVersion: 13,
+			mode: 'supplemental',
+			timelineTurn: 7,
+		});
+
+		const patchInsert = insertCalls.find(call => call.table === statePatches)?.value as { id: string };
+		const eventInserts = insertCalls
+			.filter(call => call.table === storyEvents)
+			.map(call => call.value as Record<string, unknown>);
+		const memoryInserts = insertCalls.filter(call => call.table === memoryNodes);
+
+		expect(result.eventIds).toEqual(eventInserts.map(event => event.id));
+		expect(result.patchIds).toEqual([patchInsert.id]);
+		expect(result.memoryNodeIds).toEqual([]);
+		expect(eventInserts).toHaveLength(1);
+		expect(eventInserts[0]).toMatchObject({
+			type: 'reveal',
+			title: 'Ash bridge secured',
+			createdTurn: 7,
+			occurredTurn: 7,
+			worldTime: 'Twilight of Ashes; one hour after the oath',
+			sourceEntryIds: ['entry_assistant'],
+			sourcePatchIds: [patchInsert.id],
+			serverVersion: 13,
+		});
+		expect(eventInserts.find(event => event.title === 'Turn resolved')).toBeUndefined();
+		expect(memoryInserts).toEqual([]);
+		expect(storyUpdates.find(updatePayload => 'currentTurn' in updatePayload)).toBeUndefined();
+		expect(storyUpdates.find(updatePayload => updatePayload.currentWorldTime)).toMatchObject({
+			currentWorldTime: 'Twilight of Ashes; one hour after the oath',
+			serverVersion: 13,
+			updatedAt: expect.any(String),
+		});
+		expect(dbMocks.enqueueTurnProjectionJobs).toHaveBeenCalledWith(expect.objectContaining({
+			storyId: 'story_1',
+			eventIds: result.eventIds,
+			patchIds: [patchInsert.id],
+			memoryNodeIds: [],
+			serverVersion: 13,
+		}));
 	});
 });

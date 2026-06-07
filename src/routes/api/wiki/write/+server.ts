@@ -1,11 +1,11 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { writeWiki } from '$lib/server/wiki/wikiCore';
+import { executeWikiRouteCommand } from '$lib/server/engine/wikiRouteGateway';
 import { apiError } from '$lib/server/memory/http';
 
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		return json(await writeWiki(body));
+		return json(await executeWikiRouteCommand('wiki.write', body));
 	} catch (error) {
 		return apiError(error);
 	}

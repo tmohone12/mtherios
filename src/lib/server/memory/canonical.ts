@@ -33,10 +33,95 @@ import {
 } from '$lib/contracts/memory';
 import { enqueueImportProjectionJobs, enqueueStoryVaultSyncJob, enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
 import { deleteStoryVaultArtifacts } from '$lib/server/wiki/storyVault';
+import { getCampaignProjection } from '$lib/server/engine/projections';
+import type { EngineCampaignBootstrapArgs } from '$lib/contracts/engine';
 
 type JsonRecord = Record<string, unknown>;
 type LivingMemoryKind = 'conversationMemory' | 'worldEvent' | 'factionAction' | 'rumor' | 'scheme';
 type LivingMemoryWriteMode = 'ignore' | 'upsert';
+
+export interface BootstrapProjectionLimits {
+	entryLimit: number;
+	entityLimit: number;
+	relationshipLimit: number;
+	factionLimit: number;
+	factionMembershipLimit: number;
+	factionResourceLimit: number;
+	factionGoalLimit: number;
+	agreementLimit: number;
+	npcBeliefLimit: number;
+	threadLimit: number;
+	chapterLimit: number;
+	arcLimit: number;
+	sagaLimit: number;
+	eventLimit: number;
+	patchLimit: number;
+	memoryNodeLimit: number;
+}
+
+export const DEFAULT_BOOTSTRAP_LIMITS: BootstrapProjectionLimits = {
+	entryLimit: 80,
+	entityLimit: 120,
+	relationshipLimit: 200,
+	factionLimit: 80,
+	factionMembershipLimit: 160,
+	factionResourceLimit: 160,
+	factionGoalLimit: 160,
+	agreementLimit: 80,
+	npcBeliefLimit: 80,
+	threadLimit: 80,
+	chapterLimit: 80,
+	arcLimit: 80,
+	sagaLimit: 40,
+	eventLimit: 80,
+	patchLimit: 80,
+	memoryNodeLimit: 80,
+};
+
+const BOOTSTRAP_LIMIT_CAPS: BootstrapProjectionLimits = {
+	entryLimit: 200,
+	entityLimit: 200,
+	relationshipLimit: 400,
+	factionLimit: 200,
+	factionMembershipLimit: 400,
+	factionResourceLimit: 400,
+	factionGoalLimit: 400,
+	agreementLimit: 200,
+	npcBeliefLimit: 200,
+	threadLimit: 200,
+	chapterLimit: 200,
+	arcLimit: 200,
+	sagaLimit: 100,
+	eventLimit: 200,
+	patchLimit: 200,
+	memoryNodeLimit: 200,
+};
+
+function boundedInt(value: unknown, fallback: number, cap: number): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+	return Math.max(0, Math.min(cap, Math.trunc(value)));
+}
+
+export function normalizeBootstrapOptions(options: EngineCampaignBootstrapArgs = {}): BootstrapProjectionLimits {
+	return {
+		entryLimit: boundedInt(options.entryLimit, DEFAULT_BOOTSTRAP_LIMITS.entryLimit, BOOTSTRAP_LIMIT_CAPS.entryLimit),
+		entityLimit: boundedInt(options.entityLimit, DEFAULT_BOOTSTRAP_LIMITS.entityLimit, BOOTSTRAP_LIMIT_CAPS.entityLimit),
+		relationshipLimit: boundedInt(options.relationshipLimit, DEFAULT_BOOTSTRAP_LIMITS.relationshipLimit, BOOTSTRAP_LIMIT_CAPS.relationshipLimit),
+		factionLimit: boundedInt(options.factionLimit, DEFAULT_BOOTSTRAP_LIMITS.factionLimit, BOOTSTRAP_LIMIT_CAPS.factionLimit),
+		factionMembershipLimit: boundedInt(options.factionMembershipLimit, DEFAULT_BOOTSTRAP_LIMITS.factionMembershipLimit, BOOTSTRAP_LIMIT_CAPS.factionMembershipLimit),
+		factionResourceLimit: boundedInt(options.factionResourceLimit, DEFAULT_BOOTSTRAP_LIMITS.factionResourceLimit, BOOTSTRAP_LIMIT_CAPS.factionResourceLimit),
+		factionGoalLimit: boundedInt(options.factionGoalLimit, DEFAULT_BOOTSTRAP_LIMITS.factionGoalLimit, BOOTSTRAP_LIMIT_CAPS.factionGoalLimit),
+		agreementLimit: boundedInt(options.agreementLimit, DEFAULT_BOOTSTRAP_LIMITS.agreementLimit, BOOTSTRAP_LIMIT_CAPS.agreementLimit),
+		npcBeliefLimit: boundedInt(options.npcBeliefLimit, DEFAULT_BOOTSTRAP_LIMITS.npcBeliefLimit, BOOTSTRAP_LIMIT_CAPS.npcBeliefLimit),
+		threadLimit: boundedInt(options.threadLimit, DEFAULT_BOOTSTRAP_LIMITS.threadLimit, BOOTSTRAP_LIMIT_CAPS.threadLimit),
+		chapterLimit: boundedInt(options.chapterLimit, DEFAULT_BOOTSTRAP_LIMITS.chapterLimit, BOOTSTRAP_LIMIT_CAPS.chapterLimit),
+		arcLimit: boundedInt(options.arcLimit, DEFAULT_BOOTSTRAP_LIMITS.arcLimit, BOOTSTRAP_LIMIT_CAPS.arcLimit),
+		sagaLimit: boundedInt(options.sagaLimit, DEFAULT_BOOTSTRAP_LIMITS.sagaLimit, BOOTSTRAP_LIMIT_CAPS.sagaLimit),
+		eventLimit: boundedInt(options.eventLimit, DEFAULT_BOOTSTRAP_LIMITS.eventLimit, BOOTSTRAP_LIMIT_CAPS.eventLimit),
+		patchLimit: boundedInt(options.patchLimit, DEFAULT_BOOTSTRAP_LIMITS.patchLimit, BOOTSTRAP_LIMIT_CAPS.patchLimit),
+		memoryNodeLimit: boundedInt(options.memoryNodeLimit, DEFAULT_BOOTSTRAP_LIMITS.memoryNodeLimit, BOOTSTRAP_LIMIT_CAPS.memoryNodeLimit),
+	};
+}
 type LivingMemoryWriteOptions = {
 	serverVersion?: number;
 	timestamp?: string;
@@ -242,8 +327,9 @@ export async function deleteBackendStory(storyId: string) {
 	}
 }
 
-export async function getBootstrap(storyId: string) {
+export async function getBootstrap(storyId: string, options: EngineCampaignBootstrapArgs = {}) {
 	const db = getDb();
+	const limits = normalizeBootstrapOptions(options);
 	const [story] = await db.select().from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
 
@@ -265,29 +351,31 @@ export async function getBootstrap(storyId: string) {
 		eventRows,
 		patchRows,
 		nodeRows,
+		projection,
 	] = await Promise.all([
-		db
+		limits.entryLimit === 0 ? Promise.resolve([]) : db
 			.select()
 			.from(storyEntries)
 			.where(eq(storyEntries.storyId, storyId))
 			.orderBy(desc(storyEntries.position))
-			.limit(80),
+			.limit(limits.entryLimit),
 		db.select({ count: sql<number>`count(*)::int` }).from(storyEntries).where(eq(storyEntries.storyId, storyId)),
-		db.select().from(entities).where(eq(entities.storyId, storyId)).limit(500),
-		db.select().from(relationships).where(eq(relationships.storyId, storyId)).limit(1000),
-		db.select().from(factions).where(eq(factions.storyId, storyId)).limit(200),
-		db.select().from(factionMemberships).where(eq(factionMemberships.storyId, storyId)).limit(500),
-		db.select().from(factionResources).where(eq(factionResources.storyId, storyId)).limit(500),
-		db.select().from(factionGoals).where(eq(factionGoals.storyId, storyId)).limit(500),
-		db.select().from(agreements).where(eq(agreements.storyId, storyId)).limit(200),
-		db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).orderBy(desc(npcBeliefs.updatedAt)).limit(300),
-		db.select().from(storyThreads).where(eq(storyThreads.storyId, storyId)).limit(200),
-		db.select().from(chapters).where(eq(chapters.storyId, storyId)).orderBy(asc(chapters.number)).limit(500),
-		db.select().from(arcs).where(eq(arcs.storyId, storyId)).orderBy(asc(arcs.number)).limit(200),
-		db.select().from(sagas).where(eq(sagas.storyId, storyId)).orderBy(asc(sagas.number)).limit(100),
-		db.select().from(storyEvents).where(eq(storyEvents.storyId, storyId)).orderBy(desc(storyEvents.createdAt)).limit(80),
-		db.select().from(statePatches).where(eq(statePatches.storyId, storyId)).orderBy(desc(statePatches.createdAt)).limit(80),
-		db.select().from(memoryNodes).where(eq(memoryNodes.storyId, storyId)).orderBy(desc(memoryNodes.updatedAt)).limit(300),
+		limits.entityLimit === 0 ? Promise.resolve([]) : db.select().from(entities).where(eq(entities.storyId, storyId)).limit(limits.entityLimit),
+		limits.relationshipLimit === 0 ? Promise.resolve([]) : db.select().from(relationships).where(eq(relationships.storyId, storyId)).limit(limits.relationshipLimit),
+		limits.factionLimit === 0 ? Promise.resolve([]) : db.select().from(factions).where(eq(factions.storyId, storyId)).limit(limits.factionLimit),
+		limits.factionMembershipLimit === 0 ? Promise.resolve([]) : db.select().from(factionMemberships).where(eq(factionMemberships.storyId, storyId)).limit(limits.factionMembershipLimit),
+		limits.factionResourceLimit === 0 ? Promise.resolve([]) : db.select().from(factionResources).where(eq(factionResources.storyId, storyId)).limit(limits.factionResourceLimit),
+		limits.factionGoalLimit === 0 ? Promise.resolve([]) : db.select().from(factionGoals).where(eq(factionGoals.storyId, storyId)).limit(limits.factionGoalLimit),
+		limits.agreementLimit === 0 ? Promise.resolve([]) : db.select().from(agreements).where(eq(agreements.storyId, storyId)).limit(limits.agreementLimit),
+		limits.npcBeliefLimit === 0 ? Promise.resolve([]) : db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).orderBy(desc(npcBeliefs.updatedAt)).limit(limits.npcBeliefLimit),
+		limits.threadLimit === 0 ? Promise.resolve([]) : db.select().from(storyThreads).where(eq(storyThreads.storyId, storyId)).limit(limits.threadLimit),
+		limits.chapterLimit === 0 ? Promise.resolve([]) : db.select().from(chapters).where(eq(chapters.storyId, storyId)).orderBy(desc(chapters.number)).limit(limits.chapterLimit),
+		limits.arcLimit === 0 ? Promise.resolve([]) : db.select().from(arcs).where(eq(arcs.storyId, storyId)).orderBy(desc(arcs.number)).limit(limits.arcLimit),
+		limits.sagaLimit === 0 ? Promise.resolve([]) : db.select().from(sagas).where(eq(sagas.storyId, storyId)).orderBy(desc(sagas.number)).limit(limits.sagaLimit),
+		limits.eventLimit === 0 ? Promise.resolve([]) : db.select().from(storyEvents).where(eq(storyEvents.storyId, storyId)).orderBy(desc(storyEvents.createdAt)).limit(limits.eventLimit),
+		limits.patchLimit === 0 ? Promise.resolve([]) : db.select().from(statePatches).where(eq(statePatches.storyId, storyId)).orderBy(desc(statePatches.createdAt)).limit(limits.patchLimit),
+		limits.memoryNodeLimit === 0 ? Promise.resolve([]) : db.select().from(memoryNodes).where(eq(memoryNodes.storyId, storyId)).orderBy(desc(memoryNodes.updatedAt)).limit(limits.memoryNodeLimit),
+		getCampaignProjection(storyId, { entryLimit: limits.entryLimit }),
 	]);
 
 	return {
@@ -304,12 +392,13 @@ export async function getBootstrap(storyId: string) {
 		agreements: agreementRows,
 		npcBeliefs: npcBeliefRows,
 		threads: threadRows,
-		chapters: chapterRows,
-		arcs: arcRows,
-		sagas: sagaRows,
+		chapters: [...chapterRows].sort((a, b) => a.number - b.number),
+		arcs: [...arcRows].sort((a, b) => a.number - b.number),
+		sagas: [...sagaRows].sort((a, b) => a.number - b.number),
 		recentEvents: eventRows,
 		recentPatches: patchRows,
 		memoryNodes: nodeRows.map((row) => ({ ...row, embedding: undefined })),
+		projection,
 	};
 }
 

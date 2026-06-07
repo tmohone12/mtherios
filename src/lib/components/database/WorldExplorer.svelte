@@ -103,6 +103,10 @@
 		return text.length > 140 ? `${text.slice(0, 137)}...` : text;
 	}
 
+	function cacheStatusClass(value: unknown): string {
+		return value === true ? 'text-emerald-400' : 'text-amber-400';
+	}
+
 	function recordTitle(row: JsonRecord): string {
 		for (const key of ['title', 'name', 'goal', 'terms', 'description', 'type', 'id']) {
 			const value = row[key];
@@ -111,16 +115,24 @@
 		return 'Record';
 	}
 
-	async function fetchJson(url: string, init?: RequestInit): Promise<JsonRecord> {
-		const response = await fetch(url, init);
+	async function runEngineCommand(storyId: string, command: string, args: JsonRecord = {}): Promise<JsonRecord> {
+		const response = await fetch('/api/engine/command', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ storyId, command, args }),
+		});
 		const body = await response.json().catch(() => ({}));
 		if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : `Request failed: ${response.status}`);
-		return body as JsonRecord;
+		const envelope = body as JsonRecord;
+		if (envelope.status !== 'succeeded') {
+			throw new Error(typeof envelope.error === 'string' ? envelope.error : `Engine command failed: ${command}`);
+		}
+		return asRecord(envelope.result) ?? {};
 	}
 
 	async function loadStories() {
 		status = '';
-		const body = await fetchJson('/api/stories');
+		const body = await runEngineCommand('__app__', 'story.list');
 		stories = Array.isArray(body.stories) ? body.stories as StorySummary[] : [];
 		if (!selectedStoryId && stories[0]) selectedStoryId = stories[0].id;
 	}
@@ -131,28 +143,35 @@
 		status = '';
 		try {
 			if (activeSection === 'jobs') {
-				const body = await fetchJson(`/api/jobs?storyId=${encodeURIComponent(selectedStoryId)}&limit=100`);
+				const body = await runEngineCommand(selectedStoryId, 'jobs.status', { limit: 100 });
 				records = Array.isArray(body.jobs) ? body.jobs as JsonRecord[] : [];
 				selectedRecord = records[0] ?? null;
 				detail = selectedRecord;
 				editorText = selectedRecord ? JSON.stringify(selectedRecord, null, 2) : '';
 				nextCursor = null;
 			} else if (activeSection === 'llmSettings') {
-				const body = await fetchJson('/api/settings/llm');
+				const body = await runEngineCommand('__app__', 'settings.llm.list');
 				llmSettings = Array.isArray(body.settings) ? body.settings as JsonRecord[] : [];
 				records = llmSettings;
 				selectedRecord = records[0] ?? null;
 				detail = selectedRecord;
 				editorText = JSON.stringify(llmSettings, null, 2);
 				nextCursor = null;
+			} else if (activeSection === 'apiCallLogs') {
+				const body = await runEngineCommand(selectedStoryId, 'apiCallLogs.list', { limit: 60 });
+				records = Array.isArray(body.logs) ? body.logs as JsonRecord[] : [];
+				selectedRecord = records[0] ?? null;
+				detail = selectedRecord;
+				editorText = selectedRecord ? JSON.stringify(selectedRecord, null, 2) : '';
+				nextCursor = null;
 			} else {
-				const params = new URLSearchParams({
+				const args: JsonRecord = {
 					type: activeSection,
 					q: query,
-					limit: '60',
-				});
-				if (cursor) params.set('cursor', cursor);
-				const body = await fetchJson(`/api/stories/${encodeURIComponent(selectedStoryId)}/world?${params}`);
+					limit: 60,
+				};
+				if (cursor) args.cursor = cursor;
+				const body = await runEngineCommand(selectedStoryId, 'world.records', args);
 				const pageRecords = Array.isArray(body.records) ? body.records as JsonRecord[] : [];
 				records = cursor ? [...records, ...pageRecords] : pageRecords;
 				nextCursor = typeof body.nextCursor === 'string' ? body.nextCursor : null;
@@ -178,7 +197,10 @@
 			return;
 		}
 		try {
-			const body = await fetchJson(`/api/records/${encodeURIComponent(activeSection)}/${encodeURIComponent(String(row.id))}`);
+			const body = await runEngineCommand(selectedStoryId || '__app__', 'world.record.get', {
+				type: activeSection,
+				recordId: String(row.id),
+			});
 			detail = body;
 			editorText = JSON.stringify(body.record ?? row, null, 2);
 		} catch {
@@ -193,13 +215,11 @@
 		status = '';
 		try {
 			const parsed = JSON.parse(editorText) as JsonRecord;
-			const body = await fetchJson(`/api/records/${encodeURIComponent(activeSection)}/${encodeURIComponent(String(selectedRecord.id))}`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					updates: parsed,
-					reason: 'Manual explorer edit.',
-				}),
+			const body = await runEngineCommand(selectedStoryId || '__app__', 'world.record.patch', {
+				type: activeSection,
+				recordId: String(selectedRecord.id),
+				updates: parsed,
+				reason: 'Manual explorer edit.',
 			});
 			status = `Saved patch ${body.patchId ?? ''}`;
 			await loadSection();
@@ -216,11 +236,7 @@
 		try {
 			const parsed = JSON.parse(editorText);
 			const settings = Array.isArray(parsed) ? parsed : [];
-			const body = await fetchJson('/api/settings/llm', {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ settings }),
-			});
+			const body = await runEngineCommand('__app__', 'settings.llm.save', { settings });
 			llmSettings = Array.isArray(body.settings) ? body.settings as JsonRecord[] : [];
 			records = llmSettings;
 			status = 'LLM settings saved.';
@@ -235,11 +251,7 @@
 		if (!selectedStoryId) return;
 		status = '';
 		try {
-			const body = await fetchJson('/api/jobs/reindex-story', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ storyId: selectedStoryId, runNow }),
-			});
+			const body = await runEngineCommand(selectedStoryId, 'jobs.reindexStory', { runNow });
 			const job = body.job as { completed?: boolean } | undefined;
 			status = runNow
 				? `Index job ${body.jobId ?? ''} ${job?.completed ? 'completed' : 'queued'}`
@@ -254,9 +266,9 @@
 		if (!selectedStoryId) return;
 		status = '';
 		try {
-			const params = new URLSearchParams({ q: query, limit: '12' });
-			if (isRecordSection) params.set('type', activeSection);
-			const body = await fetchJson(`/api/stories/${encodeURIComponent(selectedStoryId)}/search?${params}`);
+			const args: JsonRecord = { q: query, limit: 12 };
+			if (isRecordSection && activeSection !== 'apiCallLogs') args.type = activeSection;
+			const body = await runEngineCommand(selectedStoryId, 'world.search', args);
 			searchResults = Array.isArray(body.results) ? body.results as JsonRecord[] : [];
 		} catch (error) {
 			status = error instanceof Error ? error.message : String(error);
@@ -420,6 +432,44 @@
 												<span class="tabular-nums text-[var(--text-secondary)]">{stringValue(value)}</span>
 											</div>
 										{/each}
+									</div>
+								{/if}
+
+								{#if asRecord(apiDebugSnapshot.engineCache)}
+									{@const engineCache = asRecord(apiDebugSnapshot.engineCache)}
+									{@const cacheSegments = asRecordArray(engineCache?.segments)}
+									<div class="space-y-2 rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2">
+										<div class="flex flex-wrap items-center justify-between gap-2 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+											<span>Engine Cache</span>
+											<span>
+												{stringValue(engineCache?.hitCount)} hits /
+												{stringValue(engineCache?.missCount)} misses /
+												{stringValue(engineCache?.tokenEstimate)} tokens
+											</span>
+										</div>
+										{#if cacheSegments.length > 0}
+											<div class="max-h-56 space-y-1 overflow-auto">
+												{#each cacheSegments as segment}
+													<div class="rounded border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2 py-1.5 text-[11px]">
+														<div class="flex items-center justify-between gap-2">
+															<span class="truncate text-[var(--text-accent)]">{stringValue(segment.kind).replaceAll('_', ' ')}</span>
+															<span class="shrink-0 tabular-nums text-[var(--text-muted)]">{stringValue(segment.tokenEstimate)} tokens</span>
+														</div>
+														<div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[var(--text-muted)]">
+															<span class={cacheStatusClass(segment.hit)}>hit {stringValue(segment.hit)}</span>
+															<span class={cacheStatusClass(!segment.invalidated)}>invalidated {stringValue(segment.invalidated)}</span>
+															<span>hits {stringValue(segment.hitCount)}</span>
+															<span>misses {stringValue(segment.missCount)}</span>
+															<span>deps {stringValue(segment.dependencyCount)}</span>
+															<span>hash {stringValue(segment.contentHash).slice(0, 8) || 'none'}</span>
+														</div>
+														<div class="mt-1 truncate font-mono text-[10px] text-[var(--text-muted)]" title={stringValue(segment.cacheKey)}>
+															{stringValue(segment.cacheKey)}
+														</div>
+													</div>
+												{/each}
+											</div>
+										{/if}
 									</div>
 								{/if}
 

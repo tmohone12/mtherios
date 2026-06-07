@@ -14,6 +14,7 @@ export interface ServerGenerationOptions {
 	temperature?: number;
 	maxTokens?: number;
 	system: string;
+	systemDynamic?: string;
 	messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
 	prompt: string;
 	responseFormat?: 'json_object';
@@ -64,6 +65,10 @@ function isGoogleAgentPlatformProvider(profile: ProviderProfile): boolean {
 	return profile.providerType === 'google-agent-platform';
 }
 
+function supportsOpenRouterStyleCaching(profile: ProviderProfile): boolean {
+	return profile.providerType === 'openrouter';
+}
+
 function requiresApiKey(profile: ProviderProfile): boolean {
 	const provider = PROVIDERS[profile.providerType as ProviderType];
 	return provider?.requiresApiKey ?? true;
@@ -104,8 +109,36 @@ function openAiHeaders(profile: ProviderProfile): Record<string, string> {
 
 function promptChars(options: ServerGenerationOptions): number {
 	return options.system.length
+		+ (options.systemDynamic?.length ?? 0)
 		+ options.prompt.length
 		+ (options.messages ?? []).reduce((total, message) => total + message.content.length, 0);
+}
+
+function combinedSystem(system: string, systemDynamic?: string): string {
+	return systemDynamic ? `${system}\n\n${systemDynamic}` : system;
+}
+
+function buildAnthropicSystem(system: string, systemDynamic?: string): string | Array<Record<string, unknown>> {
+	if (systemDynamic && systemDynamic.length > 0 && system.length > 0) {
+		return [
+			{ type: 'text', text: system, cache_control: { type: 'ephemeral' } },
+			{ type: 'text', text: systemDynamic },
+		];
+	}
+	return combinedSystem(system, systemDynamic);
+}
+
+function buildOpenAiSystemMessage(profile: ProviderProfile, system: string, systemDynamic?: string): { role: 'system'; content: unknown } {
+	if (systemDynamic && systemDynamic.length > 0 && system.length > 0 && supportsOpenRouterStyleCaching(profile)) {
+		return {
+			role: 'system',
+			content: [
+				{ type: 'text', text: system, cache_control: { type: 'ephemeral' } },
+				{ type: 'text', text: systemDynamic },
+			],
+		};
+	}
+	return { role: 'system', content: combinedSystem(system, systemDynamic) };
 }
 
 function usageFromResponse(data: unknown, useAnthropic: boolean): ServerGenerationUsage {
@@ -151,7 +184,7 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			model,
 			max_tokens: maxTokens,
 			temperature,
-			system: options.system,
+			system: buildAnthropicSystem(options.system, options.systemDynamic),
 			messages: [
 				...messages,
 				{ role: 'user', content: options.prompt },
@@ -162,7 +195,7 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			temperature,
 			max_tokens: maxTokens,
 			messages: [
-				{ role: 'system', content: options.system },
+				buildOpenAiSystemMessage(options.profile, options.system, options.systemDynamic),
 				...messages,
 				{ role: 'user', content: options.prompt },
 			],

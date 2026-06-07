@@ -1,6 +1,10 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { TERMINAL_WORLD_DATABASE_SCHEMA } from '$lib/server/db/worldDatabaseSchema';
+import { executeLegacyEngineCommand } from '$lib/server/engine/routeCompatibility';
 
 export const GET: RequestHandler = async () => {
-	return json(TERMINAL_WORLD_DATABASE_SCHEMA);
+	return json(await executeLegacyEngineCommand({
+		storyId: '__app__',
+		command: 'database.schema.get',
+		args: {},
+	}));
 };

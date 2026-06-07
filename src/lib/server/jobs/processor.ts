@@ -10,12 +10,24 @@ import {
 	validateMemoryEmbeddingVector,
 } from '$lib/server/memory/embeddings';
 import { getMtheriosAppConfig } from '$lib/server/app/config';
-import { getStoryVaultStatus, materializeStoryVault, writeStoryVaultLintReport } from '$lib/server/wiki/storyVault';
+import { getStoryVaultStatus, materializeStoryVault, writeStoryVaultLintReport, type StoryVaultStatus } from '$lib/server/wiki/storyVault';
 import { indexWiki, lintWiki } from '$lib/server/wiki/wikiCore';
-import { claimBackendJobs, markBackendJobComplete, markBackendJobFailed, type BackendJobType } from './outbox';
+import { claimBackendJobs, enqueueStoryVaultSyncJob, markBackendJobComplete, markBackendJobFailed, type BackendJobType } from './outbox';
 import { indexCanonicalRecords } from '$lib/server/engine/canonicalSearch';
+import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
+import { publishEngineEvent } from '$lib/server/engine/events';
+import { resolveServiceGeneration } from '$lib/server/engine/llmSettings';
 import { createTimingRecorder, type TimingEntry, type TimingRecorder } from '$lib/server/performance/timing';
 import { mapWithConcurrency, readGenerationConcurrency } from '$lib/server/performance/concurrency';
+import { buildTurnDebugSnapshot } from '$lib/server/turn/debugSnapshot';
+import { applyValidatedTurnUpdate, parseTurnUpdate, turnUpdateOperationCount } from '$lib/server/turn/patchValidator';
+import { buildStateExtractionPrompt } from '$lib/server/turn/promptPacket';
+import {
+	ServerGenerationError,
+	generateServerTextWithMetrics,
+	parseJsonFromGeneratedText,
+	type ServerGenerationResult,
+} from '$lib/server/turn/provider';
 
 type BackendJobRow = typeof backendJobs.$inferSelect;
 type ArcRow = typeof arcs.$inferSelect;
@@ -23,6 +35,8 @@ type ChapterRow = typeof chapters.$inferSelect;
 type FactionRow = typeof factions.$inferSelect;
 type StoryEntryRow = typeof storyEntries.$inferSelect;
 type StoryEventRow = typeof storyEvents.$inferSelect;
+type ProviderProfile = NonNullable<Awaited<ReturnType<typeof resolveServiceGeneration>>['profile']>;
+type GenerationResult = ServerGenerationResult | ServerGenerationError['result'];
 
 export interface BackendJobTimingReport {
 	jobId: string;
@@ -67,6 +81,8 @@ export interface BackendJobStats {
 	recentFailures: BackendJobPreview[];
 	runningJobs: BackendJobPreview[];
 }
+
+type BackendJobStatusEventStatus = 'running' | 'completed' | 'failed';
 
 type FactionPressureReason = {
 	eventId: string;
@@ -115,6 +131,17 @@ function asNumber(value: unknown, fallback = 0): number {
 	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+function asOptionalInt(value: unknown, min: number, max: number): number | undefined {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+	return clamp(Math.trunc(value), min, max);
+}
+
+function requirePayloadString(payload: Record<string, unknown>, key: string): string {
+	const value = payload[key];
+	if (typeof value === 'string' && value.trim()) return value;
+	throw new Error(`extract_turn_state job is missing payload.${key}`);
+}
+
 function uniqueStrings(values: string[]): string[] {
 	return [...new Set(values.filter(Boolean))];
 }
@@ -126,6 +153,35 @@ function compactWhitespace(value: string): string {
 function snippet(value: string, max = 220): string {
 	const clean = compactWhitespace(value);
 	return clean.length > max ? `${clean.slice(0, Math.max(0, max - 1)).trimEnd()}...` : clean;
+}
+
+export function backendJobStatusEventData(
+	job: Pick<BackendJobRow, 'id' | 'storyId' | 'type' | 'attemptCount' | 'maxAttempts'>,
+	status: BackendJobStatusEventStatus,
+	details: { result?: Record<string, unknown>; error?: string } = {},
+): Record<string, unknown> {
+	return {
+		jobId: job.id,
+		storyId: job.storyId,
+		type: job.type,
+		status,
+		attemptCount: job.attemptCount,
+		maxAttempts: job.maxAttempts,
+		...(details.result ? { result: details.result } : {}),
+		...(details.error ? { error: snippet(details.error, 500) } : {}),
+	};
+}
+
+function publishBackendJobStatus(
+	job: Pick<BackendJobRow, 'id' | 'storyId' | 'type' | 'attemptCount' | 'maxAttempts'>,
+	status: BackendJobStatusEventStatus,
+	details: { result?: Record<string, unknown>; error?: string } = {},
+): void {
+	publishEngineEvent({
+		storyId: job.storyId,
+		type: 'job.status',
+		data: backendJobStatusEventData(job, status, details),
+	});
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -156,6 +212,46 @@ async function bumpStoryVersion(storyId: string): Promise<number> {
 		.where(eq(stories.id, storyId))
 		.returning({ serverVersion: stories.serverVersion });
 	return row?.serverVersion ?? 1;
+}
+
+function generationErrorResult(error: unknown): ServerGenerationError['result'] | null {
+	return error instanceof ServerGenerationError ? error.result : null;
+}
+
+async function logDeferredStateExtractionCall(options: {
+	job: BackendJobRow;
+	clientTurnId: string;
+	profile: ProviderProfile;
+	result: GenerationResult;
+	status: 'success' | 'error';
+	error?: unknown;
+	metadata?: Record<string, unknown>;
+}): Promise<void> {
+	const usage = 'usage' in options.result ? options.result.usage : undefined;
+	await recordApiCallLog({
+		storyId: options.job.storyId,
+		serviceId: 'classifier',
+		operation: 'turn.state_extraction',
+		providerType: options.profile.providerType,
+		providerName: options.profile.name ?? null,
+		profileId: options.profile.id ?? null,
+		model: options.result.model,
+		endpoint: options.result.endpoint,
+		status: options.status,
+		durationMs: options.result.durationMs,
+		requestTokens: usage?.requestTokens ?? null,
+		responseTokens: usage?.responseTokens ?? null,
+		totalTokens: usage?.totalTokens ?? null,
+		promptChars: options.result.promptChars,
+		responseChars: 'responseChars' in options.result ? options.result.responseChars ?? null : null,
+		error: options.error ? (options.error instanceof Error ? options.error.message : String(options.error)) : null,
+		metadata: {
+			jobId: options.job.id,
+			clientTurnId: options.clientTurnId,
+			deferred: true,
+			...options.metadata,
+		},
+	});
 }
 
 function eventMemoryType(row: StoryEventRow): MemoryNode['type'] {
@@ -1304,6 +1400,23 @@ async function syncStoryVault(job: BackendJobRow, recorder?: TimingRecorder): Pr
 		: null;
 
 	const status = await timePhase(recorder, 'job.sync_story_vault.status_after', {}, () => getStoryVaultStatus(job.storyId, config));
+	const followupVersion = storyVaultFollowupVersion(status);
+	const followupJobId = followupVersion
+		? await timePhase(recorder, 'job.sync_story_vault.enqueue_followup', { followupVersion }, () => enqueueStoryVaultSyncJob({
+			storyId: job.storyId,
+			serverVersion: followupVersion,
+			reason: 'catchup',
+			payload: {
+				clean: payload.clean,
+				index: payload.index,
+				lint: payload.lint,
+				recreate: payload.recreate,
+				provider: payload.provider,
+				model: payload.model,
+				sourceJobId: job.id,
+			},
+		}))
+		: null;
 	return {
 		storyId: job.storyId,
 		vaultPath: vault.vaultPath,
@@ -1313,8 +1426,20 @@ async function syncStoryVault(job: BackendJobRow, recorder?: TimingRecorder): Pr
 		linted,
 		autoIndex: config.wikiAutoIndexStoryVaults,
 		autoLint: config.wikiAutoLintStoryVaults,
+		followupJobId,
+		followupVersion,
 		status,
 	};
+}
+
+export function storyVaultFollowupVersion(
+	status: Pick<StoryVaultStatus, 'serverVersion' | 'manifestVersion'>,
+): number | null {
+	const serverVersion = Number.isFinite(status.serverVersion) ? Math.trunc(status.serverVersion) : 0;
+	const manifestVersion = Number.isFinite(status.manifestVersion ?? 0)
+		? Math.trunc(status.manifestVersion ?? 0)
+		: 0;
+	return serverVersion > 0 && manifestVersion < serverVersion ? serverVersion : null;
 }
 
 async function indexCanonicalRecordsJob(job: BackendJobRow): Promise<Record<string, unknown>> {
@@ -1324,6 +1449,146 @@ async function indexCanonicalRecordsJob(job: BackendJobRow): Promise<Record<stri
 		recordTypes: asStringArray(payload.recordTypes),
 		recreate: payload.recreate === true,
 	});
+}
+
+async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
+	const payload = asRecord(job.payload);
+	const playerEntryId = requirePayloadString(payload, 'playerEntryId');
+	const assistantEntryId = requirePayloadString(payload, 'assistantEntryId');
+	const playerText = requirePayloadString(payload, 'playerText');
+	const narration = requirePayloadString(payload, 'narration');
+	const clientTurnId = typeof payload.clientTurnId === 'string' && payload.clientTurnId.trim()
+		? payload.clientTurnId
+		: job.id;
+	const timelineTurn = typeof payload.timelineTurn === 'number' && Number.isFinite(payload.timelineTurn)
+		? Math.max(0, Math.trunc(payload.timelineTurn))
+		: null;
+	const memorySettingsPayload = asRecord(payload.memorySettings);
+	const memorySettings = {
+		chapterThreshold: asOptionalInt(memorySettingsPayload.chapterThreshold, 5, 200),
+		postChapterBuffer: asOptionalInt(memorySettingsPayload.postChapterBuffer, 0, 100),
+		chaptersPerArc: asOptionalInt(memorySettingsPayload.chaptersPerArc, 2, 50),
+	};
+	const classifierService = await timePhase(recorder, 'job.extract_turn_state.resolve_service', {}, () => resolveServiceGeneration('classifier'));
+	const fallbackNarrativeService = classifierService.profile
+		? null
+		: await timePhase(recorder, 'job.extract_turn_state.resolve_narrative_fallback', {}, () => resolveServiceGeneration('narrative'));
+	const classifierProfile = classifierService.profile ?? fallbackNarrativeService?.profile ?? null;
+	if (!classifierProfile) {
+		return {
+			status: 'classifier_unavailable',
+			missingReason: classifierService.missingReason ?? fallbackNarrativeService?.missingReason ?? null,
+		};
+	}
+
+	const generationService = classifierService.profile ? classifierService : fallbackNarrativeService ?? classifierService;
+	const classifierGeneration = generationService.generation;
+	const classifierSystem = generationService.systemPromptOverride?.trim() || 'You extract canonical state changes for a text adventure. Return strict JSON only.';
+	const extractionPrompt = buildStateExtractionPrompt(playerText, narration);
+	let rawUpdate: unknown = null;
+	try {
+		const extractionResult = await timePhase(recorder, 'job.extract_turn_state.llm', {
+			serviceId: 'classifier',
+			model: classifierGeneration.model ?? null,
+		}, () => generateServerTextWithMetrics({
+			profile: classifierProfile,
+			model: classifierGeneration.model,
+			temperature: classifierGeneration.temperature,
+			maxTokens: Math.min(classifierGeneration.maxTokens ?? 2048, 2048),
+			system: classifierSystem,
+			prompt: extractionPrompt,
+			responseFormat: 'json_object',
+		}));
+		await timePhase(recorder, 'job.extract_turn_state.log_success', {}, () => logDeferredStateExtractionCall({
+			job,
+			clientTurnId,
+			profile: classifierProfile,
+			result: extractionResult,
+			status: 'success',
+			metadata: {
+				responseFormat: 'json_object',
+				debugSnapshot: buildTurnDebugSnapshot({
+					kind: 'state_extraction',
+					playerText,
+					system: classifierSystem,
+					prompt: extractionPrompt,
+					output: extractionResult.text,
+				}),
+			},
+		}));
+		rawUpdate = parseJsonFromGeneratedText(extractionResult.text);
+	} catch (error) {
+		const failedResult = generationErrorResult(error);
+		if (failedResult) {
+			await timePhase(recorder, 'job.extract_turn_state.log_error', {
+				statusCode: failedResult.statusCode ?? null,
+			}, () => logDeferredStateExtractionCall({
+				job,
+				clientTurnId,
+				profile: classifierProfile,
+				result: failedResult,
+				status: 'error',
+				error,
+				metadata: {
+					responseFormat: 'json_object',
+					statusCode: failedResult.statusCode ?? null,
+					debugSnapshot: buildTurnDebugSnapshot({
+						kind: 'state_extraction',
+						playerText,
+						system: classifierSystem,
+						prompt: extractionPrompt,
+					}),
+				},
+			}));
+		}
+		return {
+			status: 'llm_error',
+			error: error instanceof Error ? error.message : String(error),
+			statusCode: failedResult?.statusCode ?? null,
+		};
+	}
+
+	const parsedUpdate = timePhaseSync(recorder, 'job.extract_turn_state.parse_update', {}, () => parseTurnUpdate(rawUpdate));
+	const operationCount = turnUpdateOperationCount(parsedUpdate.update);
+	if (operationCount === 0 && parsedUpdate.warnings.length === 0) {
+		return {
+			status: 'no_changes',
+			operationCount,
+		};
+	}
+
+	const serverVersion = await timePhase(recorder, 'job.extract_turn_state.bump_version', {
+		operationCount,
+		parseWarnings: parsedUpdate.warnings.length,
+	}, () => bumpStoryVersion(job.storyId));
+	const applied = await timePhase(recorder, 'job.extract_turn_state.apply_update', {
+		operationCount,
+		parseWarnings: parsedUpdate.warnings.length,
+		serverVersion,
+	}, () => applyValidatedTurnUpdate({
+		storyId: job.storyId,
+		playerEntryId,
+		assistantEntryId,
+		narration,
+		update: parsedUpdate.update,
+		parseWarnings: parsedUpdate.warnings,
+		retrievedMemoryIds: asStringArray(payload.retrievedMemoryIds),
+		serverVersion,
+		mode: 'supplemental',
+		timelineTurn,
+		memorySettings,
+	}));
+
+	return {
+		status: 'applied',
+		serverVersion,
+		operationCount,
+		parseWarnings: parsedUpdate.warnings.length,
+		warnings: applied.warnings,
+		eventIds: applied.eventIds,
+		patchIds: applied.patchIds,
+		memoryNodeIds: applied.memoryNodeIds,
+	};
 }
 
 async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
@@ -1350,6 +1615,8 @@ async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder):
 				return indexCanonicalRecordsJob(job);
 			case 'sync_story_vault':
 				return syncStoryVault(job, recorder);
+			case 'extract_turn_state':
+				return extractTurnState(job, recorder);
 			default:
 				throw new Error(`Unknown backend job type: ${job.type}`);
 		}
@@ -1384,8 +1651,10 @@ async function runClaimedJob(job: BackendJobRow): Promise<{
 		},
 	});
 	try {
+		publishBackendJobStatus(job, 'running');
 		const result = await processBackendJob(job, recorder);
 		await timePhase(recorder, 'job.mark_complete', {}, () => markBackendJobComplete(job.id));
+		publishBackendJobStatus(job, 'completed', { result });
 		return {
 			completed: true,
 			result,
@@ -1394,6 +1663,7 @@ async function runClaimedJob(job: BackendJobRow): Promise<{
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		await timePhase(recorder, 'job.mark_failed', { error: message }, () => markBackendJobFailed(job.id, error));
+		publishBackendJobStatus(job, 'failed', { error: message });
 		return {
 			completed: false,
 			error: message,
@@ -1490,10 +1760,19 @@ function summarizeBackendJobs(rows: BackendJobPreview[]): BackendJobStats {
 	const readyByType: Record<string, number> = {};
 	const failedByType: Record<string, number> = {};
 	const storyIds = new Set<string>();
+	const latestCompletedAt = new Map<string, string>();
 	const readyJobs: BackendJobPreview[] = [];
 	const delayedJobs: BackendJobPreview[] = [];
 	const runningJobs: BackendJobPreview[] = [];
 	const recentFailures: BackendJobPreview[] = [];
+
+	for (const row of rows) {
+		if (row.status === 'complete') {
+			const key = jobFamilyKey(row);
+			const previous = latestCompletedAt.get(key);
+			if (!previous || row.updatedAt > previous) latestCompletedAt.set(key, row.updatedAt);
+		}
+	}
 
 	for (const row of rows) {
 		byStatus[row.status] = (byStatus[row.status] ?? 0) + 1;
@@ -1510,7 +1789,7 @@ function summarizeBackendJobs(rows: BackendJobPreview[]): BackendJobStats {
 
 		if (row.status === 'running') runningJobs.push(row);
 		if (row.status === 'failed' || (row.status === 'retry' && row.lastError)) {
-			recentFailures.push(row);
+			if (!isSupersededJobFailure(row, latestCompletedAt)) recentFailures.push(row);
 			failedByType[row.type] = (failedByType[row.type] ?? 0) + 1;
 		}
 	}
@@ -1546,4 +1825,17 @@ function compactJobPreview(row: BackendJobPreview): BackendJobPreview {
 		...row,
 		lastError: row.lastError ? snippet(row.lastError, 500) : null,
 	};
+}
+
+function jobFamilyKey(row: Pick<BackendJobPreview, 'storyId' | 'type'>): string {
+	return `${row.storyId}:${row.type}`;
+}
+
+export function isSupersededJobFailure(
+	row: Pick<BackendJobPreview, 'storyId' | 'type' | 'status' | 'updatedAt'>,
+	latestCompletedAt: Map<string, string>,
+): boolean {
+	if (row.status !== 'failed' && row.status !== 'retry') return false;
+	const completedAt = latestCompletedAt.get(jobFamilyKey(row));
+	return Boolean(completedAt && completedAt > row.updatedAt);
 }

@@ -3,6 +3,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import {
+	buildStoryBootstrapCommandRequest,
+	buildStoryEntriesCommandRequest,
+	buildStoryMemoryCommandRequest,
+	buildStoryTurnCommandRequest,
+	unwrapEngineTurnCommand,
+} from './app-story-core.mjs';
 
 const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
 const DEFAULT_PORT = process.env.PORT || '5173';
@@ -20,6 +28,24 @@ const BOOLEAN_FLAGS = new Set([
 	'preserveIds',
 	'rebuildMemoryNodes',
 ]);
+const BOOTSTRAP_LIMIT_KEYS = [
+	'entryLimit',
+	'entityLimit',
+	'relationshipLimit',
+	'factionLimit',
+	'factionMembershipLimit',
+	'factionResourceLimit',
+	'factionGoalLimit',
+	'agreementLimit',
+	'npcBeliefLimit',
+	'threadLimit',
+	'chapterLimit',
+	'arcLimit',
+	'sagaLimit',
+	'eventLimit',
+	'patchLimit',
+	'memoryNodeLimit',
+];
 
 async function main(argv = process.argv.slice(2)) {
 	const { command, flags, positional } = parseArgs(argv);
@@ -141,19 +167,40 @@ async function deleteStory(url, flags) {
 
 async function bootstrapStory(url, flags) {
 	const storyId = readStoryId(flags);
-	return requestJson(url, `/api/stories/${encodeURIComponent(storyId)}/bootstrap`, { timeoutMs: 60_000 });
+	const commandRequest = buildStoryBootstrapCommandRequest({
+		storyId,
+		...readBootstrapLimitFlags(flags),
+	});
+	return unwrapEngineTurnCommand(await requestJson(url, commandRequest.requestPath, {
+		method: 'POST',
+		body: JSON.stringify(commandRequest.body),
+		timeoutMs: 60_000,
+	}));
+}
+
+function readBootstrapLimitFlags(flags) {
+	const limits = {};
+	for (const key of BOOTSTRAP_LIMIT_KEYS) {
+		const value = readNumber(flags[key]);
+		if (typeof value === 'number') limits[key] = value;
+	}
+	return limits;
 }
 
 async function listEntries(url, flags) {
 	const storyId = readStoryId(flags);
-	const params = new URLSearchParams();
 	const limit = readNumber(flags.limit);
 	const beforePosition = readNumber(flags.beforePosition);
-	if (limit) params.set('limit', String(limit));
-	if (beforePosition !== undefined) params.set('beforePosition', String(beforePosition));
-	if (flags.branchId) params.set('branchId', String(flags.branchId));
-	const query = params.toString();
-	return requestJson(url, `/api/stories/${encodeURIComponent(storyId)}/entries${query ? `?${query}` : ''}`);
+	const commandRequest = buildStoryEntriesCommandRequest({
+		storyId,
+		limit,
+		beforePosition,
+		branchId: optionalString(flags.branchId),
+	});
+	return unwrapEngineTurnCommand(await requestJson(url, commandRequest.requestPath, {
+		method: 'POST',
+		body: JSON.stringify(commandRequest.body),
+	}));
 }
 
 async function buildDossier(url, flags, positional, command) {
@@ -241,20 +288,21 @@ async function importStory(url, flags) {
 async function retrieveMemory(url, flags, positional) {
 	const storyId = readStoryId(flags);
 	const query = String(flags.query || positional.join(' ')).trim();
-	return requestJson(url, '/api/memory/retrieve', {
-		method: 'POST',
-		body: JSON.stringify({
-			storyId,
-			query,
-			sceneEntityIds: splitCsv(flags.sceneEntityIds),
-			presentNpcIds: splitCsv(flags.presentNpcIds),
-			threadIds: splitCsv(flags.threadIds),
-			locationId: optionalString(flags.locationId),
-			currentFactionId: optionalString(flags.currentFactionId),
-			includeSecret: flags.includeSecret === true,
-			tokenBudget: readNumber(flags.tokenBudget),
-		}),
+	const commandRequest = buildStoryMemoryCommandRequest({
+		storyId,
+		query,
+		sceneEntityIds: splitCsv(flags.sceneEntityIds),
+		presentNpcIds: splitCsv(flags.presentNpcIds),
+		threadIds: splitCsv(flags.threadIds),
+		locationId: optionalString(flags.locationId),
+		currentFactionId: optionalString(flags.currentFactionId),
+		includeSecret: flags.includeSecret === true,
+		tokenBudget: readNumber(flags.tokenBudget),
 	});
+	return unwrapEngineTurnCommand(await requestJson(url, commandRequest.requestPath, {
+		method: 'POST',
+		body: JSON.stringify(commandRequest.body),
+	}));
 }
 
 function defaultExportName(payload) {
@@ -268,35 +316,37 @@ function defaultExportName(payload) {
 	return `${title}-${date}.mtherios.json`;
 }
 
-async function runTurn(url, flags, positional) {
+async function runTurn(url, flags, positional, request = requestJson) {
 	const storyId = readStoryId(flags);
 	const playerText = String(flags.text || positional.join(' ')).trim();
 	if (!playerText) throw new Error('turn requires player text.');
 	const clientTurnId = optionalString(flags.clientTurnId) || `cli_${randomUUID()}`;
 	const providerProfile = buildProviderProfile(flags);
-	const turn = await requestJson(url, '/api/turn', {
+	const turnArgs = {
+		storyId,
+		clientTurnId,
+		playerText,
+		localVersion: readNumber(flags.localVersion) ?? 0,
+		...(providerProfile ? { providerProfile } : {}),
+		generation: {
+			model: optionalString(flags.model),
+			temperature: readNumber(flags.temperature) ?? 1,
+			maxTokens: readNumber(flags.maxTokens) ?? 4096,
+		},
+		clientContext: {
+			locationId: optionalString(flags.locationId),
+			sceneEntityIds: splitCsv(flags.sceneEntityIds),
+			presentNpcIds: splitCsv(flags.presentNpcIds),
+			threadIds: splitCsv(flags.threadIds),
+			currentFactionId: optionalString(flags.currentFactionId),
+		},
+	};
+	const commandRequest = buildStoryTurnCommandRequest(turnArgs);
+	const turn = unwrapEngineTurnCommand(await request(url, commandRequest.requestPath, {
 		method: 'POST',
-		body: JSON.stringify({
-			storyId,
-			clientTurnId,
-			playerText,
-			localVersion: readNumber(flags.localVersion) ?? 0,
-			...(providerProfile ? { providerProfile } : {}),
-			generation: {
-				model: optionalString(flags.model),
-				temperature: readNumber(flags.temperature) ?? 1,
-				maxTokens: readNumber(flags.maxTokens) ?? 4096,
-			},
-			clientContext: {
-				locationId: optionalString(flags.locationId),
-				sceneEntityIds: splitCsv(flags.sceneEntityIds),
-				presentNpcIds: splitCsv(flags.presentNpcIds),
-				threadIds: splitCsv(flags.threadIds),
-				currentFactionId: optionalString(flags.currentFactionId),
-			},
-		}),
+		body: JSON.stringify(commandRequest.body),
 		timeoutMs: 180_000,
-	});
+	}));
 	if (!shouldRefreshWiki(flags)) return turn;
 	return {
 		...turn,
@@ -700,7 +750,14 @@ General options:
 `);
 }
 
-main().catch((error) => {
-	console.error(error instanceof Error ? error.message : String(error));
-	process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	main().catch((error) => {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+	});
+}
+
+export {
+	main,
+	runTurn,
+};

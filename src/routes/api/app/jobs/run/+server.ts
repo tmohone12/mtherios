@@ -1,5 +1,5 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { runDueBackendJobs, getBackendJobStats } from '$lib/server/jobs/processor';
+import { executeLegacyEngineCommand } from '$lib/server/engine/routeCompatibility';
 import { apiError } from '$lib/server/memory/http';
 
 export const POST: RequestHandler = async ({ request, url }) => {
@@ -16,17 +16,15 @@ export const POST: RequestHandler = async ({ request, url }) => {
 			? body.storyId.trim()
 			: url.searchParams.get('storyId');
 
-		const before = await getBackendJobStats(storyId);
-		const result = await runDueBackendJobs(workerId, limit, storyId);
-		const after = await getBackendJobStats(storyId);
-		return json({
-			ok: true,
-			workerId,
-			limit,
-			before,
-			after,
-			...result,
-		});
+		return json(await executeLegacyEngineCommand({
+			storyId: storyId || '__all_stories__',
+			command: 'jobs.runDue',
+			args: {
+				workerId,
+				limit,
+				allStories: !storyId,
+			},
+		}));
 	} catch (error) {
 		return apiError(error);
 	}

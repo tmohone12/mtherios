@@ -1,6 +1,6 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { apiCallLogCreateSchema } from '$lib/contracts/engine';
-import { listApiCallLogs, recordApiCallLog } from '$lib/server/engine/apiCallLogs';
+import { executeLegacyEngineCommand } from '$lib/server/engine/routeCompatibility';
 import { apiError, readJson } from '$lib/server/memory/http';
 
 function positiveInteger(value: string | null, fallback: number): number {
@@ -11,13 +11,16 @@ function positiveInteger(value: string | null, fallback: number): number {
 
 export const GET: RequestHandler = async ({ url }) => {
 	try {
-		const logs = await listApiCallLogs({
-			storyId: url.searchParams.get('storyId'),
-			status: url.searchParams.get('status'),
-			serviceId: url.searchParams.get('serviceId'),
-			limit: positiveInteger(url.searchParams.get('limit'), 100),
-		});
-		return json({ logs });
+		const storyId = url.searchParams.get('storyId')?.trim() || null;
+		return json(await executeLegacyEngineCommand({
+			storyId: storyId ?? '__app__',
+			command: 'apiCallLogs.list',
+			args: {
+				status: url.searchParams.get('status') || null,
+				serviceId: url.searchParams.get('serviceId') || null,
+				limit: positiveInteger(url.searchParams.get('limit'), 100),
+			},
+		}));
 	} catch (error) {
 		return apiError(error);
 	}
@@ -26,8 +29,11 @@ export const GET: RequestHandler = async ({ url }) => {
 export const POST: RequestHandler = async (event) => {
 	try {
 		const request = await readJson(event, apiCallLogCreateSchema);
-		const log = await recordApiCallLog(request);
-		return json({ logged: Boolean(log), log });
+		return json(await executeLegacyEngineCommand({
+			storyId: request.storyId ?? '__app__',
+			command: 'apiCallLogs.record',
+			args: request,
+		}));
 	} catch (error) {
 		return apiError(error);
 	}

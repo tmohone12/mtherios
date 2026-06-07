@@ -12,6 +12,7 @@
 		"engine": "npm run app:dev",
 		"app:status": "node scripts/app-status.mjs",
 		"app:jobs": "node scripts/app-jobs.mjs",
+		"app:engine": "node scripts/app-engine.mjs",
 		"app:story": "node scripts/app-story.mjs",
 		"app:database": "node scripts/app-database.mjs",
 		"app:mcp": "node scripts/mtherios-mcp.mjs",

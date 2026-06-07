@@ -1,7 +1,7 @@
 import { SERVICE_DEFINITIONS, settings } from '$lib/stores/settings.svelte';
 import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 import type { APIProfile, ProviderType } from '$lib/types';
-import type { LlmServiceSetting } from '$lib/contracts/engine';
+import type { EngineCommandResponse, LlmServiceSetting } from '$lib/contracts/engine';
 
 const DEFAULT_KEY_REFS: Partial<Record<ProviderType, string>> = {
 	openrouter: 'env:OPENROUTER_API_KEY',
@@ -44,14 +44,21 @@ type TerminalSecretRef = { ref: string; value: string };
 
 async function patchTerminalLlmSettings(payload: LlmServiceSetting[], secrets: TerminalSecretRef[] = []): Promise<void> {
 	if (payload.length === 0) return;
-	const response = await fetch('/api/settings/llm', {
-		method: 'PATCH',
+	const response = await fetch('/api/engine/command', {
+		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ settings: payload, secrets }),
+		body: JSON.stringify({
+			storyId: '__app__',
+			command: 'settings.llm.save',
+			args: { settings: payload, secrets },
+		}),
 	});
+	const body = await response.json().catch(() => ({})) as Partial<EngineCommandResponse> & { error?: string };
 	if (!response.ok) {
-		const body = await response.json().catch(() => ({})) as { error?: string };
 		throw new Error(body.error ?? `Terminal LLM settings failed: HTTP ${response.status}`);
+	}
+	if (body.status !== 'succeeded') {
+		throw new Error(body.error ?? 'Terminal LLM settings failed');
 	}
 }
 

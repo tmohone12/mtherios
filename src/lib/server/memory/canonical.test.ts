@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SyncOperation } from '$lib/contracts/memory';
-import { assertSyncOpReplayMatches } from './canonical';
+import { assertSyncOpReplayMatches, normalizeBootstrapOptions } from './canonical';
 
 const baseOp: SyncOperation = {
 	id: 'op_replay_1',
@@ -72,5 +72,44 @@ describe('sync operation replay guard', () => {
 			clientVersion: 5,
 			payload: baseOp.payload,
 		})).toThrow('Sync operation id collision');
+	});
+});
+
+describe('backend bootstrap projection limits', () => {
+	it('defaults to bounded control-surface slices instead of broad history/world loads', () => {
+		expect(normalizeBootstrapOptions()).toEqual({
+			entryLimit: 80,
+			entityLimit: 120,
+			relationshipLimit: 200,
+			factionLimit: 80,
+			factionMembershipLimit: 160,
+			factionResourceLimit: 160,
+			factionGoalLimit: 160,
+			agreementLimit: 80,
+			npcBeliefLimit: 80,
+			threadLimit: 80,
+			chapterLimit: 80,
+			arcLimit: 80,
+			sagaLimit: 40,
+			eventLimit: 80,
+			patchLimit: 80,
+			memoryNodeLimit: 80,
+		});
+	});
+
+	it('clamps bootstrap limits so a control surface cannot request a giant campaign blob', () => {
+		expect(normalizeBootstrapOptions({
+			entryLimit: 10000,
+			entityLimit: 9999,
+			memoryNodeLimit: 9999,
+			npcBeliefLimit: -5,
+			sagaLimit: 0,
+		})).toEqual(expect.objectContaining({
+			entryLimit: 200,
+			entityLimit: 200,
+			memoryNodeLimit: 200,
+			npcBeliefLimit: 0,
+			sagaLimit: 0,
+		}));
 	});
 });

@@ -50,6 +50,12 @@ export interface StoryVaultJobResult {
 	status: StoryVaultStatus;
 }
 
+interface EngineCommandResponse<T> {
+	status?: string;
+	result?: T;
+	error?: string | null;
+}
+
 async function readJson(response: Response): Promise<unknown> {
 	const body = await response.json().catch(() => ({}));
 	if (!response.ok) {
@@ -60,10 +66,24 @@ async function readJson(response: Response): Promise<unknown> {
 	return body;
 }
 
+async function runEngineCommand<T>(
+	storyId: string,
+	command: string,
+	args: Record<string, unknown>,
+): Promise<T> {
+	const raw = await readJson(await fetch('/api/engine/command', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ storyId, command, args }),
+	})) as EngineCommandResponse<T>;
+	if (raw.status !== 'succeeded') {
+		throw new Error(raw.error ?? `Engine command failed: ${command}`);
+	}
+	return raw.result as T;
+}
+
 export async function fetchStoryVaultStatus(storyId: string): Promise<StoryVaultStatus> {
-	const params = new URLSearchParams({ storyId });
-	const raw = await readJson(await fetch(`/api/wiki/story-vault/status?${params.toString()}`));
-	return raw as StoryVaultStatus;
+	return runEngineCommand<StoryVaultStatus>(storyId, 'wiki.storyVault.status', { storyId });
 }
 
 export async function downloadStoryVaultArchive(storyId: string): Promise<void> {
@@ -96,21 +116,16 @@ export async function runStoryVaultJob(input: {
 	orphanLayer?: 'derived' | 'all';
 	runNow?: boolean;
 }): Promise<StoryVaultJobResult> {
-	const response = await fetch('/api/app/jobs/wiki', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			storyId: input.storyId,
-			index: input.index === true,
-			recreate: input.recreate === true,
-			clean: input.clean !== false,
-			lint: input.lint === true,
-			thinChars: input.thinChars,
-			orphanLayer: input.orphanLayer,
-			runNow: input.runNow !== false,
-		}),
+	const job = await runEngineCommand<Record<string, unknown>>(input.storyId, 'jobs.storyVaultSync', {
+		storyId: input.storyId,
+		index: input.index === true,
+		recreate: input.recreate === true,
+		clean: input.clean !== false,
+		lint: input.lint === true,
+		thinChars: input.thinChars,
+		orphanLayer: input.orphanLayer,
+		runNow: input.runNow !== false,
 	});
-	const job = await readJson(response) as Record<string, unknown>;
 	if (job.ok === false) {
 		const run = job.job && typeof job.job === 'object' ? job.job as Record<string, unknown> : null;
 		throw new Error(typeof run?.error === 'string' ? run.error : 'Story vault job failed.');

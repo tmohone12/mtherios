@@ -61,7 +61,7 @@ function printStatus(status, url) {
 	printQdrantCollections(qdrant);
 	console.log(`  ollama:   ${serviceLine(ollama)} ${config.ollamaUrl || ''}`);
 	console.log(`  wiki:     ${config.wikiEmbedProvider || 'unknown'} / ${config.wikiEmbedModel || 'unknown'}, auto-index ${config.wikiAutoIndexStoryVaults ? 'on' : 'off'}, auto-lint ${config.wikiAutoLintStoryVaults ? 'on' : 'off'}`);
-	printWikiStatus(wiki);
+	printWikiStatus(wiki, qdrant);
 	console.log(`  memory:   chapters every ${config.chapterThreshold ?? 'unknown'} entries (+${config.postChapterBuffer ?? 'unknown'} buffer), arcs every ${config.chaptersPerArc ?? 'unknown'} chapters`);
 	console.log(`  vectors:  ${config.memoryEmbeddingsConfigured ? `${config.memoryEmbeddingProvider} / ${config.memoryEmbeddingModel} (${config.memoryEmbeddingDimensions}d)` : 'disabled'}`);
 	console.log(`  backlog:  total=${jobs.total ?? 0} ready=${jobs.ready ?? 0} retry=${jobs.retry ?? 0} running=${jobs.running ?? 0} delayed=${jobs.delayed ?? 0} failed=${jobs.failed ?? 0}`);
@@ -78,7 +78,7 @@ function serviceLine(service) {
 	return `down${service.error ? ` (${service.error})` : ''}`;
 }
 
-function printWikiStatus(wiki) {
+function printWikiStatus(wiki, qdrant = {}) {
 	if (wiki.error) {
 		console.log(`  story wiki: unavailable (${wiki.error})`);
 		return;
@@ -95,9 +95,26 @@ function printWikiStatus(wiki) {
 	for (const row of attention) {
 		const title = row.storyTitle || row.storyId || 'unknown story';
 		const vault = row.vaultFresh ? 'vault fresh' : row.exists ? `vault v${row.manifestVersion ?? '-'} < backend v${row.serverVersion ?? '-'}` : 'vault missing';
-		const index = row.indexFresh ? 'qdrant fresh' : row.indexedVersion ? `qdrant v${row.indexedVersion} < backend v${row.serverVersion ?? '-'}` : 'qdrant missing';
+		const index = storyIndexText(row, qdrant);
 		console.log(`    ${title}: ${vault}; ${index}`);
 	}
+}
+
+function storyIndexText(row, qdrant) {
+	if (row.indexFresh) return 'qdrant fresh';
+	if (row.indexedVersion !== null && row.indexedVersion !== undefined) {
+		return `qdrant v${row.indexedVersion} < backend v${row.serverVersion ?? '-'}`;
+	}
+	if (qdrantHasCollection(qdrant, row.collection)) {
+		return 'qdrant collection exists, index marker missing';
+	}
+	return 'qdrant missing';
+}
+
+function qdrantHasCollection(qdrant, collection) {
+	if (!collection) return false;
+	const collections = Array.isArray(qdrant.collections) ? qdrant.collections : [];
+	return collections.some((row) => row && row.name === collection);
 }
 
 function printQdrantCollections(qdrant) {

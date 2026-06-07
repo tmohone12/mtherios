@@ -184,14 +184,27 @@ export async function exportStory(storyId: string): Promise<StoryExportData> {
 }
 
 async function fetchBackendStoryExport(serverStoryId: string): Promise<StoryExportData> {
-	const response = await fetch(`/api/export/${encodeURIComponent(serverStoryId)}`);
+	const response = await fetch('/api/engine/command', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			storyId: serverStoryId,
+			command: 'story.export',
+			args: {},
+		}),
+	});
 	const body = await response.json().catch(() => ({}));
 	if (!response.ok) {
 		throw new Error(typeof (body as { error?: unknown }).error === 'string'
 			? (body as { error: string }).error
 			: `Terminal export failed: ${response.status}`);
 	}
-	const data = body as StoryExportData;
+	if ((body as { status?: unknown }).status !== 'succeeded') {
+		throw new Error(typeof (body as { error?: unknown }).error === 'string'
+			? (body as { error: string }).error
+			: 'Terminal export failed.');
+	}
+	const data = (body as { result?: unknown }).result as StoryExportData;
 	if (!data || data.version !== 1 || !data.story || !Array.isArray(data.storyEntries)) {
 		throw new Error('Backend export returned an invalid story bundle.');
 	}

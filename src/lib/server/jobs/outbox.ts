@@ -12,6 +12,7 @@ export const backendJobTypes = [
 	'rebuild_retrieval_projection',
 	'index_canonical_records',
 	'sync_story_vault',
+	'extract_turn_state',
 ] as const;
 
 export type BackendJobType = typeof backendJobTypes[number];
@@ -96,6 +97,43 @@ export async function enqueueStoryVaultSyncJob(input: {
 			...(input.payload ?? {}),
 			serverVersion: input.serverVersion,
 			reason: input.reason,
+		},
+		maxAttempts: 3,
+	});
+}
+
+export function turnStateExtractionDedupeKey(input: { assistantEntryId: string }): string {
+	return `turn-state-${input.assistantEntryId}`;
+}
+
+export async function enqueueTurnStateExtractionJob(input: {
+	storyId: string;
+	playerEntryId: string;
+	assistantEntryId: string;
+	playerText: string;
+	narration: string;
+	clientTurnId: string;
+	timelineTurn: number;
+	retrievedMemoryIds: string[];
+	memorySettings?: {
+		chapterThreshold?: number;
+		postChapterBuffer?: number;
+		chaptersPerArc?: number;
+	};
+}): Promise<string> {
+	return enqueueBackendJob({
+		storyId: input.storyId,
+		type: 'extract_turn_state',
+		dedupeKey: turnStateExtractionDedupeKey({ assistantEntryId: input.assistantEntryId }),
+		payload: {
+			playerEntryId: input.playerEntryId,
+			assistantEntryId: input.assistantEntryId,
+			playerText: input.playerText,
+			narration: input.narration,
+			clientTurnId: input.clientTurnId,
+			timelineTurn: input.timelineTurn,
+			retrievedMemoryIds: input.retrievedMemoryIds,
+			memorySettings: input.memorySettings ?? {},
 		},
 		maxAttempts: 3,
 	});

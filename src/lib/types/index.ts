@@ -933,7 +933,7 @@ export interface UISettings {
   proceduralMemoryLimit: number
   backendMemoryTokenBudget: number
   snapshotTokenCap: number // 0 = unlimited (context window is the limit)
-  /** Route online turns through the terminal world database when the story is bound to a server story id. */
+  /** @deprecated Bound server stories always route turns through the terminal engine. */
   serverAuthoritativeTurns?: boolean
 }
 

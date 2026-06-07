@@ -23,7 +23,19 @@ import {
 	type SagaCommandResponse,
 	type StoryEntriesPageResponse,
 } from '$lib/contracts/memory';
+import {
+	campaignProjectionSchema,
+	engineCacheStatusSchema,
+	engineCommandRequestSchema,
+	engineCommandResponseSchema,
+	type CampaignProjection,
+	type EngineCacheStatus,
+	type EngineCacheStatusArgs,
+	type EngineCommandRequest,
+	type EngineCommandResponse,
+} from '$lib/contracts/engine';
 import type { Arc, Chapter, Entry, Saga, Story, StoryMode, StorySettings } from '$lib/types';
+import type { ZodType } from 'zod';
 
 export type LivingMemoryKind = 'conversationMemory' | 'worldEvent' | 'factionAction' | 'rumor' | 'scheme';
 export type LivingMemoryCommandResponse = {
@@ -66,6 +78,25 @@ export interface CreateBackendStoryResult {
 	createdAt: string;
 }
 
+export const CONTROL_SURFACE_BOOTSTRAP_LIMITS = {
+	entryLimit: 80,
+	entityLimit: 120,
+	relationshipLimit: 200,
+	factionLimit: 80,
+	factionMembershipLimit: 160,
+	factionResourceLimit: 160,
+	factionGoalLimit: 160,
+	agreementLimit: 80,
+	npcBeliefLimit: 80,
+	threadLimit: 80,
+	chapterLimit: 80,
+	arcLimit: 80,
+	sagaLimit: 40,
+	eventLimit: 80,
+	patchLimit: 80,
+	memoryNodeLimit: 80,
+} as const;
+
 async function getJson(url: string): Promise<unknown> {
 	const response = await fetch(url);
 	if (!response.ok) {
@@ -88,17 +119,26 @@ async function sendJson(url: string, method: 'POST' | 'PATCH', payload: unknown)
 	return response.json();
 }
 
-async function deleteJson(url: string): Promise<unknown> {
-	const response = await fetch(url, { method: 'DELETE' });
-	if (!response.ok) {
-		const body = await response.json().catch(() => ({}));
-		throw new Error(typeof body.error === 'string' ? body.error : `Backend delete failed: ${response.status}`);
+function cacheStatusArgs(options: Partial<EngineCacheStatusArgs> = {}): Record<string, unknown> {
+	const args: Record<string, unknown> = {};
+	if (options.includeSegments) args.includeSegments = true;
+	if (typeof options.segmentLimit === 'number' && Number.isFinite(options.segmentLimit)) {
+		args.segmentLimit = Math.max(1, Math.trunc(options.segmentLimit));
 	}
-	return response.json();
+	if (options.kind) args.kind = options.kind;
+	return args;
 }
 
 export async function listBackendStories(): Promise<BackendStorySummary[]> {
-	const raw = await getJson('/api/stories');
+	const response = await sendEngineCommand({
+		storyId: '__app__',
+		command: 'story.list',
+		args: {},
+	});
+	if (response.status !== 'succeeded') {
+		throw new Error(response.error ?? 'Terminal world database list failed.');
+	}
+	const raw = response.result;
 	if (!raw || typeof raw !== 'object' || !Array.isArray((raw as { stories?: unknown }).stories)) {
 		throw new Error('Terminal world database list returned an invalid payload.');
 	}
@@ -106,75 +146,105 @@ export async function listBackendStories(): Promise<BackendStorySummary[]> {
 }
 
 export async function createBackendStoryShell(input: CreateBackendStoryInput): Promise<CreateBackendStoryResult> {
-	const raw = await sendJson('/api/stories', 'POST', input);
-	return createStoryResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult('__app__', 'story.create', { ...input }, createStoryResponseSchema);
 }
 
 export async function fetchBackendStoryBootstrap(serverStoryId: string): Promise<BootstrapResponse> {
-	const raw = await getJson(`/api/stories/${encodeURIComponent(serverStoryId)}/bootstrap`);
-	return bootstrapResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'campaign.bootstrap', CONTROL_SURFACE_BOOTSTRAP_LIMITS, bootstrapResponseSchema);
+}
+
+export async function fetchBackendStoryProjection(serverStoryId: string, limit = 80): Promise<CampaignProjection> {
+	return sendStoryEngineCommandResult(serverStoryId, 'campaign.status', {
+		entryLimit: Math.max(1, Math.trunc(limit)),
+	}, campaignProjectionSchema);
+}
+
+export async function fetchEngineCacheStatus(
+	serverStoryId?: string | null,
+	options: Partial<EngineCacheStatusArgs> = {},
+): Promise<EngineCacheStatus> {
+	const args = cacheStatusArgs(options);
+	if (serverStoryId) {
+		return sendStoryEngineCommandResult(serverStoryId, 'campaign.cacheStatus', args, engineCacheStatusSchema);
+	}
+	const params = new URLSearchParams();
+	if (serverStoryId) params.set('storyId', serverStoryId);
+	if (args.includeSegments) params.set('includeSegments', 'true');
+	if (typeof args.segmentLimit === 'number') params.set('segmentLimit', String(args.segmentLimit));
+	if (typeof args.kind === 'string') params.set('kind', args.kind);
+	const query = params.toString();
+	const raw = await getJson(`/api/engine/cache${query ? `?${query}` : ''}`);
+	return engineCacheStatusSchema.parse(raw);
+}
+
+export async function sendEngineCommand(command: EngineCommandRequest): Promise<EngineCommandResponse> {
+	const payload = engineCommandRequestSchema.parse(command);
+	const raw = await sendJson('/api/engine/command', 'POST', payload);
+	return engineCommandResponseSchema.parse(raw);
+}
+
+async function sendStoryEngineCommandResult<T>(
+	storyId: string,
+	command: string,
+	args: Record<string, unknown>,
+	schema: ZodType<T>,
+): Promise<T> {
+	const response = await sendEngineCommand({ storyId, command, args });
+	if (response.status !== 'succeeded') {
+		throw new Error(response.error ?? `Engine command failed: ${command}`);
+	}
+	return schema.parse(response.result);
 }
 
 export async function fetchBackendStoryEntriesPage(
 	serverStoryId: string,
 	options: { beforePosition?: number | null; limit?: number | null; branchId?: string | null } = {},
 ): Promise<StoryEntriesPageResponse> {
-	const params = new URLSearchParams();
+	const args: Record<string, unknown> = {};
 	if (typeof options.beforePosition === 'number' && Number.isFinite(options.beforePosition)) {
-		params.set('beforePosition', String(Math.trunc(options.beforePosition)));
+		args.beforePosition = Math.trunc(options.beforePosition);
 	}
 	if (typeof options.limit === 'number' && Number.isFinite(options.limit)) {
-		params.set('limit', String(Math.trunc(options.limit)));
+		args.limit = Math.trunc(options.limit);
 	}
-	if (options.branchId) params.set('branchId', options.branchId);
-	const query = params.toString();
-	const raw = await getJson(`/api/stories/${encodeURIComponent(serverStoryId)}/entries${query ? `?${query}` : ''}`);
-	return storyEntriesPageResponseSchema.parse(raw);
+	if (options.branchId) args.branchId = options.branchId;
+	return sendStoryEngineCommandResult(serverStoryId, 'campaign.transcriptPage', args, storyEntriesPageResponseSchema);
 }
 
 export async function upsertBackendLorebookEntry(serverStoryId: string, entry: Entry): Promise<EntityCommandResponse> {
-	const raw = await sendJson(`/api/stories/${encodeURIComponent(serverStoryId)}/entities/${encodeURIComponent(entry.id)}`, 'PATCH', { entry });
-	return entityCommandResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'entity.upsert', { entry }, entityCommandResponseSchema);
 }
 
 export async function createBackendLorebookEntry(serverStoryId: string, entry: Entry): Promise<EntityCommandResponse> {
-	const raw = await sendJson(`/api/stories/${encodeURIComponent(serverStoryId)}/entities`, 'POST', { entry });
-	return entityCommandResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'entity.create', { entry }, entityCommandResponseSchema);
 }
 
 export async function deleteBackendLorebookEntry(serverStoryId: string, entityId: string): Promise<EntityDeleteResponse> {
-	const raw = await deleteJson(`/api/stories/${encodeURIComponent(serverStoryId)}/entities/${encodeURIComponent(entityId)}`);
-	return entityDeleteResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'entity.delete', { entityId }, entityDeleteResponseSchema);
 }
 
 export async function upsertBackendChapter(serverStoryId: string, chapter: Chapter): Promise<ChapterCommandResponse> {
-	const raw = await sendJson(`/api/stories/${encodeURIComponent(serverStoryId)}/chapters/${encodeURIComponent(chapter.id)}`, 'PATCH', { chapter });
-	return chapterCommandResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'chapter.upsert', { chapter }, chapterCommandResponseSchema);
 }
 
 export async function createBackendChapter(serverStoryId: string, chapter: Chapter): Promise<ChapterCommandResponse> {
-	const raw = await sendJson(`/api/stories/${encodeURIComponent(serverStoryId)}/chapters`, 'POST', { chapter });
-	return chapterCommandResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'chapter.create', { chapter }, chapterCommandResponseSchema);
 }
 
 export async function upsertBackendArc(serverStoryId: string, arc: Arc): Promise<ArcCommandResponse> {
-	const raw = await sendJson(`/api/stories/${encodeURIComponent(serverStoryId)}/arcs/${encodeURIComponent(arc.id)}`, 'PATCH', { arc });
-	return arcCommandResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'arc.upsert', { arc }, arcCommandResponseSchema);
 }
 
 export async function createBackendArc(serverStoryId: string, arc: Arc): Promise<ArcCommandResponse> {
-	const raw = await sendJson(`/api/stories/${encodeURIComponent(serverStoryId)}/arcs`, 'POST', { arc });
-	return arcCommandResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'arc.create', { arc }, arcCommandResponseSchema);
 }
 
 export async function upsertBackendSaga(serverStoryId: string, saga: Saga): Promise<SagaCommandResponse> {
-	const raw = await sendJson(`/api/stories/${encodeURIComponent(serverStoryId)}/sagas/${encodeURIComponent(saga.id)}`, 'PATCH', { saga });
-	return sagaCommandResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'saga.upsert', { saga }, sagaCommandResponseSchema);
 }
 
 export async function createBackendSaga(serverStoryId: string, saga: Saga): Promise<SagaCommandResponse> {
-	const raw = await sendJson(`/api/stories/${encodeURIComponent(serverStoryId)}/sagas`, 'POST', { saga });
-	return sagaCommandResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'saga.create', { saga }, sagaCommandResponseSchema);
 }
 
 export async function upsertBackendLivingMemory(
@@ -182,8 +252,7 @@ export async function upsertBackendLivingMemory(
 	kind: LivingMemoryKind,
 	records: Array<Record<string, unknown>>,
 ): Promise<LivingMemoryCommandResponse> {
-	const raw = await sendJson(`/api/stories/${encodeURIComponent(serverStoryId)}/living-memory`, 'POST', { kind, records });
-	return livingMemoryCommandResponseSchema.parse(raw);
+	return sendStoryEngineCommandResult(serverStoryId, 'livingMemory.upsert', { kind, records }, livingMemoryCommandResponseSchema);
 }
 
 export async function cacheBackendStoryFromBootstrap(bootstrap: BootstrapResponse): Promise<Story> {
@@ -279,7 +348,14 @@ export async function cacheBackendStory(row: BackendStorySummary): Promise<Story
 
 export async function deleteStoryEverywhere(story: Story): Promise<void> {
 	if (story.serverStoryId) {
-		await deleteJson(`/api/stories/${encodeURIComponent(story.serverStoryId)}`);
+		const response = await sendEngineCommand({
+			storyId: story.serverStoryId,
+			command: 'story.delete',
+			args: {},
+		});
+		if (response.status !== 'succeeded') {
+			throw new Error(response.error ?? 'Backend delete failed.');
+		}
 	}
 	await deleteStory(story.id);
 }

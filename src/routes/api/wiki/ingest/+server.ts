@@ -1,11 +1,11 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { ingestWiki } from '$lib/server/wiki/wikiCore';
+import { executeWikiRouteCommand } from '$lib/server/engine/wikiRouteGateway';
 import { apiError } from '$lib/server/memory/http';
 
 export const POST: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
-		return json(await ingestWiki(body));
+		return json(await executeWikiRouteCommand('wiki.ingest', body));
 	} catch (error) {
 		return apiError(error);
 	}

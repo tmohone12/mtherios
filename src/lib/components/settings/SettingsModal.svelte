@@ -819,18 +819,13 @@
 					</div>
 					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
 						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Terminal Runtime</h4>
-						<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
-							<input
-								type="checkbox"
-								checked={settings.uiSettings.serverAuthoritativeTurns ?? false}
-								onchange={(e) => { settings.uiSettings.serverAuthoritativeTurns = (e.target as HTMLInputElement).checked; settings.saveUISettings(); }}
-								class="mt-0.5 accent-[var(--color-gold-400)]"
-							/>
+						<div class="flex items-start gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+							<span class="mt-0.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">On</span>
 							<span class="min-w-0">
-								<span class="block text-xs font-medium text-[var(--text-primary)]">Terminal-run online turns</span>
-								<span class="mt-1 block text-[10px] leading-relaxed text-[var(--text-muted)]">For terminal-bound stories, route turns through /api/turn so prompts, model calls, events, patches, and memory nodes are handled by the terminal process.</span>
+								<span class="block text-xs font-medium text-[var(--text-primary)]">Terminal-bound turns</span>
+								<span class="mt-1 block text-[10px] leading-relaxed text-[var(--text-muted)]">Bound stories always route turns through the engine command gateway.</span>
 							</span>
-						</label>
+						</div>
 					</div>
 				</div>
 
@@ -919,15 +914,9 @@
 								<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Retrieval</h4>
 								<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">How much searchable memory is pulled for the current action.</p>
 							</div>
-							<label class="flex items-center gap-2 rounded-full border border-[var(--border-primary)] px-2 py-1 text-[10px] text-[var(--text-muted)]">
-								<input
-									type="checkbox"
-									checked={settings.uiSettings.serverAuthoritativeTurns ?? false}
-									onchange={(e) => { settings.uiSettings.serverAuthoritativeTurns = (e.target as HTMLInputElement).checked; settings.saveUISettings(); }}
-									class="accent-[var(--color-gold-400)]"
-								/>
-								Terminal turns
-							</label>
+							<span class="rounded-full border border-[var(--border-primary)] px-2 py-1 text-[10px] text-[var(--text-muted)]">
+								Terminal-bound
+							</span>
 						</div>
 
 						<div class="space-y-5">

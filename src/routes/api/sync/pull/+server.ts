@@ -1,6 +1,6 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { syncPullRequestSchema } from '$lib/contracts/memory';
-import { getSyncChanges } from '$lib/server/memory/canonical';
+import { executeLegacyEngineCommand } from '$lib/server/engine/routeCompatibility';
 import { apiError } from '$lib/server/memory/http';
 
 export const GET: RequestHandler = async ({ url }) => {
@@ -9,9 +9,11 @@ export const GET: RequestHandler = async ({ url }) => {
 			storyId: url.searchParams.get('storyId') ?? '',
 			since: Number(url.searchParams.get('since') ?? '0'),
 		});
-		const changes = await getSyncChanges(request.storyId, request.since);
-		const serverVersion = changes.reduce((max, change) => Math.max(max, change.version), request.since);
-		return json({ storyId: request.storyId, serverVersion, changes });
+		return json(await executeLegacyEngineCommand({
+			storyId: request.storyId,
+			command: 'sync.pull',
+			args: { since: request.since },
+		}));
 	} catch (error) {
 		return apiError(error);
 	}

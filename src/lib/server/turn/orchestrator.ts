@@ -1,7 +1,10 @@
+import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { desc, eq } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
 import { storyEntries, syncOps } from '$lib/server/db/schema';
-import { turnRequestSchema, type TurnRequest, type TurnResponse } from '$lib/contracts/memory';
+import { turnRequestSchema, type RetrievedMemoryPacket, type TurnRequest, type TurnResponse } from '$lib/contracts/memory';
 import { bumpStoryVersion, getSyncChanges } from '$lib/server/memory/canonical';
 import { retrieveMemoryPacket } from '$lib/server/memory/retrieval';
 import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
@@ -18,15 +21,95 @@ import {
 import { applyValidatedTurnUpdate, parseTurnUpdate } from './patchValidator';
 import { requireResolvedServiceProfile, resolveServiceGeneration } from '$lib/server/engine/llmSettings';
 import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
-import { buildTurnDebugSnapshot } from './debugSnapshot';
-import { createTimingRecorder } from '$lib/server/performance/timing';
+import { appendTurnEvidence } from '$lib/server/engine/campaignVault';
+import { getCampaignProjection } from '$lib/server/engine/projections';
+import { enqueueTurnStateExtractionJob } from '$lib/server/jobs/outbox';
+import {
+	buildEngineCacheKey,
+	engineCacheDependencyHash,
+	readEngineCacheSegment,
+	recordEngineCacheSegment,
+	recordPromptCacheSegments,
+	type EngineCacheRepository,
+	type RecordEngineCacheSegmentResult,
+} from '$lib/server/engine/cache';
+import { buildEngineCacheDebug, buildTurnDebugSnapshot, type EngineCacheDebug } from './debugSnapshot';
+import { createTimingRecorder, type TimingEntry, type TimingRecorder } from '$lib/server/performance/timing';
+import type { TurnContext } from './context';
+import { ensureFreshStoryVault, resolveWikiTarget } from '$lib/server/wiki/storyVault';
+import { getMtheriosAppConfig } from '$lib/server/app/config';
 
 function nowIso(): string {
 	return new Date().toISOString();
 }
 
+function stableJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+	if (value && typeof value === 'object') {
+		const entries = Object.entries(value as Record<string, unknown>)
+			.sort(([a], [b]) => a.localeCompare(b))
+			.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`);
+		return `{${entries.join(',')}}`;
+	}
+	return JSON.stringify(value) ?? 'null';
+}
+
+function hashText(value: string): string {
+	return createHash('sha256').update(value).digest('hex');
+}
+
+function preparedTurnCacheKey(storyId: string, clientTurnId: string): string {
+	return `${storyId}:${clientTurnId}`;
+}
+
+function preparedTurnFingerprint(request: TurnRequest): string {
+	return hashText(stableJson({
+		storyId: request.storyId,
+		clientTurnId: request.clientTurnId,
+		playerText: request.playerText,
+		clientContext: request.clientContext ?? null,
+	}));
+}
+
+function trimPreparedTurnCache(now = Date.now()): void {
+	for (const [key, entry] of preparedTurnCache) {
+		if (entry.expiresAt <= now) preparedTurnCache.delete(key);
+	}
+	while (preparedTurnCache.size > PREPARED_TURN_CACHE_MAX) {
+		const oldest = preparedTurnCache.keys().next().value;
+		if (!oldest) break;
+		preparedTurnCache.delete(oldest);
+	}
+}
+
+function readPreparedTurn(request: TurnRequest, consume: boolean): PreparedServerTurnContext | null {
+	trimPreparedTurnCache();
+	const key = preparedTurnCacheKey(request.storyId, request.clientTurnId);
+	const entry = preparedTurnCache.get(key);
+	if (!entry || entry.fingerprint !== preparedTurnFingerprint(request)) return null;
+	if (consume) preparedTurnCache.delete(key);
+	return entry.prepared;
+}
+
+function writePreparedTurn(prepared: PreparedServerTurnContext): void {
+	trimPreparedTurnCache();
+	preparedTurnCache.set(preparedTurnCacheKey(prepared.request.storyId, prepared.request.clientTurnId), {
+		fingerprint: preparedTurnFingerprint(prepared.request),
+		expiresAt: Date.now() + PREPARED_TURN_TTL_MS,
+		prepared,
+	});
+	trimPreparedTurnCache();
+}
+
 type ProviderProfile = NonNullable<TurnRequest['providerProfile']>;
 type GenerationTiming = NonNullable<TurnResponse['generationTimings']>[number];
+type ResolvedGenerationService = Awaited<ReturnType<typeof resolveServiceGeneration>>;
+type ServerTurnPrompt = ReturnType<typeof buildServerTurnPrompt>;
+type MemorySettings = {
+	chapterThreshold: number;
+	postChapterBuffer: number;
+	chaptersPerArc: number;
+};
 
 interface ServerWikiContext {
 	markdown: string;
@@ -34,6 +117,17 @@ interface ServerWikiContext {
 	pageCount: number;
 	seedCount: number;
 	semanticError?: string | null;
+	sourcePaths: string[];
+	cacheHit?: boolean;
+}
+
+type WikiContextLoader = () => Promise<unknown>;
+type WikiContextSourceHasher = (sourcePaths: string[]) => Promise<string[]>;
+
+interface LoadServerWikiContextCacheOptions {
+	repository?: EngineCacheRepository;
+	loadContext?: WikiContextLoader;
+	sourceHash?: WikiContextSourceHasher;
 }
 
 const DEFAULT_MEMORY_TOKEN_BUDGET = 800;
@@ -42,6 +136,81 @@ const WIKI_CONTEXT_LIMIT = 4;
 const WIKI_CONTEXT_PAGE_LIMIT = 6;
 const WIKI_CONTEXT_PAGE_CHARS = 700;
 const WIKI_CONTEXT_MAX_CHARS = 4000;
+const PREPARED_TURN_TTL_MS = 120_000;
+const PREPARED_TURN_CACHE_MAX = 48;
+
+export interface PreparedTurnPromptSummary {
+	systemChars: number;
+	systemDynamicChars: number;
+	playerPromptChars: number;
+	messageCount: number;
+	messageChars: number;
+	totalChars: number;
+	tokenEstimate: number;
+}
+
+export interface PreparedServerTurnSummary {
+	storyId: string;
+	clientTurnId: string;
+	playerEntryId: string;
+	preparedAt: string;
+	contextCounts: Record<string, number>;
+	prompt: PreparedTurnPromptSummary;
+	retrievedMemory: {
+		nodeCount: number;
+		tokenEstimate: number;
+		nodeIds: string[];
+	};
+	wikiContext: {
+		pageCount: number;
+		seedCount: number;
+		charCount: number;
+		citations: string[];
+		semanticError?: string | null;
+	} | null;
+	timeline: {
+		currentTurn: number;
+		currentWorldTime: string | null;
+		dueEventCount: number;
+		recentEventCount: number;
+		scheduledEventCount: number;
+		npcEventCount: number;
+	};
+	cache: EngineCacheDebug | null;
+	warnings: string[];
+	timings: TimingEntry[];
+}
+
+interface PreparedServerTurnContext {
+	request: TurnRequest;
+	playerEntryId: string;
+	preparedAt: string;
+	warnings: string[];
+	memoryTokenBudget: number;
+	memorySettings: MemorySettings;
+	retrieved: RetrievedMemoryPacket;
+	ctxWithTimeline: TurnContext & { gmBrief: NonNullable<TurnContext['gmBrief']> };
+	gmBrief: NonNullable<TurnContext['gmBrief']>;
+	wikiContext: ServerWikiContext | null;
+	prompt: ServerTurnPrompt;
+	narrativeService: ResolvedGenerationService;
+	narrativeProfile: ProviderProfile;
+	narrativeGeneration: ResolvedGenerationService['generation'];
+	narrativeSystem: string;
+	narrativeSystemDynamic: string;
+	narrativePrompt: string;
+	narrativeDebugPrompt: string;
+	contextCounts: Record<string, number>;
+	engineCacheDebug: EngineCacheDebug | null;
+}
+
+type PreparedCacheEntry = {
+	fingerprint: string;
+	expiresAt: number;
+	prepared: PreparedServerTurnContext;
+};
+
+const preparedTurnCache = new Map<string, PreparedCacheEntry>();
 
 function asRecord(value: unknown): Record<string, unknown> {
 	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -58,6 +227,26 @@ function asNumber(value: unknown, fallback = 0): number {
 function clampInt(value: number | null | undefined, min: number, max: number, fallback: number): number {
 	if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
 	return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+export function applyPromptContextBudget(
+	value: string,
+	maxChars: number | null | undefined,
+): { value: string; truncated: boolean } {
+	if (!maxChars || maxChars <= 0 || value.length <= maxChars) return { value, truncated: false };
+	const finalInstruction = 'Return only the narration prose for the player action. Do not include JSON in this response.';
+	const marker = '\n\n[Backend context budget truncated older dynamic context.]\n\n';
+	if (maxChars <= marker.length + finalInstruction.length + 120 || !value.endsWith(finalInstruction)) {
+		return {
+			value: value.slice(0, Math.max(0, maxChars)),
+			truncated: true,
+		};
+	}
+	const headBudget = Math.max(0, maxChars - marker.length - finalInstruction.length);
+	return {
+		value: `${value.slice(0, headBudget).trimEnd()}${marker}${finalInstruction}`,
+		truncated: true,
+	};
 }
 
 function generationErrorResult(error: unknown): ServerGenerationError['result'] | null {
@@ -121,13 +310,101 @@ async function logGenerationCall(options: {
 
 function extractServerWikiContext(result: unknown): ServerWikiContext {
 	const record = asRecord(result);
+	const pages = Array.isArray(record.pages)
+		? record.pages
+			.map((page) => asRecord(page))
+			.map((page) => typeof page.path === 'string' ? page.path : '')
+			.filter(Boolean)
+		: [];
 	return {
 		markdown: typeof record.contextMarkdown === 'string' ? record.contextMarkdown : '',
 		citations: asStringArray(record.citations),
 		pageCount: asNumber(record.pageCount),
 		seedCount: asNumber(record.seedCount),
 		semanticError: typeof record.semanticError === 'string' ? record.semanticError : null,
+		sourcePaths: [...new Set(pages)],
+		cacheHit: false,
 	};
+}
+
+function wikiContextCachePayload(context: ServerWikiContext): string {
+	return JSON.stringify({
+		markdown: context.markdown,
+		citations: context.citations,
+		pageCount: context.pageCount,
+		seedCount: context.seedCount,
+		semanticError: context.semanticError ?? null,
+		sourcePaths: context.sourcePaths,
+	});
+}
+
+function parseWikiContextCachePayload(value: string): ServerWikiContext | null {
+	try {
+		const record = asRecord(JSON.parse(value));
+		const markdown = typeof record.markdown === 'string' ? record.markdown : '';
+		if (!markdown.trim()) return null;
+		return {
+			markdown,
+			citations: asStringArray(record.citations),
+			pageCount: asNumber(record.pageCount),
+			seedCount: asNumber(record.seedCount),
+			semanticError: typeof record.semanticError === 'string' ? record.semanticError : null,
+			sourcePaths: asStringArray(record.sourcePaths),
+			cacheHit: true,
+		};
+	} catch {
+		return null;
+	}
+}
+
+function wikiContextCacheKey(storyId: string, query: string): string {
+	return buildEngineCacheKey({
+		storyId,
+		kind: 'wiki_context_pack',
+		parts: [
+			'turn-prepare',
+			query,
+			WIKI_CONTEXT_LIMIT,
+			1,
+			WIKI_CONTEXT_PAGE_LIMIT,
+			WIKI_CONTEXT_PAGE_CHARS,
+			WIKI_CONTEXT_MAX_CHARS,
+		],
+	});
+}
+
+function isPathInside(root: string, target: string): boolean {
+	const relative = path.relative(root, target);
+	return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+async function hashWikiContextSourceFiles(storyId: string, sourcePaths: string[]): Promise<string[]> {
+	if (sourcePaths.length === 0) return [];
+	const config = getMtheriosAppConfig();
+	const target = resolveWikiTarget({ storyId }, config);
+	const root = path.resolve(target.vaultPath);
+	const hashes: string[] = [];
+	for (const sourcePath of sourcePaths) {
+		const absolutePath = path.resolve(root, sourcePath);
+		if (!isPathInside(root, absolutePath)) {
+			hashes.push(engineCacheDependencyHash({ path: sourcePath, invalid: true }));
+			continue;
+		}
+		try {
+			const content = await fs.readFile(absolutePath, 'utf8');
+			hashes.push(engineCacheDependencyHash({
+				path: sourcePath,
+				contentHash: hashText(content),
+			}));
+		} catch (error) {
+			hashes.push(engineCacheDependencyHash({
+				path: sourcePath,
+				missing: true,
+				error: error instanceof Error ? error.message : String(error),
+			}));
+		}
+	}
+	return hashes;
 }
 
 function turnContextCounts(ctx: Awaited<ReturnType<typeof loadTurnContext>>): Record<string, number> {
@@ -154,8 +431,14 @@ function turnContextCounts(ctx: Awaited<ReturnType<typeof loadTurnContext>>): Re
 	};
 }
 
-async function loadServerWikiContext(storyId: string, query: string): Promise<ServerWikiContext> {
-	return extractServerWikiContext(await contextWiki({
+export async function loadServerWikiContextWithCache(
+	storyId: string,
+	query: string,
+	options: LoadServerWikiContextCacheOptions = {},
+): Promise<ServerWikiContext> {
+	const cacheKey = wikiContextCacheKey(storyId, query);
+	const repository = options.repository;
+	const loadContext = options.loadContext ?? (() => contextWiki({
 		storyId,
 		query,
 		limit: WIKI_CONTEXT_LIMIT,
@@ -164,6 +447,59 @@ async function loadServerWikiContext(storyId: string, query: string): Promise<Se
 		pageChars: WIKI_CONTEXT_PAGE_CHARS,
 		maxChars: WIKI_CONTEXT_MAX_CHARS,
 	}));
+	const sourceHash = options.sourceHash ?? ((sourcePaths: string[]) => hashWikiContextSourceFiles(storyId, sourcePaths));
+	if (!options.sourceHash) {
+		await ensureFreshStoryVault(storyId);
+	}
+
+	const candidate = await readEngineCacheSegment({
+		storyId,
+		kind: 'wiki_context_pack',
+		cacheKey,
+		touch: false,
+	}, repository);
+	const cachedContext = candidate ? parseWikiContextCachePayload(candidate.value) : null;
+	if (cachedContext && cachedContext.sourcePaths.length > 0) {
+		const dependencyHashes = await sourceHash(cachedContext.sourcePaths);
+		const hit = await readEngineCacheSegment({
+			storyId,
+			kind: 'wiki_context_pack',
+			cacheKey,
+			dependencyHashes,
+		}, repository);
+		if (hit) return cachedContext;
+	}
+
+	const context = extractServerWikiContext(await loadContext());
+	const dependencyHashes = context.sourcePaths.length > 0
+		? await sourceHash(context.sourcePaths)
+		: [engineCacheDependencyHash({
+			queryHash: hashText(query),
+			markdown: context.markdown,
+			pageCount: context.pageCount,
+			seedCount: context.seedCount,
+		})];
+	await recordEngineCacheSegment({
+		storyId,
+		kind: 'wiki_context_pack',
+		cacheKey,
+		value: wikiContextCachePayload(context),
+		tokenEstimate: Math.max(1, Math.ceil(context.markdown.length / 4)),
+		dependencyHashes,
+		metadata: {
+			queryHash: hashText(query),
+			pageCount: context.pageCount,
+			seedCount: context.seedCount,
+			sourcePathCount: context.sourcePaths.length,
+			sourcePaths: context.sourcePaths.slice(0, 20),
+			hasSemanticError: Boolean(context.semanticError),
+		},
+	}, repository);
+	return context;
+}
+
+async function loadServerWikiContext(storyId: string, query: string): Promise<ServerWikiContext> {
+	return loadServerWikiContextWithCache(storyId, query);
 }
 
 async function nextEntryPosition(storyId: string): Promise<number> {
@@ -206,52 +542,86 @@ async function existingTurn(storyId: string, clientTurnId: string): Promise<Turn
 	};
 }
 
-export async function processServerTurn(input: unknown): Promise<TurnResponse> {
+function summarizePreparedTurnContext(
+	prepared: PreparedServerTurnContext,
+	timings: TimingEntry[] = [],
+): PreparedServerTurnSummary {
+	const messageChars = prepared.prompt.messages.reduce((sum, message) => sum + message.content.length, 0);
+	const totalChars = prepared.narrativeSystem.length
+		+ prepared.narrativeSystemDynamic.length
+		+ prepared.narrativePrompt.length
+		+ messageChars;
+	return {
+		storyId: prepared.request.storyId,
+		clientTurnId: prepared.request.clientTurnId,
+		playerEntryId: prepared.playerEntryId,
+		preparedAt: prepared.preparedAt,
+		contextCounts: { ...prepared.contextCounts },
+		prompt: {
+			systemChars: prepared.narrativeSystem.length,
+			systemDynamicChars: prepared.narrativeSystemDynamic.length,
+			playerPromptChars: prepared.narrativePrompt.length,
+			messageCount: prepared.prompt.messages.length,
+			messageChars,
+			totalChars,
+			tokenEstimate: Math.max(1, Math.ceil(totalChars / 4)),
+		},
+		retrievedMemory: {
+			nodeCount: prepared.retrieved.nodes.length,
+			tokenEstimate: prepared.retrieved.tokenEstimate,
+			nodeIds: prepared.retrieved.nodes.map((node) => node.id),
+		},
+		wikiContext: prepared.wikiContext ? {
+			pageCount: prepared.wikiContext.pageCount,
+			seedCount: prepared.wikiContext.seedCount,
+			charCount: prepared.wikiContext.markdown.length,
+			citations: [...prepared.wikiContext.citations],
+			semanticError: prepared.wikiContext.semanticError ?? null,
+		} : null,
+		timeline: {
+			currentTurn: prepared.gmBrief.currentTurn,
+			currentWorldTime: prepared.gmBrief.currentWorldTime,
+			dueEventCount: prepared.gmBrief.dueEvents.length,
+			recentEventCount: prepared.gmBrief.recentEvents.length,
+			scheduledEventCount: prepared.gmBrief.scheduledEvents.length,
+			npcEventCount: prepared.gmBrief.npcEvents.length,
+		},
+		cache: prepared.engineCacheDebug,
+		warnings: [...prepared.warnings],
+		timings,
+	};
+}
+
+export async function prepareServerTurnContext(
+	input: unknown,
+	options: {
+		recorder?: TimingRecorder;
+		cachePrepared?: boolean;
+		consumePrepared?: boolean;
+	} = {},
+): Promise<PreparedServerTurnContext> {
 	const request = turnRequestSchema.parse(input);
-	const recorder = createTimingRecorder({
-		pipeline: 'backend.turn.generation',
+	const recorder = options.recorder ?? createTimingRecorder({
+		pipeline: 'backend.turn.prepare',
 		metadata: {
 			storyId: request.storyId,
 			clientTurnId: request.clientTurnId,
 		},
 	});
-	recorder.record('turn.request_start', 0, {
-		localVersion: request.localVersion,
-		hasClientContext: Boolean(request.clientContext),
-	});
-	const existing = await recorder.time('turn.idempotency_check', {}, () => existingTurn(request.storyId, request.clientTurnId));
-	if (existing) {
-		recorder.record('turn.response_cached', 0, { serverVersion: existing.serverVersion });
-		return existing;
+	const cached = options.consumePrepared ? readPreparedTurn(request, true) : null;
+	if (cached) {
+		recorder.record('turn.prepare.cache_hit', 0, {
+			preparedAt: cached.preparedAt,
+			contextCounts: cached.contextCounts,
+		});
+		return cached;
 	}
 
-	const db = getDb();
-	const createdAt = nowIso();
 	const playerEntryId = `entry_${request.clientTurnId}`;
-	const assistantEntryId = `narration_${request.clientTurnId}`;
 	const warnings: string[] = [];
-	const [narrativeService, classifierService] = await recorder.time('turn.service_config', {}, () => Promise.all([
-		resolveServiceGeneration('narrative'),
-		resolveServiceGeneration('classifier'),
-	]));
+	const narrativeService = await recorder.time('turn.service_config.narrative', {}, () => resolveServiceGeneration('narrative'));
 	const narrativeProfile = requireResolvedServiceProfile('narrative', narrativeService);
 	const narrativeGeneration = narrativeService.generation;
-	const classifierProfile = classifierService.profile ?? narrativeProfile;
-	const classifierGeneration = classifierService.profile
-		? {
-			...classifierService.generation,
-			temperature: classifierService.generation.temperature ?? 0.2,
-			maxTokens: Math.min(classifierService.generation.maxTokens ?? MAX_CLASSIFIER_TOKENS, MAX_CLASSIFIER_TOKENS),
-		}
-		: {
-			model: narrativeGeneration.model,
-			temperature: 0.2,
-			maxTokens: Math.min(narrativeGeneration.maxTokens ?? MAX_CLASSIFIER_TOKENS, MAX_CLASSIFIER_TOKENS),
-		};
-	if (classifierService.missingReason) {
-		warnings.push(`Classifier service fallback: ${classifierService.missingReason}`);
-	}
-	const generationTimings: GenerationTiming[] = [];
 	const memoryTokenBudget = clampInt(request.clientContext?.memoryTokenBudget, 160, 2400, DEFAULT_MEMORY_TOKEN_BUDGET);
 	const memorySettings = {
 		chapterThreshold: clampInt(request.clientContext?.chapterThreshold, 5, 200, 20),
@@ -305,7 +675,7 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		})),
 		wikiContextTask,
 	]));
-	const ctxWithTimeline = { ...ctx, gmBrief };
+	const ctxWithTimeline: TurnContext & { gmBrief: NonNullable<TurnContext['gmBrief']> } = { ...ctx, gmBrief };
 	let wikiContext: ServerWikiContext | null = null;
 	if (wikiResult.ok) {
 		wikiContext = wikiResult.value;
@@ -314,32 +684,213 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		const error = wikiResult.error;
 		warnings.push(`Terminal wiki context unavailable: ${error instanceof Error ? error.message : String(error)}`);
 	}
+	const contextCounts = turnContextCounts(ctxWithTimeline);
 	const prompt = recorder.timeSync('turn.prompt_assembly', {
 		retrievedMemoryNodes: retrieved.nodes.length,
 		wikiContextChars: wikiContext?.markdown.length ?? 0,
-		...turnContextCounts(ctxWithTimeline),
+		...contextCounts,
 	}, () => buildServerTurnPrompt(ctxWithTimeline, retrieved, playerEntryId, {
 		currentFactionId: request.clientContext?.currentFactionId ?? null,
 		sceneEntityIds: request.clientContext?.sceneEntityIds ?? [],
 		wikiContextMarkdown: wikiContext?.markdown ?? null,
 	}));
 	const narrativeSystem = narrativeService.systemPromptOverride?.trim() || prompt.system;
-	const narrativePrompt = `${prompt.prompt}\n\nPlayer action:\n${request.playerText}`;
+	const promptBudget = applyPromptContextBudget(prompt.prompt, request.clientContext?.contextBudget ?? 0);
+	if (promptBudget.truncated) {
+		warnings.push(`Dynamic prompt context budget applied: ${prompt.prompt.length} -> ${promptBudget.value.length} chars.`);
+	}
+	const narrativeSystemDynamic = promptBudget.value;
+	const narrativePrompt = `Player action:\n${request.playerText}`;
+	const narrativeDebugPrompt = `${narrativeSystemDynamic}\n\n${narrativePrompt}`;
 	recorder.record('turn.prompt_payload', 0, {
 		systemChars: narrativeSystem.length,
+		systemDynamicChars: narrativeSystemDynamic.length,
 		promptChars: narrativePrompt.length,
 		messageCount: prompt.messages.length,
 		messageChars: prompt.messages.reduce((sum, message) => sum + message.content.length, 0),
 	});
+	let promptCacheStats: { hitCount: number; missCount: number; segments: RecordEngineCacheSegmentResult[] } | null = null;
+	try {
+		promptCacheStats = await recorder.time('turn.engine_cache.prompt_segments', {
+			retrievedMemoryNodes: retrieved.nodes.length,
+			wikiContextChars: wikiContext?.markdown.length ?? 0,
+		}, () => recordPromptCacheSegments({
+			storyId: request.storyId,
+			segments: [
+				{
+					kind: 'prompt_system',
+					cacheKey: buildEngineCacheKey({
+						storyId: request.storyId,
+						kind: 'prompt_system',
+						parts: ['narrative', narrativeProfile.providerType, narrativeGeneration.model ?? 'default'],
+					}),
+					value: narrativeSystem,
+					dependencyHashes: [engineCacheDependencyHash({
+						service: 'narrative',
+						providerType: narrativeProfile.providerType,
+						model: narrativeGeneration.model ?? null,
+						systemPromptOverride: narrativeService.systemPromptOverride ?? null,
+					})],
+				},
+				{
+					kind: 'retrieved_memory',
+					cacheKey: buildEngineCacheKey({
+						storyId: request.storyId,
+						kind: 'retrieved_memory',
+						parts: ['selected-memory-packet'],
+					}),
+					value: retrieved.packet,
+					tokenEstimate: retrieved.tokenEstimate,
+					dependencyHashes: retrieved.nodes.map((node) => engineCacheDependencyHash({
+						id: node.id,
+						type: node.type,
+						updatedAt: node.updatedAt,
+						content: node.content,
+						summary: node.summary,
+					})),
+					metadata: { nodeCount: retrieved.nodes.length },
+				},
+				{
+					kind: 'wiki_context',
+					cacheKey: buildEngineCacheKey({
+						storyId: request.storyId,
+						kind: 'wiki_context',
+						parts: ['selected-markdown-chunks'],
+					}),
+					value: wikiContext?.markdown ?? '',
+					dependencyHashes: [engineCacheDependencyHash({
+						citations: wikiContext?.citations ?? [],
+						pageCount: wikiContext?.pageCount ?? 0,
+						markdown: wikiContext?.markdown ?? '',
+					})],
+					metadata: {
+						citations: wikiContext?.citations ?? [],
+						pageCount: wikiContext?.pageCount ?? 0,
+					},
+				},
+				{
+					kind: 'tool_schema',
+					cacheKey: buildEngineCacheKey({
+						storyId: request.storyId,
+						kind: 'tool_schema',
+						parts: ['world-state-update', 'v1'],
+					}),
+					value: 'worldStateUpdateSchema:v1',
+					dependencyHashes: [engineCacheDependencyHash('worldStateUpdateSchema:v1')],
+				},
+			],
+		}));
+	} catch (error) {
+		warnings.push(`Engine prompt cache unavailable: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	const prepared: PreparedServerTurnContext = {
+		request,
+		playerEntryId,
+		preparedAt: nowIso(),
+		warnings,
+		memoryTokenBudget,
+		memorySettings,
+		retrieved,
+		ctxWithTimeline,
+		gmBrief,
+		wikiContext,
+		prompt,
+		narrativeService,
+		narrativeProfile,
+		narrativeGeneration,
+		narrativeSystem,
+		narrativeSystemDynamic,
+		narrativePrompt,
+		narrativeDebugPrompt,
+		contextCounts,
+		engineCacheDebug: buildEngineCacheDebug(promptCacheStats) ?? null,
+	};
+	if (options.cachePrepared) writePreparedTurn(prepared);
+	return prepared;
+}
+
+export async function prepareServerTurn(input: unknown): Promise<PreparedServerTurnSummary> {
+	const request = turnRequestSchema.parse(input);
+	const recorder = createTimingRecorder({
+		pipeline: 'backend.turn.prepare',
+		metadata: {
+			storyId: request.storyId,
+			clientTurnId: request.clientTurnId,
+		},
+	});
+	const prepared = await prepareServerTurnContext(request, { recorder, cachePrepared: true });
+	return summarizePreparedTurnContext(prepared, recorder.timings);
+}
+
+export async function processServerTurn(input: unknown): Promise<TurnResponse> {
+	const request = turnRequestSchema.parse(input);
+	const recorder = createTimingRecorder({
+		pipeline: 'backend.turn.generation',
+		metadata: {
+			storyId: request.storyId,
+			clientTurnId: request.clientTurnId,
+		},
+	});
+	recorder.record('turn.request_start', 0, {
+		localVersion: request.localVersion,
+		hasClientContext: Boolean(request.clientContext),
+	});
+	const existing = await recorder.time('turn.idempotency_check', {}, () => existingTurn(request.storyId, request.clientTurnId));
+	if (existing) {
+		recorder.record('turn.response_cached', 0, { serverVersion: existing.serverVersion });
+		return existing;
+	}
+
+	const db = getDb();
+	const createdAt = nowIso();
+	const assistantEntryId = `narration_${request.clientTurnId}`;
+	const prepared = await prepareServerTurnContext(request, { recorder, consumePrepared: true });
+	const {
+		playerEntryId,
+		retrieved,
+		gmBrief,
+		wikiContext,
+		prompt,
+		narrativeProfile,
+		narrativeGeneration,
+		narrativeSystem,
+		narrativeSystemDynamic,
+		narrativePrompt,
+		narrativeDebugPrompt,
+		contextCounts,
+		engineCacheDebug,
+		memoryTokenBudget,
+		memorySettings,
+	} = prepared;
+	const warnings: string[] = [...prepared.warnings];
+	const classifierService = await recorder.time('turn.service_config.classifier', {}, () => resolveServiceGeneration('classifier'));
+	const classifierProfile = classifierService.profile ?? narrativeProfile;
+	const classifierGeneration = classifierService.profile
+		? {
+			...classifierService.generation,
+			temperature: classifierService.generation.temperature ?? 0.2,
+			maxTokens: Math.min(classifierService.generation.maxTokens ?? MAX_CLASSIFIER_TOKENS, MAX_CLASSIFIER_TOKENS),
+		}
+		: {
+			model: narrativeGeneration.model,
+			temperature: 0.2,
+			maxTokens: Math.min(narrativeGeneration.maxTokens ?? MAX_CLASSIFIER_TOKENS, MAX_CLASSIFIER_TOKENS),
+		};
+	if (classifierService.missingReason) {
+		warnings.push(`Classifier service fallback: ${classifierService.missingReason}`);
+	}
+	const deferStateExtraction = request.clientContext?.deferStateExtraction !== false;
+	const generationTimings: GenerationTiming[] = [];
 	const narrativeDebugBase = {
 		kind: 'narration' as const,
 		playerText: request.playerText,
 		system: narrativeSystem,
 		messages: prompt.messages,
-		prompt: narrativePrompt,
+		prompt: narrativeDebugPrompt,
 		retrievedMemory: retrieved,
 		wikiContext,
-		contextCounts: turnContextCounts(ctxWithTimeline),
+		contextCounts,
+		engineCache: engineCacheDebug,
 	};
 
 	let narration = '';
@@ -350,6 +901,7 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 			temperature: narrativeGeneration.temperature,
 			maxTokens: narrativeGeneration.maxTokens,
 			system: narrativeSystem,
+			systemDynamic: narrativeSystemDynamic,
 			messages: prompt.messages,
 			prompt: narrativePrompt,
 		});
@@ -473,7 +1025,11 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 				wikiContextPageCount: wikiContext?.pageCount ?? 0,
 				wikiContextSeedCount: wikiContext?.seedCount ?? 0,
 				generationTimings,
+				stateExtraction: {
+					mode: deferStateExtraction ? 'deferred' : 'sync',
+				},
 				memoryTokenBudget,
+				engineCache: engineCacheDebug ?? null,
 			},
 			serverVersion: turnVersion,
 			createdAt,
@@ -482,7 +1038,7 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 	]));
 
 	let rawUpdate: unknown = { update: worldStateUpdateSchema.parse({}) };
-	if (classifierProfile) {
+	if (classifierProfile && !deferStateExtraction) {
 		const classifierSystem = classifierService.systemPromptOverride?.trim() || 'You extract canonical state changes for a text adventure. Return strict JSON only.';
 		const extractionPrompt = buildStateExtractionPrompt(request.playerText, narration);
 		try {
@@ -588,11 +1144,32 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		memorySettings,
 	}));
 	warnings.push(...applied.warnings);
+	if (deferStateExtraction) {
+		try {
+			const jobId = await recorder.time('turn.state_extraction.enqueue', {
+				timelineTurn: gmBrief.currentTurn,
+				retrievedMemoryIds: retrieved.nodes.length,
+			}, () => enqueueTurnStateExtractionJob({
+				storyId: request.storyId,
+				playerEntryId,
+				assistantEntryId,
+				playerText: request.playerText,
+				narration,
+				clientTurnId: request.clientTurnId,
+				timelineTurn: gmBrief.currentTurn,
+				retrievedMemoryIds: retrieved.nodes.map((node) => node.id),
+				memorySettings,
+			}));
+			warnings.push(`State extraction queued as background job: ${jobId}`);
+		} catch (error) {
+			warnings.push(`State extraction enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
 	const promotionMetadata: Record<string, unknown> = {
 		currentTurn: gmBrief.currentTurn,
 		serverVersion: turnVersion,
 		status: 'pending',
-		...turnContextCounts(ctxWithTimeline),
+		...contextCounts,
 		promotedEvents: 0,
 	};
 	try {
@@ -612,7 +1189,40 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		warnings.push(`Timeline due-event promotion failed: ${error instanceof Error ? error.message : String(error)}`);
 	}
 
-	const [entries, syncChanges] = await recorder.time('turn.final_response.readback', {
+	let campaignVault: TurnResponse['campaignVault'] = null;
+	try {
+		campaignVault = await recorder.time('turn.campaign_vault.append_evidence', {
+			position,
+			serverVersion: turnVersion,
+			eventIds: applied.eventIds.length,
+			statePatchIds: applied.patchIds.length,
+			retrievedMemoryIds: retrieved.nodes.length,
+		}, () => appendTurnEvidence({
+			story: {
+				id: request.storyId,
+				title: request.storyId,
+				serverVersion: turnVersion,
+			},
+			clientTurnId: request.clientTurnId,
+			position,
+			playerText: request.playerText,
+			narration,
+			eventIds: applied.eventIds,
+			statePatchIds: applied.patchIds,
+			retrievedMemoryIds: retrieved.nodes.map((node) => node.id),
+			memoryNodeIds: applied.memoryNodeIds,
+			warnings,
+			generationTimings,
+			metadata: {
+				engineCache: engineCacheDebug ?? null,
+				wikiContextCitations: wikiContext?.citations ?? [],
+			},
+		}));
+	} catch (error) {
+		warnings.push(`Campaign vault evidence append failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
+
+	const [entries, syncChanges, projection] = await recorder.time('turn.final_response.readback', {
 		localVersion: request.localVersion,
 	}, () => Promise.all([
 		db
@@ -622,6 +1232,10 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 			.orderBy(desc(storyEntries.position))
 			.limit(2),
 		getSyncChanges(request.storyId, request.localVersion),
+		getCampaignProjection(request.storyId, { entryLimit: 80 }).catch((error) => {
+			warnings.push(`Campaign projection readback failed: ${error instanceof Error ? error.message : String(error)}`);
+			return null;
+		}),
 	]));
 	const maxVersion = syncChanges.reduce((max, change) => Math.max(max, change.version), turnVersion);
 	recorder.record('turn.final_response.serialize', 0, {
@@ -642,6 +1256,17 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		serverVersion: maxVersion,
 		syncChanges,
 		warnings,
+		campaignVault,
+		projection: projection ? {
+			mode: projection.mode,
+			entryLimit: 80,
+			counts: projection.counts,
+			cache: projection.cache ? {
+				hitCount: projection.cache.hitCount,
+				missCount: projection.cache.missCount,
+				tokenEstimate: projection.cache.tokenEstimate,
+			} : null,
+		} : null,
 		generationTimings,
 	};
 }
