@@ -4,15 +4,20 @@ import {
 	agreements,
 	arcs,
 	chapters,
+	continuityWarnings,
 	entities,
 	entityAliases,
+	facts,
 	factions,
 	factionGoals,
 	factionMemberships,
+	factionProjects,
 	factionResources,
+	patchProposals,
 	memoryNodes,
 	npcBeliefs,
 	npcEventLinks,
+	sourceRefs,
 	relationships,
 	sagas,
 	statePatches,
@@ -34,6 +39,7 @@ import {
 import { enqueueImportProjectionJobs, enqueueStoryVaultSyncJob, enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
 import { deleteStoryVaultArtifacts } from '$lib/server/wiki/storyVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
+import { entityResolutionSummary, resolveEntityIdentity, shouldReuseResolvedEntity } from './entityResolver';
 import type { EngineCampaignBootstrapArgs } from '$lib/contracts/engine';
 
 type JsonRecord = Record<string, unknown>;
@@ -48,6 +54,7 @@ export interface BootstrapProjectionLimits {
 	factionMembershipLimit: number;
 	factionResourceLimit: number;
 	factionGoalLimit: number;
+	factionProjectLimit: number;
 	agreementLimit: number;
 	npcBeliefLimit: number;
 	threadLimit: number;
@@ -67,6 +74,7 @@ export const DEFAULT_BOOTSTRAP_LIMITS: BootstrapProjectionLimits = {
 	factionMembershipLimit: 160,
 	factionResourceLimit: 160,
 	factionGoalLimit: 160,
+	factionProjectLimit: 160,
 	agreementLimit: 80,
 	npcBeliefLimit: 80,
 	threadLimit: 80,
@@ -86,6 +94,7 @@ const BOOTSTRAP_LIMIT_CAPS: BootstrapProjectionLimits = {
 	factionMembershipLimit: 400,
 	factionResourceLimit: 400,
 	factionGoalLimit: 400,
+	factionProjectLimit: 400,
 	agreementLimit: 200,
 	npcBeliefLimit: 200,
 	threadLimit: 200,
@@ -111,6 +120,7 @@ export function normalizeBootstrapOptions(options: EngineCampaignBootstrapArgs =
 		factionMembershipLimit: boundedInt(options.factionMembershipLimit, DEFAULT_BOOTSTRAP_LIMITS.factionMembershipLimit, BOOTSTRAP_LIMIT_CAPS.factionMembershipLimit),
 		factionResourceLimit: boundedInt(options.factionResourceLimit, DEFAULT_BOOTSTRAP_LIMITS.factionResourceLimit, BOOTSTRAP_LIMIT_CAPS.factionResourceLimit),
 		factionGoalLimit: boundedInt(options.factionGoalLimit, DEFAULT_BOOTSTRAP_LIMITS.factionGoalLimit, BOOTSTRAP_LIMIT_CAPS.factionGoalLimit),
+		factionProjectLimit: boundedInt(options.factionProjectLimit, DEFAULT_BOOTSTRAP_LIMITS.factionProjectLimit, BOOTSTRAP_LIMIT_CAPS.factionProjectLimit),
 		agreementLimit: boundedInt(options.agreementLimit, DEFAULT_BOOTSTRAP_LIMITS.agreementLimit, BOOTSTRAP_LIMIT_CAPS.agreementLimit),
 		npcBeliefLimit: boundedInt(options.npcBeliefLimit, DEFAULT_BOOTSTRAP_LIMITS.npcBeliefLimit, BOOTSTRAP_LIMIT_CAPS.npcBeliefLimit),
 		threadLimit: boundedInt(options.threadLimit, DEFAULT_BOOTSTRAP_LIMITS.threadLimit, BOOTSTRAP_LIMIT_CAPS.threadLimit),
@@ -342,6 +352,7 @@ export async function getBootstrap(storyId: string, options: EngineCampaignBoots
 		factionMembershipRows,
 		factionResourceRows,
 		factionGoalRows,
+		factionProjectRows,
 		agreementRows,
 		npcBeliefRows,
 		threadRows,
@@ -366,6 +377,7 @@ export async function getBootstrap(storyId: string, options: EngineCampaignBoots
 		limits.factionMembershipLimit === 0 ? Promise.resolve([]) : db.select().from(factionMemberships).where(eq(factionMemberships.storyId, storyId)).limit(limits.factionMembershipLimit),
 		limits.factionResourceLimit === 0 ? Promise.resolve([]) : db.select().from(factionResources).where(eq(factionResources.storyId, storyId)).limit(limits.factionResourceLimit),
 		limits.factionGoalLimit === 0 ? Promise.resolve([]) : db.select().from(factionGoals).where(eq(factionGoals.storyId, storyId)).limit(limits.factionGoalLimit),
+		limits.factionProjectLimit === 0 ? Promise.resolve([]) : db.select().from(factionProjects).where(eq(factionProjects.storyId, storyId)).limit(limits.factionProjectLimit),
 		limits.agreementLimit === 0 ? Promise.resolve([]) : db.select().from(agreements).where(eq(agreements.storyId, storyId)).limit(limits.agreementLimit),
 		limits.npcBeliefLimit === 0 ? Promise.resolve([]) : db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).orderBy(desc(npcBeliefs.updatedAt)).limit(limits.npcBeliefLimit),
 		limits.threadLimit === 0 ? Promise.resolve([]) : db.select().from(storyThreads).where(eq(storyThreads.storyId, storyId)).limit(limits.threadLimit),
@@ -389,6 +401,7 @@ export async function getBootstrap(storyId: string, options: EngineCampaignBoots
 		factionMemberships: factionMembershipRows,
 		factionResources: factionResourceRows,
 		factionGoals: factionGoalRows,
+		factionProjects: factionProjectRows,
 		agreements: agreementRows,
 		npcBeliefs: npcBeliefRows,
 		threads: threadRows,
@@ -478,37 +491,63 @@ function entityMetadataFromEntry(entry: JsonRecord, existing: JsonRecord = {}): 
 export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: unknown) {
 	const db = getDb();
 	const entry = asRecord(rawEntry);
-	const entityId = asNullableString(entry.id) ?? id('entity');
+	const requestedEntityId = asNullableString(entry.id);
 	const name = asString(entry.name).trim();
 	if (!name) throw new Error('Wiki entry name is required.');
 	const type = asString(entry.type, 'concept');
 	const now = nowIso();
 	const [story] = await db.select({ id: stories.id }).from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
-	const [existing] = await db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, entityId))).limit(1);
-	const serverVersion = await bumpStoryVersion(storyId);
 	const sourceEntryIds = sourceEntries(entry.firstMentioned, entry.lastMentioned);
-	const state = entityStateFromEntry(entry);
-	const metadata = entityMetadataFromEntry(entry, asRecord(existing?.metadata));
 	const description = asString(entry.description);
-	const status = asString(entry.status, asString(state.status, 'active'));
-	const visibility = asString(entry.visibility, 'player_known');
 	const sourceEventIds = asStringArray(entry.sourceEventIds);
 	const sourcePatchIds = asStringArray(entry.sourcePatchIds);
+	const resolution = await resolveEntityIdentity({
+		storyId,
+		db,
+		candidate: {
+			id: requestedEntityId,
+			type,
+			name,
+			aliases: asStringArray(entry.aliases),
+			description,
+			sourceEntryIds,
+			sourceEventIds,
+			sourcePatchIds,
+		},
+	});
+	const entityId = shouldReuseResolvedEntity(resolution) && resolution.entityId
+		? resolution.entityId
+		: requestedEntityId ?? id('entity');
+	const [existing] = await db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, entityId))).limit(1);
+	const serverVersion = await bumpStoryVersion(storyId);
+	const state = { ...asRecord(existing?.state), ...entityStateFromEntry(entry) };
+	const mergedSourceEntryIds = stringList(existing?.sourceEntryIds, sourceEntryIds);
+	const mergedSourceEventIds = stringList(existing?.sourceEventIds, sourceEventIds);
+	const mergedSourcePatchIds = stringList(existing?.sourcePatchIds, sourcePatchIds);
+	const metadata = {
+		...entityMetadataFromEntry(entry, asRecord(existing?.metadata)),
+		entityResolver: entityResolutionSummary(resolution),
+	};
+	const canonicalName = existing && normalizeAlias(existing.name) !== normalizeAlias(name) && existing.name.length >= name.length
+		? existing.name
+		: name;
+	const status = asString(entry.status, asString(state.status, existing?.status ?? 'active'));
+	const visibility = asString(entry.visibility, existing?.visibility ?? 'player_known');
 
 	const [entity] = await db.insert(entities).values({
 		id: entityId,
 		storyId,
 		type,
-		name,
+		name: canonicalName,
 		description,
 		status,
 		visibility,
 		state,
 		metadata,
-		sourceEntryIds,
-		sourceEventIds,
-		sourcePatchIds,
+		sourceEntryIds: mergedSourceEntryIds,
+		sourceEventIds: mergedSourceEventIds,
+		sourcePatchIds: mergedSourcePatchIds,
 		serverVersion,
 		createdAt: existing?.createdAt ?? now,
 		updatedAt: now,
@@ -516,22 +555,23 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 		target: entities.id,
 		set: {
 			type,
-			name,
+			name: canonicalName,
 			description,
 			status,
 			visibility,
 			state,
 			metadata,
-			sourceEntryIds,
-			sourceEventIds,
-			sourcePatchIds,
+			sourceEntryIds: mergedSourceEntryIds,
+			sourceEventIds: mergedSourceEventIds,
+			sourcePatchIds: mergedSourcePatchIds,
 			serverVersion,
 			updatedAt: now,
 		},
 	}).returning();
 
 	await db.delete(entityAliases).where(and(eq(entityAliases.storyId, storyId), eq(entityAliases.entityId, entityId)));
-	const aliases = [...new Set([name, ...asStringArray(entry.aliases)])]
+	const matchedAliases = resolution.candidates.find((candidate) => candidate.entityId === entityId)?.aliases ?? [];
+	const aliases = [...new Set([canonicalName, name, ...matchedAliases, ...asStringArray(entry.aliases)])]
 		.map((alias) => ({ alias, normalizedAlias: normalizeAlias(alias) }))
 		.filter((alias) => alias.normalizedAlias);
 	for (const alias of aliases) {
@@ -541,7 +581,7 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 			entityId,
 			alias: alias.alias,
 			normalizedAlias: alias.normalizedAlias,
-			sourceEntryIds,
+			sourceEntryIds: mergedSourceEntryIds,
 			serverVersion,
 			createdAt: now,
 			updatedAt: now,
@@ -549,13 +589,13 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 	}
 
 	if (type === 'faction') {
-		await importFactionFromEntry(storyId, { ...entry, id: entityId, state }, entityId, {}, serverVersion);
+		await importFactionFromEntry(storyId, { ...entry, id: entityId, name: canonicalName, state }, entityId, {}, serverVersion);
 	} else {
 		await db.delete(factions).where(and(eq(factions.storyId, storyId), eq(factions.entityId, entityId)));
 	}
 
-	await queueStoryVaultSync(storyId, serverVersion, 'entity-upsert', { entityId, type, name });
-	return { storyId, serverVersion, entity };
+	await queueStoryVaultSync(storyId, serverVersion, 'entity-upsert', { entityId, type, name: canonicalName, resolution: resolution.decision });
+	return { storyId, serverVersion, entity, resolution };
 }
 
 export async function deleteBackendEntity(storyId: string, entityId: string) {
@@ -901,33 +941,66 @@ async function insertEntityFromObject(
 		return null;
 	}
 
-	const entityId = asNullableString(item.id) ?? id('entity');
+	const requestedEntityId = asNullableString(item.id);
 	const state = asRecord(item.state);
-	const metadata = { originalTable: table, originalMetadata: item.metadata ?? null };
+	const sourceEntryIds = sourceEntries(item.firstMentioned, item.lastMentioned);
+	const resolution = await resolveEntityIdentity({
+		storyId,
+		db: getDb(),
+		includeSemantic: false,
+		candidate: {
+			id: requestedEntityId,
+			type,
+			name,
+			aliases: asStringArray(item.aliases),
+			description: asNullableString(item.description),
+			sourceEntryIds,
+		},
+	});
+	const entityId = shouldReuseResolvedEntity(resolution) && resolution.entityId
+		? resolution.entityId
+		: requestedEntityId ?? id('entity');
+	const [existing] = await getDb().select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, entityId))).limit(1);
+	const metadata = {
+		...asRecord(existing?.metadata),
+		originalTable: table,
+		originalMetadata: item.metadata ?? null,
+		entityResolver: entityResolutionSummary(resolution),
+	};
+	const canonicalName = existing && normalizeAlias(existing.name) !== normalizeAlias(name) && existing.name.length >= name.length
+		? existing.name
+		: name;
 	const insertedAt = nowIso();
 	await getDb().insert(entities).values({
 		id: entityId,
 		storyId,
 		type,
-		name,
-		description: asNullableString(item.description),
-		status: asString(item.status, 'active'),
-		visibility: asString(item.visibility, 'player_known'),
-		state,
+		name: canonicalName,
+		description: asNullableString(item.description) ?? existing?.description ?? null,
+		status: asString(item.status, existing?.status ?? 'active'),
+		visibility: asString(item.visibility, existing?.visibility ?? 'player_known'),
+		state: { ...asRecord(existing?.state), ...state },
 		metadata,
-		sourceEntryIds: sourceEntries(item.firstMentioned, item.lastMentioned),
-		createdAt: insertedAt,
+		sourceEntryIds: stringList(existing?.sourceEntryIds, sourceEntryIds),
+		createdAt: existing?.createdAt ?? insertedAt,
 		updatedAt: insertedAt,
 	}).onConflictDoUpdate({
 		target: entities.id,
 		set: {
-			name,
-			description: asNullableString(item.description),
+			name: canonicalName,
+			description: asNullableString(item.description) ?? existing?.description ?? null,
+			status: asString(item.status, existing?.status ?? 'active'),
+			visibility: asString(item.visibility, existing?.visibility ?? 'player_known'),
+			state: { ...asRecord(existing?.state), ...state },
+			metadata,
+			sourceEntryIds: stringList(existing?.sourceEntryIds, sourceEntryIds),
 			updatedAt: insertedAt,
 		},
 	});
 
-	const aliases = [...new Set([name, ...asStringArray(item.aliases)])]
+	await getDb().delete(entityAliases).where(and(eq(entityAliases.storyId, storyId), eq(entityAliases.entityId, entityId)));
+	const matchedAliases = resolution.candidates.find((candidate) => candidate.entityId === entityId)?.aliases ?? [];
+	const aliases = [...new Set([canonicalName, name, ...matchedAliases, ...asStringArray(item.aliases)])]
 		.map((alias) => ({ alias, normalizedAlias: normalizeAlias(alias) }))
 		.filter((alias) => alias.normalizedAlias);
 	for (const alias of aliases) {
@@ -937,7 +1010,7 @@ async function insertEntityFromObject(
 			entityId,
 			alias: alias.alias,
 			normalizedAlias: alias.normalizedAlias,
-			sourceEntryIds: sourceEntries(item.firstMentioned, item.lastMentioned),
+			sourceEntryIds,
 			createdAt: insertedAt,
 			updatedAt: insertedAt,
 		}).onConflictDoNothing();
@@ -1810,12 +1883,17 @@ export async function exportBackendStory(storyId: string) {
 		factionMembershipRows,
 		factionResourceRows,
 		factionGoalRows,
+		factionProjectRows,
 		agreementRows,
 		threadRows,
 		beliefRows,
 		eventRows,
 		npcEventLinkRows,
 		patchRows,
+		factRows,
+		sourceRefRows,
+		patchProposalRows,
+		continuityWarningRows,
 		nodeRows,
 		chapterRows,
 		arcRows,
@@ -1829,12 +1907,17 @@ export async function exportBackendStory(storyId: string) {
 		db.select().from(factionMemberships).where(eq(factionMemberships.storyId, storyId)),
 		db.select().from(factionResources).where(eq(factionResources.storyId, storyId)),
 		db.select().from(factionGoals).where(eq(factionGoals.storyId, storyId)),
+		db.select().from(factionProjects).where(eq(factionProjects.storyId, storyId)),
 		db.select().from(agreements).where(eq(agreements.storyId, storyId)),
 		db.select().from(storyThreads).where(eq(storyThreads.storyId, storyId)),
 		db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)),
 		db.select().from(storyEvents).where(eq(storyEvents.storyId, storyId)).orderBy(asc(storyEvents.createdAt)),
 		db.select().from(npcEventLinks).where(eq(npcEventLinks.storyId, storyId)).orderBy(asc(npcEventLinks.createdAt)),
 		db.select().from(statePatches).where(eq(statePatches.storyId, storyId)).orderBy(asc(statePatches.createdAt)),
+		db.select().from(facts).where(eq(facts.storyId, storyId)).orderBy(asc(facts.createdAt)),
+		db.select().from(sourceRefs).where(eq(sourceRefs.storyId, storyId)).orderBy(asc(sourceRefs.createdAt)),
+		db.select().from(patchProposals).where(eq(patchProposals.storyId, storyId)).orderBy(asc(patchProposals.createdAt)),
+		db.select().from(continuityWarnings).where(eq(continuityWarnings.storyId, storyId)).orderBy(asc(continuityWarnings.createdAt)),
 		db.select().from(memoryNodes).where(eq(memoryNodes.storyId, storyId)).orderBy(asc(memoryNodes.updatedAt)),
 		db.select().from(chapters).where(eq(chapters.storyId, storyId)).orderBy(asc(chapters.number)),
 		db.select().from(arcs).where(eq(arcs.storyId, storyId)).orderBy(asc(arcs.number)),
@@ -1863,12 +1946,17 @@ export async function exportBackendStory(storyId: string) {
 		factionMemberships: factionMembershipRows,
 		factionResources: factionResourceRows,
 		factionGoals: factionGoalRows,
+		factionProjects: factionProjectRows,
 		agreements: agreementRows,
 		threads: threadRows,
 		npcBeliefs: beliefRows,
 		events: eventRows,
 		npcEventLinks: npcEventLinkRows,
 		statePatches: patchRows,
+		facts: factRows,
+		sourceRefs: sourceRefRows,
+		patchProposals: patchProposalRows,
+		continuityWarnings: continuityWarningRows,
 		memoryNodes: nodeRows.map((row) => ({ ...row, embedding: undefined })),
 		chapters: chapterRows,
 		arcs: arcRows,
@@ -2135,12 +2223,17 @@ export async function getSyncChanges(storyId: string, since: number): Promise<Sy
 		{ name: 'faction_memberships', table: factionMemberships, idColumn: factionMemberships.id, storyColumn: factionMemberships.storyId },
 		{ name: 'faction_resources', table: factionResources, idColumn: factionResources.id, storyColumn: factionResources.storyId },
 		{ name: 'faction_goals', table: factionGoals, idColumn: factionGoals.id, storyColumn: factionGoals.storyId },
+		{ name: 'faction_projects', table: factionProjects, idColumn: factionProjects.id, storyColumn: factionProjects.storyId },
 		{ name: 'agreements', table: agreements, idColumn: agreements.id, storyColumn: agreements.storyId },
 		{ name: 'story_threads', table: storyThreads, idColumn: storyThreads.id, storyColumn: storyThreads.storyId },
 		{ name: 'npc_beliefs', table: npcBeliefs, idColumn: npcBeliefs.id, storyColumn: npcBeliefs.storyId },
 		{ name: 'story_events', table: storyEvents, idColumn: storyEvents.id, storyColumn: storyEvents.storyId },
 		{ name: 'npc_event_links', table: npcEventLinks, idColumn: npcEventLinks.id, storyColumn: npcEventLinks.storyId },
 		{ name: 'state_patches', table: statePatches, idColumn: statePatches.id, storyColumn: statePatches.storyId },
+		{ name: 'facts', table: facts, idColumn: facts.id, storyColumn: facts.storyId },
+		{ name: 'source_refs', table: sourceRefs, idColumn: sourceRefs.id, storyColumn: sourceRefs.storyId },
+		{ name: 'patch_proposals', table: patchProposals, idColumn: patchProposals.id, storyColumn: patchProposals.storyId },
+		{ name: 'continuity_warnings', table: continuityWarnings, idColumn: continuityWarnings.id, storyColumn: continuityWarnings.storyId },
 		{ name: 'memory_nodes', table: memoryNodes, idColumn: memoryNodes.id, storyColumn: memoryNodes.storyId },
 		{ name: 'chapters', table: chapters, idColumn: chapters.id, storyColumn: chapters.storyId },
 		{ name: 'arcs', table: arcs, idColumn: arcs.id, storyColumn: arcs.storyId },

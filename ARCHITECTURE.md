@@ -22,6 +22,14 @@ This is a comprehensive reference document for the entire Mtherios interactive f
 
 **Current migration state:** The old browser/IndexedDB path still exists for compatibility, but the frontend story catalog now refreshes from the terminal process, new/imported stories are backend-bound by default when the server is reachable, and backend-bound turns use `/api/turn`, `/api/sync/*`, and `/api/memory/retrieve`. For backend-bound stories, Dexie is being narrowed into cache plus offline command queue: queued `turn_command`/entry repair ops are pushed before projection pulls or new backend turns, and server `sync_ops` IDs make retries idempotent. Future work should keep moving large-story ownership toward the terminal process and backend canon.
 
+### Canon Schema Lock (DB-first projection boundary)
+
+- `Postgres` is the canonical source of truth for character/location/faction/world records. `stories`, `story_entries`, `entities`, `entity_aliases`, `relationships`, `factions`, `state_patches`, `facts`, `source_refs`, `patch_proposals`, and `continuity_warnings` are persistent, durable records owned by the terminal process.
+- Stable IDs live in row IDs (`id`, `story_id`, record IDs in related tables). Frontmatter/markdown pages are generated projections, not identity boundaries.
+- Durable updates flow as: write/update a canonical row with `source_ids`/`source_refs` provenance, then project the story vault and optional search indexes.
+- Entity and record changes are expected to include explicit evidence links (`source_entry_ids`, `source_event_ids`, `source_patch_ids`, `source_refs`) rather than implicit narrative inference.
+- Import/export (`worldDatabase`) must preserve or map IDs and row payloads so identity is stable across bundles.
+
 ---
 
 ### FILE 1: `src/lib/stores/story.svelte.ts`

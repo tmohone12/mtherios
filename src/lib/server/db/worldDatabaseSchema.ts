@@ -1,4 +1,4 @@
-export const TERMINAL_WORLD_DATABASE_SCHEMA_VERSION = 2;
+export const TERMINAL_WORLD_DATABASE_SCHEMA_VERSION = 3;
 
 export const TERMINAL_WORLD_DATABASE_TABLE_ORDER = [
 	'stories',
@@ -10,12 +10,17 @@ export const TERMINAL_WORLD_DATABASE_TABLE_ORDER = [
 	'factionMemberships',
 	'factionResources',
 	'factionGoals',
+	'factionProjects',
 	'npcBeliefs',
 	'agreements',
 	'storyThreads',
 	'storyEvents',
 	'npcEventLinks',
 	'statePatches',
+	'facts',
+	'sourceRefs',
+	'patchProposals',
+	'continuityWarnings',
 	'memoryNodes',
 	'chapters',
 	'arcs',
@@ -243,6 +248,12 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 			foreignKeys: ['storyId -> stories.id', 'factionId -> factions.id'],
 			fields: ['id', 'storyId', 'factionId', 'goal', 'status', 'priority', 'secrecy', 'metadata', 'sourceEntryIds', 'sourceEventIds', 'sourcePatchIds', 'serverVersion', 'createdAt', 'updatedAt'],
 		},
+		factionProjects: {
+			purpose: 'Delayed faction plans with resource costs, expected gains, risks, and due turns.',
+			primaryKey: 'id',
+			foreignKeys: ['storyId -> stories.id', 'factionId -> factions.id'],
+			fields: ['id', 'storyId', 'factionId', 'project', 'status', 'progress', 'priority', 'dueTurn', 'worldTime', 'costs', 'gains', 'risks', 'visibility', 'metadata', 'sourceEntryIds', 'sourceEventIds', 'sourcePatchIds', 'serverVersion', 'createdAt', 'updatedAt'],
+		},
 		npcBeliefs: {
 			purpose: 'What a character believes about an entity or situation, including confidence and visibility.',
 			primaryKey: 'id',
@@ -278,6 +289,30 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 			primaryKey: 'id',
 			foreignKeys: ['storyId -> stories.id'],
 			fields: ['id', 'storyId', 'operations', 'reason', 'status', 'validationWarnings', 'sourceEntryIds', 'sourceEventIds', 'serverVersion', 'createdAt', 'updatedAt'],
+		},
+		facts: {
+			purpose: 'Canonicalized fact records with provenance and confidence per story.',
+			primaryKey: 'id',
+			foreignKeys: ['storyId -> stories.id', 'subjectEntityId -> entities.id', 'targetEntityId -> entities.id'],
+			fields: ['id', 'storyId', 'type', 'subjectEntityId', 'targetEntityId', 'title', 'statement', 'confidence', 'status', 'visibility', 'firstSeenEntryId', 'sourceEntryIds', 'sourceEventIds', 'sourcePatchIds', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
+		},
+		sourceRefs: {
+			purpose: 'Traceability links from canon rows back to source material and evidence.',
+			primaryKey: 'id',
+			foreignKeys: ['storyId -> stories.id'],
+			fields: ['id', 'storyId', 'sourceType', 'sourceId', 'targetTable', 'targetRecordId', 'targetRecordField', 'sourceField', 'confidence', 'rationale', 'notes', 'serverVersion', 'createdAt', 'updatedAt'],
+		},
+		patchProposals: {
+			purpose: 'Queued or persisted requests to mutate canon safely with source-backed rationale.',
+			primaryKey: 'id',
+			foreignKeys: ['storyId -> stories.id'],
+			fields: ['id', 'storyId', 'proposalType', 'targetTable', 'targetRecordId', 'proposedBy', 'operations', 'reason', 'suggestion', 'status', 'decision', 'validatedBy', 'sourceEntryIds', 'sourceEventIds', 'sourcePatchIds', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
+		},
+		continuityWarnings: {
+			purpose: 'Continuity concerns raised during merge/resolution and tracked with provenance.',
+			primaryKey: 'id',
+			foreignKeys: ['storyId -> stories.id'],
+			fields: ['id', 'storyId', 'warningType', 'level', 'title', 'status', 'details', 'entityIds', 'factionIds', 'threadIds', 'actorIds', 'sourceEntryIds', 'sourceEventIds', 'sourcePatchIds', 'resolutionNotes', 'resolvedBy', 'resolvedAt', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
 		},
 		memoryNodes: {
 			purpose: 'Retrieval memory and compiled world knowledge. Embeddings are optional local indexes, not the source of truth.',
