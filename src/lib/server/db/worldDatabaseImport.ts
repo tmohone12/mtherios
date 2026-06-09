@@ -595,6 +595,8 @@ function patchProposalValue(row: JsonRecord, storyId: string, importedAt: string
 		status: asString(row.status, 'pending'),
 		decision: asNullableString(row.decision),
 		validatedBy: asNullableString(row.validatedBy),
+		affectedEntityIds: asStringArray(row.affectedEntityIds),
+		confidence: asNumber(row.confidence, 0.75),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),
 		sourcePatchIds: asStringArray(row.sourcePatchIds),

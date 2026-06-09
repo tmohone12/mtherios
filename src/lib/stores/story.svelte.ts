@@ -475,7 +475,7 @@ class StoryStore {
 
 	// ── Derived ──
 	get storyMode() { return this.currentStory?.mode ?? 'adventure'; }
-	get pov() { return this.currentStory?.settings?.pov ?? 'second'; }
+	get pov() { return this.currentStory?.settings?.pov ?? 'first'; }
 	get tense() { return this.currentStory?.settings?.tense ?? 'present'; }
 	get hasOlderEntries() {
 		return this.currentStory !== null
@@ -2381,7 +2381,7 @@ class StoryStore {
 
 	// ── Section 1: Header ───────────────────────────────────────────────────
 	#sectionHeader(s: Story, mode: string): string {
-		const pov = s.settings?.pov ?? 'second';
+		const pov = s.settings?.pov ?? 'first';
 		const tense = s.settings?.tense ?? 'present';
 		const tenseWord = tense === 'past' ? 'past' : 'present';
 		const protagonist = this.protagonist;
@@ -2391,13 +2391,14 @@ class StoryStore {
 
 		if (mode === 'adventure') {
 			const isThird = pov === 'third';
-			const personLabel = isThird ? 'third person' : 'second person (you/your)';
+			const isSecond = pov === 'second';
+			const personLabel = isThird ? 'third person' : isSecond ? 'second person (you/your)' : 'first-person POV (I/me/my)';
 			const userName = protagonist?.name ?? 'the player';
 
 			parts.push(
 				`## Role\n\n` +
-				`You are the GM of a text-adventure simulation. You control the world, every NPC, and every consequence. The player controls one character. You NEVER speak, act, think, or decide for the protagonist. You stop when their input is needed.\n\n` +
-				`Write in ${tenseWord} tense, ${personLabel} (for sensations the protagonist's body registers). For the world, NPCs, and environment, render at the protagonist's shoulder in 3rd-person limited — never inside another mind.\n\n` +
+				`You are the GM narrator of a text RPG, not a writing assistant. You control the world, every NPC, and every consequence. The player controls one character. You NEVER speak, act, think, or decide for the protagonist. You stop when their input is needed.\n\n` +
+				`Write in ${tenseWord} tense, ${personLabel}. For the world, NPCs, and environment, stay inside the protagonist's immediate sensory range — never inside another mind.\n\n` +
 				`**{{user}}** = ${userName} — the player. You NEVER speak, act, think, or move for {{user}}.\n` +
 				`**{{char}}** = all NPCs, controlled by you.\n` +
 				`**{{world}}** = environment, time, physics, consequences.\n` +
@@ -2413,9 +2414,9 @@ class StoryStore {
 				`No exceptions. Header first. Prose after.`
 			);
 		} else {
-			parts.push(`You are a skilled fiction writer. Write in ${tenseWord} tense, ${pov} person.`);
+			parts.push(`You are the narrator for a text RPG scene, not a writing assistant. Write in ${tenseWord} tense, ${pov} person.`);
 			if (protagonist) parts.push(`The main character is ${protagonist.name}. ${protagonist.description ?? ''}`);
-			parts.push(`Write prose based on the author's directions.`);
+			parts.push(`Narrate the supplied direction without addressing the user as an author, editor, or co-writer.`);
 		}
 
 		if (s.genre) parts.push(`Genre: ${s.genre}`);

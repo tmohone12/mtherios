@@ -13,6 +13,7 @@ export interface ServerGenerationOptions {
 	model?: string;
 	temperature?: number;
 	maxTokens?: number;
+	timeoutMs?: number;
 	system: string;
 	systemDynamic?: string;
 	messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
@@ -60,6 +61,8 @@ export class ServerGenerationError extends Error {
 function isAnthropicProvider(profile: ProviderProfile): boolean {
 	return profile.providerType === 'anthropic' || profile.providerType === 'anthropic-proxy';
 }
+
+const DEFAULT_SERVER_GENERATION_TIMEOUT_MS = 120_000;
 
 function isGoogleAgentPlatformProvider(profile: ProviderProfile): boolean {
 	return profile.providerType === 'google-agent-platform';
@@ -158,6 +161,30 @@ function usageFromResponse(data: unknown, useAnthropic: boolean): ServerGenerati
 	};
 }
 
+function generationTimeoutMs(value: unknown): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_SERVER_GENERATION_TIMEOUT_MS;
+	return Math.max(1, Math.trunc(value));
+}
+
+function makeGenerationAbortSignal(timeoutMs: number): { signal: AbortSignal; cleanup: () => void } {
+	const controller = new AbortController();
+	const timer = setTimeout(() => {
+		controller.abort(new Error(`Server LLM request timed out after ${timeoutMs}ms`));
+	}, timeoutMs);
+	return {
+		signal: controller.signal,
+		cleanup: () => clearTimeout(timer),
+	};
+}
+
+function generationErrorMessage(error: unknown, timeoutMs: number): string {
+	if (error instanceof Error && error.message) return error.message;
+	if (error && typeof error === 'object' && 'name' in error && (error as { name?: unknown }).name === 'AbortError') {
+		return `Server LLM request timed out after ${timeoutMs}ms`;
+	}
+	return String(error);
+}
+
 export async function generateServerTextWithMetrics(options: ServerGenerationOptions): Promise<ServerGenerationResult> {
 	if (requiresApiKey(options.profile) && !options.profile.apiKey?.trim()) {
 		throw new Error('Server turn generation requires an API profile with an API key.');
@@ -173,6 +200,7 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 		? await getGoogleAgentPlatformBaseUrl()
 		: baseUrlFor(options.profile);
 	const messages = options.messages ?? [];
+	const timeoutMs = generationTimeoutMs(options.timeoutMs);
 
 	const endpoint = useAnthropic
 		? `${baseUrl || 'https://api.anthropic.com'}/v1/messages`
@@ -202,6 +230,7 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			...(options.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}),
 		};
 
+	const abort = makeGenerationAbortSignal(timeoutMs);
 	try {
 		const response = await fetch(endpoint, {
 			method: 'POST',
@@ -211,6 +240,7 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 					? { 'Content-Type': 'application/json', ...await getGoogleAgentPlatformHeaders() }
 					: openAiHeaders(options.profile),
 			body: JSON.stringify(body),
+			signal: abort.signal,
 		});
 
 		if (!response.ok) {
@@ -239,12 +269,14 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 		};
 	} catch (error) {
 		if (error instanceof ServerGenerationError) throw error;
-		throw new ServerGenerationError(error instanceof Error ? error.message : String(error), {
+		throw new ServerGenerationError(generationErrorMessage(error, timeoutMs), {
 			model,
 			endpoint,
 			durationMs: Date.now() - startTime,
 			promptChars: inputChars,
 		});
+	} finally {
+		abort.cleanup();
 	}
 }
 

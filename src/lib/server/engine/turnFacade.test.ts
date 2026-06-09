@@ -33,6 +33,7 @@ const turnResponse: TurnResponse = {
 	warnings: [],
 	generationTimings: [],
 	performance: null,
+	contextReceipt: null,
 };
 
 describe('legacy turn engine facade', () => {

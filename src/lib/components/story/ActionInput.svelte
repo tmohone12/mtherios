@@ -10,6 +10,8 @@
 	import { GM_TOOLS, worldStateUpdateSchema, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
 	import { declarePlayerScheme } from '$lib/services/ai/scheme/SchemeService';
 	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
+	import { isTerminalReachabilityError } from '$lib/services/backendMemory';
+	import { normalizeBackendContextBudget } from '$lib/services/backendTurnContext';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
 	import { shouldUseTerminalEngineTurn } from './engineTurnRouting';
 
@@ -78,7 +80,7 @@
 			locationId: story.locations.find((location) => location.current)?.id ?? null,
 			threadIds: [],
 			memoryTokenBudget: settings.uiSettings.backendMemoryTokenBudget || 800,
-			contextBudget: settings.contextBudget || 0,
+			contextBudget: normalizeBackendContextBudget(settings.contextBudget),
 			chapterThreshold: settings.uiSettings.chapterThreshold || 20,
 			postChapterBuffer: settings.uiSettings.postChapterBuffer ?? 10,
 			chaptersPerArc: settings.uiSettings.chaptersPerArc || 5,
@@ -656,8 +658,13 @@
 			return true;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			console.warn('[BackendTurn] Terminal runtime unavailable; refusing local turn queue:', error);
-			await story.addEntry('system', `Terminal agent runtime required: ${message}`);
+			const runtimeUnavailable = isTerminalReachabilityError(error);
+			console.warn(runtimeUnavailable
+				? '[BackendTurn] Terminal runtime unavailable; refusing local turn queue:'
+				: '[BackendTurn] Terminal turn failed; refusing local turn queue:', error);
+			await story.addEntry('system', runtimeUnavailable
+				? `Terminal agent runtime required: ${message}`
+				: `Terminal turn failed: ${message}`);
 			onStreamClear?.();
 			onStreamEnd?.('');
 			return true;

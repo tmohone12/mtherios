@@ -233,6 +233,7 @@ export const engineCampaignBootstrapArgsSchema = z.object({
 	factionMembershipLimit: z.number().int().min(0).max(400).optional(),
 	factionResourceLimit: z.number().int().min(0).max(400).optional(),
 	factionGoalLimit: z.number().int().min(0).max(400).optional(),
+	factionProjectLimit: z.number().int().min(0).max(400).optional(),
 	agreementLimit: z.number().int().min(0).max(200).optional(),
 	npcBeliefLimit: z.number().int().min(0).max(200).optional(),
 	threadLimit: z.number().int().min(0).max(200).optional(),

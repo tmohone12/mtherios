@@ -4,23 +4,31 @@ import { getDb } from '$lib/server/db/client';
 import {
 	agreements,
 	entities,
+	entityAliases,
 	factions,
 	factionGoals,
 	factionMemberships,
+	factionProjects,
 	factionResources,
+	facts,
+	continuityWarnings,
+	patchProposals,
 	memoryNodes,
 	npcEventLinks,
 	npcBeliefs,
 	relationships,
+	sourceRefs,
 	statePatches,
 	stories,
 	storyEvents,
 } from '$lib/server/db/schema';
 import { buildNpcEventLinksForEvent } from '$lib/server/events/timeline';
 import { enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
+import { summarizeTurnContinuity } from '$lib/server/memory/continuity';
+import { entityResolutionSummary, resolveEntityIdentity, shouldReuseResolvedEntity } from '$lib/server/memory/entityResolver';
 import { worldStateUpdateSchema, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
 
-type TurnPersistenceDb = Pick<ReturnType<typeof getDb>, 'insert' | 'select' | 'update'>;
+type TurnPersistenceDb = Pick<ReturnType<typeof getDb>, 'delete' | 'insert' | 'select' | 'update'>;
 
 const extractedUpdateSchema = z.object({
 	update: worldStateUpdateSchema.default(() => worldStateUpdateSchema.parse({})),
@@ -40,6 +48,131 @@ function normalizeName(value: string): string {
 
 function sourceIds(...values: Array<string | null | undefined>): string[] {
 	return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+type TurnContinuityProposalRow = typeof patchProposals.$inferInsert;
+type TurnSourceRefRow = typeof sourceRefs.$inferInsert;
+
+interface TurnContinuityLedgerBundle {
+	patchProposals: Array<TurnContinuityProposalRow>;
+	sourceRefs: Array<TurnSourceRefRow>;
+}
+
+function queueTurnContinuityProposal(
+	ledger: TurnContinuityLedgerBundle,
+	input: {
+		storyId: string;
+		proposalType: string;
+		targetTable: string;
+		targetRecordId: string;
+		operations: Array<Record<string, unknown>>;
+		reason: string;
+		suggestion: string;
+		affectedEntityIds: string[];
+		confidence: number;
+		sourceEntryIds: string[];
+		sourceEventIds?: string[];
+		sourcePatchIds?: string[];
+		sourceField: string;
+		sourceRecordField?: string | null;
+		requiresReview?: boolean;
+		serverVersion: number;
+		now: string;
+		metadata: Record<string, unknown>;
+	},
+) {
+	const proposalId = id('proposal_turn');
+	const sourceEntryIds = sourceIds(...input.sourceEntryIds);
+	const sourceEventIds = sourceIds(...(input.sourceEventIds ?? []));
+	const sourcePatchIds = sourceIds(...(input.sourcePatchIds ?? []));
+	const proposal: TurnContinuityProposalRow = {
+		id: proposalId,
+		storyId: input.storyId,
+		proposalType: input.proposalType,
+		targetTable: input.targetTable,
+		targetRecordId: input.targetRecordId,
+		proposedBy: 'narration',
+		operations: input.operations,
+		reason: input.reason,
+		suggestion: input.suggestion,
+		status: input.requiresReview ? 'needs_review' : 'pending',
+		decision: null,
+		validatedBy: null,
+		affectedEntityIds: sourceIds(...input.affectedEntityIds),
+		confidence: input.confidence,
+		sourceEntryIds,
+		sourceEventIds,
+		sourcePatchIds,
+		metadata: input.metadata,
+		serverVersion: input.serverVersion,
+		createdAt: input.now,
+		updatedAt: input.now,
+	};
+
+	ledger.patchProposals.push(proposal);
+	ledger.sourceRefs.push(...buildSourceRefRows({
+		storyId: input.storyId,
+		targetTable: 'patch_proposals',
+		targetRecordId: proposalId,
+		targetRecordField: input.sourceRecordField ?? null,
+		sourceField: input.sourceField,
+		sourceEntryIds,
+		sourceEventIds,
+		sourcePatchIds,
+		confidence: input.confidence,
+		rationale: input.reason,
+		notes: input.suggestion,
+		serverVersion: input.serverVersion,
+		now: input.now,
+	}));
+}
+
+function buildSourceRefRows(input: {
+	storyId: string;
+	targetTable: string;
+	targetRecordId: string;
+	targetRecordField?: string | null;
+	sourceField?: string | null;
+	sourceEntryIds?: string[];
+	sourceEventIds?: string[];
+	sourcePatchIds?: string[];
+	confidence?: number;
+	rationale?: string | null;
+	notes?: string | null;
+	serverVersion: number;
+	now: string;
+}) {
+	const confidence = typeof input.confidence === 'number' && Number.isFinite(input.confidence)
+		? Math.max(0, Math.min(1, input.confidence))
+		: 1;
+	const buildRows = (sourceType: string, ids: string[]) => ids.map((sourceId) => ({
+		id: id('sourceref'),
+		storyId: input.storyId,
+		sourceType,
+		sourceId,
+		targetTable: input.targetTable,
+		targetRecordId: input.targetRecordId,
+		targetRecordField: input.targetRecordField ?? null,
+		sourceField: input.sourceField ?? null,
+		confidence,
+		rationale: input.rationale ?? null,
+		notes: input.notes ?? null,
+		serverVersion: input.serverVersion,
+		createdAt: input.now,
+		updatedAt: input.now,
+	}));
+
+	return [
+		...buildRows('story_entry', sourceIds(...(input.sourceEntryIds ?? []))),
+		...buildRows('story_event', sourceIds(...(input.sourceEventIds ?? []))),
+		...buildRows('state_patch', sourceIds(...(input.sourcePatchIds ?? []))),
+	];
+}
+
+async function insertSourceRefs(db: TurnPersistenceDb, input: Parameters<typeof buildSourceRefRows>[0]): Promise<void> {
+	const rows = buildSourceRefRows(input);
+	if (rows.length === 0) return;
+	await db.insert(sourceRefs).values(rows).onConflictDoNothing();
 }
 
 export function parseTurnUpdate(input: unknown): { update: WorldStateUpdate; warnings: string[] } {
@@ -87,20 +220,50 @@ async function upsertEntity(
 	sourcePatchIds: string[],
 	serverVersion: number,
 	createdAt: string,
+	continuityLedger: TurnContinuityLedgerBundle,
+	requiresReview: boolean,
 ): Promise<string> {
-	const existing = await findEntityByName(db, storyId, name, type);
-	const entityId = existing?.id ?? id('entity');
+	const aliases = Array.isArray(state.aliases)
+		? state.aliases.filter((alias): alias is string => typeof alias === 'string' && alias.trim().length > 0)
+		: [];
+	const resolution = await resolveEntityIdentity({
+		storyId,
+		db,
+		includeSemantic: false,
+		candidate: {
+			type,
+			name,
+			aliases,
+			description,
+			sourceEntryIds,
+			sourceEventIds,
+			sourcePatchIds,
+		},
+	});
+	const resolvedEntityId = shouldReuseResolvedEntity(resolution) ? resolution.entityId : null;
+	const entityId = resolvedEntityId ?? id('entity');
+	const [existing] = resolvedEntityId
+		? await db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, resolvedEntityId))).limit(1)
+		: [];
+	const canonicalName = existing && normalizeName(existing.name) !== normalizeName(name) && existing.name.length >= name.length
+		? existing.name
+		: name;
 	const nextState = { ...(existing?.state as Record<string, unknown> | null ?? {}), ...state };
+	const metadata = {
+		...(existing?.metadata as Record<string, unknown> | null ?? {}),
+		entityResolver: entityResolutionSummary(resolution),
+	};
+	const isUpdate = Boolean(existing);
 	await db.insert(entities).values({
 		id: entityId,
 		storyId,
 		type,
-		name,
+		name: canonicalName,
 		description: description ?? existing?.description ?? null,
 		status: String(state.status ?? existing?.status ?? 'active'),
 		visibility: 'player_known',
 		state: nextState,
-		metadata: {},
+		metadata,
 		sourceEntryIds: sourceIds(...(existing?.sourceEntryIds ?? []), ...sourceEntryIds),
 		sourceEventIds: sourceIds(...(existing?.sourceEventIds ?? []), ...sourceEventIds),
 		sourcePatchIds: sourceIds(...(existing?.sourcePatchIds ?? []), ...sourcePatchIds),
@@ -113,11 +276,81 @@ async function upsertEntity(
 			description: description ?? existing?.description ?? null,
 			status: String(state.status ?? existing?.status ?? 'active'),
 			state: nextState,
+			metadata,
 			sourceEntryIds: sourceIds(...(existing?.sourceEntryIds ?? []), ...sourceEntryIds),
 			sourceEventIds: sourceIds(...(existing?.sourceEventIds ?? []), ...sourceEventIds),
 			sourcePatchIds: sourceIds(...(existing?.sourcePatchIds ?? []), ...sourcePatchIds),
 			serverVersion,
 			updatedAt: createdAt,
+		},
+	});
+	await insertSourceRefs(db, {
+		storyId,
+		targetTable: 'entities',
+		targetRecordId: entityId,
+		targetRecordField: 'state',
+		sourceField: 'structured_update',
+		sourceEntryIds,
+		sourceEventIds,
+		sourcePatchIds,
+		confidence: 0.9,
+		rationale: 'Structured turn update upserted this canonical entity.',
+		serverVersion,
+		now: createdAt,
+	});
+	await db.delete(entityAliases).where(and(eq(entityAliases.storyId, storyId), eq(entityAliases.entityId, entityId)));
+	const matchedAliases = resolution.candidates.find((candidate) => candidate.entityId === entityId)?.aliases ?? [];
+	for (const alias of [...new Set([canonicalName, name, ...matchedAliases, ...aliases])]) {
+		const normalizedAlias = normalizeName(alias);
+		if (!normalizedAlias) continue;
+		await db.insert(entityAliases).values({
+			id: id('alias'),
+			storyId,
+			entityId,
+			alias,
+			normalizedAlias,
+			sourceEntryIds,
+			serverVersion,
+			createdAt,
+			updatedAt: createdAt,
+		}).onConflictDoNothing();
+	}
+
+	queueTurnContinuityProposal(continuityLedger, {
+		storyId,
+		proposalType: isUpdate ? 'entity_update' : 'entity_create',
+		targetTable: 'entities',
+		targetRecordId: entityId,
+		operations: [{
+			op: isUpdate ? 'replace' : 'add',
+			path: `/entities/${entityId}`,
+			value: {
+				id: entityId,
+				storyId,
+				type,
+				name: canonicalName,
+				description: description ?? existing?.description ?? null,
+				status: String(state.status ?? existing?.status ?? 'active'),
+				visibility: 'player_known',
+				state: nextState,
+			},
+		}],
+		reason: `Turn extracted ${type} ${canonicalName}.`,
+		suggestion: `Review the proposed ${type} ${canonicalName} update before merging it into canon.`,
+		affectedEntityIds: [entityId],
+		confidence: 0.88,
+		sourceEntryIds,
+		sourceEventIds,
+		sourcePatchIds,
+		sourceField: 'structured_update',
+		sourceRecordField: 'state',
+		requiresReview,
+		serverVersion,
+		now: createdAt,
+		metadata: {
+			sourceType: isUpdate ? 'entity_update' : 'entity_create',
+			sourceName: name,
+			resolutionMode: existing ? 'resolved' : 'new',
 		},
 	});
 	return entityId;
@@ -200,8 +433,10 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 	const createdAt = nowIso();
 	const eventIds: string[] = [];
 	const memoryNodeIds: string[] = [];
+	const affectedEntityIds: string[] = [];
 	const warnings = [...input.parseWarnings];
 	const operations = makeOperations(input.update);
+	const continuityLedger: TurnContinuityLedgerBundle = { patchProposals: [], sourceRefs: [] };
 	const isSupplemental = input.mode === 'supplemental';
 	const shouldPersistPatch = !isSupplemental || operations.length > 0 || input.parseWarnings.length > 0;
 	const patchId = shouldPersistPatch ? id('patch') : null;
@@ -290,6 +525,51 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				createdAt,
 				updatedAt: createdAt,
 			});
+			await insertSourceRefs(tx, {
+				storyId: input.storyId,
+				targetTable: 'story_events',
+				targetRecordId: turnEventId,
+				targetRecordField: 'body',
+				sourceField: 'narration',
+				sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
+				sourcePatchIds: patchIds,
+				confidence: 0.98,
+				rationale: 'Narration generated the canonical turn event.',
+				serverVersion: input.serverVersion,
+				now: createdAt,
+			});
+			queueTurnContinuityProposal(continuityLedger, {
+				storyId: input.storyId,
+				proposalType: 'turn_event_upsert',
+				targetTable: 'story_events',
+				targetRecordId: turnEventId,
+				operations: [{
+					op: 'add',
+					path: '/story_events',
+					value: {
+						id: turnEventId,
+						storyId: input.storyId,
+						type: 'scene_transition',
+						title: 'Turn resolved',
+						body: input.narration.replace(/\s+/g, ' ').slice(0, 500),
+					},
+				}],
+				reason: 'Narration generated a scene-transition turn event.',
+				suggestion: 'Review the turn event proposal before applying to long-term canon.',
+				affectedEntityIds: [...new Set(affectedEntityIds)],
+				confidence: 0.9,
+				sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
+				sourcePatchIds: patchIds,
+				sourceField: 'narration',
+				sourceRecordField: 'body',
+				requiresReview: warnings.length > 0,
+				serverVersion: input.serverVersion,
+				now: createdAt,
+				metadata: {
+					sourceType: 'turn_event',
+					isSupplemental,
+				},
+			});
 			await insertNpcLinksForEvent({
 				eventId: turnEventId,
 				visibility: 'player_known',
@@ -300,29 +580,32 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 		}
 
 		for (const character of input.update.characters) {
-			await upsertEntity(tx, input.storyId, 'character', character.name, character.description, {
+			const entityId = await upsertEntity(tx, input.storyId, 'character', character.name, character.description, {
 				status: character.status,
 				relationship: character.relationship,
 				traits: character.traits,
 				present: character.present,
 				pressures: character.pressures,
-			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt);
+			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0);
+			affectedEntityIds.push(entityId);
 		}
 
 		for (const location of input.update.locations) {
-			await upsertEntity(tx, input.storyId, 'location', location.name, location.description, {
+			const entityId = await upsertEntity(tx, input.storyId, 'location', location.name, location.description, {
 				current: location.current,
 				region: location.region,
 				connections: location.connections,
-			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt);
+			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0);
+			affectedEntityIds.push(entityId);
 		}
 
 		for (const item of input.update.items) {
-			await upsertEntity(tx, input.storyId, 'item', item.name, item.description, {
+			const entityId = await upsertEntity(tx, input.storyId, 'item', item.name, item.description, {
 				quantity: item.quantity,
 				equipped: item.equipped,
 				location: item.location,
-			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt);
+			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0);
+			affectedEntityIds.push(entityId);
 		}
 
 		for (const entry of input.update.lorebook_entries) {
@@ -331,7 +614,8 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				aliases: entry.aliases,
 				keywords: entry.keywords,
 				...entry.state_overrides,
-			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt);
+			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0);
+			affectedEntityIds.push(entityId);
 			if (entry.type === 'faction') {
 				const factionId = `faction_${entityId}`;
 				await tx.insert(factions).values({
@@ -434,6 +718,47 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 						set: { goal: goal.description, priority: goal.priority, metadata: goal, sourcePatchIds: patchIds, serverVersion: input.serverVersion, updatedAt: createdAt },
 					});
 				}
+				for (const [idx, project] of entry.faction_projects.entries()) {
+					await tx.insert(factionProjects).values({
+						id: `${factionId}_project_${idx}_${normalizeName(project.project).slice(0, 24).replace(/\s+/g, '_') || idx}`,
+						storyId: input.storyId,
+						factionId,
+						project: project.project,
+						status: project.status,
+						progress: project.progress / 100,
+						priority: project.priority,
+						dueTurn: project.due_turn,
+						worldTime: project.world_time,
+						costs: project.costs,
+						gains: project.gains,
+						risks: project.risks,
+						visibility: 'player_known',
+						metadata: project,
+						sourceEntryIds: [input.assistantEntryId],
+						sourceEventIds: [],
+						sourcePatchIds: patchIds,
+						serverVersion: input.serverVersion,
+						createdAt,
+						updatedAt: createdAt,
+					}).onConflictDoUpdate({
+						target: factionProjects.id,
+						set: {
+							project: project.project,
+							status: project.status,
+							progress: project.progress / 100,
+							priority: project.priority,
+							dueTurn: project.due_turn,
+							worldTime: project.world_time,
+							costs: project.costs,
+							gains: project.gains,
+							risks: project.risks,
+							metadata: project,
+							sourcePatchIds: patchIds,
+							serverVersion: input.serverVersion,
+							updatedAt: createdAt,
+						},
+					});
+				}
 			}
 		}
 
@@ -444,8 +769,10 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				warnings.push(`Skipped relationship ${rel.sourceName} -> ${rel.targetName}: missing entity.`);
 				continue;
 			}
+			affectedEntityIds.push(source.id, target.id);
+			const relId = id('rel');
 			await tx.insert(relationships).values({
-				id: id('rel'),
+				id: relId,
 				storyId: input.storyId,
 				sourceEntityId: source.id,
 				targetEntityId: target.id,
@@ -461,6 +788,54 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				createdAt,
 				updatedAt: createdAt,
 			}).onConflictDoNothing();
+			await insertSourceRefs(tx, {
+				storyId: input.storyId,
+				targetTable: 'relationships',
+				targetRecordId: relId,
+				targetRecordField: 'type',
+				sourceField: 'relationships',
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: patchIds,
+				confidence: 0.88,
+				rationale: 'Structured turn update created this relationship record.',
+				serverVersion: input.serverVersion,
+				now: createdAt,
+			});
+			queueTurnContinuityProposal(continuityLedger, {
+				storyId: input.storyId,
+				proposalType: 'relationship_upsert',
+				targetTable: 'relationships',
+				targetRecordId: relId,
+				operations: [{
+					op: 'add',
+					path: '/relationships',
+					value: {
+						id: relId,
+						sourceEntityId: source.id,
+						targetEntityId: target.id,
+						type: rel.type,
+						label: rel.label,
+						strength: rel.strength,
+						bidirectional: rel.bidirectional,
+					},
+				}],
+				reason: `Narration extracted relationship ${rel.sourceName} -> ${rel.targetName} (${rel.type}).`,
+				suggestion: 'Review relationship proposal before applying to long-term canon.',
+				affectedEntityIds: [source.id, target.id],
+				confidence: 0.88,
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: patchIds,
+				sourceField: 'relationships',
+				sourceRecordField: 'type',
+				requiresReview: warnings.length > 0,
+				serverVersion: input.serverVersion,
+				now: createdAt,
+				metadata: {
+					sourceType: 'turn_relationship',
+					relationshipType: rel.type,
+					relationshipLabel: rel.label,
+				},
+			});
 		}
 
 		for (const conversation of input.update.conversations) {
@@ -469,14 +844,16 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				warnings.push(`Skipped NPC belief for ${conversation.npcName}: missing character entity.`);
 				continue;
 			}
+			affectedEntityIds.push(believer.id);
 			const beliefText = [
 				conversation.topicSummary,
 				conversation.playerRevealed.length ? `Player revealed: ${conversation.playerRevealed.join('; ')}` : '',
 				conversation.npcLearned.length ? `NPC learned: ${conversation.npcLearned.join('; ')}` : '',
 				conversation.emotionalShift ? `Emotional shift: ${conversation.emotionalShift}` : '',
 			].filter(Boolean).join('\n');
+			const beliefId = id('belief');
 			await tx.insert(npcBeliefs).values({
-				id: id('belief'),
+				id: beliefId,
 				storyId: input.storyId,
 				believerEntityId: believer.id,
 				subjectEntityId: null,
@@ -491,6 +868,50 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				createdAt,
 				updatedAt: createdAt,
 			});
+			await insertSourceRefs(tx, {
+				storyId: input.storyId,
+				targetTable: 'npc_beliefs',
+				targetRecordId: beliefId,
+				targetRecordField: 'belief',
+				sourceField: 'conversations',
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: patchIds,
+				confidence: 0.82,
+				rationale: 'Structured turn update recorded this NPC belief.',
+				serverVersion: input.serverVersion,
+				now: createdAt,
+			});
+			queueTurnContinuityProposal(continuityLedger, {
+				storyId: input.storyId,
+				proposalType: 'npc_belief_upsert',
+				targetTable: 'npc_beliefs',
+				targetRecordId: beliefId,
+				operations: [{
+					op: 'add',
+					path: '/npc_beliefs',
+					value: {
+						id: beliefId,
+						believerEntityId: believer.id,
+						subjectEntityId: null,
+						belief: beliefText,
+					},
+				}],
+				reason: `Narration extracted NPC belief update for ${conversation.npcName}.`,
+				suggestion: 'Review the NPC belief proposal before applying to long-term canon.',
+				affectedEntityIds: [believer.id],
+				confidence: 0.82,
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: patchIds,
+				sourceField: 'conversations',
+				sourceRecordField: 'belief',
+				requiresReview: warnings.length > 0,
+				serverVersion: input.serverVersion,
+				now: createdAt,
+				metadata: {
+					sourceType: 'turn_npc_belief',
+					npcName: conversation.npcName,
+				},
+			});
 		}
 
 		for (const agreement of input.update.agreements) {
@@ -502,6 +923,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				if (entity) resolvedPartyIds.push(entity.id);
 			}
 			const uniqueResolvedPartyIds = sourceIds(...resolvedPartyIds);
+			affectedEntityIds.push(...uniqueResolvedPartyIds);
 			await tx.insert(storyEvents).values({
 				id: eventId,
 				storyId: input.storyId,
@@ -517,6 +939,51 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				createdAt,
 				updatedAt: createdAt,
 			});
+			await insertSourceRefs(tx, {
+				storyId: input.storyId,
+				targetTable: 'story_events',
+				targetRecordId: eventId,
+				targetRecordField: 'metadata',
+				sourceField: 'agreements',
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: patchIds,
+				confidence: 0.9,
+				rationale: 'Structured turn update recorded this agreement event.',
+				serverVersion: input.serverVersion,
+				now: createdAt,
+			});
+			queueTurnContinuityProposal(continuityLedger, {
+				storyId: input.storyId,
+				proposalType: 'story_event_upsert',
+				targetTable: 'story_events',
+				targetRecordId: eventId,
+				operations: [{
+					op: 'add',
+					path: '/story_events',
+					value: {
+						id: eventId,
+						storyId: input.storyId,
+						type: 'agreement',
+						title: `${agreement.action} agreement`,
+						body: agreement.terms ?? agreement.reason ?? `${agreement.action} ${agreement.category ?? 'agreement'}`,
+					},
+				}],
+				reason: `Narration extracted agreement event for ${agreement.action} (${agreement.category ?? 'agreement'}).`,
+				suggestion: 'Review the agreement event proposal before applying to long-term canon.',
+				affectedEntityIds: uniqueResolvedPartyIds,
+				confidence: 0.9,
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: patchIds,
+				sourceField: 'agreements',
+				sourceRecordField: 'metadata',
+				requiresReview: warnings.length > 0,
+				serverVersion: input.serverVersion,
+				now: createdAt,
+				metadata: {
+					sourceType: 'turn_agreement_event',
+					action: agreement.action,
+				},
+			});
 			await insertNpcLinksForEvent({
 				eventId,
 				actorNpcEntityIds: uniqueResolvedPartyIds.slice(0, 1),
@@ -527,8 +994,9 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			});
 			eventIds.push(eventId);
 			if (agreement.action === 'create' && agreement.category && agreement.terms && agreement.parties.length > 0) {
+				const agreementId = id('agreement');
 				await tx.insert(agreements).values({
-					id: id('agreement'),
+					id: agreementId,
 					storyId: input.storyId,
 					parties: agreement.parties,
 					category: agreement.category,
@@ -542,6 +1010,54 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 					serverVersion: input.serverVersion,
 					createdAt,
 					updatedAt: createdAt,
+				});
+				queueTurnContinuityProposal(continuityLedger, {
+					storyId: input.storyId,
+					proposalType: 'agreement_upsert',
+					targetTable: 'agreements',
+					targetRecordId: agreementId,
+					operations: [{
+						op: 'add',
+						path: '/agreements',
+						value: {
+							id: agreementId,
+							storyId: input.storyId,
+							parties: agreement.parties,
+							category: agreement.category,
+							terms: agreement.terms,
+							status: 'active',
+							secrecy: agreement.secrecy,
+							consequences: agreement.consequences,
+						},
+					}],
+					reason: `Narration extracted agreement record for ${agreement.category}.`,
+					suggestion: 'Review the agreement proposal before applying to long-term canon.',
+					affectedEntityIds: uniqueResolvedPartyIds,
+					confidence: 0.9,
+					sourceEntryIds: [input.assistantEntryId],
+					sourcePatchIds: patchIds,
+					sourceField: 'agreements',
+					sourceRecordField: 'terms',
+					requiresReview: warnings.length > 0,
+					serverVersion: input.serverVersion,
+					now: createdAt,
+					metadata: {
+						sourceType: 'turn_agreement_record',
+						action: agreement.action,
+					},
+				});
+				await insertSourceRefs(tx, {
+					storyId: input.storyId,
+					targetTable: 'agreements',
+					targetRecordId: agreementId,
+					targetRecordField: 'terms',
+					sourceField: 'agreements',
+					sourceEntryIds: [input.assistantEntryId],
+					sourcePatchIds: patchIds,
+					confidence: 0.9,
+					rationale: 'Structured turn update created this agreement record.',
+					serverVersion: input.serverVersion,
+					now: createdAt,
 				});
 			}
 		}
@@ -563,7 +1079,85 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				createdAt,
 				updatedAt: createdAt,
 			});
+			await insertSourceRefs(tx, {
+				storyId: input.storyId,
+				targetTable: 'story_events',
+				targetRecordId: eventId,
+				targetRecordField: 'body',
+				sourceField: 'story_beats',
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: patchIds,
+				confidence: 0.9,
+				rationale: 'Structured turn update recorded this story beat.',
+				serverVersion: input.serverVersion,
+				now: createdAt,
+			});
+			queueTurnContinuityProposal(continuityLedger, {
+				storyId: input.storyId,
+				proposalType: 'story_event_upsert',
+				targetTable: 'story_events',
+				targetRecordId: eventId,
+				operations: [{
+					op: 'add',
+					path: '/story_events',
+					value: {
+						id: eventId,
+						storyId: input.storyId,
+						type: 'reveal',
+						title: beat.title,
+						body: beat.description,
+					},
+				}],
+				reason: `Narration extracted story beat "${beat.title}".`,
+				suggestion: 'Review this story beat proposal before applying to long-term canon.',
+				affectedEntityIds: [...new Set(affectedEntityIds)],
+				confidence: 0.9,
+				sourceEntryIds: [input.assistantEntryId],
+				sourcePatchIds: patchIds,
+				sourceField: 'story_beats',
+				sourceRecordField: 'body',
+				requiresReview: warnings.length > 0,
+				serverVersion: input.serverVersion,
+				now: createdAt,
+				metadata: {
+					sourceType: 'story_beat',
+					significance: beat.significance,
+				},
+			});
 			eventIds.push(eventId);
+		}
+
+		const continuityBundle = summarizeTurnContinuity({
+			storyId: input.storyId,
+			assistantEntryId: input.assistantEntryId,
+			playerEntryId: input.playerEntryId,
+			narration: input.narration,
+			update: input.update,
+			affectedEntityIds,
+			sourceEventIds: eventIds,
+			sourcePatchIds: patchIds,
+			parseWarnings: warnings,
+			serverVersion: input.serverVersion,
+			now: createdAt,
+		});
+		const continuityBundleCombined = {
+			facts: continuityBundle.facts,
+			patchProposals: [...continuityBundle.patchProposals, ...continuityLedger.patchProposals],
+			continuityWarnings: continuityBundle.continuityWarnings,
+			sourceRefs: [...continuityBundle.sourceRefs, ...continuityLedger.sourceRefs],
+		};
+
+		if (continuityBundleCombined.facts.length > 0) {
+			await tx.insert(facts).values(continuityBundleCombined.facts).onConflictDoNothing();
+		}
+		if (continuityBundleCombined.patchProposals.length > 0) {
+			await tx.insert(patchProposals).values(continuityBundleCombined.patchProposals).onConflictDoNothing();
+		}
+		if (continuityBundleCombined.continuityWarnings.length > 0) {
+			await tx.insert(continuityWarnings).values(continuityBundleCombined.continuityWarnings).onConflictDoNothing();
+		}
+		if (continuityBundleCombined.sourceRefs.length > 0) {
+			await tx.insert(sourceRefs).values(continuityBundleCombined.sourceRefs).onConflictDoNothing();
 		}
 
 		if (!isSupplemental) {

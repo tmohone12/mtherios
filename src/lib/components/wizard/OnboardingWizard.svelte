@@ -163,7 +163,7 @@
 		const storyId = uuid();
 		const now = Date.now();
 		const storySettings: Story['settings'] = {
-			pov: storyMode === 'adventure' ? 'second' : 'third',
+			pov: storyMode === 'adventure' ? 'first' : 'third',
 			tense: 'present',
 			tone: genre,
 			temperature: 1.0,

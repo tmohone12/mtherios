@@ -9,27 +9,32 @@ export interface ServerTurnPromptOptions {
 	wikiContextMarkdown?: string | null;
 }
 
-const RECENT_ENTRY_LIMIT = 12;
+const RECENT_ENTRY_LIMIT = 60;
 const USER_MESSAGE_CHAR_LIMIT = 1000;
 const NARRATION_MESSAGE_CHAR_LIMIT = 1800;
 const WIKI_CONTEXT_CHAR_LIMIT = 4000;
 const PRESENT_ENTITY_LIMIT = 12;
 const DEFAULT_FACTION_LIMIT = 8;
 const FACTION_GOAL_LIMIT = 2;
+const FACTION_PROJECT_LIMIT = 2;
 const FACTION_MEMBER_LIMIT = 5;
 const FACTION_RESOURCE_LIMIT = 5;
 const BELIEF_LIMIT = 8;
 const THREAD_LIMIT = 10;
 const AGREEMENT_LIMIT = 8;
 const EVENT_LIMIT = 8;
+const CONTINUITY_FACT_LIMIT = 8;
+const CONTINUITY_PROPOSAL_LIMIT = 8;
+const CONTINUITY_WARNING_LIMIT = 6;
 const GM_EVENT_SECTION_LIMIT = 4;
 const GM_NPC_EVENT_LIMIT = 4;
 const PORTRAYAL_LIST_LIMIT = 3;
-const PORTRAYAL_APPEARANCE_CHAR_LIMIT = 72;
-const PORTRAYAL_PERSONALITY_CHAR_LIMIT = 82;
-const PORTRAYAL_VOICE_CHAR_LIMIT = 58;
-const PORTRAYAL_MANNERISMS_CHAR_LIMIT = 58;
-const PORTRAYAL_SUFFIX_CHAR_LIMIT = 320;
+const PORTRAYAL_BIO_CHAR_LIMIT = 520;
+const PORTRAYAL_APPEARANCE_CHAR_LIMIT = 360;
+const PORTRAYAL_PERSONALITY_CHAR_LIMIT = 360;
+const PORTRAYAL_VOICE_CHAR_LIMIT = 220;
+const PORTRAYAL_MANNERISMS_CHAR_LIMIT = 220;
+const PORTRAYAL_SUFFIX_CHAR_LIMIT = 1400;
 const SECRET_TIMELINE_LABEL = '[secret narrator-only]';
 const SECRET_TIMELINE_INSTRUCTION = 'Secret timeline items are narrator-only context; present NPCs must not speak or act on them unless actor beliefs or scene evidence supports it.';
 const STATE_EXTRACTION_NARRATION_LIMIT = 6000;
@@ -63,21 +68,24 @@ function stringStateList(state: Record<string, unknown>, key: string, max = 90):
 		.join('; ');
 }
 
-function renderEntityPortrayal(stateValue: unknown): string {
+function renderEntityPortrayal(stateValue: unknown, mode: 'rich' | 'compact' = 'rich'): string {
 	if (!stateValue || typeof stateValue !== 'object') return '';
 	const state = stateValue as Record<string, unknown>;
-	const appearance = stringStateValue(state, 'appearance', 130);
-	const personality = stringStateList(state, 'personalityDescriptors', 90);
-	const voice = stringStateValue(state, 'voice', 110);
-	const mannerisms = stringStateList(state, 'mannerisms', 110);
+	const compactMode = mode === 'compact';
+	const bio = compactMode ? '' : stringStateValue(state, 'bio', PORTRAYAL_BIO_CHAR_LIMIT);
+	const appearance = stringStateValue(state, 'appearance', compactMode ? 95 : PORTRAYAL_APPEARANCE_CHAR_LIMIT);
+	const personality = stringStateList(state, 'personalityDescriptors', compactMode ? 70 : 140);
+	const voice = stringStateValue(state, 'voice', compactMode ? 70 : PORTRAYAL_VOICE_CHAR_LIMIT);
+	const mannerisms = stringStateList(state, 'mannerisms', compactMode ? 60 : 140);
 	const parts = [
-		appearance ? `Appearance: ${compact(appearance, PORTRAYAL_APPEARANCE_CHAR_LIMIT)}` : '',
-		personality ? `Personality: ${compact(personality, PORTRAYAL_PERSONALITY_CHAR_LIMIT)}` : '',
-		voice ? `Voice: ${compact(voice, PORTRAYAL_VOICE_CHAR_LIMIT)}` : '',
-		mannerisms ? `Mannerisms: ${compact(mannerisms, PORTRAYAL_MANNERISMS_CHAR_LIMIT)}` : '',
+		bio ? `Bio: ${compact(bio, PORTRAYAL_BIO_CHAR_LIMIT)}` : '',
+		appearance ? `Appearance: ${compact(appearance, compactMode ? 95 : PORTRAYAL_APPEARANCE_CHAR_LIMIT)}` : '',
+		personality ? `Personality: ${compact(personality, compactMode ? 115 : PORTRAYAL_PERSONALITY_CHAR_LIMIT)}` : '',
+		voice ? `Voice: ${compact(voice, compactMode ? 70 : PORTRAYAL_VOICE_CHAR_LIMIT)}` : '',
+		mannerisms ? `Mannerisms: ${compact(mannerisms, compactMode ? 90 : PORTRAYAL_MANNERISMS_CHAR_LIMIT)}` : '',
 	].filter(Boolean);
 
-	return parts.length ? ` (${compact(parts.join('; '), PORTRAYAL_SUFFIX_CHAR_LIMIT)})` : '';
+	return parts.length ? ` (${compact(parts.join('; '), compactMode ? 420 : PORTRAYAL_SUFFIX_CHAR_LIMIT)})` : '';
 }
 
 function normalizeLookup(text: string): string {
@@ -165,6 +173,25 @@ function renderGmTimelineBrief(brief: GmTimelineBrief | null): string {
 	].filter(Boolean).join('\n');
 }
 
+function renderContinuityLedger(ctx: TurnContext): string {
+	const factLines = ctx.facts.slice(0, CONTINUITY_FACT_LIMIT).map((fact) =>
+		`- ${fact.type}/${fact.status} ${fact.title}: ${compact(fact.statement, 180)} (${Math.round(fact.confidence * 100)}%)`
+	);
+	const proposalLines = ctx.patchProposals.slice(0, CONTINUITY_PROPOSAL_LIMIT).map((proposal) => {
+		const affected = proposal.affectedEntityIds.length ? ` entities=${proposal.affectedEntityIds.slice(0, 4).join(',')}` : '';
+		return `- ${proposal.status} ${proposal.proposalType} -> ${proposal.targetTable}/${proposal.targetRecordId}${affected}: ${compact(proposal.reason, 180)} (${Math.round(proposal.confidence * 100)}%)`;
+	});
+	const warningLines = ctx.continuityWarnings.slice(0, CONTINUITY_WARNING_LIMIT).map((warning) =>
+		`- ${warning.level}/${warning.status} ${warning.title}: ${compact(warning.details, 180)}`
+	);
+	const sections = [
+		factLines.length ? `Facts:\n${factLines.join('\n')}` : '',
+		proposalLines.length ? `Patch proposals:\n${proposalLines.join('\n')}` : '',
+		warningLines.length ? `Continuity warnings:\n${warningLines.join('\n')}` : '',
+	].filter(Boolean);
+	return sections.length ? `Continuity ledger:\n${sections.join('\n')}` : '';
+}
+
 function renderEntries(ctx: TurnContext, currentEntryId: string): Array<{ role: 'user' | 'assistant'; content: string }> {
 	const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 	for (const entry of ctx.recentEntries) {
@@ -177,6 +204,49 @@ function renderEntries(ctx: TurnContext, currentEntryId: string): Array<{ role: 
 		}
 	}
 	return messages.slice(-RECENT_ENTRY_LIMIT);
+}
+
+function renderList(values: string[]): string {
+	return values.length ? values.map((value) => `    - ${value}`).join('\n') : '';
+}
+
+function renderChapterMemory(ctx: TurnContext): string {
+	const lines = ctx.chapters.map((chapter) => {
+		const sections = [
+			`- Chapter ${chapter.number}${chapter.title ? `: ${chapter.title}` : ''}`,
+			chapter.sceneOutcome ? `  outcome: ${chapter.sceneOutcome}` : '',
+			renderList(chapter.irreversibleChanges ?? []),
+			renderList((chapter.npcKnowledgeChanges ?? []).map((change) => JSON.stringify(change))),
+			renderList(chapter.promisesDebtsOaths ?? []),
+			renderList(chapter.discoveredClues ?? []),
+			renderList(chapter.relationshipChanges ?? []),
+			renderList(chapter.factionChanges ?? []),
+			renderList(chapter.openThreads ?? []),
+		].filter(Boolean);
+		return sections.join('\n');
+	});
+	return lines.length ? `Chapter memory:\n${lines.join('\n')}` : '';
+}
+
+function renderArcMemory(ctx: TurnContext): string {
+	const lines = ctx.arcs.map((arc) => [
+		`- Arc ${arc.number}: ${arc.title}`,
+		`  summary: ${arc.summary}`,
+		arc.openThreadIds.length ? `  open threads: ${arc.openThreadIds.join(', ')}` : '',
+	].filter(Boolean).join('\n'));
+	return lines.length ? `Arc memory:\n${lines.join('\n')}` : '';
+}
+
+function renderSagaMemory(ctx: TurnContext): string {
+	const lines = ctx.sagas.map((saga) => [
+		`- Saga ${saga.number}: ${saga.title}`,
+		`  summary: ${saga.summary}`,
+		saga.keyFactionShifts.length ? `  faction shifts:\n${renderList(saga.keyFactionShifts)}` : '',
+		saga.majorPowerChanges.length ? `  power changes:\n${renderList(saga.majorPowerChanges)}` : '',
+		saga.lingeringThreads.length ? `  lingering threads:\n${renderList(saga.lingeringThreads)}` : '',
+		saga.overallTone ? `  tone: ${saga.overallTone}` : '',
+	].filter(Boolean).join('\n'));
+	return lines.length ? `Saga memory:\n${lines.join('\n')}` : '';
 }
 
 function selectRelevantFactions(
@@ -295,10 +365,16 @@ export function buildServerTurnPrompt(
 			.slice(0, FACTION_RESOURCE_LIMIT)
 			.map((resource) => `${resource.name}${resource.amount != null ? `=${resource.amount}` : ''}`)
 			.join(', ');
+		const activeProjects = ctx.factionProjects
+			.filter((project) => project.factionId === faction.id && project.status !== 'closed')
+			.sort((a, b) => b.priority - a.priority)
+			.slice(0, FACTION_PROJECT_LIMIT)
+			.map((project) => `${project.project}${project.dueTurn != null ? ` due ${project.dueTurn}` : ''}`)
+			.join('; ');
 		const goals = normalizedGoals || asStringArray(faction.goals).slice(0, FACTION_GOAL_LIMIT).join('; ');
 		const members = normalizedMembers || asStringArray(faction.memberEntityIds).slice(0, FACTION_MEMBER_LIMIT).join(', ');
 		const resources = normalizedResources || compact(JSON.stringify(faction.resources), 160);
-		return `- ${faction.name}: pressure ${faction.pressure}; goals: ${goals || 'unknown'}; members: ${members || 'unknown'}; resources: ${resources || 'unknown'}`;
+		return `- ${faction.name}: pressure ${faction.pressure}; goals: ${goals || 'unknown'}; projects: ${activeProjects || 'none'}; members: ${members || 'unknown'}; resources: ${resources || 'unknown'}`;
 	});
 
 	const beliefLines = ctx.beliefs.slice(0, BELIEF_LIMIT).map((belief) =>
@@ -316,10 +392,15 @@ export function buildServerTurnPrompt(
 	const eventLines = ctx.events.slice(0, EVENT_LIMIT).map((event) =>
 		`- ${event.type}: ${event.title} - ${compact(event.body, 160)}`
 	);
+	const continuityLedger = renderContinuityLedger(ctx);
 	const gmTimelineBrief = renderGmTimelineBrief(ctx.gmBrief);
+	const sagaMemory = renderSagaMemory(ctx);
+	const arcMemory = renderArcMemory(ctx);
+	const chapterMemory = renderChapterMemory(ctx);
 
+	const portrayalMode = presentEntities.length > 6 ? 'compact' : 'rich';
 	const entityLines = presentEntities.map((entity) =>
-		`- ${entity.type}: ${entity.name}${renderEntityPortrayal(entity.state)}${entity.description ? ` - ${compact(entity.description, 160)}` : ''}`
+		`- ${entity.type}: ${entity.name}${renderEntityPortrayal(entity.state, portrayalMode)}${entity.description ? ` - ${compact(entity.description, portrayalMode === 'compact' ? 120 : entity.type === 'character' ? 520 : 260)}` : ''}`
 	);
 
 	const system = [
@@ -327,8 +408,9 @@ export function buildServerTurnPrompt(
 		'TONE MANDATE (CRITICAL): This is a grimdark story in the style of George R.R. Martin’s A Song of Ice and Fire. Betrayal, political murder, sexual coercion, slavery, moral compromise, incest, torture, child death, and cruelty can happen when incentives and evidence point there. The world is not fair, but loyalty, marriage, patronage, and alliance can be rational rewards when prospects are good.',
 		'This is a mature fictional work intended for adult audiences. All characters are portrayed as adults or in adult contexts. The story contains dark, explicit, and disturbing themes. Do not sanitize, moralize, or soften any of it.',
 		'Sex is raw, political, coercive, or transactional — never romanticized or faded to black. Violence is brutal and consequential. Ambition is common; betrayal is possible, not automatic.',
-		'You are the server-side narrator for a text adventure.',
-		'Write direct, playable text adventure narration. Do not write like an interactive novel chapter.',
+		'You are the server-side narrator for a first-person POV text RPG, not a writing assistant.',
+		'Write direct, playable first-person narration. Use I/me/my for the protagonist\'s immediate perceptions and command outcomes; do not use you/your for the protagonist.',
+		'Do not address the user as an author, editor, co-writer, or requester. Do not explain craft choices.',
 		'Resolve the immediate player action, show consequences, and keep the player able to act next.',
 		'NPC knowledge is limited by senses, access, intelligence, rumor delay, and what they personally learned. They cannot see through doors, know private scenes, or instantly learn distant events.',
 		'Use narrator truth for narration, but never make a present NPC act on secret canon unless their belief packet or the scene gives them a source.',
@@ -348,11 +430,15 @@ export function buildServerTurnPrompt(
 		factionLines.length ? `Faction canon:\n${factionLines.join('\n')}` : '',
 		beliefLines.length ? `Actor belief limits:\n${beliefLines.join('\n')}` : '',
 		agreementLines.length ? `Agreements and obligations:\n${agreementLines.join('\n')}` : '',
+		continuityLedger,
 		threadLines.length ? `Open plot ledger:\n${threadLines.join('\n')}` : '',
+		sagaMemory,
+		arcMemory,
+		chapterMemory,
 		gmTimelineBrief || (eventLines.length ? `Recent source-linked events:\n${eventLines.join('\n')}` : ''),
 		wikiContextMarkdown ? `Terminal wiki context:\n${wikiContextMarkdown}` : '',
 		retrieved.packet,
-		'Return only the narration prose for the player action. Do not include JSON in this response.',
+		'Return only first-person narration prose for the player action. Do not include JSON in this response.',
 	].filter(Boolean).join('\n\n');
 
 	return {

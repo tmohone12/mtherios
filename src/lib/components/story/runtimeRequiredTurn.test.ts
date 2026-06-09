@@ -16,7 +16,9 @@ describe('runtime-required turn submission boundary', () => {
 
 		expect(source).toContain('terminalRuntimeUnavailable');
 		expect(source).toContain('Terminal agent runtime required. Start the terminal process to use this campaign.');
+		expect(source).toContain('isTerminalReachabilityError');
 		expect(source).toContain('Terminal agent runtime required');
+		expect(source).toContain('Terminal turn failed');
 		expect(source).not.toContain('transcript is available');
 	});
 });

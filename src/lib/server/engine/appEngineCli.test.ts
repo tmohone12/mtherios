@@ -313,6 +313,8 @@ describe('app-engine CLI payload builder', () => {
 							responseTokens: 120,
 							totalTokens: 1120,
 						},
+						waterfall: {},
+						topSpans: [],
 						slowTimings: [
 							{ operation: 'turn.context_assembly', durationMs: 410 },
 						],

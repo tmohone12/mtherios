@@ -6,7 +6,7 @@
 	import StoryMemoryPanel from '$lib/components/memory/StoryMemoryPanel.svelte';
 	import WorldExplorer from '$lib/components/database/WorldExplorer.svelte';
 
-	let activePanel = $state<'library' | 'chapters' | 'wiki' | 'database' | 'settings'>('library');
+	let activePanel = $state<'library' | 'chapters' | 'wiki' | 'database'>('library');
 	let settingsOpen = $state(false);
 
 	const navItems = [
@@ -39,7 +39,9 @@
 						{activePanel === item.id
 							? 'bg-[rgba(212,168,83,0.12)] text-[var(--text-accent)]'
 							: 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
-					onclick={() => item.action ? item.action() : (activePanel = item.id)}
+					onclick={() => item.action
+						? item.action()
+						: (activePanel = item.id as 'library' | 'chapters' | 'wiki' | 'database')}
 				>
 					<item.icon class="h-4 w-4" />
 					<span class="font-display text-xs tracking-wider uppercase">{item.label}</span>
@@ -60,13 +62,6 @@
 			<LorebookPanel />
 		{:else if activePanel === 'database'}
 			<WorldExplorer />
-		{:else if activePanel === 'settings'}
-			<div class="flex h-full items-center justify-center">
-				<button class="rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] px-6 py-3 font-display text-sm font-semibold tracking-wide text-[var(--bg-primary)]"
-					onclick={() => settingsOpen = true}>
-					Open Settings
-				</button>
-			</div>
 		{/if}
 	</main>
 

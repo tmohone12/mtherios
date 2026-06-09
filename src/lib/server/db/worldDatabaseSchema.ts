@@ -306,7 +306,7 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 			purpose: 'Queued or persisted requests to mutate canon safely with source-backed rationale.',
 			primaryKey: 'id',
 			foreignKeys: ['storyId -> stories.id'],
-			fields: ['id', 'storyId', 'proposalType', 'targetTable', 'targetRecordId', 'proposedBy', 'operations', 'reason', 'suggestion', 'status', 'decision', 'validatedBy', 'sourceEntryIds', 'sourceEventIds', 'sourcePatchIds', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
+			fields: ['id', 'storyId', 'proposalType', 'targetTable', 'targetRecordId', 'proposedBy', 'operations', 'reason', 'suggestion', 'status', 'decision', 'validatedBy', 'affectedEntityIds', 'confidence', 'sourceEntryIds', 'sourceEventIds', 'sourcePatchIds', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
 		},
 		continuityWarnings: {
 			purpose: 'Continuity concerns raised during merge/resolution and tracked with provenance.',

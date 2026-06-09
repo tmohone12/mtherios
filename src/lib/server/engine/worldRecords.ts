@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
-import { statePatches, storyEntries, storyEvents } from '$lib/server/db/schema';
+import { patchProposals, sourceRefs, statePatches, storyEntries, storyEvents } from '$lib/server/db/schema';
 import { bumpStoryVersion } from '$lib/server/memory/canonical';
 import type { RecordPatchRequest } from '$lib/contracts/engine';
 
@@ -404,12 +404,14 @@ export const WORLD_RECORD_TYPES: Record<string, RecordSpec> = {
 			status: 'status',
 			decision: 'decision',
 			validatedBy: 'validated_by',
+			affectedEntityIds: 'affected_entity_ids',
+			confidence: 'confidence',
 			sourceEntryIds: 'source_entry_ids',
 			sourceEventIds: 'source_event_ids',
 			sourcePatchIds: 'source_patch_ids',
 			metadata: 'metadata',
 		},
-		jsonColumns: jsonColumns('operations', 'source_entry_ids', 'source_patch_ids', 'metadata'),
+		jsonColumns: jsonColumns('operations', 'affected_entity_ids', 'source_entry_ids', 'source_patch_ids', 'metadata'),
 	},
 	continuityWarnings: {
 		table: 'continuity_warnings',
@@ -564,12 +566,38 @@ function asArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
-function sourceRefs(row: JsonRecord) {
+function sourceRefIds(row: JsonRecord) {
 	return {
 		sourceEntryIds: asArray(row.source_entry_ids ?? row.sourceEntryIds),
 		sourceEventIds: asArray(row.source_event_ids ?? row.sourceEventIds),
 		sourcePatchIds: asArray(row.source_patch_ids ?? row.sourcePatchIds),
 	};
+}
+
+function inferAffectedEntityIds(type: string, record: JsonRecord): string[] {
+	const ids = new Set<string>();
+	const add = (value: unknown) => {
+		if (typeof value === 'string' && value.trim()) ids.add(value);
+	};
+	const addMany = (value: unknown) => {
+		if (!Array.isArray(value)) return;
+		for (const item of value) add(item);
+	};
+
+	if (['entities', 'characters', 'locations', 'items'].includes(type)) add(String(record.id));
+	add(record.entityId);
+	add(record.sourceEntityId);
+	add(record.targetEntityId);
+	add(record.subjectEntityId);
+	add(record.believerEntityId);
+	add(record.locationId);
+	addMany(record.entityIds);
+	addMany(record.memberEntityIds);
+	addMany(record.actorEntityIds);
+	addMany(record.targetEntityIds);
+	addMany(record.locationIds);
+	addMany(record.affectedEntityIds);
+	return [...ids];
 }
 
 function valueExpression(spec: RecordSpec, column: string, value: unknown) {
@@ -635,7 +663,7 @@ export async function getWorldRecord(type: string, recordId: string) {
 	`);
 	const record = rows[0] as JsonRecord | undefined;
 	if (!record) throw new Error(`Record not found: ${type}/${recordId}`);
-	const refs = sourceRefs(record);
+	const refs = sourceRefIds(record);
 	const [sourceEntries, sourceEvents, sourcePatches] = await Promise.all([
 		refs.sourceEntryIds.length
 			? getDb().select().from(storyEntries).where(and(eq(storyEntries.storyId, String(record[spec.storyColumn])), inArray(storyEntries.id, refs.sourceEntryIds)))
@@ -677,6 +705,7 @@ export async function patchWorldRecord(type: string, recordId: string, request: 
 	const serverVersion = await bumpStoryVersion(storyId);
 	const updatedAt = nowIso();
 	const patchId = id('manual_patch');
+	const proposalId = id('manual_proposal');
 	const operations = editable.map(({ key, value }) => ({
 		op: 'replace',
 		path: `/${type}/${recordId}/${key}`,
@@ -692,6 +721,65 @@ export async function patchWorldRecord(type: string, recordId: string, request: 
 		validationWarnings: [],
 		sourceEntryIds: [],
 		sourceEventIds: [],
+		serverVersion,
+		createdAt: updatedAt,
+		updatedAt,
+	});
+	const affectedEntityIds = inferAffectedEntityIds(type, existing);
+	await getDb().insert(patchProposals).values({
+		id: proposalId,
+		storyId,
+		proposalType: 'manual_edit',
+		targetTable: spec.table,
+		targetRecordId: recordId,
+		proposedBy: 'human',
+		operations,
+		reason: request.reason || 'Manual explorer edit.',
+		suggestion: 'Review the manual edit before treating the record as canonical.',
+		status: 'applied',
+		decision: 'approved',
+		validatedBy: 'human',
+		affectedEntityIds,
+		confidence: 1,
+		sourceEntryIds: [],
+		sourceEventIds: [],
+		sourcePatchIds: [patchId],
+		metadata: {
+			sourceType: 'manual_edit',
+			recordType: type,
+		},
+		serverVersion,
+		createdAt: updatedAt,
+		updatedAt,
+	});
+	await getDb().insert(sourceRefs).values({
+		id: id('sourceref_manual'),
+		storyId,
+		sourceType: 'state_patch',
+		sourceId: patchId,
+		targetTable: 'patch_proposals',
+		targetRecordId: proposalId,
+		targetRecordField: 'operations',
+		sourceField: 'manual_edit',
+		confidence: 1,
+		rationale: request.reason || 'Manual explorer edit.',
+		notes: `Applied to ${type}/${recordId}`,
+		serverVersion,
+		createdAt: updatedAt,
+		updatedAt,
+	});
+	await getDb().insert(sourceRefs).values({
+		id: id('sourceref_manual_target'),
+		storyId,
+		sourceType: 'state_patch',
+		sourceId: patchId,
+		targetTable: spec.table,
+		targetRecordId: recordId,
+		targetRecordField: editable[0]?.column ?? null,
+		sourceField: 'manual_edit',
+		confidence: 1,
+		rationale: request.reason || 'Manual explorer edit.',
+		notes: `Patch proposal ${proposalId}`,
 		serverVersion,
 		createdAt: updatedAt,
 		updatedAt,

@@ -8,6 +8,113 @@ export const sourceRefsSchema = z.object({
 	sourcePatchIds: z.array(z.string()).default([]),
 });
 
+export const sourceRefSchema = z.object({
+	id: z.string(),
+	storyId: z.string(),
+	sourceType: z.string().min(1),
+	sourceId: z.string().min(1),
+	targetTable: z.string().min(1),
+	targetRecordId: z.string().min(1),
+	targetRecordField: z.string().nullable().default(null),
+	sourceField: z.string().nullable().default(null),
+	confidence: z.number().min(0).max(1).default(1),
+	rationale: z.string().nullable().default(null),
+	notes: z.string().nullable().default(null),
+	serverVersion: z.number().int().nonnegative(),
+	createdAt: z.string(),
+	updatedAt: z.string(),
+});
+
+export const memoryVisibilitySchema = z.enum(['public', 'player_known', 'secret']);
+
+export const factTypeSchema = z.enum([
+	'observation',
+	'event',
+	'belief',
+	'relationship',
+	'warning',
+	'identity',
+	'proposal',
+]);
+
+export const factSchema = z.object({
+	id: z.string(),
+	storyId: z.string(),
+	type: factTypeSchema.default('observation'),
+	subjectEntityId: z.string().nullable().default(null),
+	targetEntityId: z.string().nullable().default(null),
+	title: z.string(),
+	statement: z.string(),
+	confidence: z.number().min(0).max(1).default(1),
+	status: z.enum(['active', 'superseded', 'rejected']).default('active'),
+	visibility: memoryVisibilitySchema.default('player_known'),
+	firstSeenEntryId: z.string().nullable().default(null),
+	sourceEntryIds: z.array(z.string()).default([]),
+	sourceEventIds: z.array(z.string()).default([]),
+	sourcePatchIds: z.array(z.string()).default([]),
+	metadata: jsonObjectSchema.optional().default({}),
+	serverVersion: z.number().int().nonnegative(),
+	createdAt: z.string(),
+	updatedAt: z.string(),
+});
+
+export const jsonPatchOperationSchema = z.object({
+	op: z.enum(['add', 'remove', 'replace', 'move', 'copy', 'test', 'upsert', 'create', 'update', 'break', 'fulfill', 'expire']),
+	path: z.string().min(1),
+	from: z.string().optional(),
+	value: z.unknown().optional(),
+});
+
+export const patchProposalStatusSchema = z.enum(['pending', 'approved', 'rejected', 'applied', 'needs_review']);
+
+export const patchProposalSchema = z.object({
+	id: z.string(),
+	storyId: z.string(),
+	proposalType: z.string().min(1),
+	targetTable: z.string().min(1),
+	targetRecordId: z.string().min(1),
+	proposedBy: z.string().min(1).default('llm'),
+	operations: z.array(jsonPatchOperationSchema).default([]),
+	reason: z.string().default(''),
+	suggestion: z.string().default(''),
+	status: patchProposalStatusSchema.default('pending'),
+	decision: z.string().nullable().default(null),
+	validatedBy: z.string().nullable().default(null),
+	affectedEntityIds: z.array(z.string()).default([]),
+	confidence: z.number().min(0).max(1).default(0.75),
+	sourceEntryIds: z.array(z.string()).default([]),
+	sourceEventIds: z.array(z.string()).default([]),
+	sourcePatchIds: z.array(z.string()).default([]),
+	metadata: jsonObjectSchema.optional().default({}),
+	serverVersion: z.number().int().nonnegative(),
+	createdAt: z.string(),
+	updatedAt: z.string(),
+});
+
+export const continuityWarningSchema = z.object({
+	id: z.string(),
+	storyId: z.string(),
+	warningType: z.string().min(1),
+	level: z.enum(['info', 'warning', 'error']).default('warning'),
+	title: z.string(),
+	status: z.enum(['open', 'resolved', 'dismissed']).default('open'),
+	details: z.string(),
+	entityIds: z.array(z.string()).default([]),
+	factionIds: z.array(z.string()).default([]),
+	threadIds: z.array(z.string()).default([]),
+	actorIds: z.array(z.string()).default([]),
+	sourceEntryIds: z.array(z.string()).default([]),
+	sourceEventIds: z.array(z.string()).default([]),
+	sourcePatchIds: z.array(z.string()).default([]),
+	resolutionNotes: z.string().nullable().default(null),
+	resolvedBy: z.string().nullable().default(null),
+	resolvedAt: z.string().nullable().default(null),
+	metadata: jsonObjectSchema.optional().default({}),
+	serverVersion: z.number().int().nonnegative(),
+	createdAt: z.string(),
+	updatedAt: z.string(),
+});
+
 export const syncMetaSchema = z.object({
 	serverVersion: z.number().int().nonnegative(),
 	updatedAt: z.string(),
@@ -43,16 +150,7 @@ export const memoryNodeTypeSchema = z.enum([
 	'procedural',
 ]);
 
-export const memoryVisibilitySchema = z.enum(['public', 'player_known', 'secret']);
-
 export const storyEventStatusSchema = z.enum(['proposed', 'scheduled', 'due', 'committed', 'cancelled']);
-
-export const jsonPatchOperationSchema = z.object({
-	op: z.enum(['add', 'remove', 'replace', 'move', 'copy', 'test', 'upsert', 'create', 'update', 'break', 'fulfill', 'expire']),
-	path: z.string().min(1),
-	from: z.string().optional(),
-	value: z.unknown().optional(),
-});
 
 export const statePatchSchema = z.object({
 	id: z.string(),
@@ -203,6 +301,7 @@ export const bootstrapResponseSchema = z.object({
 	factionMemberships: z.array(jsonObjectSchema).default([]),
 	factionResources: z.array(jsonObjectSchema).default([]),
 	factionGoals: z.array(jsonObjectSchema).default([]),
+	factionProjects: z.array(jsonObjectSchema).default([]),
 	agreements: z.array(jsonObjectSchema),
 	npcBeliefs: z.array(jsonObjectSchema).default([]),
 	threads: z.array(jsonObjectSchema),
@@ -480,10 +579,70 @@ export const turnPerformanceSummarySchema = z.object({
 		responseTokens: z.number().int().nonnegative().nullable().default(null),
 		totalTokens: z.number().int().nonnegative().nullable().default(null),
 	}),
+	waterfall: z.object({
+		turnId: z.string().nullable().default(null),
+		storyId: z.string().nullable().default(null),
+		model: z.string().nullable().default(null),
+		profile: z.string().nullable().default(null),
+		totalMs: z.number().int().nonnegative().default(0),
+		frontendOutboxFlushMs: z.number().int().nonnegative().nullable().default(null),
+		commandRouterMs: z.number().int().nonnegative().nullable().default(null),
+		resolveNarrativeMs: z.number().int().nonnegative().default(0),
+		retrieveMemoryPacketMs: z.number().int().nonnegative().default(0),
+		loadDbContextMs: z.number().int().nonnegative().default(0),
+		loadTimelineBriefMs: z.number().int().nonnegative().default(0),
+		loadWikiContextMs: z.number().int().nonnegative().default(0),
+		buildPromptMs: z.number().int().nonnegative().default(0),
+		inputTokens: z.number().int().nonnegative().nullable().default(null),
+		outputTokens: z.number().int().nonnegative().nullable().default(null),
+		promptBytes: z.number().int().nonnegative().default(0),
+		recentMessageCount: z.number().int().nonnegative().default(0),
+		wikiChunkCount: z.number().int().nonnegative().default(0),
+		memoryItemCount: z.number().int().nonnegative().default(0),
+		providerTimeToFirstTokenMs: z.number().int().nonnegative().nullable().default(null),
+		providerTotalMs: z.number().int().nonnegative().default(0),
+		providerRetries: z.number().int().nonnegative().default(0),
+		providerTimeoutHit: z.boolean().default(false),
+		persistMs: z.number().int().nonnegative().default(0),
+		stateExtractionMode: z.enum(['deferred', 'sync', 'none']).default('none'),
+		stateExtractionMs: z.number().int().nonnegative().default(0),
+		vaultAppendMs: z.number().int().nonnegative().default(0),
+		projectionBuildMs: z.number().int().nonnegative().default(0),
+		cacheHit: z.boolean().default(false),
+		stablePromptHash: z.string().nullable().default(null),
+		dynamicContextHash: z.string().nullable().default(null),
+	}).partial().default({}),
+	topSpans: z.array(z.object({
+		operation: z.string(),
+		durationMs: z.number().int().nonnegative(),
+	})).default([]),
 	slowTimings: z.array(z.object({
 		operation: z.string(),
 		durationMs: z.number().int().nonnegative(),
 	})).default([]),
+});
+
+export const turnContextReceiptSchema = z.object({
+	turnId: z.string(),
+	storyId: z.string(),
+	truncated: z.boolean().default(false),
+	included: z.object({
+		recentEntries: z.number().int().nonnegative().default(0),
+		memoryNodes: z.number().int().nonnegative().default(0),
+		wikiChunks: z.number().int().nonnegative().default(0),
+		timelineEvents: z.number().int().nonnegative().default(0),
+		factionSheets: z.array(z.string()).default([]),
+	}),
+	skipped: z.array(z.object({
+		source: z.string(),
+		reason: z.string(),
+	})).default([]),
+	budgets: z.object({
+		memoryTokensUsed: z.number().int().nonnegative().default(0),
+		memoryTokensMax: z.number().int().nonnegative().default(0),
+		wikiCharsUsed: z.number().int().nonnegative().default(0),
+		wikiCharsMax: z.number().int().nonnegative().default(0),
+	}),
 });
 
 export const turnResponseSchema = z.object({
@@ -532,6 +691,7 @@ export const turnResponseSchema = z.object({
 		totalTokens: z.number().int().nonnegative().nullable().default(null),
 	})).default([]),
 	performance: turnPerformanceSummarySchema.nullable().default(null),
+	contextReceipt: turnContextReceiptSchema.nullable().default(null),
 });
 
 export type StoryEventType = z.infer<typeof storyEventTypeSchema>;
@@ -539,6 +699,12 @@ export type MemoryNodeType = z.infer<typeof memoryNodeTypeSchema>;
 export type MemoryVisibility = z.infer<typeof memoryVisibilitySchema>;
 export type StoryEventStatus = z.infer<typeof storyEventStatusSchema>;
 export type StatePatch = z.infer<typeof statePatchSchema>;
+export type SourceRef = z.infer<typeof sourceRefSchema>;
+export type FactType = z.infer<typeof factTypeSchema>;
+export type Fact = z.infer<typeof factSchema>;
+export type PatchProposalStatus = z.infer<typeof patchProposalStatusSchema>;
+export type PatchProposal = z.infer<typeof patchProposalSchema>;
+export type ContinuityWarning = z.infer<typeof continuityWarningSchema>;
 export type StoryEvent = z.infer<typeof storyEventSchema>;
 export type NpcEventLinkRole = z.infer<typeof npcEventLinkRoleSchema>;
 export type NpcEventLink = z.infer<typeof npcEventLinkSchema>;
@@ -547,6 +713,7 @@ export type GmTimelineNpcEvent = z.infer<typeof gmTimelineNpcEventSchema>;
 export type GmTimelineBrief = z.infer<typeof gmTimelineBriefSchema>;
 export type MemoryNode = z.infer<typeof memoryNodeSchema>;
 export type RetrievedMemoryPacket = z.infer<typeof retrievedMemoryPacketSchema>;
+export type TurnContextReceipt = z.infer<typeof turnContextReceiptSchema>;
 export type BootstrapResponse = z.infer<typeof bootstrapResponseSchema>;
 export type StoryEntriesPageResponse = z.infer<typeof storyEntriesPageResponseSchema>;
 export type EntityCommandResponse = z.infer<typeof entityCommandResponseSchema>;

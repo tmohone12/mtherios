@@ -85,6 +85,7 @@ describe('backend bootstrap projection limits', () => {
 			factionMembershipLimit: 160,
 			factionResourceLimit: 160,
 			factionGoalLimit: 160,
+			factionProjectLimit: 160,
 			agreementLimit: 80,
 			npcBeliefLimit: 80,
 			threadLimit: 80,

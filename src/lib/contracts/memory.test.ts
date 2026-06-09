@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+	continuityWarningSchema,
+	factSchema,
 	gmTimelineBriefSchema,
+	patchProposalSchema,
+	sourceRefSchema,
 	npcEventLinkSchema,
 	storyEventSchema,
 	turnResponseSchema,
@@ -172,6 +176,100 @@ describe('timeline contracts', () => {
 		expect(brief.npcEvents[0].eventIds).toEqual(['event_marriage_alliance']);
 	});
 
+	it('parses continuity ledger records with provenance and review metadata', () => {
+		const sourceRef = sourceRefSchema.parse({
+			id: 'sourceref_1',
+			storyId: 'story_1',
+			sourceType: 'state_patch',
+			sourceId: 'patch_1',
+			targetTable: 'facts',
+			targetRecordId: 'fact_1',
+			targetRecordField: 'statement',
+			sourceField: 'manual_edit',
+			confidence: 0.95,
+			rationale: 'Manual review tied the change to a specific patch.',
+			notes: 'Checked during merge.',
+			serverVersion: 12,
+			createdAt: '2026-06-02T00:00:00.000Z',
+			updatedAt: '2026-06-02T00:00:00.000Z',
+		});
+		const fact = factSchema.parse({
+			id: 'fact_1',
+			storyId: 'story_1',
+			type: 'observation',
+			subjectEntityId: 'entity_mara',
+			targetEntityId: null,
+			title: 'Mara and the black key',
+			statement: 'Mara now carries the black key.',
+			confidence: 0.9,
+			status: 'active',
+			visibility: 'player_known',
+			firstSeenEntryId: 'entry_1',
+			sourceEntryIds: ['entry_1'],
+			sourceEventIds: ['event_1'],
+			sourcePatchIds: ['patch_1'],
+			metadata: { sourceType: 'story_text_example' },
+			serverVersion: 12,
+			createdAt: '2026-06-02T00:00:00.000Z',
+			updatedAt: '2026-06-02T00:00:00.000Z',
+		});
+		const proposal = patchProposalSchema.parse({
+			id: 'proposal_1',
+			storyId: 'story_1',
+			proposalType: 'fact_upsert',
+			targetTable: 'facts',
+			targetRecordId: 'fact_1',
+			proposedBy: 'narration',
+			operations: [{
+				op: 'upsert',
+				path: '/facts/fact_1',
+				value: { id: 'fact_1', statement: 'Mara now carries the black key.' },
+			}],
+			reason: 'Narration states that Mara now carries the black key.',
+			suggestion: 'Merge after review.',
+			status: 'pending',
+			decision: null,
+			validatedBy: null,
+			affectedEntityIds: ['entity_mara'],
+			confidence: 0.9,
+			sourceEntryIds: ['entry_1'],
+			sourceEventIds: ['event_1'],
+			sourcePatchIds: ['patch_1'],
+			metadata: { sourceType: 'story_text_example' },
+			serverVersion: 12,
+			createdAt: '2026-06-02T00:00:00.000Z',
+			updatedAt: '2026-06-02T00:00:00.000Z',
+		});
+		const warning = continuityWarningSchema.parse({
+			id: 'warning_1',
+			storyId: 'story_1',
+			warningType: 'turn_extraction',
+			level: 'warning',
+			title: 'Skipped relationship update',
+			status: 'open',
+			details: 'Skipped relationship because the target entity was missing.',
+			entityIds: ['entity_mara'],
+			factionIds: [],
+			threadIds: [],
+			actorIds: [],
+			sourceEntryIds: ['entry_1'],
+			sourceEventIds: ['event_1'],
+			sourcePatchIds: ['patch_1'],
+			resolutionNotes: null,
+			resolvedBy: null,
+			resolvedAt: null,
+			metadata: { sourceType: 'story_text_example' },
+			serverVersion: 12,
+			createdAt: '2026-06-02T00:00:00.000Z',
+			updatedAt: '2026-06-02T00:00:00.000Z',
+		});
+
+		expect(sourceRef.targetRecordField).toBe('statement');
+		expect(fact.statement).toBe('Mara now carries the black key.');
+		expect(proposal.affectedEntityIds).toEqual(['entity_mara']);
+		expect(warning.level).toBe('warning');
+	});
+
 	it('rejects invalid story event statuses', () => {
 		expect(() => storyEventSchema.parse({
 			id: 'event_bad_status',
@@ -283,6 +381,8 @@ describe('timeline contracts', () => {
 				responseTokens: 120,
 				totalTokens: 1120,
 			},
+			waterfall: {},
+			topSpans: [],
 			slowTimings: [
 				{ operation: 'turn.context_assembly', durationMs: 410 },
 			],

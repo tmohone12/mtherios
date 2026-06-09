@@ -12,6 +12,7 @@ import {
 	factions,
 	factionGoals,
 	factionMemberships,
+	factionProjects,
 	factionResources,
 	memoryNodes,
 	npcBeliefs,
@@ -28,6 +29,13 @@ import {
 	resolveVaultPath,
 	type MtheriosAppConfig,
 } from '$lib/server/app/config';
+import {
+	buildCharacterProjectionMarkdown,
+	CHARACTER_PROJECTION_SCHEMA_VERSION,
+	resolveCharacterProjectionPath,
+	scanCharacterProjectionPages,
+	type ExistingCharacterProjectionRecord,
+} from './characterProjection';
 
 type StoryRow = typeof stories.$inferSelect;
 type StoryEntryRow = typeof storyEntries.$inferSelect;
@@ -38,6 +46,7 @@ type FactionRow = typeof factions.$inferSelect;
 type FactionMembershipRow = typeof factionMemberships.$inferSelect;
 type FactionResourceRow = typeof factionResources.$inferSelect;
 type FactionGoalRow = typeof factionGoals.$inferSelect;
+type FactionProjectRow = typeof factionProjects.$inferSelect;
 type NpcBeliefRow = typeof npcBeliefs.$inferSelect;
 type AgreementRow = typeof agreements.$inferSelect;
 type ThreadRow = typeof storyThreads.$inferSelect;
@@ -246,6 +255,9 @@ async function materializeStoryVaultUnlocked(input: MaterializeStoryVaultInput):
 	assertPathInside(config.vaultRoot, vaultPath);
 
 	const data = await loadStoryVaultData(storyId);
+	const existingCharacterPages = input.clean === false
+		? await scanCharacterProjectionPages(vaultPath)
+		: new Map<string, ExistingCharacterProjectionRecord>();
 	const previousManifest = await readStoryVaultManifest(storyId, config);
 	if (input.clean !== false) {
 		await fs.rm(vaultPath, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 });
@@ -268,6 +280,16 @@ async function materializeStoryVaultUnlocked(input: MaterializeStoryVaultInput):
 	}
 
 	for (const entity of data.entities) {
+		if (entity.type === 'character') {
+			const existing = existingCharacterPages.get(entity.id);
+			const relativePath = resolveCharacterProjectionPath({
+				canonicalName: entity.name,
+				id: entity.id,
+				existingPages: existingCharacterPages,
+			});
+			addFile(files, relativePath, renderCharacterProjection(entity, entityAliasMap.get(entity.id) ?? [], data, entityTitleMap, existing?.content ?? null));
+			continue;
+		}
 		addFile(files, entityRelPath(entity), renderEntity(entity, entityAliasMap.get(entity.id) ?? [], data, entityTitleMap));
 	}
 
@@ -307,6 +329,7 @@ async function materializeStoryVaultUnlocked(input: MaterializeStoryVaultInput):
 		factionMemberships: data.factionMemberships.length,
 		factionResources: data.factionResources.length,
 		factionGoals: data.factionGoals.length,
+		factionProjects: data.factionProjects.length,
 		npcBeliefs: data.npcBeliefs.length,
 		chapters: data.chapters.length,
 		arcs: data.arcs.length,
@@ -629,6 +652,7 @@ async function loadStoryVaultData(storyId: string) {
 		factionMembershipRows,
 		factionResourceRows,
 		factionGoalRows,
+		factionProjectRows,
 		npcBeliefRows,
 		agreementRows,
 		threadRows,
@@ -646,6 +670,7 @@ async function loadStoryVaultData(storyId: string) {
 		db.select().from(factionMemberships).where(eq(factionMemberships.storyId, storyId)).orderBy(asc(factionMemberships.factionId), asc(factionMemberships.role)).limit(10000),
 		db.select().from(factionResources).where(eq(factionResources.storyId, storyId)).orderBy(asc(factionResources.factionId), asc(factionResources.kind), asc(factionResources.name)).limit(10000),
 		db.select().from(factionGoals).where(eq(factionGoals.storyId, storyId)).orderBy(asc(factionGoals.factionId), desc(factionGoals.priority), asc(factionGoals.goal)).limit(5000),
+		db.select().from(factionProjects).where(eq(factionProjects.storyId, storyId)).orderBy(asc(factionProjects.factionId), asc(factionProjects.status), desc(factionProjects.priority), asc(factionProjects.project)).limit(5000),
 		db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).orderBy(desc(npcBeliefs.updatedAt)).limit(5000),
 		db.select().from(agreements).where(eq(agreements.storyId, storyId)).orderBy(desc(agreements.updatedAt)).limit(2000),
 		db.select().from(storyThreads).where(eq(storyThreads.storyId, storyId)).orderBy(desc(storyThreads.updatedAt)).limit(2000),
@@ -666,6 +691,7 @@ async function loadStoryVaultData(storyId: string) {
 		factionMemberships: factionMembershipRows,
 		factionResources: factionResourceRows,
 		factionGoals: factionGoalRows,
+		factionProjects: factionProjectRows,
 		npcBeliefs: npcBeliefRows,
 		agreements: agreementRows,
 		threads: threadRows,
@@ -872,6 +898,14 @@ function renderEntity(entity: EntityRow, aliases: string[], data: Awaited<Return
 	const outgoing = data.relationships.filter((rel) => rel.sourceEntityId === entity.id || rel.targetEntityId === entity.id);
 	const relatedFactionLines = factionLinesForEntity(entity, data, entityTitleMap);
 	const profileLines = entityProfileLines(entity, entityTitleMap);
+	const metadata = asRecord(entity.metadata);
+	const resolver = asRecord(metadata.entityResolver);
+	const confidence = typeof resolver.confidence === 'number' ? resolver.confidence : null;
+	const sourceRefs = uniqueStrings([
+		...(entity.sourceEntryIds ?? []),
+		...(entity.sourceEventIds ?? []),
+		...(entity.sourcePatchIds ?? []),
+	]);
 	const beliefsHeld = data.npcBeliefs.filter((belief) => belief.believerEntityId === entity.id).slice(0, 25);
 	const beliefsAbout = data.npcBeliefs.filter((belief) => belief.subjectEntityId === entity.id).slice(0, 25);
 	const relatedEvents = data.events
@@ -883,7 +917,22 @@ function renderEntity(entity: EntityRow, aliases: string[], data: Awaited<Return
 		.slice(0, 20);
 	const relatedMemory = data.memoryNodes.filter((node) => node.entityIds.includes(entity.id)).slice(0, 20);
 	return [
-		frontmatter({ title: entity.name, name: entity.name, storyId: entity.storyId, entityId: entity.id, type: entity.type, status: entity.status }),
+		frontmatter({
+			id: entity.id,
+			type: entity.type,
+			canonical_name: entity.name,
+			aliases,
+			status: entity.status,
+			first_seen_entry_id: entity.sourceEntryIds[0] ?? null,
+			source_refs: sourceRefs,
+			confidence,
+			schema_version: 1,
+			title: entity.name,
+			name: entity.name,
+			storyId: entity.storyId,
+			entityId: entity.id,
+			visibility: entity.visibility,
+		}),
 		`# ${entity.name}`,
 		'',
 		'## Identity',
@@ -916,6 +965,58 @@ function renderEntity(entity: EntityRow, aliases: string[], data: Awaited<Return
 	].filter(Boolean).join('\n');
 }
 
+function renderCharacterProjection(
+	entity: EntityRow,
+	aliases: string[],
+	data: Awaited<ReturnType<typeof loadStoryVaultData>>,
+	entityTitleMap: Map<string, string>,
+	existingContent: string | null,
+): string {
+	const outgoing = data.relationships.filter((rel) => rel.sourceEntityId === entity.id || rel.targetEntityId === entity.id);
+	const relatedFactionLines = factionLinesForEntity(entity, data, entityTitleMap);
+	const profileLines = entityProfileLines(entity, entityTitleMap);
+	const metadata = asRecord(entity.metadata);
+	const resolver = asRecord(metadata.entityResolver);
+	const confidence = typeof resolver.confidence === 'number' ? resolver.confidence : null;
+	const sourceRefs = uniqueStrings([
+		...(entity.sourceEntryIds ?? []),
+		...(entity.sourceEventIds ?? []),
+		...(entity.sourcePatchIds ?? []),
+	]);
+	const beliefsHeld = data.npcBeliefs.filter((belief) => belief.believerEntityId === entity.id).slice(0, 25);
+	const beliefsAbout = data.npcBeliefs.filter((belief) => belief.subjectEntityId === entity.id).slice(0, 25);
+	const relatedEvents = data.events
+		.filter((event) =>
+			event.actorEntityIds.includes(entity.id) ||
+			event.targetEntityIds.includes(entity.id) ||
+			event.locationId === entity.id
+		)
+		.slice(0, 20);
+	const relatedMemory = data.memoryNodes.filter((node) => node.entityIds.includes(entity.id)).slice(0, 20);
+
+	return buildCharacterProjectionMarkdown({
+		id: entity.id,
+		canonicalName: entity.name,
+		aliases,
+		status: entity.status,
+		firstSeenEntryId: entity.sourceEntryIds[0] ?? null,
+		sourceRefs,
+		confidence,
+		description: entity.description || '_No description yet._',
+		profileLines,
+		relatedFactions: relatedFactionLines,
+		relationships: outgoing.map((rel) => relationshipLine(rel, entityTitleMap)),
+		beliefsHeld: beliefsHeld.map((belief) => beliefLine(belief, entityTitleMap)),
+		beliefsAbout: beliefsAbout.map((belief) => beliefLine(belief, entityTitleMap)),
+		relatedEvents: relatedEvents.map((event) => `- [[${eventPageTitle(event)}|${event.title || event.type}]] (${event.type}, ${event.visibility})`),
+		relatedMemory: relatedMemory.map((node) => `- [[${memoryPageTitle(node)}|${node.title}]] (${node.type}, importance ${node.importance})`),
+		sourceEntryIds: entity.sourceEntryIds,
+		sourceEventIds: entity.sourceEventIds,
+		canonState: entity.state,
+		schemaVersion: CHARACTER_PROJECTION_SCHEMA_VERSION,
+	}, existingContent);
+}
+
 function renderFaction(faction: FactionRow, data: Awaited<ReturnType<typeof loadStoryVaultData>>, entityTitleMap: Map<string, string>): string {
 	const goals = data.factionGoals
 		.filter((goal) => goal.factionId === faction.id)
@@ -926,6 +1027,9 @@ function renderFaction(faction: FactionRow, data: Awaited<ReturnType<typeof load
 	const resources = data.factionResources
 		.filter((resource) => resource.factionId === faction.id)
 		.sort((a, b) => `${a.kind}:${a.name}`.localeCompare(`${b.kind}:${b.name}`));
+	const projects = data.factionProjects
+		.filter((project) => project.factionId === faction.id)
+		.sort((a, b) => a.status.localeCompare(b.status) || b.priority - a.priority || a.project.localeCompare(b.project));
 	const normalizedMemberIds = new Set(memberships.flatMap((membership) => [
 		membership.entityId,
 		asString(asRecord(membership.metadata).memberNameOrId),
@@ -956,12 +1060,14 @@ function renderFaction(faction: FactionRow, data: Awaited<ReturnType<typeof load
 		...goals.map((goal) => goal.sourceEntryIds),
 		...memberships.map((membership) => membership.sourceEntryIds),
 		...resources.map((resource) => resource.sourceEntryIds),
+		...projects.map((project) => project.sourceEntryIds),
 	);
 	const sourceEventIds = uniqueStrings(
 		faction.sourceEventIds,
 		...goals.map((goal) => goal.sourceEventIds),
 		...memberships.map((membership) => membership.sourceEventIds),
 		...resources.map((resource) => resource.sourceEventIds),
+		...projects.map((project) => project.sourceEventIds),
 	);
 	return [
 		frontmatter({ title: faction.name, name: faction.name, storyId: faction.storyId, factionId: faction.id, type: 'faction', pressure: faction.pressure }),
@@ -984,6 +1090,8 @@ function renderFaction(faction: FactionRow, data: Awaited<ReturnType<typeof load
 			'## Resources',
 			codeJson(faction.resources),
 		].join('\n'),
+		'',
+		projects.length ? `## Projects\n${projects.map(projectLine).join('\n')}` : '',
 		'',
 		faction.allies.length ? `## Allies\n${faction.allies.map((name) => `- ${factionLink(name, data)}`).join('\n')}` : '',
 		'',
@@ -1255,6 +1363,30 @@ function resourceLine(resource: FactionResourceRow, entityTitleMap: Map<string, 
 		resource.visibility !== 'player_known' ? resource.visibility : '',
 	].filter(Boolean).join(', ');
 	return `- ${resource.kind}: ${resource.name}${details ? ` (${details})` : ''}`;
+}
+
+function compactText(value: string, maxLength = 160): string {
+	const text = value.replace(/\s+/g, ' ').trim();
+	if (text.length <= maxLength) return text;
+	return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function projectLine(project: FactionProjectRow): string {
+	const costs = Object.keys(asRecord(project.costs)).length ? `costs ${compactText(JSON.stringify(project.costs), 120)}` : '';
+	const gains = Object.keys(asRecord(project.gains)).length ? `gains ${compactText(JSON.stringify(project.gains), 120)}` : '';
+	const risks = project.risks.length ? `risks ${project.risks.slice(0, 3).join('; ')}` : '';
+	const due = project.dueTurn != null ? `due turn ${project.dueTurn}` : '';
+	const details = [
+		project.status,
+		`priority ${project.priority}`,
+		`progress ${Math.round(project.progress * 100)}%`,
+		due,
+		costs,
+		gains,
+		risks,
+		project.visibility !== 'player_known' ? project.visibility : '',
+	].filter(Boolean).join(', ');
+	return `- ${project.project}${details ? ` (${details})` : ''}`;
 }
 
 function beliefLine(belief: NpcBeliefRow, entityTitleMap: Map<string, string>): string {
