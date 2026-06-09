@@ -1,4 +1,4 @@
-# Mtherios
+# Mtherios (Work in progess no real stable version)
 
 A terminal-run interactive fiction engine with a SvelteKit frontend and a full AI-driven living world simulation. The local Node process owns the app runtime, backend canon, Qdrant wiki search, and the syncable data root; the browser is the client.
 
