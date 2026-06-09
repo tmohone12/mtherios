@@ -4,13 +4,18 @@ import {
 	agreements,
 	arcs,
 	chapters,
+	continuityWarnings,
 	entities,
 	entityAliases,
 	factionGoals,
 	factionMemberships,
+	factionProjects,
 	factionResources,
 	factions,
+	patchProposals,
+	sourceRefs,
 	memoryNodes,
+	facts,
 	npcBeliefs,
 	npcEventLinks,
 	relationships,
@@ -37,11 +42,16 @@ interface WorldDatabaseTables {
 	factionMemberships: JsonRecord[];
 	factionResources: JsonRecord[];
 	factionGoals: JsonRecord[];
+	factionProjects: JsonRecord[];
 	npcBeliefs: JsonRecord[];
 	agreements: JsonRecord[];
 	threads: JsonRecord[];
 	events: JsonRecord[];
 	npcEventLinks: JsonRecord[];
+	facts: JsonRecord[];
+	sourceRefs: JsonRecord[];
+	patchProposals: JsonRecord[];
+	continuityWarnings: JsonRecord[];
 	statePatches: JsonRecord[];
 	memoryNodes: JsonRecord[];
 	chapters: JsonRecord[];
@@ -122,11 +132,16 @@ function normalizeTables(rawBundle: JsonRecord): WorldDatabaseTables {
 		factionMemberships: asArray(source.factionMemberships),
 		factionResources: asArray(source.factionResources),
 		factionGoals: asArray(source.factionGoals),
+		factionProjects: asArray(source.factionProjects),
 		npcBeliefs: asArray(source.npcBeliefs),
 		agreements: asArray(source.agreements),
 		threads: asArray(source.threads ?? source.storyThreads),
 		events: asArray(source.events ?? source.storyEvents),
 		npcEventLinks: asArray(source.npcEventLinks ?? source.npc_event_links),
+		facts: asArray(source.facts),
+		sourceRefs: asArray(source.sourceRefs),
+		patchProposals: asArray(source.patchProposals),
+		continuityWarnings: asArray(source.continuityWarnings),
 		statePatches: asArray(source.statePatches),
 		memoryNodes: asArray(source.memoryNodes),
 		chapters: asArray(source.chapters),
@@ -368,6 +383,31 @@ function goalValue(row: JsonRecord, storyId: string, importedAt: string): typeof
 	};
 }
 
+function projectValue(row: JsonRecord, storyId: string, importedAt: string): typeof factionProjects.$inferInsert {
+	return {
+		id: asString(row.id, id('project')),
+		storyId,
+		factionId: asString(row.factionId),
+		project: asString(row.project, asString(row.name, 'Faction project')),
+		status: asString(row.status, 'planned'),
+		progress: asNumber(row.progress, 0),
+		priority: asNumber(row.priority, 5),
+		dueTurn: typeof row.dueTurn === 'number' ? Math.trunc(row.dueTurn) : null,
+		worldTime: asNullableString(row.worldTime),
+		costs: asRecord(row.costs),
+		gains: asRecord(row.gains),
+		risks: asStringArray(row.risks),
+		visibility: asString(row.visibility, 'player_known'),
+		metadata: asRecord(row.metadata),
+		sourceEntryIds: asStringArray(row.sourceEntryIds),
+		sourceEventIds: asStringArray(row.sourceEventIds),
+		sourcePatchIds: asStringArray(row.sourcePatchIds),
+		serverVersion: asNumber(row.serverVersion, 1),
+		createdAt: asString(row.createdAt, importedAt),
+		updatedAt: asString(row.updatedAt, importedAt),
+	};
+}
+
 function beliefValue(row: JsonRecord, storyId: string, importedAt: string): typeof npcBeliefs.$inferInsert {
 	return {
 		id: asString(row.id, id('belief')),
@@ -493,6 +533,98 @@ function patchValue(row: JsonRecord, storyId: string, importedAt: string): typeo
 		validationWarnings: asStringArray(row.validationWarnings),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),
+		serverVersion: asNumber(row.serverVersion, 1),
+		createdAt: asString(row.createdAt, importedAt),
+		updatedAt: asString(row.updatedAt, importedAt),
+	};
+}
+
+function factValue(row: JsonRecord, storyId: string, importedAt: string): typeof facts.$inferInsert {
+	return {
+		id: asString(row.id, id('fact')),
+		storyId,
+		type: asString(row.type, 'observation'),
+		subjectEntityId: asNullableString(row.subjectEntityId),
+		targetEntityId: asNullableString(row.targetEntityId),
+		title: asString(row.title, 'Imported Fact'),
+		statement: asString(row.statement),
+		confidence: asNumber(row.confidence, 1),
+		status: asString(row.status, 'active'),
+		visibility: asString(row.visibility, 'player_known'),
+		firstSeenEntryId: asNullableString(row.firstSeenEntryId),
+		sourceEntryIds: asStringArray(row.sourceEntryIds),
+		sourceEventIds: asStringArray(row.sourceEventIds),
+		sourcePatchIds: asStringArray(row.sourcePatchIds),
+		metadata: asRecord(row.metadata),
+		serverVersion: asNumber(row.serverVersion, 1),
+		createdAt: asString(row.createdAt, importedAt),
+		updatedAt: asString(row.updatedAt, importedAt),
+	};
+}
+
+function sourceRefValue(row: JsonRecord, storyId: string, importedAt: string): typeof sourceRefs.$inferInsert {
+	return {
+		id: asString(row.id, id('sourceref')),
+		storyId,
+		sourceType: asString(row.sourceType),
+		sourceId: asString(row.sourceId),
+		targetTable: asString(row.targetTable),
+		targetRecordId: asString(row.targetRecordId),
+		targetRecordField: asNullableString(row.targetRecordField),
+		sourceField: asNullableString(row.sourceField),
+		confidence: asNumber(row.confidence, 1),
+		rationale: asNullableString(row.rationale),
+		notes: asNullableString(row.notes),
+		serverVersion: asNumber(row.serverVersion, 1),
+		createdAt: asString(row.createdAt, importedAt),
+		updatedAt: asString(row.updatedAt, importedAt),
+	};
+}
+
+function patchProposalValue(row: JsonRecord, storyId: string, importedAt: string): typeof patchProposals.$inferInsert {
+	return {
+		id: asString(row.id, id('proposal')),
+		storyId,
+		proposalType: asString(row.proposalType),
+		targetTable: asString(row.targetTable),
+		targetRecordId: asString(row.targetRecordId),
+		proposedBy: asString(row.proposedBy, 'llm'),
+		operations: asJsonArray(row.operations),
+		reason: asString(row.reason),
+		suggestion: asString(row.suggestion),
+		status: asString(row.status, 'pending'),
+		decision: asNullableString(row.decision),
+		validatedBy: asNullableString(row.validatedBy),
+		sourceEntryIds: asStringArray(row.sourceEntryIds),
+		sourceEventIds: asStringArray(row.sourceEventIds),
+		sourcePatchIds: asStringArray(row.sourcePatchIds),
+		metadata: asRecord(row.metadata),
+		serverVersion: asNumber(row.serverVersion, 1),
+		createdAt: asString(row.createdAt, importedAt),
+		updatedAt: asString(row.updatedAt, importedAt),
+	};
+}
+
+function continuityWarningValue(row: JsonRecord, storyId: string, importedAt: string): typeof continuityWarnings.$inferInsert {
+	return {
+		id: asString(row.id, id('warning')),
+		storyId,
+		warningType: asString(row.warningType),
+		level: asString(row.level, 'warning'),
+		title: asString(row.title, 'Imported continuity warning'),
+		status: asString(row.status, 'open'),
+		details: asString(row.details),
+		entityIds: asStringArray(row.entityIds),
+		factionIds: asStringArray(row.factionIds),
+		threadIds: asStringArray(row.threadIds),
+		actorIds: asStringArray(row.actorIds),
+		sourceEntryIds: asStringArray(row.sourceEntryIds),
+		sourceEventIds: asStringArray(row.sourceEventIds),
+		sourcePatchIds: asStringArray(row.sourcePatchIds),
+		resolutionNotes: asNullableString(row.resolutionNotes),
+		resolvedBy: asNullableString(row.resolvedBy),
+		resolvedAt: asNullableString(row.resolvedAt),
+		metadata: asRecord(row.metadata),
 		serverVersion: asNumber(row.serverVersion, 1),
 		createdAt: asString(row.createdAt, importedAt),
 		updatedAt: asString(row.updatedAt, importedAt),
@@ -644,6 +776,9 @@ export async function importWorldDatabaseBundle(input: unknown) {
 		for (const row of tables.factionGoals) await tx.insert(factionGoals).values(goalValue(row, storyId, importedAt)).onConflictDoNothing();
 		increment(counts, 'factionGoals', tables.factionGoals.length);
 
+		for (const row of tables.factionProjects) await tx.insert(factionProjects).values(projectValue(row, storyId, importedAt)).onConflictDoNothing();
+		increment(counts, 'factionProjects', tables.factionProjects.length);
+
 		for (const row of tables.npcBeliefs) await tx.insert(npcBeliefs).values(beliefValue(row, storyId, importedAt)).onConflictDoNothing();
 		increment(counts, 'npcBeliefs', tables.npcBeliefs.length);
 
@@ -661,6 +796,18 @@ export async function importWorldDatabaseBundle(input: unknown) {
 
 		for (const row of tables.statePatches) await tx.insert(statePatches).values(patchValue(row, storyId, importedAt)).onConflictDoNothing();
 		increment(counts, 'statePatches', tables.statePatches.length);
+
+		for (const row of tables.facts) await tx.insert(facts).values(factValue(row, storyId, importedAt)).onConflictDoNothing();
+		increment(counts, 'facts', tables.facts.length);
+
+		for (const row of tables.sourceRefs) await tx.insert(sourceRefs).values(sourceRefValue(row, storyId, importedAt)).onConflictDoNothing();
+		increment(counts, 'sourceRefs', tables.sourceRefs.length);
+
+		for (const row of tables.patchProposals) await tx.insert(patchProposals).values(patchProposalValue(row, storyId, importedAt)).onConflictDoNothing();
+		increment(counts, 'patchProposals', tables.patchProposals.length);
+
+		for (const row of tables.continuityWarnings) await tx.insert(continuityWarnings).values(continuityWarningValue(row, storyId, importedAt)).onConflictDoNothing();
+		increment(counts, 'continuityWarnings', tables.continuityWarnings.length);
 
 		for (const row of tables.memoryNodes) await tx.insert(memoryNodes).values(memoryValue(row, storyId, importedAt)).onConflictDoNothing();
 		increment(counts, 'memoryNodes', tables.memoryNodes.length);

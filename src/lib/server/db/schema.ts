@@ -203,6 +203,31 @@ export const factionGoals = pgTable('faction_goals', {
 	statusIdx: index('faction_goals_status_idx').on(table.storyId, table.status),
 }));
 
+export const factionProjects = pgTable('faction_projects', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	factionId: text('faction_id').notNull().references(() => factions.id, { onDelete: 'cascade' }),
+	project: text('project').notNull(),
+	status: text('status').notNull().default('planned'),
+	progress: real('progress').notNull().default(0),
+	priority: integer('priority').notNull().default(5),
+	dueTurn: integer('due_turn'),
+	worldTime: text('world_time'),
+	costs: jsonb('costs').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	gains: jsonb('gains').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	risks: jsonb('risks').$type<string[]>().notNull().default(jsonArray),
+	visibility: text('visibility').notNull().default('player_known'),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	sourceEntryIds: jsonb('source_entry_ids').$type<string[]>().notNull().default(jsonArray),
+	sourceEventIds: jsonb('source_event_ids').$type<string[]>().notNull().default(jsonArray),
+	sourcePatchIds: jsonb('source_patch_ids').$type<string[]>().notNull().default(jsonArray),
+	...syncColumns,
+}, (table) => ({
+	factionIdx: index('faction_projects_faction_idx').on(table.storyId, table.factionId),
+	statusIdx: index('faction_projects_status_idx').on(table.storyId, table.status),
+	dueTurnIdx: index('faction_projects_due_turn_idx').on(table.storyId, table.dueTurn),
+}));
+
 export const npcBeliefs = pgTable('npc_beliefs', {
 	id: text('id').primaryKey(),
 	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
@@ -313,6 +338,97 @@ export const statePatches = pgTable('state_patches', {
 	...syncColumns,
 }, (table) => ({
 	storyStatusIdx: index('state_patches_story_status_idx').on(table.storyId, table.status),
+}));
+
+export const facts = pgTable('facts', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	type: text('type').notNull().default('observation'),
+	subjectEntityId: text('subject_entity_id').references(() => entities.id, { onDelete: 'set null' }),
+	targetEntityId: text('target_entity_id').references(() => entities.id, { onDelete: 'set null' }),
+	title: text('title').notNull(),
+	statement: text('statement').notNull(),
+	confidence: real('confidence').notNull().default(1),
+	status: text('status').notNull().default('active'),
+	visibility: text('visibility').notNull().default('player_known'),
+	firstSeenEntryId: text('first_seen_entry_id'),
+	sourceEntryIds: jsonb('source_entry_ids').$type<string[]>().notNull().default(jsonArray),
+	sourceEventIds: jsonb('source_event_ids').$type<string[]>().notNull().default(jsonArray),
+	sourcePatchIds: jsonb('source_patch_ids').$type<string[]>().notNull().default(jsonArray),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	...syncColumns,
+}, (table) => ({
+	storyTypeIdx: index('facts_story_type_idx').on(table.storyId, table.type),
+	subjectEntityIdx: index('facts_subject_entity_idx').on(table.storyId, table.subjectEntityId),
+	statusIdx: index('facts_story_status_idx').on(table.storyId, table.status),
+}));
+
+export const sourceRefs = pgTable('source_refs', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	sourceType: text('source_type').notNull(),
+	sourceId: text('source_id').notNull(),
+	targetTable: text('target_table').notNull(),
+	targetRecordId: text('target_record_id').notNull(),
+	targetRecordField: text('target_record_field'),
+	sourceField: text('source_field'),
+	confidence: real('confidence').notNull().default(1),
+	rationale: text('rationale'),
+	notes: text('notes'),
+	serverVersion: integer('server_version').notNull().default(1),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (table) => ({
+	storySourceIdx: index('source_refs_story_source_idx').on(table.storyId, table.sourceType, table.sourceId),
+	storyTargetIdx: index('source_refs_story_target_idx').on(table.storyId, table.targetTable, table.targetRecordId),
+}));
+
+export const patchProposals = pgTable('patch_proposals', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	proposalType: text('proposal_type').notNull(),
+	targetTable: text('target_table').notNull(),
+	targetRecordId: text('target_record_id').notNull(),
+	proposedBy: text('proposed_by').notNull().default('llm'),
+	operations: jsonb('operations').$type<Array<Record<string, unknown>>>().notNull().default(jsonArray),
+	reason: text('reason').notNull().default(''),
+	suggestion: text('suggestion').notNull().default(''),
+	status: text('status').notNull().default('pending'),
+	decision: text('decision'),
+	validatedBy: text('validated_by'),
+	sourceEntryIds: jsonb('source_entry_ids').$type<string[]>().notNull().default(jsonArray),
+	sourceEventIds: jsonb('source_event_ids').$type<string[]>().notNull().default(jsonArray),
+	sourcePatchIds: jsonb('source_patch_ids').$type<string[]>().notNull().default(jsonArray),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	...syncColumns,
+}, (table) => ({
+	storyStatusIdx: index('patch_proposals_story_status_idx').on(table.storyId, table.status),
+	targetIdx: index('patch_proposals_target_idx').on(table.storyId, table.targetTable, table.targetRecordId),
+}));
+
+export const continuityWarnings = pgTable('continuity_warnings', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	warningType: text('warning_type').notNull(),
+	level: text('level').notNull().default('warning'),
+	title: text('title').notNull(),
+	status: text('status').notNull().default('open'),
+	details: text('details').notNull(),
+	entityIds: jsonb('entity_ids').$type<string[]>().notNull().default(jsonArray),
+	factionIds: jsonb('faction_ids').$type<string[]>().notNull().default(jsonArray),
+	threadIds: jsonb('thread_ids').$type<string[]>().notNull().default(jsonArray),
+	actorIds: jsonb('actor_ids').$type<string[]>().notNull().default(jsonArray),
+	sourceEntryIds: jsonb('source_entry_ids').$type<string[]>().notNull().default(jsonArray),
+	sourceEventIds: jsonb('source_event_ids').$type<string[]>().notNull().default(jsonArray),
+	sourcePatchIds: jsonb('source_patch_ids').$type<string[]>().notNull().default(jsonArray),
+	resolutionNotes: text('resolution_notes'),
+	resolvedBy: text('resolved_by'),
+	resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	...syncColumns,
+}, (table) => ({
+	storyStatusIdx: index('continuity_warnings_story_status_idx').on(table.storyId, table.status),
+	storyLevelIdx: index('continuity_warnings_story_level_idx').on(table.storyId, table.level),
 }));
 
 export const memoryNodes = pgTable('memory_nodes', {
@@ -546,11 +662,16 @@ export const schema = {
 	factionMemberships,
 	factionResources,
 	factionGoals,
+	factionProjects,
 	agreements,
 	storyThreads,
 	storyEvents,
 	npcEventLinks,
 	statePatches,
+	facts,
+	sourceRefs,
+	patchProposals,
+	continuityWarnings,
 	memoryNodes,
 	chapters,
 	arcs,
