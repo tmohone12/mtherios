@@ -364,6 +364,7 @@ describe('engine command envelope', () => {
 					factionMemberships: [],
 					factionResources: [],
 					factionGoals: [],
+					factionProjects: [],
 					agreements: [],
 					npcBeliefs: [],
 					threads: [],
@@ -1469,10 +1470,13 @@ describe('engine command envelope', () => {
 						responseTokens: 120,
 						totalTokens: 1120,
 					},
+					waterfall: {},
+					topSpans: [],
 					slowTimings: [
 						{ operation: 'turn.context_assembly', durationMs: 410 },
 					],
 				},
+				contextReceipt: null,
 				campaignVault: {
 					files: [{
 						relativePath: 'raw/turns/000100-turn-1.md',
@@ -1513,6 +1517,7 @@ describe('engine command envelope', () => {
 				missCount: 1,
 				tokenEstimate: 6000,
 			},
+			contextReceipt: null,
 			projection: {
 				mode: 'control_surface',
 				entryLimit: 80,
@@ -1551,6 +1556,8 @@ describe('engine command envelope', () => {
 					responseTokens: 120,
 					totalTokens: 1120,
 				},
+				waterfall: {},
+				topSpans: [],
 				slowTimings: [
 					{ operation: 'turn.context_assembly', durationMs: 410 },
 				],

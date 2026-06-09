@@ -135,6 +135,13 @@ import {
 	withCommandStoryId,
 	type WikiCoreAction,
 } from './wikiCommands';
+import {
+	addEntityAlias as addEntityAliasCommand,
+	continuityAudit as continuityAuditCommand,
+	mergeEntities as mergeEntitiesCommand,
+	previewEntityResolution as previewEntityResolutionCommand,
+	reviewPatchProposal as reviewPatchProposalCommand,
+} from './canonRepair';
 
 type JsonRecord = Record<string, unknown>;
 type LlmSettingsSaveInput = {
@@ -180,6 +187,11 @@ export interface EngineCommandHandlers {
 	upsertArc?: (storyId: string, arc: JsonRecord) => Promise<ArcCommandResponse>;
 	upsertSaga?: (storyId: string, saga: JsonRecord) => Promise<SagaCommandResponse>;
 	upsertLivingMemory?: (storyId: string, kind: Parameters<typeof upsertBackendLivingMemoryFromLocal>[1], records: JsonRecord[]) => Promise<LivingMemoryCommandResponse>;
+	previewEntityResolution?: (input: Parameters<typeof previewEntityResolution>[0]) => Promise<JsonRecord>;
+	addEntityAlias?: (input: Parameters<typeof addEntityAlias>[0]) => Promise<JsonRecord>;
+	mergeEntities?: (input: Parameters<typeof mergeEntities>[0]) => Promise<JsonRecord>;
+	reviewPatchProposal?: (input: Parameters<typeof reviewPatchProposal>[0]) => Promise<JsonRecord>;
+	continuityAudit?: (input: Parameters<typeof continuityAudit>[0]) => Promise<JsonRecord>;
 	submitTurn?: (input: unknown) => Promise<TurnResponse>;
 	loadTimelineBrief?: (input: Parameters<typeof loadGmTimelineBrief>[0]) => Promise<GmTimelineBrief>;
 	scheduleTimelineEvent?: (input: Parameters<typeof scheduleTimelineEvent>[0]) => Promise<StoryEventRow>;
@@ -290,6 +302,11 @@ export async function executeEngineCommand(
 	const runDueJobs = handlers.runDueJobs ?? runDueBackendJobsCommand;
 	const runStoryVaultSyncJob = handlers.runStoryVaultSyncJob ?? runStoryVaultSyncJobCommand;
 	const runWorldSimJob = handlers.runWorldSimJob ?? runWorldSimJobCommand;
+	const previewResolution = handlers.previewEntityResolution ?? previewEntityResolutionCommand;
+	const addAlias = handlers.addEntityAlias ?? addEntityAliasCommand;
+	const mergeDuplicateEntities = handlers.mergeEntities ?? mergeEntitiesCommand;
+	const reviewProposal = handlers.reviewPatchProposal ?? reviewPatchProposalCommand;
+	const runContinuityAudit = handlers.continuityAudit ?? continuityAuditCommand;
 	const runOrchestrator = handlers.runOrchestrator ?? ((input: EngineOrchestratorRunInput) => runEngineOrchestrator(input, {
 		runTool: (call) => executeEngineCommand({
 			storyId: input.storyId,
@@ -1091,6 +1108,85 @@ export async function executeEngineCommand(
 				publishSucceededEvent(response);
 				return response;
 			}
+			case 'entity.resolve': {
+				const args = asRecord(request.args ?? {});
+				const result = await previewResolution({
+					storyId: request.storyId,
+					candidate: asRecord(args.candidate) as Parameters<typeof previewResolution>[0]['candidate'],
+					includeSemantic: args.includeSemantic !== false,
+					maxCandidates: typeof args.maxCandidates === 'number' ? args.maxCandidates : undefined,
+				});
+				const summary = asRecord(result.resolution);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						entityResolution: {
+							storyId: request.storyId,
+							decision: typeof summary.decision === 'string' ? summary.decision : null,
+							entityId: typeof summary.matchedEntityId === 'string' ? summary.matchedEntityId : null,
+							confidence: typeof summary.confidence === 'number' ? summary.confidence : null,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'entity.alias.add': {
+				const args = asRecord(request.args ?? {});
+				const result = await addAlias({
+					storyId: request.storyId,
+					entityId: typeof args.entityId === 'string' ? args.entityId : '',
+					alias: typeof args.alias === 'string' ? args.alias : '',
+					sourceEntryIds: Array.isArray(args.sourceEntryIds) ? args.sourceEntryIds.filter((value): value is string => typeof value === 'string') : [],
+					sourceEventIds: Array.isArray(args.sourceEventIds) ? args.sourceEventIds.filter((value): value is string => typeof value === 'string') : [],
+					sourcePatchIds: Array.isArray(args.sourcePatchIds) ? args.sourcePatchIds.filter((value): value is string => typeof value === 'string') : [],
+				});
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						entityAlias: {
+							storyId: request.storyId,
+							entityId: result.entityId,
+							alias: result.alias,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'entity.merge': {
+				const args = asRecord(request.args ?? {});
+				const result = await mergeDuplicateEntities({
+					storyId: request.storyId,
+					keepEntityId: typeof args.keepEntityId === 'string' ? args.keepEntityId : '',
+					mergeEntityId: typeof args.mergeEntityId === 'string' ? args.mergeEntityId : '',
+					reason: typeof args.reason === 'string' ? args.reason : null,
+				});
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						entityMerge: {
+							storyId: request.storyId,
+							keepEntityId: result.keepEntityId,
+							mergeEntityId: result.mergeEntityId,
+							mergedAliasCount: Array.isArray(result.mergedAliases) ? result.mergedAliases.length : 0,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
 			case 'entity.delete': {
 				const args = engineEntityDeleteArgsSchema.parse(request.args ?? {});
 				const result = await deleteEntity(request.storyId, args.entityId);
@@ -1106,6 +1202,58 @@ export async function executeEngineCommand(
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;
 				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'patchProposal.review': {
+				const args = asRecord(request.args ?? {});
+				const decision = args.decision === 'rejected' ? 'rejected' : 'approved';
+				const result = await reviewProposal({
+					storyId: request.storyId,
+					proposalId: typeof args.proposalId === 'string' ? args.proposalId : '',
+					decision,
+					reviewer: typeof args.reviewer === 'string' ? args.reviewer : 'human',
+					notes: typeof args.notes === 'string' ? args.notes : null,
+				});
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						patchProposal: {
+							storyId: request.storyId,
+							proposalId: result.proposalId,
+							status: result.status,
+							decision: result.decision,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'continuity.audit': {
+				const args = asRecord(request.args ?? {});
+				const result = await runContinuityAudit({
+					storyId: request.storyId,
+					limit: typeof args.limit === 'number' ? args.limit : undefined,
+				});
+				const summary = asRecord(result.summary);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						continuityAudit: {
+							storyId: request.storyId,
+							openWarnings: typeof summary.openWarnings === 'number' ? summary.openWarnings : 0,
+							pendingProposals: typeof summary.pendingProposals === 'number' ? summary.pendingProposals : 0,
+							inactiveEntities: typeof summary.inactiveEntities === 'number' ? summary.inactiveEntities : 0,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
 				publishSucceededEvent(response);
 				return response;
 			}
@@ -1463,6 +1611,7 @@ export async function executeEngineCommand(
 							files: turn.campaignVault.files,
 						} : null,
 						performance: turn.performance ?? null,
+						contextReceipt: turn.contextReceipt ?? null,
 					},
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;

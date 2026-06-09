@@ -13,6 +13,7 @@ export const backendJobTypes = [
 	'index_canonical_records',
 	'sync_story_vault',
 	'extract_turn_state',
+	'continuity_audit',
 ] as const;
 
 export type BackendJobType = typeof backendJobTypes[number];
@@ -106,6 +107,10 @@ export function turnStateExtractionDedupeKey(input: { assistantEntryId: string }
 	return `turn-state-${input.assistantEntryId}`;
 }
 
+export function continuityAuditDedupeKey(input: { assistantEntryId: string }): string {
+	return `continuity-audit-${input.assistantEntryId}`;
+}
+
 export async function enqueueTurnStateExtractionJob(input: {
 	storyId: string;
 	playerEntryId: string;
@@ -134,6 +139,31 @@ export async function enqueueTurnStateExtractionJob(input: {
 			timelineTurn: input.timelineTurn,
 			retrievedMemoryIds: input.retrievedMemoryIds,
 			memorySettings: input.memorySettings ?? {},
+		},
+		maxAttempts: 3,
+	});
+}
+
+export async function enqueueContinuityAuditJob(input: {
+	storyId: string;
+	playerEntryId: string;
+	assistantEntryId: string;
+	clientTurnId: string;
+	serverVersion: number;
+	contextReceipt?: Record<string, unknown> | null;
+	performance?: Record<string, unknown> | null;
+}): Promise<string> {
+	return enqueueBackendJob({
+		storyId: input.storyId,
+		type: 'continuity_audit',
+		dedupeKey: continuityAuditDedupeKey({ assistantEntryId: input.assistantEntryId }),
+		payload: {
+			playerEntryId: input.playerEntryId,
+			assistantEntryId: input.assistantEntryId,
+			clientTurnId: input.clientTurnId,
+			serverVersion: input.serverVersion,
+			contextReceipt: input.contextReceipt ?? null,
+			performance: input.performance ?? null,
 		},
 		maxAttempts: 3,
 	});

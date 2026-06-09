@@ -90,6 +90,12 @@ Every important state change should answer: what caused this, who knows it, wher
 
 The continuity auditor should eventually become a real background agent. It should compare narration, extracted state, current canon, NPC knowledge, faction projects, and timeline receipts. It should flag contradictions before they become permanent, or create repair proposals when the campaign has already moved on.
 
+Continuity must be led by a patch proposal ledger:
+
+- Every extracted fact, event, belief, relationship, and warning should create a `patchProposals` record with operation paths, affected entities, confidence, reason, and source reference pointers.
+- Canonical rows stay as the runtime truth, but reviewable proposals remain the human-facing surface for continuity audits.
+- The engine should never treat continuity changes as silently accepted facts; proposals and warnings must be visible before they are considered merged in narrative decisions.
+
 ## Factions
 
 Factions should be actors, not flavor text.

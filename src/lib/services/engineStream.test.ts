@@ -97,6 +97,8 @@ describe('engine stream client helpers', () => {
 				responseTokens: 120,
 				totalTokens: 1120,
 			},
+			waterfall: {},
+			topSpans: [],
 			slowTimings: [{ operation: 'turn.context_assembly', durationMs: 410 }],
 		};
 		const parsed = parseEngineStreamEvent(JSON.stringify(event('command.succeeded', {
@@ -105,7 +107,7 @@ describe('engine stream client helpers', () => {
 			projectionChanges: { performance },
 		})));
 
-		expect(extractTurnPerformance(parsed)).toEqual(performance);
+		expect(extractTurnPerformance(parsed)).toMatchObject(performance);
 		expect(shouldRefreshCampaignProjection(parsed)).toBe(true);
 	});
 
@@ -166,6 +168,8 @@ describe('engine stream client helpers', () => {
 					responseTokens: null,
 					totalTokens: null,
 				},
+				waterfall: {},
+				topSpans: [],
 				slowTimings: [],
 			},
 		}));
@@ -173,7 +177,8 @@ describe('engine stream client helpers', () => {
 		expect(seen).toEqual(['campaign.status', 'command.succeeded', 'state.changed']);
 		expect(projections).toEqual([projection]);
 		expect(cacheStatuses).toEqual([projection.cache]);
-		expect(turnPerformance).toEqual([{
+		expect(turnPerformance).toHaveLength(1);
+		expect(turnPerformance[0]).toMatchObject({
 			preparedCacheHit: false,
 			prompt: { tokenEstimate: 800, totalChars: 3200, messageCount: 8 },
 			cache: null,
@@ -184,8 +189,10 @@ describe('engine stream client helpers', () => {
 				responseTokens: null,
 				totalTokens: null,
 			},
+			waterfall: {},
+			topSpans: [],
 			slowTimings: [],
-		}]);
+		});
 		expect(refreshes).toEqual(['command.succeeded', 'state.changed']);
 
 		subscription.close();

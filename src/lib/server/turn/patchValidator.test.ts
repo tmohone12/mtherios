@@ -1,5 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { entities, memoryNodes, npcEventLinks, statePatches, stories, storyEvents } from '$lib/server/db/schema';
+import {
+	continuityWarnings,
+	entities,
+	facts,
+	memoryNodes,
+	npcEventLinks,
+	patchProposals,
+	sourceRefs,
+	statePatches,
+	stories,
+	storyEvents,
+} from '$lib/server/db/schema';
 import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
 import { applyValidatedTurnUpdate } from './patchValidator';
 
@@ -178,9 +189,15 @@ describe('applyValidatedTurnUpdate', () => {
 		]);
 
 		const patchInsert = insertCalls.find(call => call.table === statePatches)?.value as { id: string };
+		const factInsert = (insertCalls.find(call => call.table === facts)?.value as Array<{ id: string; statement: string }>)?.[0];
+		const proposalInsert = (insertCalls.find(call => call.table === patchProposals)?.value as Array<{ id: string; targetRecordId: string; proposalType: string; status: string }>)?.find((proposal) => proposal.proposalType === 'turn_summary');
 		const eventInserts = insertCalls
 			.filter(call => call.table === storyEvents)
 			.map(call => call.value as Record<string, unknown>);
+		const sourceRefInserts = insertCalls
+			.filter(call => call.table === sourceRefs)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const warningInserts = insertCalls.filter(call => call.table === continuityWarnings);
 		const agreementEvent = eventInserts.find(event => event.type === 'agreement');
 		const linkInsert = insertCalls.find(call => call.table === npcEventLinks)?.value as Array<Record<string, unknown>>;
 		const metadataUpdate = storyUpdates.find(updatePayload => updatePayload.metadata);
@@ -218,6 +235,17 @@ describe('applyValidatedTurnUpdate', () => {
 			sourcePatchIds: [patchInsert.id],
 			metadata: { significance: 'major' },
 		});
+		expect(factInsert).toMatchObject({
+			statement: expect.stringContaining('Turn update recorded'),
+		});
+		expect(proposalInsert).toMatchObject({
+			proposalType: 'turn_summary',
+			targetRecordId: factInsert.id,
+			status: 'pending',
+		});
+		expect(sourceRefInserts.some(ref => ref.targetTable === 'facts' && ref.targetRecordId === factInsert.id)).toBe(true);
+		expect(sourceRefInserts.some(ref => ref.targetTable === 'patch_proposals' && ref.targetRecordId === proposalInsert.id)).toBe(true);
+		expect(warningInserts).toHaveLength(0);
 		expect(linkInsert).toEqual([
 			expect.objectContaining({
 				storyId: 'story_1',

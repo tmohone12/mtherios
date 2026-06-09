@@ -86,6 +86,7 @@ export const CONTROL_SURFACE_BOOTSTRAP_LIMITS = {
 	factionMembershipLimit: 160,
 	factionResourceLimit: 160,
 	factionGoalLimit: 160,
+	factionProjectLimit: 160,
 	agreementLimit: 80,
 	npcBeliefLimit: 80,
 	threadLimit: 80,

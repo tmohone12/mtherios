@@ -160,10 +160,17 @@ function baseContext(overrides: Partial<TurnContext> = {}): TurnContext {
 		],
 		factionResources: [],
 		factionGoals: [],
+		factionProjects: [],
 		agreements: [],
 		threads: [],
 		events: [],
 		beliefs: [],
+		facts: [],
+		patchProposals: [],
+		continuityWarnings: [],
+		chapters: [],
+		arcs: [],
+		sagas: [],
 		gmBrief: null,
 		...overrides,
 	} as unknown as TurnContext;
@@ -189,7 +196,15 @@ describe('turn prompt harness', () => {
 		});
 
 		const findings = evaluatePromptHarness(report, {
-			systemIncludes: ['server-side narrator', '1 Volantene honor = 1 gold dragon', 'Bayesian social prior', '296 AC', '15th day of the 8th moon'],
+			systemIncludes: [
+				'server-side narrator',
+				'first-person POV',
+				'not a writing assistant',
+				'1 Volantene honor = 1 gold dragon',
+				'Bayesian social prior',
+				'296 AC',
+				'15th day of the 8th moon',
+			],
 			promptIncludes: [
 				'The Crimson Spire',
 				'Balaerys Heir',
@@ -205,7 +220,90 @@ describe('turn prompt harness', () => {
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
+		expect(report.system).not.toContain('skilled fiction writer');
+		expect(report.system).not.toContain("author's directions");
 		expect(report.retrievedMemoryIds).toEqual(['mem_old_blood', 'mem_household']);
+	});
+
+	it('keeps long-campaign continuity visible with saga arc chapter memory and 60 recent messages', () => {
+		const longChapterOutcome = 'Chapter 3 outcome: Vaelar exposed the same purple-sealed letter once and only once, proving the harbor bribe came from House Vhassar before the nameday feast.';
+		const report = buildPromptHarnessReport({
+			name: 'long-campaign-continuity',
+			playerText: 'I ask Vaelar why everyone keeps circling back to the letter.',
+			ctx: baseContext({
+				recentEntries: Array.from({ length: 70 }, (_, index) => row({
+					id: `entry_${index}`,
+					storyId: 'story_balaerys',
+					type: index % 2 === 0 ? 'user_action' : 'narration',
+					content: `Conversation beat ${index}: the letter was discussed without repeating the discovery scene.`,
+					position: index,
+					parentId: index > 0 ? `entry_${index - 1}` : null,
+					branchId: null,
+					metadata: {},
+				})),
+				chapters: [
+					row({
+						id: 'chapter_3',
+						storyId: 'story_balaerys',
+						number: 3,
+						title: 'The Purple Seal',
+						sceneOutcome: longChapterOutcome,
+						irreversibleChanges: ['The purple-sealed letter is known to Vaelar and the heir.'],
+						npcKnowledgeChanges: [{ npc: 'Vaelar', learned: 'Vhassar funded the harbor bribe.' }],
+						promisesDebtsOaths: ['Vaelar promised not to repeat the discovery scene unless new evidence appears.'],
+						discoveredClues: ['Purple wax from House Vhassar.'],
+						relationshipChanges: [],
+						factionChanges: ['House Vhassar is implicated in harbor bribery.'],
+						openThreads: ['Who delivered the letter?'],
+						sourceEntryIds: [],
+						sourceEventIds: [],
+						metadata: {},
+					}),
+				],
+				arcs: [
+					row({
+						id: 'arc_1',
+						storyId: 'story_balaerys',
+						number: 1,
+						title: 'Harbor Bribe',
+						summary: 'The harbor bribe arc already established House Vhassar as the likely patron; do not rediscover this as if new.',
+						chapterIds: ['chapter_3'],
+						sourceEventIds: [],
+						openThreadIds: ['thread_letter_courier'],
+						metadata: {},
+					}),
+				],
+				sagas: [
+					row({
+						id: 'saga_1',
+						storyId: 'story_balaerys',
+						number: 1,
+						title: 'Old Blood Pressure',
+						summary: 'The first saga is about Old Blood houses using documents, debt, and marriage pressure rather than repeating first discoveries.',
+						arcIds: ['arc_1'],
+						keyFactionShifts: ['House Vhassar became a covert antagonist.'],
+						majorPowerChanges: ['Balaerys gained leverage over harbor accounts.'],
+						lingeringThreads: ['The courier remains unidentified.'],
+						overallTone: 'paranoid court politics',
+						sourceEventIds: [],
+						openThreadIds: ['thread_letter_courier'],
+						metadata: {},
+					}),
+				],
+			}),
+			retrieved: packet('letter Vaelar Vhassar harbor bribe', []),
+			options: {
+				currentFactionId: 'faction_balaerys',
+				sceneEntityIds: ['pc_balaerys', 'npc_vaelar'],
+			},
+		});
+
+		expect(report.messages).toHaveLength(60);
+		expect(report.prompt).toContain('Saga memory');
+		expect(report.prompt).toContain('Arc memory');
+		expect(report.prompt).toContain('Chapter memory');
+		expect(report.prompt).toContain(longChapterOutcome);
+		expect(report.prompt).toContain('do not rediscover this as if new');
 	});
 
 	it('keeps actor belief limits visible for secret-knowledge scenarios', () => {
@@ -251,6 +349,87 @@ describe('turn prompt harness', () => {
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
+	});
+
+	it('renders continuity ledger facts, proposals, and warnings into the prompt', () => {
+		const report = buildPromptHarnessReport({
+			name: 'continuity-ledger-rendering',
+			playerText: 'I ask what changed in the ledger.',
+			ctx: baseContext({
+				facts: [
+					row({
+						id: 'fact_mara_key',
+						storyId: 'story_balaerys',
+						type: 'observation',
+						subjectEntityId: 'entity_mara',
+						targetEntityId: null,
+						title: 'Mara and the black key',
+						statement: 'Mara now carries the black key.',
+						confidence: 0.9,
+						status: 'active',
+						visibility: 'player_known',
+						firstSeenEntryId: 'entry_ledger',
+						sourceEntryIds: ['entry_ledger'],
+						sourceEventIds: ['event_ledger'],
+						sourcePatchIds: ['patch_ledger'],
+						metadata: {},
+					}),
+				],
+				patchProposals: [
+					row({
+						id: 'proposal_mara_key',
+						storyId: 'story_balaerys',
+						proposalType: 'fact_upsert',
+						targetTable: 'facts',
+						targetRecordId: 'fact_mara_key',
+						proposedBy: 'narration',
+						operations: [{ op: 'upsert', path: '/facts/fact_mara_key', value: { statement: 'Mara now carries the black key.' } }],
+						reason: 'Narration stated Mara now carries the black key.',
+						suggestion: 'Merge after review.',
+						status: 'pending',
+						decision: null,
+						validatedBy: null,
+						affectedEntityIds: ['entity_mara'],
+						confidence: 0.9,
+						sourceEntryIds: ['entry_ledger'],
+						sourceEventIds: ['event_ledger'],
+						sourcePatchIds: ['patch_ledger'],
+						metadata: {},
+					}),
+				],
+				continuityWarnings: [
+					row({
+						id: 'warning_ledger',
+						storyId: 'story_balaerys',
+						warningType: 'turn_extraction',
+						level: 'warning',
+						title: 'Missing witness',
+						status: 'open',
+						details: 'Skipped relationship because the witness entity was missing.',
+						entityIds: ['entity_mara'],
+						factionIds: [],
+						threadIds: [],
+						actorIds: [],
+						sourceEntryIds: ['entry_ledger'],
+						sourceEventIds: ['event_ledger'],
+						sourcePatchIds: ['patch_ledger'],
+						resolutionNotes: null,
+						resolvedBy: null,
+						resolvedAt: null,
+						metadata: {},
+					}),
+				],
+			}),
+			retrieved: packet('ledger continuity review', []),
+			options: {
+				sceneEntityIds: ['pc_balaerys'],
+			},
+		});
+
+		expect(report.prompt).toContain('Continuity ledger');
+		expect(report.prompt).toContain('Mara now carries the black key.');
+		expect(report.prompt).toContain('fact_upsert -> facts/fact_mara_key');
+		expect(report.prompt).toContain('Missing witness');
 	});
 
 	it('ranks scene-relevant factions instead of keeping arbitrary insertion order', () => {

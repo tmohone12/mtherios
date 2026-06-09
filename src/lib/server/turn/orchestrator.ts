@@ -23,7 +23,7 @@ import { requireResolvedServiceProfile, resolveServiceGeneration } from '$lib/se
 import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
 import { appendTurnEvidence } from '$lib/server/engine/campaignVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
-import { enqueueTurnStateExtractionJob } from '$lib/server/jobs/outbox';
+import { enqueueContinuityAuditJob, enqueueTurnStateExtractionJob } from '$lib/server/jobs/outbox';
 import {
 	buildEngineCacheKey,
 	engineCacheDependencyHash,
@@ -41,6 +41,10 @@ import { getMtheriosAppConfig } from '$lib/server/app/config';
 
 function nowIso(): string {
 	return new Date().toISOString();
+}
+
+function monotonicNow(): number {
+	return globalThis.performance?.now?.() ?? Date.now();
 }
 
 function stableJson(value: unknown): string {
@@ -136,6 +140,8 @@ const WIKI_CONTEXT_LIMIT = 4;
 const WIKI_CONTEXT_PAGE_LIMIT = 6;
 const WIKI_CONTEXT_PAGE_CHARS = 700;
 const WIKI_CONTEXT_MAX_CHARS = 4000;
+const WIKI_CONTEXT_BUDGET_MS = 700;
+const GM_TIMELINE_BRIEF_BUDGET_MS = 300;
 const PREPARED_TURN_TTL_MS = 120_000;
 const PREPARED_TURN_CACHE_MAX = 48;
 
@@ -201,10 +207,70 @@ export interface TurnPerformanceSummary {
 		responseTokens: number | null;
 		totalTokens: number | null;
 	};
+	waterfall: {
+		turnId: string | null;
+		storyId: string | null;
+		model: string | null;
+		profile: string | null;
+		totalMs: number;
+		frontendOutboxFlushMs: number | null;
+		commandRouterMs: number | null;
+		resolveNarrativeMs: number;
+		retrieveMemoryPacketMs: number;
+		loadDbContextMs: number;
+		loadTimelineBriefMs: number;
+		loadWikiContextMs: number;
+		buildPromptMs: number;
+		inputTokens: number | null;
+		outputTokens: number | null;
+		promptBytes: number;
+		recentMessageCount: number;
+		wikiChunkCount: number;
+		memoryItemCount: number;
+		providerTimeToFirstTokenMs: number | null;
+		providerTotalMs: number;
+		providerRetries: number;
+		providerTimeoutHit: boolean;
+		persistMs: number;
+		stateExtractionMode: 'deferred' | 'sync' | 'none';
+		stateExtractionMs: number;
+		vaultAppendMs: number;
+		projectionBuildMs: number;
+		cacheHit: boolean;
+		stablePromptHash: string | null;
+		dynamicContextHash: string | null;
+	};
+	topSpans: Array<{
+		operation: string;
+		durationMs: number;
+	}>;
 	slowTimings: Array<{
 		operation: string;
 		durationMs: number;
 	}>;
+}
+
+export interface TurnContextReceipt {
+	turnId: string;
+	storyId: string;
+	truncated: boolean;
+	included: {
+		recentEntries: number;
+		memoryNodes: number;
+		wikiChunks: number;
+		timelineEvents: number;
+		factionSheets: string[];
+	};
+	skipped: Array<{
+		source: string;
+		reason: string;
+	}>;
+	budgets: {
+		memoryTokensUsed: number;
+		memoryTokensMax: number;
+		wikiCharsUsed: number;
+		wikiCharsMax: number;
+	};
 }
 
 interface PreparedServerTurnContext {
@@ -229,6 +295,7 @@ interface PreparedServerTurnContext {
 	narrativeDebugPrompt: string;
 	contextCounts: Record<string, number>;
 	engineCacheDebug: EngineCacheDebug | null;
+	contextReceipt: TurnContextReceipt;
 }
 
 type PreparedCacheEntry = {
@@ -287,7 +354,142 @@ export function applyPromptContextBudget(
 	};
 }
 
+export async function withBudget<T>(
+	fn: () => Promise<T>,
+	budgetMs: number,
+	fallback: T,
+): Promise<T> {
+	if (!Number.isFinite(budgetMs) || budgetMs <= 0) return fn();
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	let timedOut = false;
+	const guarded = fn().catch((error) => {
+		if (timedOut) return fallback;
+		throw error;
+	});
+	const timeoutPromise = new Promise<T>((resolve) => {
+		timeout = setTimeout(() => {
+			timedOut = true;
+			resolve(fallback);
+		}, budgetMs);
+	});
+	try {
+		return await Promise.race([guarded, timeoutPromise]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
+	}
+}
+
+async function withBudgetStatus<T>(
+	fn: () => Promise<T>,
+	budgetMs: number,
+	fallback: T,
+): Promise<{ value: T; budgetExceeded: boolean }> {
+	type BudgetStatus = { value: T; budgetExceeded: boolean };
+	return withBudget<BudgetStatus>(
+		async () => ({ value: await fn(), budgetExceeded: false }),
+		budgetMs,
+		{ value: fallback, budgetExceeded: true },
+	);
+}
+
+function timingMs(timings: TimingEntry[], phase: string): number {
+	return Math.max(0, Math.trunc(timings.find((timing) => timing.phase === phase)?.durationMs ?? 0));
+}
+
+function sumTimingMs(timings: TimingEntry[], phases: string[]): number {
+	return phases.reduce((sum, phase) => sum + timingMs(timings, phase), 0);
+}
+
+function sortedTimingSpans(timings: TimingEntry[], thresholdMs = 0, limit = Number.POSITIVE_INFINITY): Array<{ operation: string; durationMs: number }> {
+	return timings
+		.filter((timing) => timing.durationMs >= thresholdMs)
+		.map((timing) => ({
+			operation: timing.phase,
+			durationMs: Math.max(0, Math.trunc(timing.durationMs)),
+		}))
+		.sort((a, b) => b.durationMs - a.durationMs || a.operation.localeCompare(b.operation))
+		.slice(0, limit);
+}
+
+function generationDuration(generationTimings: GenerationTiming[], operation: string): number {
+	const timing = generationTimings.find((item) => item.operation === operation);
+	return Math.max(0, Math.trunc(timing?.durationMs ?? 0));
+}
+
+function emptyServerWikiContext(): ServerWikiContext {
+	return {
+		markdown: '',
+		citations: [],
+		pageCount: 0,
+		seedCount: 0,
+		sourcePaths: [],
+		cacheHit: false,
+	};
+}
+
+function emptyGmTimelineBrief(storyId: string): NonNullable<TurnContext['gmBrief']> {
+	return {
+		storyId,
+		currentTurn: 0,
+		currentWorldTime: null,
+		dueEvents: [],
+		recentEvents: [],
+		scheduledEvents: [],
+		npcEvents: [],
+	};
+}
+
+export function buildTurnContextReceipt(input: {
+	turnId: string;
+	storyId: string;
+	truncated?: boolean;
+	recentEntryCount?: number | null;
+	memoryNodeCount?: number | null;
+	wikiChunkCount?: number | null;
+	timelineEventCount?: number | null;
+	factionIds?: string[];
+	skipped?: Array<{ source: string; reason: string }>;
+	budgets?: Partial<TurnContextReceipt['budgets']>;
+}): TurnContextReceipt {
+	const clampCount = (value: number | null | undefined) => Math.max(0, Math.trunc(Number.isFinite(value) ? Number(value) : 0));
+	const factionSheets = [...new Set((input.factionIds ?? []).map((id) => id.trim()).filter(Boolean))];
+	const skipped = (input.skipped ?? [])
+		.map((item) => ({ source: item.source.trim(), reason: item.reason.trim() }))
+		.filter((item) => item.source && item.reason);
+	const budgets = input.budgets ?? {};
+	return {
+		turnId: input.turnId,
+		storyId: input.storyId,
+		truncated: input.truncated === true || skipped.some((item) => item.reason.includes('truncated')),
+		included: {
+			recentEntries: clampCount(input.recentEntryCount),
+			memoryNodes: clampCount(input.memoryNodeCount),
+			wikiChunks: clampCount(input.wikiChunkCount),
+			timelineEvents: clampCount(input.timelineEventCount),
+			factionSheets,
+		},
+		skipped,
+		budgets: {
+			memoryTokensUsed: clampCount(budgets.memoryTokensUsed),
+			memoryTokensMax: clampCount(budgets.memoryTokensMax),
+			wikiCharsUsed: clampCount(budgets.wikiCharsUsed),
+			wikiCharsMax: clampCount(budgets.wikiCharsMax),
+		},
+	};
+}
+
 export function buildTurnPerformanceSummary(input: {
+	turnId?: string | null;
+	storyId?: string | null;
+	totalMs?: number | null;
+	model?: string | null;
+	profile?: string | null;
+	stateExtractionMode?: 'deferred' | 'sync' | 'none';
+	stablePromptHash?: string | null;
+	dynamicContextHash?: string | null;
+	recentMessageCount?: number | null;
+	wikiChunkCount?: number | null;
+	memoryItemCount?: number | null;
 	preparedCacheHit: boolean;
 	prompt: {
 		tokenEstimate: number;
@@ -300,6 +502,53 @@ export function buildTurnPerformanceSummary(input: {
 	slowTimingThresholdMs?: number;
 }): TurnPerformanceSummary {
 	const slowTimingThresholdMs = Math.max(0, Math.trunc(input.slowTimingThresholdMs ?? 500));
+	const generation = {
+		operationCount: input.generationTimings.length,
+		durationMs: input.generationTimings.reduce((sum, timing) => sum + Math.max(0, Math.trunc(timing.durationMs)), 0),
+		requestTokens: sumNullable(input.generationTimings.map((timing) => timing.requestTokens)),
+		responseTokens: sumNullable(input.generationTimings.map((timing) => timing.responseTokens)),
+		totalTokens: sumNullable(input.generationTimings.map((timing) => timing.totalTokens)),
+	};
+	const cacheHit = input.preparedCacheHit || (input.cache?.hitCount ?? 0) > 0;
+	const waterfall = {
+		turnId: input.turnId ?? null,
+		storyId: input.storyId ?? null,
+		model: input.model ?? null,
+		profile: input.profile ?? null,
+		totalMs: Math.max(0, Math.trunc(input.totalMs ?? 0)),
+		frontendOutboxFlushMs: null,
+		commandRouterMs: null,
+		resolveNarrativeMs: timingMs(input.timings, 'turn.service_config.narrative'),
+		retrieveMemoryPacketMs: timingMs(input.timings, 'turn.memory_retrieval'),
+		loadDbContextMs: timingMs(input.timings, 'turn.context_load'),
+		loadTimelineBriefMs: timingMs(input.timings, 'turn.gm_timeline_brief'),
+		loadWikiContextMs: timingMs(input.timings, 'turn.wiki_context'),
+		buildPromptMs: timingMs(input.timings, 'turn.prompt_assembly'),
+		inputTokens: generation.requestTokens,
+		outputTokens: generation.responseTokens,
+		promptBytes: Math.max(0, Math.trunc(input.prompt.totalChars)),
+		recentMessageCount: Math.max(0, Math.trunc(input.recentMessageCount ?? input.prompt.messageCount)),
+		wikiChunkCount: Math.max(0, Math.trunc(input.wikiChunkCount ?? 0)),
+		memoryItemCount: Math.max(0, Math.trunc(input.memoryItemCount ?? 0)),
+		providerTimeToFirstTokenMs: null,
+		providerTotalMs: generationDuration(input.generationTimings, 'turn.narration'),
+		providerRetries: 0,
+		providerTimeoutHit: false,
+		persistMs: sumTimingMs(input.timings, [
+			'turn.persistence.allocate_position_version',
+			'turn.persistence.entries',
+		]),
+		stateExtractionMode: input.stateExtractionMode ?? 'none',
+		stateExtractionMs: sumTimingMs(input.timings, [
+			'turn.llm.state_extraction',
+			'turn.state_extraction.enqueue',
+		]),
+		vaultAppendMs: timingMs(input.timings, 'turn.campaign_vault.append_evidence'),
+		projectionBuildMs: timingMs(input.timings, 'turn.final_response.readback'),
+		cacheHit,
+		stablePromptHash: input.stablePromptHash ?? null,
+		dynamicContextHash: input.dynamicContextHash ?? null,
+	} satisfies TurnPerformanceSummary['waterfall'];
 	return {
 		preparedCacheHit: input.preparedCacheHit,
 		prompt: {
@@ -313,20 +562,32 @@ export function buildTurnPerformanceSummary(input: {
 			tokenEstimate: Math.max(0, Math.trunc(input.cache.tokenEstimate ?? 0)),
 			segmentCount: input.cache.segments.length,
 		} : null,
-		generation: {
-			operationCount: input.generationTimings.length,
-			durationMs: input.generationTimings.reduce((sum, timing) => sum + Math.max(0, Math.trunc(timing.durationMs)), 0),
-			requestTokens: sumNullable(input.generationTimings.map((timing) => timing.requestTokens)),
-			responseTokens: sumNullable(input.generationTimings.map((timing) => timing.responseTokens)),
-			totalTokens: sumNullable(input.generationTimings.map((timing) => timing.totalTokens)),
-		},
-		slowTimings: input.timings
-			.filter((timing) => timing.durationMs >= slowTimingThresholdMs)
-			.map((timing) => ({
-				operation: timing.phase,
-				durationMs: Math.max(0, Math.trunc(timing.durationMs)),
-			})),
+		generation,
+		waterfall,
+		topSpans: sortedTimingSpans(input.timings, 0, 8),
+		slowTimings: sortedTimingSpans(input.timings, slowTimingThresholdMs),
 	};
+}
+
+function slowTurnThresholdMs(): number {
+	const raw = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.MTHERIOS_SLOW_TURN_MS;
+	const parsed = Number.parseInt(raw ?? '', 10);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 8_000;
+}
+
+export function logSlowTurn(
+	performance: TurnPerformanceSummary,
+	thresholdMs = slowTurnThresholdMs(),
+	warn: (message: string, payload: Record<string, unknown>) => void = console.warn,
+): void {
+	if (performance.waterfall.totalMs < thresholdMs) return;
+	warn('[slow-turn]', {
+		turnId: performance.waterfall.turnId,
+		storyId: performance.waterfall.storyId,
+		totalMs: performance.waterfall.totalMs,
+		model: performance.waterfall.model,
+		topSpans: performance.topSpans.slice(0, 8),
+	});
 }
 
 function generationErrorResult(error: unknown): ServerGenerationError['result'] | null {
@@ -499,10 +760,14 @@ function turnContextCounts(ctx: Awaited<ReturnType<typeof loadTurnContext>>): Re
 		factionMemberships: ctx.factionMemberships.length,
 		factionResources: ctx.factionResources.length,
 		factionGoals: ctx.factionGoals.length,
+		factionProjects: ctx.factionProjects.length,
 		agreements: ctx.agreements.length,
 		threads: ctx.threads.length,
 		events: ctx.events.length,
 		beliefs: ctx.beliefs.length,
+		chapters: ctx.chapters.length,
+		arcs: ctx.arcs.length,
+		sagas: ctx.sagas.length,
 		gmDueEvents,
 		gmRecentEvents,
 		gmScheduledEvents,
@@ -620,6 +885,7 @@ async function existingTurn(storyId: string, clientTurnId: string): Promise<Turn
 		warnings: ['Turn was already processed; returning existing backend entries.'],
 		generationTimings: [],
 		performance: null,
+		contextReceipt: null,
 	};
 }
 
@@ -700,6 +966,7 @@ export async function prepareServerTurnContext(
 
 	const playerEntryId = `entry_${request.clientTurnId}`;
 	const warnings: string[] = [];
+	const contextSkipped: TurnContextReceipt['skipped'] = [];
 	const narrativeService = await recorder.time('turn.service_config.narrative', {}, () => resolveServiceGeneration('narrative'));
 	const narrativeProfile = requireResolvedServiceProfile('narrative', narrativeService);
 	const narrativeGeneration = narrativeService.generation;
@@ -724,14 +991,20 @@ export async function prepareServerTurnContext(
 		limit: WIKI_CONTEXT_LIMIT,
 		pageLimit: WIKI_CONTEXT_PAGE_LIMIT,
 		maxChars: WIKI_CONTEXT_MAX_CHARS,
+		budgetMs: WIKI_CONTEXT_BUDGET_MS,
 	}, async () => {
 		try {
-			return { ok: true as const, value: await loadServerWikiContext(request.storyId, request.playerText) };
+			const context = await withBudgetStatus(
+				() => loadServerWikiContext(request.storyId, request.playerText),
+				WIKI_CONTEXT_BUDGET_MS,
+				emptyServerWikiContext(),
+			);
+			return { ok: true as const, ...context };
 		} catch (error) {
 			return { ok: false as const, error };
 		}
 	});
-	const [retrieved, ctx, gmBrief, wikiResult] = await recorder.time('turn.context_assembly', {
+	const [retrieved, ctx, gmBriefResult, wikiResult] = await recorder.time('turn.context_assembly', {
 		parallel: true,
 		memoryTokenBudget,
 	}, () => Promise.all([
@@ -748,21 +1021,49 @@ export async function prepareServerTurnContext(
 		recorder.time('turn.gm_timeline_brief', {
 			sceneEntityIds: retrievalRequest.sceneEntityIds.length,
 			presentNpcIds: retrievalRequest.presentNpcIds.length,
-		}, () => loadGmTimelineBrief({
-			storyId: request.storyId,
-			sceneEntityIds: retrievalRequest.sceneEntityIds,
-			presentNpcIds: retrievalRequest.presentNpcIds,
-			includeSecret: true,
-		})),
+			budgetMs: GM_TIMELINE_BRIEF_BUDGET_MS,
+		}, async () => {
+			try {
+				const brief = await withBudgetStatus(
+					() => loadGmTimelineBrief({
+						storyId: request.storyId,
+						sceneEntityIds: retrievalRequest.sceneEntityIds,
+						presentNpcIds: retrievalRequest.presentNpcIds,
+						includeSecret: true,
+					}),
+					GM_TIMELINE_BRIEF_BUDGET_MS,
+					emptyGmTimelineBrief(request.storyId),
+				);
+				return { ok: true as const, ...brief };
+			} catch (error) {
+				return { ok: false as const, error, value: emptyGmTimelineBrief(request.storyId), budgetExceeded: false };
+			}
+		}),
 		wikiContextTask,
 	]));
+	const gmBrief = gmBriefResult.value;
+	if (gmBriefResult.ok) {
+		if (gmBriefResult.budgetExceeded) {
+			contextSkipped.push({ source: 'timeline', reason: 'budget_exceeded' });
+			warnings.push(`GM timeline brief skipped after ${GM_TIMELINE_BRIEF_BUDGET_MS}ms budget.`);
+		}
+	} else {
+		const error = gmBriefResult.error;
+		contextSkipped.push({ source: 'timeline', reason: 'unavailable' });
+		warnings.push(`GM timeline brief unavailable: ${error instanceof Error ? error.message : String(error)}`);
+	}
 	const ctxWithTimeline: TurnContext & { gmBrief: NonNullable<TurnContext['gmBrief']> } = { ...ctx, gmBrief };
 	let wikiContext: ServerWikiContext | null = null;
 	if (wikiResult.ok) {
 		wikiContext = wikiResult.value;
+		if (wikiResult.budgetExceeded) {
+			contextSkipped.push({ source: 'wiki', reason: 'budget_exceeded' });
+			warnings.push(`Terminal wiki context skipped after ${WIKI_CONTEXT_BUDGET_MS}ms budget.`);
+		}
 		if (wikiContext.semanticError) warnings.push(`Terminal wiki semantic search warning: ${wikiContext.semanticError}`);
 	} else {
 		const error = wikiResult.error;
+		contextSkipped.push({ source: 'wiki', reason: 'unavailable' });
 		warnings.push(`Terminal wiki context unavailable: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	const contextCounts = turnContextCounts(ctxWithTimeline);
@@ -778,6 +1079,7 @@ export async function prepareServerTurnContext(
 	const narrativeSystem = narrativeService.systemPromptOverride?.trim() || prompt.system;
 	const promptBudget = applyPromptContextBudget(prompt.prompt, request.clientContext?.contextBudget ?? 0);
 	if (promptBudget.truncated) {
+		contextSkipped.push({ source: 'dynamic_context', reason: 'truncated_by_context_budget' });
 		warnings.push(`Dynamic prompt context budget applied: ${prompt.prompt.length} -> ${promptBudget.value.length} chars.`);
 	}
 	const narrativeSystemDynamic = promptBudget.value;
@@ -850,6 +1152,50 @@ export async function prepareServerTurnContext(
 					},
 				},
 				{
+					kind: 'campaign_continuity',
+					cacheKey: buildEngineCacheKey({
+						storyId: request.storyId,
+						kind: 'campaign_continuity',
+						parts: ['chapters-arcs-sagas'],
+					}),
+					value: stableJson({
+						chapters: ctxWithTimeline.chapters,
+						arcs: ctxWithTimeline.arcs,
+						sagas: ctxWithTimeline.sagas,
+					}),
+					dependencyHashes: [
+						...ctxWithTimeline.chapters.map((chapter) => engineCacheDependencyHash({
+							id: chapter.id,
+							type: 'chapter',
+							number: chapter.number,
+							updatedAt: chapter.updatedAt,
+							sceneOutcome: chapter.sceneOutcome,
+							openThreads: chapter.openThreads,
+						})),
+						...ctxWithTimeline.arcs.map((arc) => engineCacheDependencyHash({
+							id: arc.id,
+							type: 'arc',
+							number: arc.number,
+							updatedAt: arc.updatedAt,
+							summary: arc.summary,
+							openThreadIds: arc.openThreadIds,
+						})),
+						...ctxWithTimeline.sagas.map((saga) => engineCacheDependencyHash({
+							id: saga.id,
+							type: 'saga',
+							number: saga.number,
+							updatedAt: saga.updatedAt,
+							summary: saga.summary,
+							lingeringThreads: saga.lingeringThreads,
+						})),
+					],
+					metadata: {
+						chapterCount: ctxWithTimeline.chapters.length,
+						arcCount: ctxWithTimeline.arcs.length,
+						sagaCount: ctxWithTimeline.sagas.length,
+					},
+				},
+				{
 					kind: 'tool_schema',
 					cacheKey: buildEngineCacheKey({
 						storyId: request.storyId,
@@ -864,6 +1210,26 @@ export async function prepareServerTurnContext(
 	} catch (error) {
 		warnings.push(`Engine prompt cache unavailable: ${error instanceof Error ? error.message : String(error)}`);
 	}
+	const contextReceipt = buildTurnContextReceipt({
+		turnId: request.clientTurnId,
+		storyId: request.storyId,
+		truncated: promptBudget.truncated,
+		recentEntryCount: ctxWithTimeline.recentEntries.length,
+		memoryNodeCount: retrieved.nodes.length,
+		wikiChunkCount: wikiContext?.pageCount ?? 0,
+		timelineEventCount: gmBrief.dueEvents.length + gmBrief.recentEvents.length + gmBrief.scheduledEvents.length,
+		factionIds: [
+			request.clientContext?.currentFactionId ?? '',
+			...ctxWithTimeline.factions.map((faction) => faction.id),
+		].filter(Boolean).slice(0, 20),
+		skipped: contextSkipped,
+		budgets: {
+			memoryTokensUsed: retrieved.tokenEstimate,
+			memoryTokensMax: memoryTokenBudget,
+			wikiCharsUsed: wikiContext?.markdown.length ?? 0,
+			wikiCharsMax: WIKI_CONTEXT_MAX_CHARS,
+		},
+	});
 	const prepared: PreparedServerTurnContext = {
 		request,
 		playerEntryId,
@@ -886,6 +1252,7 @@ export async function prepareServerTurnContext(
 		narrativeDebugPrompt,
 		contextCounts,
 		engineCacheDebug: buildEngineCacheDebug(promptCacheStats) ?? null,
+		contextReceipt,
 	};
 	if (options.cachePrepared) writePreparedTurn(prepared);
 	return prepared;
@@ -905,6 +1272,7 @@ export async function prepareServerTurn(input: unknown): Promise<PreparedServerT
 }
 
 export async function processServerTurn(input: unknown): Promise<TurnResponse> {
+	const turnStartedAt = monotonicNow();
 	const request = turnRequestSchema.parse(input);
 	const recorder = createTimingRecorder({
 		pipeline: 'backend.turn.generation',
@@ -941,6 +1309,7 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		narrativeDebugPrompt,
 		contextCounts,
 		engineCacheDebug,
+		contextReceipt,
 		memoryTokenBudget,
 		memorySettings,
 	} = prepared;
@@ -1327,6 +1696,17 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 	});
 	const preparedSummary = summarizePreparedTurnContext(prepared);
 	const performance = buildTurnPerformanceSummary({
+		turnId: request.clientTurnId,
+		storyId: request.storyId,
+		totalMs: monotonicNow() - turnStartedAt,
+		model: narrativeGeneration.model ?? null,
+		profile: narrativeProfile.providerType,
+		stateExtractionMode: deferStateExtraction ? 'deferred' : 'sync',
+		stablePromptHash: hashText(narrativeSystem),
+		dynamicContextHash: hashText(narrativeSystemDynamic),
+		recentMessageCount: prompt.messages.length,
+		wikiChunkCount: wikiContext?.pageCount ?? 0,
+		memoryItemCount: retrieved.nodes.length,
 		preparedCacheHit: prepared.preparedCacheHit,
 		prompt: {
 			tokenEstimate: preparedSummary.prompt.tokenEstimate,
@@ -1337,6 +1717,23 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		generationTimings,
 		timings: recorder.timings,
 	});
+	logSlowTurn(performance);
+	try {
+		await recorder.time('turn.continuity_audit.enqueue', {
+			serverVersion: turnVersion,
+			truncated: contextReceipt.truncated,
+		}, () => enqueueContinuityAuditJob({
+			storyId: request.storyId,
+			playerEntryId,
+			assistantEntryId,
+			clientTurnId: request.clientTurnId,
+			serverVersion: turnVersion,
+			contextReceipt: contextReceipt as unknown as Record<string, unknown>,
+			performance: performance as unknown as Record<string, unknown>,
+		}));
+	} catch (error) {
+		warnings.push(`Continuity audit enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
 
 	return {
 		narration,
@@ -1363,5 +1760,6 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		} : null,
 		generationTimings,
 		performance,
+		contextReceipt,
 	};
 }

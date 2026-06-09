@@ -42,6 +42,8 @@ describe('canon database schema', () => {
 		expect(patchProposals.targetTable).toBeDefined();
 		expect(patchProposals.targetRecordId).toBeDefined();
 		expect(patchProposals.operations).toBeDefined();
+		expect(patchProposals.affectedEntityIds).toBeDefined();
+		expect(patchProposals.confidence).toBeDefined();
 
 		expect(continuityWarnings).toBeDefined();
 		expect(continuityWarnings.storyId).toBeDefined();

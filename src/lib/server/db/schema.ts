@@ -396,6 +396,8 @@ export const patchProposals = pgTable('patch_proposals', {
 	status: text('status').notNull().default('pending'),
 	decision: text('decision'),
 	validatedBy: text('validated_by'),
+	affectedEntityIds: jsonb('affected_entity_ids').$type<string[]>().notNull().default(jsonArray),
+	confidence: real('confidence').notNull().default(0.75),
 	sourceEntryIds: jsonb('source_entry_ids').$type<string[]>().notNull().default(jsonArray),
 	sourceEventIds: jsonb('source_event_ids').$type<string[]>().notNull().default(jsonArray),
 	sourcePatchIds: jsonb('source_patch_ids').$type<string[]>().notNull().default(jsonArray),

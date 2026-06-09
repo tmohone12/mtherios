@@ -13,6 +13,11 @@
 	} from 'lucide-svelte';
 
 	type JsonRecord = Record<string, unknown>;
+	type SectionEntry = {
+		id: string;
+		label: string;
+		isAdvanced?: boolean;
+	};
 	type StorySummary = {
 		id: string;
 		title?: string | null;
@@ -20,7 +25,7 @@
 		updatedAt?: string | null;
 	};
 
-	const sections = [
+	const sections: SectionEntry[] = [
 		{ id: 'transcript', label: 'Transcript' },
 		{ id: 'characters', label: 'Characters' },
 		{ id: 'locations', label: 'Locations' },
@@ -36,11 +41,11 @@
 		{ id: 'chapters', label: 'Chapters' },
 		{ id: 'arcs', label: 'Arcs' },
 		{ id: 'memoryNodes', label: 'Memory' },
-		{ id: 'patches', label: 'Patches' },
-		{ id: 'searchIndex', label: 'Index' },
-		{ id: 'jobs', label: 'Jobs' },
-		{ id: 'apiCallLogs', label: 'API Calls' },
-		{ id: 'llmSettings', label: 'LLM' },
+		{ id: 'patches', label: 'Patches', isAdvanced: true },
+		{ id: 'searchIndex', label: 'Index', isAdvanced: true },
+		{ id: 'jobs', label: 'Jobs', isAdvanced: true },
+		{ id: 'apiCallLogs', label: 'API Calls', isAdvanced: true },
+		{ id: 'llmSettings', label: 'LLM', isAdvanced: true },
 	];
 
 	let stories = $state<StorySummary[]>([]);
@@ -57,6 +62,12 @@
 	let nextCursor = $state<string | null>(null);
 	let llmSettings = $state<JsonRecord[]>([]);
 	let searchResults = $state<JsonRecord[]>([]);
+	let showDiagnostics = $state(false);
+	let isMobile = $state(false);
+
+	const visibleSections = $derived.by(() => {
+		return sections.filter((section) => !section.isAdvanced || showDiagnostics);
+	});
 
 	const selectedStory = $derived(stories.find((story) => story.id === selectedStoryId) ?? null);
 	const isRecordSection = $derived(activeSection !== 'jobs' && activeSection !== 'llmSettings');
@@ -80,6 +91,7 @@
 		}
 		return [...keys];
 	});
+	const visibleColumns = $derived.by(() => isMobile ? columns.slice(0, 4) : columns);
 
 	function asRecord(value: unknown): JsonRecord | null {
 		return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : null;
@@ -113,6 +125,18 @@
 			if (typeof value === 'string' && value.trim()) return value.trim();
 		}
 		return 'Record';
+	}
+
+	function setActiveSection(sectionId: string) {
+		activeSection = sectionId;
+		searchResults = [];
+		loadSection();
+	}
+
+	function ensureActiveSectionVisible() {
+		if (!visibleSections.some((section) => section.id === activeSection)) {
+			activeSection = visibleSections[0]?.id ?? 'entities';
+		}
 	}
 
 	async function runEngineCommand(storyId: string, command: string, args: JsonRecord = {}): Promise<JsonRecord> {
@@ -275,14 +299,26 @@
 		}
 	}
 
-	onMount(async () => {
-		await loadStories();
-		await loadSection();
+	onMount(() => {
+		const mediaQuery = window.matchMedia('(max-width: 768px)');
+		const syncViewport = () => {
+			isMobile = mediaQuery.matches;
+		};
+		syncViewport();
+		mediaQuery.addEventListener('change', syncViewport);
+
+		(async () => {
+			await loadStories();
+			ensureActiveSectionVisible();
+			await loadSection();
+		})();
+
+		return () => mediaQuery.removeEventListener('change', syncViewport);
 	});
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-[var(--bg-primary)] text-[var(--text-primary)]">
-	<header class="flex flex-wrap items-center gap-3 border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
+	<header class="flex flex-col gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-3 sm:flex-row sm:items-center sm:gap-3">
 		<div class="flex min-w-0 items-center gap-2">
 			<Database class="h-5 w-5 text-[var(--text-accent)]" />
 			<div class="min-w-0">
@@ -293,49 +329,73 @@
 
 		<select
 			bind:value={selectedStoryId}
-			onchange={() => loadSection()}
-			class="min-w-48 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-xs text-[var(--text-primary)]"
+			onchange={() => {
+				ensureActiveSectionVisible();
+				loadSection();
+			}}
+			class="w-full min-w-0 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-xs text-[var(--text-primary)] sm:min-w-48 sm:w-auto"
 		>
 			{#each stories as item}
 				<option value={item.id}>{item.title ?? item.id}</option>
 			{/each}
 		</select>
 
-		<div class="flex min-w-0 flex-1 items-center gap-2">
+		<div class="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:flex-1 sm:items-center">
 			<div class="relative min-w-40 flex-1">
 				<Search class="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
 				<input
 					bind:value={query}
 					onkeydown={(event) => event.key === 'Enter' && loadSection()}
-					class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] py-1.5 pl-7 pr-2 text-xs text-[var(--text-primary)]"
+					class="h-9 w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 pl-7 pr-2 text-xs text-[var(--text-primary)]"
 					placeholder="Search"
 				/>
 			</div>
-			<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={() => loadSection()} title="Refresh">
-				<RefreshCw class="h-4 w-4" />
-			</button>
-			<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={searchStory} title="Hybrid search">
-				<Search class="h-4 w-4" />
-			</button>
-			<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={() => reindexStory(false)} title="Queue reindex">
-				<History class="h-4 w-4" />
-			</button>
-			<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={() => reindexStory(true)} title="Run reindex now">
-				<Play class="h-4 w-4" />
+			<div class="grid flex-1 grid-cols-2 gap-2 sm:flex sm:flex-nowrap sm:gap-2">
+				<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={() => loadSection()} title="Refresh">
+					<RefreshCw class="h-4 w-4" />
+				</button>
+				<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={searchStory} title="Hybrid search">
+					<Search class="h-4 w-4" />
+				</button>
+				<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={() => reindexStory(false)} title="Queue reindex">
+					<History class="h-4 w-4" />
+				</button>
+				<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={() => reindexStory(true)} title="Run reindex now">
+					<Play class="h-4 w-4" />
+				</button>
+			</div>
+			<button
+				class="rounded-md border border-[var(--border-primary)] px-2 py-2 text-[9px] uppercase tracking-[0.14em] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-accent)] sm:w-auto sm:px-3 sm:py-1.5"
+				onclick={() => {
+					showDiagnostics = !showDiagnostics;
+					ensureActiveSectionVisible();
+					loadSection();
+				}}
+			>
+				{showDiagnostics ? 'Core + Debug' : 'Show Debug'}
 			</button>
 		</div>
 	</header>
 
+	<nav class="border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-2 sm:hidden">
+		<div class="flex min-w-0 items-center gap-2 overflow-x-auto">
+			{#each visibleSections as item}
+				<button
+					class="shrink-0 rounded-md border border-[var(--border-primary)] px-2.5 py-1.5 text-xs transition-colors {activeSection === item.id ? 'bg-[rgba(212,168,83,0.14)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]'}"
+					onclick={() => setActiveSection(item.id)}
+				>
+					{item.label}
+				</button>
+			{/each}
+		</div>
+	</nav>
+
 	<div class="flex min-h-0 flex-1 overflow-hidden">
 		<aside class="hidden w-52 shrink-0 overflow-y-auto border-r border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 md:block">
-			{#each sections as item}
+			{#each visibleSections as item}
 				<button
 					class="mb-1 flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs transition-colors {activeSection === item.id ? 'bg-[rgba(212,168,83,0.14)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]'}"
-					onclick={() => {
-						activeSection = item.id;
-						searchResults = [];
-						loadSection();
-					}}
+					onclick={() => setActiveSection(item.id)}
 				>
 					<span>{item.label}</span>
 				</button>
@@ -365,12 +425,13 @@
 							<div class="mb-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Search Results</div>
 							<div class="space-y-1">
 								{#each searchResults as result}
-									<button class="block w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-left text-xs hover:border-[var(--color-gold-600)]"
+									<button
+										class="block w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-left text-xs hover:border-[var(--color-gold-600)]"
 										onclick={() => {
-											activeSection = String(result.recordType ?? activeSection);
+											setActiveSection(String(result.recordType ?? activeSection));
 											query = '';
-											loadSection();
-										}}>
+										}}
+									>
 										<span class="text-[var(--text-accent)]">{result.title ?? result.recordId}</span>
 										<span class="ml-2 text-[var(--text-muted)]">{result.source} {Number(result.score ?? 0).toFixed(2)}</span>
 									</button>
@@ -379,27 +440,58 @@
 						</div>
 					{/if}
 
-					<div class="min-w-[760px]">
-						<div class="grid border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[10px] uppercase tracking-wide text-[var(--text-muted)]" style={`grid-template-columns: repeat(${Math.max(columns.length, 1)}, minmax(120px, 1fr));`}>
-							{#each columns as column}
-								<div class="px-3 py-2">{column}</div>
+					{#if isMobile}
+						<div class="space-y-1.5 p-2">
+							{#if records.length === 0}
+								<div class="py-8 text-center text-xs text-[var(--text-muted)]">No records</div>
+							{:else}
+								{#each records as row}
+									<button
+										class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-tertiary)] p-2 text-left transition-colors {selectedRecord?.id === row.id ? 'border-[var(--color-gold-600)] bg-[rgba(212,168,83,0.08)]' : 'hover:bg-[rgba(212,168,83,0.06)]'}"
+										onclick={() => selectRecord(row)}
+									>
+										<div class="flex items-start justify-between gap-2">
+											<div class="min-w-0">
+												<div class="text-xs uppercase tracking-wide text-[var(--text-accent)]">{recordTitle(row)}</div>
+												<div class="mt-1 text-xs text-[var(--text-muted)]">{preview(row.id)}</div>
+											</div>
+											<div class="font-mono text-[9px] uppercase tracking-wide text-[var(--text-muted)]">{preview(row.type)}</div>
+										</div>
+										<div class="mt-2 grid grid-cols-2 gap-2">
+											{#each visibleColumns as column}
+												<div class="text-[10px]">
+													<div class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">{column}</div>
+													<div class="truncate text-[var(--text-secondary)]">{preview(row[column])}</div>
+												</div>
+											{/each}
+										</div>
+									</button>
+								{/each}
+							{/if}
+						</div>
+					{:else}
+						<div class="min-w-[760px]">
+							<div class="grid border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[10px] uppercase tracking-wide text-[var(--text-muted)]" style={`grid-template-columns: repeat(${Math.max(visibleColumns.length, 1)}, minmax(120px, 1fr));`}>
+								{#each visibleColumns as column}
+									<div class="px-3 py-2">{column}</div>
+								{/each}
+							</div>
+							{#each records as row}
+								<button
+									class="grid w-full border-b border-[var(--border-secondary)] text-left text-xs hover:bg-[rgba(212,168,83,0.06)] {selectedRecord?.id === row.id ? 'bg-[rgba(212,168,83,0.1)]' : ''}"
+									style={`grid-template-columns: repeat(${Math.max(visibleColumns.length, 1)}, minmax(120px, 1fr));`}
+									onclick={() => selectRecord(row)}
+								>
+									{#each visibleColumns as column}
+										<div class="truncate px-3 py-2 text-[var(--text-secondary)]" title={preview(row[column])}>{preview(row[column])}</div>
+									{/each}
+								</button>
 							{/each}
 						</div>
-						{#each records as row}
-							<button
-								class="grid w-full border-b border-[var(--border-secondary)] text-left text-xs hover:bg-[rgba(212,168,83,0.06)] {selectedRecord?.id === row.id ? 'bg-[rgba(212,168,83,0.1)]' : ''}"
-								style={`grid-template-columns: repeat(${Math.max(columns.length, 1)}, minmax(120px, 1fr));`}
-								onclick={() => selectRecord(row)}
-							>
-								{#each columns as column}
-									<div class="truncate px-3 py-2 text-[var(--text-secondary)]" title={preview(row[column])}>{preview(row[column])}</div>
-								{/each}
-							</button>
-						{/each}
-					</div>
+					{/if}
 				</div>
 
-				<aside class="min-h-0 overflow-y-auto bg-[var(--bg-secondary)]">
+				<aside class="min-h-0 overflow-y-auto bg-[var(--bg-secondary)] {isMobile ? 'max-h-[48dvh]' : ''}">
 					<div class="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
 						<div class="min-w-0">
 							<div class="truncate text-sm text-[var(--text-primary)]">{selectedRecord ? recordTitle(selectedRecord) : 'No record'}</div>
@@ -564,7 +656,7 @@
 							bind:value={editorText}
 							spellcheck="false"
 							readonly={isReadOnlySection}
-							class="h-[44vh] w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3 font-mono text-xs leading-relaxed text-[var(--text-secondary)] outline-none focus:border-[var(--color-gold-600)]"
+							class="h-[34vh] w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3 font-mono text-xs leading-relaxed text-[var(--text-secondary)] outline-none focus:border-[var(--color-gold-600)] sm:h-[44vh]"
 						></textarea>
 
 						{#if detail && typeof detail === 'object' && !Array.isArray(detail) && (detail.sourceEntries || detail.sourceEvents || detail.sourcePatches)}

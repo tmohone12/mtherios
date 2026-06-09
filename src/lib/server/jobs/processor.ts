@@ -1591,6 +1591,40 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): 
 	};
 }
 
+async function continuityAudit(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
+	const payload = asRecord(job.payload);
+	const assistantEntryId = typeof payload.assistantEntryId === 'string' ? payload.assistantEntryId : null;
+	const playerEntryId = typeof payload.playerEntryId === 'string' ? payload.playerEntryId : null;
+	const serverVersion = typeof payload.serverVersion === 'number' && Number.isFinite(payload.serverVersion)
+		? Math.trunc(payload.serverVersion)
+		: null;
+	const entryIds = [assistantEntryId, playerEntryId].filter((value): value is string => Boolean(value));
+	const rows = entryIds.length
+		? await timePhase(recorder, 'job.continuity_audit.load_entries', { entryIds: entryIds.length }, () => getDb()
+			.select()
+			.from(storyEntries)
+			.where(and(eq(storyEntries.storyId, job.storyId), inArray(storyEntries.id, entryIds)))
+			.limit(entryIds.length))
+		: [];
+	const contextReceipt = asRecord(payload.contextReceipt);
+	const truncated = contextReceipt.truncated === true;
+	const warnings = [
+		truncated ? 'Turn context was truncated; continuity should prefer canonical state over omitted transcript.' : '',
+		entryIds.length > 0 && rows.length === 0 ? 'Continuity audit could not load turn entries.' : '',
+	].filter(Boolean);
+	const result = {
+		status: warnings.length ? 'needs_review' : 'ok',
+		playerEntryId,
+		assistantEntryId,
+		serverVersion,
+		entryCount: rows.length,
+		truncated,
+		warnings,
+	};
+	publishEngineEvent({ storyId: job.storyId, type: 'state.changed', data: { continuityAudit: result } });
+	return result;
+}
+
 async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const type = job.type as BackendJobType;
 	return timePhase(recorder, `job.${type}.total`, {
@@ -1617,6 +1651,8 @@ async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder):
 				return syncStoryVault(job, recorder);
 			case 'extract_turn_state':
 				return extractTurnState(job, recorder);
+			case 'continuity_audit':
+				return continuityAudit(job, recorder);
 			default:
 				throw new Error(`Unknown backend job type: ${job.type}`);
 		}

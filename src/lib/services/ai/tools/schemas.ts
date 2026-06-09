@@ -111,6 +111,18 @@ export const worldStateFactionResourcesSchema = z.object({
 	morale: z.number().min(0).max(100).optional().default(50),
 });
 
+export const worldStateFactionProjectSchema = z.object({
+	project: z.string(),
+	status: z.enum(['planned', 'active', 'blocked', 'completed', 'closed']).optional().default('planned'),
+	progress: z.number().min(0).max(100).optional().default(0),
+	priority: z.number().min(1).max(10).optional().default(5),
+	due_turn: z.number().int().nonnegative().nullable().optional().default(null),
+	world_time: z.string().nullable().optional().default(null),
+	costs: z.record(z.string(), z.number()).optional().default({}),
+	gains: z.record(z.string(), z.number()).optional().default({}),
+	risks: z.array(z.string()).optional().default([]),
+});
+
 export const worldStateLorebookEntrySchema = z.object({
 	name: z.string(),
 	type: z.enum(['character', 'location', 'item', 'faction', 'concept', 'event']),
@@ -123,6 +135,7 @@ export const worldStateLorebookEntrySchema = z.object({
 	state_overrides: z.record(z.string(), z.any()).optional().default({}),
 	known_members: z.array(z.string()).optional().default([]),
 	faction_goals: z.array(worldStateFactionGoalSchema).optional().default([]),
+	faction_projects: z.array(worldStateFactionProjectSchema).optional().default([]),
 	faction_resources: worldStateFactionResourcesSchema.nullable().optional().default(null),
 	faction_disposition: z.enum(['aggressive', 'defensive', 'scheming', 'neutral', 'desperate']).nullable().optional().default(null),
 	territory: z.array(z.string()).optional().default([]),

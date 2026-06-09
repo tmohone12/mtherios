@@ -20,10 +20,12 @@ function stubFetch(responseBody: Record<string, any>) {
 describe('server generation provider cache hints', () => {
 	beforeEach(() => {
 		requests.length = 0;
+		vi.useRealTimers();
 	});
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.useRealTimers();
 	});
 
 	it('sends OpenRouter cache-control breakpoints for stable and dynamic system segments', async () => {
@@ -80,5 +82,58 @@ describe('server generation provider cache hints', () => {
 			{ type: 'text', text: 'Per-turn world state.' },
 		]);
 		expect(body.messages).toEqual([{ role: 'user', content: 'Player action:\nListen.' }]);
+	});
+
+	it('passes an abort signal to upstream provider fetches so turns cannot hang indefinitely', async () => {
+		stubFetch({
+			choices: [{ message: { content: 'The hall grows quiet.' } }],
+		});
+
+		await generateServerTextWithMetrics({
+			profile: {
+				providerType: 'openrouter',
+				apiKey: 'test-key',
+				baseUrl: 'https://openrouter.ai/api/v1',
+			} as any,
+			model: 'zai-org/glm-5.1',
+			system: 'Stable narrator rules.',
+			prompt: 'Player action:\nListen.',
+		});
+
+		const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+		expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+	});
+
+	it('reports upstream provider timeout as a structured server generation error', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+			const signal = init.signal as AbortSignal;
+			signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+		})));
+
+		const result = generateServerTextWithMetrics({
+			profile: {
+				providerType: 'openrouter',
+				apiKey: 'test-key',
+				baseUrl: 'https://openrouter.ai/api/v1',
+			} as any,
+			model: 'zai-org/glm-5.1',
+			system: 'Stable narrator rules.',
+			prompt: 'Player action:\nListen.',
+			timeoutMs: 25,
+		});
+
+		const assertion = expect(result).rejects.toMatchObject({
+			name: 'ServerGenerationError',
+			message: 'Server LLM request timed out after 25ms',
+			result: {
+				model: 'zai-org/glm-5.1',
+				endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+				durationMs: expect.any(Number),
+				promptChars: 44,
+			},
+		});
+		await vi.advanceTimersByTimeAsync(30);
+		await assertion;
 	});
 });

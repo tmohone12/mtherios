@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { backendJobTypes, turnStateExtractionDedupeKey } from './outbox';
+import { backendJobTypes, continuityAuditDedupeKey, turnStateExtractionDedupeKey } from './outbox';
 import { backendJobStatusEventData, isSupersededJobFailure, storyVaultFollowupVersion } from './processor';
 
 describe('turn state extraction jobs', () => {
 	it('exposes a stable background job type and dedupe key', () => {
 		expect(backendJobTypes).toContain('extract_turn_state');
 		expect(turnStateExtractionDedupeKey({ assistantEntryId: 'entry_assistant' })).toBe('turn-state-entry_assistant');
+	});
+});
+
+describe('continuity audit jobs', () => {
+	it('exposes a stable background job type and dedupe key', () => {
+		expect(backendJobTypes).toContain('continuity_audit');
+		expect(continuityAuditDedupeKey({ assistantEntryId: 'entry_assistant' })).toBe('continuity-audit-entry_assistant');
 	});
 });
 

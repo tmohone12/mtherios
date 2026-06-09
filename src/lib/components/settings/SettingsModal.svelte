@@ -251,7 +251,7 @@
 
 		if (model) {
 			settings.narrativeSettings.model = model;
-			await settings.saveNarrativeSettings();
+			await saveNarrativeSettingsAndSync();
 		}
 		try {
 			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']);
@@ -319,13 +319,26 @@
 	}
 
 	// Generation settings (bound and saved)
+	async function syncNarrativeRuntimeSetting() {
+		try {
+			await syncTerminalLlmSettingsFromBrowser(['narrative']);
+		} catch (error) {
+			console.warn('[Settings] Terminal sync for narrative settings failed:', error);
+		}
+	}
+
+	async function saveNarrativeSettingsAndSync() {
+		await settings.saveNarrativeSettings();
+		await syncNarrativeRuntimeSetting();
+	}
+
 	async function saveTemp(val: number) {
 		settings.narrativeSettings.temperature = val;
-		await settings.saveNarrativeSettings();
+		await saveNarrativeSettingsAndSync();
 	}
 	async function saveMaxTokens(val: number) {
 		settings.narrativeSettings.maxTokens = val;
-		await settings.saveNarrativeSettings();
+		await saveNarrativeSettingsAndSync();
 	}
 
 	function clampDial(value: number, min: number, max: number): number {
@@ -578,7 +591,7 @@
 							</button>
 							<button
 								class="rounded-lg bg-[var(--color-gold-400)]/20 px-3 py-2 text-xs font-semibold text-[var(--text-accent)] hover:bg-[var(--color-gold-400)]/30"
-								onclick={() => settings.saveNarrativeSettings()}
+								onclick={saveNarrativeSettingsAndSync}
 							>Save</button>
 						</div>
 						{#if modelChips.length > 0}
@@ -597,8 +610,8 @@
 										{#each filteredModelChips as fm}
 											<button
 												class="max-w-full truncate rounded border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]
-													{settings.narrativeSettings.model === fm ? 'border-[var(--color-gold-600)] text-[var(--text-accent)]' : ''}"
-												onclick={() => { settings.narrativeSettings.model = fm; settings.saveNarrativeSettings(); }}
+												{settings.narrativeSettings.model === fm ? 'border-[var(--color-gold-600)] text-[var(--text-accent)]' : ''}"
+												onclick={() => { settings.narrativeSettings.model = fm; saveNarrativeSettingsAndSync(); }}
 												title={fm}
 											>{fm}</button>
 										{/each}
@@ -619,7 +632,7 @@
 							<label class="text-xs text-[var(--text-muted)]">Temperature</label>
 							<input type="range" min="0" max="2" step="0.1"
 								bind:value={settings.narrativeSettings.temperature}
-								onchange={() => settings.saveNarrativeSettings()}
+								onchange={() => saveNarrativeSettingsAndSync()}
 								class="w-full accent-[var(--color-gold-400)]" />
 							<div class="text-center font-mono text-xs text-[var(--text-primary)]">{settings.narrativeSettings.temperature?.toFixed(1) ?? '1.0'}</div>
 						</div>
@@ -627,7 +640,7 @@
 							<label class="text-xs text-[var(--text-muted)]">Max Tokens</label>
 							<input type="number" min="256" max="65536" step="256"
 								bind:value={settings.narrativeSettings.maxTokens}
-								onchange={() => settings.saveNarrativeSettings()}
+								onchange={() => saveNarrativeSettingsAndSync()}
 								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-1.5 font-mono text-sm text-[var(--text-primary)] focus:outline-none" />
 						</div>
 					</div>
