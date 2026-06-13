@@ -29,6 +29,7 @@ export interface EnqueueBackendJobInput {
 }
 
 const DEFAULT_STALE_LOCK_MS = 30 * 60_000;
+const DEFAULT_TURN_STORY_VAULT_SYNC_EVERY = 5;
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -41,6 +42,17 @@ function staleLockMs(): number {
 
 function id(prefix: string): string {
 	return `${prefix}_${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
+}
+
+function turnStoryVaultSyncEvery(): number {
+	const raw = Number(process.env.MTHERIOS_TURN_STORY_VAULT_SYNC_EVERY ?? DEFAULT_TURN_STORY_VAULT_SYNC_EVERY);
+	return Number.isFinite(raw) ? Math.max(0, Math.trunc(raw)) : DEFAULT_TURN_STORY_VAULT_SYNC_EVERY;
+}
+
+export function shouldQueueTurnStoryVaultSync(serverVersion: number, cadence = turnStoryVaultSyncEvery()): boolean {
+	if (cadence <= 0) return false;
+	const version = Number.isFinite(serverVersion) ? Math.max(1, Math.trunc(serverVersion)) : 1;
+	return version % cadence === 0;
 }
 
 function stableJobId(type: BackendJobType, dedupeKey: string): string {
@@ -212,13 +224,21 @@ export async function enqueueTurnProjectionJobs(input: {
 		dedupeKey: `chapter-summary-${input.serverVersion}`,
 		payload: { eventIds: input.eventIds, patchIds: input.patchIds, serverVersion: input.serverVersion, ...memorySettings },
 	}));
-	jobs.push(enqueueBackendJob({
-		storyId: input.storyId,
-		type: 'sync_story_vault',
-		dedupeKey: `story-vault-${input.serverVersion}`,
-		payload: { eventIds: input.eventIds, patchIds: input.patchIds, serverVersion: input.serverVersion },
-		maxAttempts: 3,
-	}));
+	if (shouldQueueTurnStoryVaultSync(input.serverVersion)) {
+		jobs.push(enqueueBackendJob({
+			storyId: input.storyId,
+			type: 'sync_story_vault',
+			dedupeKey: `story-vault-${input.serverVersion}`,
+			payload: {
+				eventIds: input.eventIds,
+				patchIds: input.patchIds,
+				serverVersion: input.serverVersion,
+				reason: 'turn_cadence',
+				cadence: turnStoryVaultSyncEvery(),
+			},
+			maxAttempts: 3,
+		}));
+	}
 	return Promise.all(jobs);
 }
 

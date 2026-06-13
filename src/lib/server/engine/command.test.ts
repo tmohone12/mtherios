@@ -971,6 +971,164 @@ describe('engine command envelope', () => {
 		});
 	});
 
+	it('routes canon repair controls through the shared backend command surface', async () => {
+		const calls: string[] = [];
+		const resolve = await executeEngineCommand({
+			command: 'entity.resolve',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_resolve',
+			args: {
+				candidate: { type: 'character', name: 'Mira' },
+				includeSemantic: false,
+				maxCandidates: 24,
+			},
+		}, {
+			previewEntityResolution: async (input) => {
+				calls.push(`resolve:${input.storyId}:${input.candidate.name}`);
+				return {
+					storyId: input.storyId,
+					candidate: input.candidate,
+					resolution: {
+						decision: 'update',
+						confidence: 0.92,
+						matchedEntityId: 'entity_mira',
+						reason: 'Strong resolver match for Mira.',
+					},
+					candidates: [],
+				};
+			},
+		});
+		const alias = await executeEngineCommand({
+			command: 'entity.alias.add',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_alias',
+			args: {
+				entityId: 'entity_mira',
+				alias: 'Lady Mira',
+			},
+		}, {
+			addEntityAlias: async (input) => {
+				calls.push(`alias:${input.storyId}:${input.entityId}:${input.alias}`);
+				return {
+					storyId: input.storyId,
+					serverVersion: 22,
+					entityId: input.entityId,
+					alias: input.alias,
+					normalizedAlias: 'lady mira',
+					aliases: ['Mira', 'Lady Mira'],
+				};
+			},
+		});
+		const merge = await executeEngineCommand({
+			command: 'entity.merge',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_merge',
+			args: {
+				keepEntityId: 'entity_keep',
+				mergeEntityId: 'entity_dup',
+				reason: 'Duplicate found.',
+			},
+		}, {
+			mergeEntities: async (input) => {
+				calls.push(`merge:${input.storyId}:${input.keepEntityId}:${input.mergeEntityId}`);
+				return {
+					storyId: input.storyId,
+					serverVersion: 23,
+					keepEntityId: input.keepEntityId,
+					mergeEntityId: input.mergeEntityId,
+					mergedAliases: ['Mira', 'Lady Mira'],
+				};
+			},
+		});
+		const review = await executeEngineCommand({
+			command: 'patchProposal.review',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_review',
+			args: {
+				proposalId: 'proposal_1',
+				decision: 'approved',
+				reviewer: 'human',
+			},
+		}, {
+			reviewPatchProposal: async (input) => {
+				calls.push(`review:${input.storyId}:${input.proposalId}:${input.decision}`);
+				return {
+					storyId: input.storyId,
+					serverVersion: 24,
+					proposalId: input.proposalId,
+					status: input.decision,
+					decision: input.decision,
+				};
+			},
+		});
+		const audit = await executeEngineCommand({
+			command: 'continuity.audit',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_audit',
+			args: { limit: 12 },
+		}, {
+			continuityAudit: async (input) => {
+				calls.push(`audit:${input.storyId}:${input.limit}`);
+				return {
+					storyId: input.storyId,
+					generatedAt: '2026-06-09T00:00:00.000Z',
+					summary: { openWarnings: 2, pendingProposals: 1, inactiveEntities: 3 },
+					openWarnings: [],
+					pendingProposals: [],
+					inactiveEntities: [],
+				};
+			},
+		});
+
+		expect(resolve.status).toBe('succeeded');
+		expect(resolve.projectionChanges).toEqual({
+			entityResolution: {
+				storyId: 'story_alpha',
+				decision: 'update',
+				entityId: 'entity_mira',
+				confidence: 0.92,
+			},
+		});
+		expect(alias.projectionChanges).toEqual({
+			entityAlias: {
+				storyId: 'story_alpha',
+				entityId: 'entity_mira',
+				alias: 'Lady Mira',
+			},
+		});
+		expect(merge.projectionChanges).toEqual({
+			entityMerge: {
+				storyId: 'story_alpha',
+				keepEntityId: 'entity_keep',
+				mergeEntityId: 'entity_dup',
+				mergedAliasCount: 2,
+			},
+		});
+		expect(review.projectionChanges).toEqual({
+			patchProposal: {
+				storyId: 'story_alpha',
+				proposalId: 'proposal_1',
+				status: 'approved',
+				decision: 'approved',
+			},
+		});
+		expect(audit.projectionChanges).toEqual({
+			continuityAudit: {
+				storyId: 'story_alpha',
+				openWarnings: 2,
+				pendingProposals: 1,
+				inactiveEntities: 3,
+			},
+		});
+		expect(calls).toEqual([
+			'resolve:story_alpha:Mira',
+			'alias:story_alpha:entity_mira:Lady Mira',
+			'merge:story_alpha:entity_keep:entity_dup',
+			'review:story_alpha:proposal_1:approved',
+			'audit:story_alpha:12',
+		]);
+	});
+
 	it('rejects unknown commands without touching campaign state', async () => {
 		const result = await executeEngineCommand({
 			command: 'unknown.command',

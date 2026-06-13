@@ -35,6 +35,7 @@ const turnResult = {
 	warnings: [],
 	generationTimings: [],
 	performance: null,
+	contextReceipt: null,
 };
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {

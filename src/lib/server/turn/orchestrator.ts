@@ -38,6 +38,7 @@ import { createTimingRecorder, type TimingEntry, type TimingRecorder } from '$li
 import type { TurnContext } from './context';
 import { ensureFreshStoryVault, resolveWikiTarget } from '$lib/server/wiki/storyVault';
 import { getMtheriosAppConfig } from '$lib/server/app/config';
+import { sliceWellFormedText, toWellFormedText } from './wellFormedText';
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -338,18 +339,19 @@ export function applyPromptContextBudget(
 	value: string,
 	maxChars: number | null | undefined,
 ): { value: string; truncated: boolean } {
-	if (!maxChars || maxChars <= 0 || value.length <= maxChars) return { value, truncated: false };
-	const finalInstruction = 'Return only the narration prose for the player action. Do not include JSON in this response.';
+	const cleanValue = toWellFormedText(value);
+	if (!maxChars || maxChars <= 0 || cleanValue.length <= maxChars) return { value: cleanValue, truncated: cleanValue !== value };
+	const finalInstruction = 'Return only GM narration prose for the player action. Do not include JSON, ending choices, numbered options, menus, or OOC notes in this response.';
 	const marker = '\n\n[Backend context budget truncated older dynamic context.]\n\n';
-	if (maxChars <= marker.length + finalInstruction.length + 120 || !value.endsWith(finalInstruction)) {
+	if (maxChars <= marker.length + finalInstruction.length + 120 || !cleanValue.endsWith(finalInstruction)) {
 		return {
-			value: value.slice(0, Math.max(0, maxChars)),
+			value: sliceWellFormedText(cleanValue, Math.max(0, maxChars)),
 			truncated: true,
 		};
 	}
 	const headBudget = Math.max(0, maxChars - marker.length - finalInstruction.length);
 	return {
-		value: `${value.slice(0, headBudget).trimEnd()}${marker}${finalInstruction}`,
+		value: `${sliceWellFormedText(cleanValue, headBudget).trimEnd()}${marker}${finalInstruction}`,
 		truncated: true,
 	};
 }

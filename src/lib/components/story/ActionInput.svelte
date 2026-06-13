@@ -12,6 +12,7 @@
 	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
 	import { isTerminalReachabilityError } from '$lib/services/backendMemory';
 	import { normalizeBackendContextBudget } from '$lib/services/backendTurnContext';
+	import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET } from '$lib/services/memorySettings';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
 	import { shouldUseTerminalEngineTurn } from './engineTurnRouting';
 
@@ -79,7 +80,7 @@
 			presentNpcIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
 			locationId: story.locations.find((location) => location.current)?.id ?? null,
 			threadIds: [],
-			memoryTokenBudget: settings.uiSettings.backendMemoryTokenBudget || 800,
+			memoryTokenBudget: settings.uiSettings.backendMemoryTokenBudget || DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET,
 			contextBudget: normalizeBackendContextBudget(settings.contextBudget),
 			chapterThreshold: settings.uiSettings.chapterThreshold || 20,
 			postChapterBuffer: settings.uiSettings.postChapterBuffer ?? 10,

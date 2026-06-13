@@ -23,8 +23,6 @@ import { resolveEntityIdentity, entityResolutionSummary, type EntityIdentityCand
 type JsonRecord = Record<string, unknown>;
 type Db = ReturnType<typeof getDb>;
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
-type EntityRow = typeof entities.$inferSelect;
-type AliasRow = typeof entityAliases.$inferSelect;
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -105,15 +103,6 @@ async function saveCanonicalAliases(tx: Tx, input: {
 			updatedAt: input.now,
 		}).onConflictDoNothing();
 	}
-}
-
-async function updateStoryArrayRows<T extends { id: string }>(rows: T[], updateRow: (row: T) => Promise<void>): Promise<number> {
-	let updated = 0;
-	for (const row of rows) {
-		await updateRow(row);
-		updated += 1;
-	}
-	return updated;
 }
 
 async function queueCanonRepairRefresh(storyId: string, serverVersion: number): Promise<void> {
@@ -452,7 +441,9 @@ export async function mergeEntities(input: {
 		] as const;
 
 		for (const batch of directEntityUpdates) {
-			await updateStoryArrayRows(batch.rows as Array<{ id: string }>, batch.apply);
+			for (const row of batch.rows) {
+				await batch.apply(row as never);
+			}
 		}
 
 		return {

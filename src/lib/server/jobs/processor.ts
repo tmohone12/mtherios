@@ -28,6 +28,7 @@ import {
 	parseJsonFromGeneratedText,
 	type ServerGenerationResult,
 } from '$lib/server/turn/provider';
+import { formatMtheriosMemorySummary } from '$lib/services/ai/context/mtheriosSummaryFormat';
 
 type BackendJobRow = typeof backendJobs.$inferSelect;
 type ArcRow = typeof arcs.$inferSelect;
@@ -978,13 +979,52 @@ async function loadEventsForEntries(storyId: string, entryIds: string[]): Promis
 		.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-function entryLine(entry: StoryEntryRow): string {
-	const label = entry.type === 'user_action'
-		? 'Player'
-		: entry.type === 'narration'
-			? 'Narrator'
-			: entry.type;
-	return `${label}: ${snippet(entry.content, 180)}`;
+function stripNarrationHeader(value: string): string {
+	return value.replace(/^\s*\[[^\]]*(?:Time|Location|Weather)[^\]]*\]\s*/i, '').trim();
+}
+
+function summarizePlayerAction(value: string): string {
+	const text = compactWhitespace(value.replace(/^>\s*/, ''));
+	return text
+		.replace(/^I\s+say\b/i, 'says')
+		.replace(/^I\s+ask\b/i, 'asks')
+		.replace(/^I\s+look\b/i, 'looks')
+		.replace(/^I\s+walk\b/i, 'walks')
+		.replace(/^I\s+rise\b/i, 'rises')
+		.replace(/^I\s+/i, 'acts: ');
+}
+
+function cleanSummaryBeat(value: string, max = 220): string {
+	return snippet(stripNarrationHeader(value).replace(/^OOC:\s*/i, 'OOC correction: '), max);
+}
+
+function checkpointBeat(entry: StoryEntryRow): string {
+	if (entry.type === 'user_action') return `Player: ${summarizePlayerAction(entry.content)}`;
+	if (entry.type === 'narration') return `Narrator: ${cleanSummaryBeat(entry.content)}`;
+	return `${entry.type}: ${cleanSummaryBeat(entry.content)}`;
+}
+
+function meaningfulEventString(event: StoryEventRow): string | null {
+	const title = compactWhitespace(event.title);
+	const body = cleanSummaryBeat(event.body, 180);
+	if (!title || title.toLowerCase() === 'turn resolved') return null;
+	return `${event.type}: ${title}${body ? ` - ${body}` : ''}`;
+}
+
+function parseCurrentAnchor(entries: StoryEntryRow[], first: StoryEntryRow, last: StoryEntryRow): string {
+	for (const entry of [...entries].reverse()) {
+		if (entry.type !== 'narration') continue;
+		const header = entry.content.match(/^\s*\[([^\]]*(?:Time|Location|Weather)[^\]]*)\]/i)?.[1];
+		if (!header) continue;
+		const time = header.match(/Time\s+([^|]+)/i)?.[1]?.trim();
+		const date = header.match(/Day\s+([^|]+)/i)?.[1]?.trim();
+		const location = header.match(/Location\s+([^|]+)/i)?.[1]?.trim();
+		const weather = header.match(/Weather\s+(.+)$/i)?.[1]?.trim();
+		if (time || date || location || weather) {
+			return `${date || 'day/date unknown'} | ${time || 'time unknown'} | ${location || 'location unknown'} | ${weather || 'weather unknown'}`;
+		}
+	}
+	return `positions ${first.position}-${last.position} | time unknown | location unknown | weather unknown, temp C unknown`;
 }
 
 function deriveChapterTitle(number: number, entries: StoryEntryRow[], events: StoryEventRow[]): string {
@@ -995,19 +1035,25 @@ function deriveChapterTitle(number: number, entries: StoryEntryRow[], events: St
 	return title || `Chapter ${number}`;
 }
 
-function buildChapterSummary(entries: StoryEntryRow[], events: StoryEventRow[]): string {
+export function buildChapterSummary(entries: StoryEntryRow[], events: StoryEventRow[]): string {
 	const first = entries[0];
 	const last = entries[entries.length - 1];
-	const eventLines = events.slice(0, 12).map((event) => `- ${event.title}: ${snippet(event.body, 240)}`);
-	const transcriptLines = entries.slice(0, 24).map(entryLine);
-	if (entries.length > transcriptLines.length) {
-		transcriptLines.push(`- ${entries.length - transcriptLines.length} more transcript entries in this checkpoint.`);
-	}
-	return [
-		`Terminal checkpoint covering transcript positions ${first.position}-${last.position}.`,
-		eventLines.length > 0 ? `Key events:\n${eventLines.join('\n')}` : null,
-		`Transcript trace:\n${transcriptLines.join('\n')}`,
-	].filter((section): section is string => Boolean(section)).join('\n\n');
+	const recentLines = entries.slice(0, 8).map(checkpointBeat);
+	if (entries.length > recentLines.length) recentLines.push(`${entries.length - recentLines.length} more transcript entries are covered by this checkpoint.`);
+	const importantStrings = [
+		...events.map(meaningfulEventString).filter((event): event is string => Boolean(event)).slice(0, 8),
+		`Source coverage: transcript positions ${first.position}-${last.position}; ${entries.length} entries; ${events.length} source event records.`,
+	];
+	return formatMtheriosMemorySummary({
+		beginning: `Terminal checkpoint covering transcript positions ${first.position}-${last.position}.`,
+		recent: recentLines,
+		charAppearance: 'not established',
+		charDemeanor: 'not established',
+		userAppearance: 'not established',
+		sideCharacters: uniqueStrings(events.flatMap((event) => asStringArray(event.actorEntityIds))).slice(0, 12),
+		importantStrings,
+		currently: parseCurrentAnchor(entries, first, last),
+	});
 }
 
 async function upsertChapterMemoryNode(input: {
@@ -1210,10 +1256,22 @@ function arcTitle(number: number, arcChapters: ChapterRow[]): string {
 }
 
 function arcSummary(arcChapters: ChapterRow[]): string {
-	return [
-		`Terminal arc rollup covering chapters ${arcChapters[0].number}-${arcChapters[arcChapters.length - 1].number}.`,
-		...arcChapters.map((chapter) => `Chapter ${chapter.number}${chapter.title ? ` (${chapter.title})` : ''}: ${snippet(chapter.sceneOutcome, 500)}`),
-	].join('\n\n');
+	const first = arcChapters[0];
+	const last = arcChapters[arcChapters.length - 1];
+	return formatMtheriosMemorySummary({
+		beginning: `Terminal arc rollup covering chapters ${first.number}-${last.number}.`,
+		recent: arcChapters.map((chapter) => `Chapter ${chapter.number}${chapter.title ? ` (${chapter.title})` : ''}: ${snippet(chapter.sceneOutcome, 360)}`),
+		charAppearance: 'not established',
+		charDemeanor: 'not established',
+		userAppearance: 'not established',
+		sideCharacters: [],
+		importantStrings: uniqueStrings(arcChapters.flatMap((chapter) => [
+			...asStringArray(chapter.irreversibleChanges),
+			...asStringArray(chapter.promisesDebtsOaths),
+			...asStringArray(chapter.openThreads),
+		])).slice(0, 16),
+		currently: `chapters ${first.number}-${last.number} | time unknown | location unknown | weather unknown, temp°C unknown`,
+	});
 }
 
 async function upsertArcMemoryNode(input: {
@@ -1789,7 +1847,7 @@ export async function getBackendJobStats(storyId?: string | null): Promise<Backe
 	return summarizeBackendJobs(rows);
 }
 
-function summarizeBackendJobs(rows: BackendJobPreview[]): BackendJobStats {
+export function summarizeBackendJobs(rows: BackendJobPreview[]): BackendJobStats {
 	const now = nowIso();
 	const byStatus: Record<string, number> = {};
 	const byType: Record<string, number> = {};
@@ -1797,6 +1855,7 @@ function summarizeBackendJobs(rows: BackendJobPreview[]): BackendJobStats {
 	const failedByType: Record<string, number> = {};
 	const storyIds = new Set<string>();
 	const latestCompletedAt = new Map<string, string>();
+	let activeFailed = 0;
 	const readyJobs: BackendJobPreview[] = [];
 	const delayedJobs: BackendJobPreview[] = [];
 	const runningJobs: BackendJobPreview[] = [];
@@ -1825,8 +1884,11 @@ function summarizeBackendJobs(rows: BackendJobPreview[]): BackendJobStats {
 
 		if (row.status === 'running') runningJobs.push(row);
 		if (row.status === 'failed' || (row.status === 'retry' && row.lastError)) {
-			if (!isSupersededJobFailure(row, latestCompletedAt)) recentFailures.push(row);
-			failedByType[row.type] = (failedByType[row.type] ?? 0) + 1;
+			if (!isSupersededJobFailure(row, latestCompletedAt)) {
+				recentFailures.push(row);
+				if (row.status === 'failed') activeFailed += 1;
+				failedByType[row.type] = (failedByType[row.type] ?? 0) + 1;
+			}
 		}
 	}
 
@@ -1841,7 +1903,7 @@ function summarizeBackendJobs(rows: BackendJobPreview[]): BackendJobStats {
 		retry: byStatus.retry ?? 0,
 		running: byStatus.running ?? 0,
 		complete: byStatus.complete ?? 0,
-		failed: byStatus.failed ?? 0,
+		failed: activeFailed,
 		ready: readyJobs.length,
 		delayed: delayedJobs.length,
 		storyCount: storyIds.size,

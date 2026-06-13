@@ -1,6 +1,7 @@
 import type { TurnContext } from './context';
 import type { GmTimelineBrief, GmTimelineBriefEvent, RetrievedMemoryPacket } from '$lib/contracts/memory';
-import { buildEconomyScaleBlock } from '$lib/services/ai/context/economyScale';
+import { buildEconomyScaleBlock, buildWorldScaleBlock } from '$lib/services/ai/context/economyScale';
+import { sliceWellFormedText, toWellFormedText } from './wellFormedText';
 
 export interface ServerTurnPromptOptions {
 	currentFactionId?: string | null;
@@ -11,7 +12,7 @@ export interface ServerTurnPromptOptions {
 
 const RECENT_ENTRY_LIMIT = 60;
 const USER_MESSAGE_CHAR_LIMIT = 1000;
-const NARRATION_MESSAGE_CHAR_LIMIT = 1800;
+const NARRATION_MESSAGE_CHAR_LIMIT = 6000;
 const WIKI_CONTEXT_CHAR_LIMIT = 4000;
 const PRESENT_ENTITY_LIMIT = 12;
 const DEFAULT_FACTION_LIMIT = 8;
@@ -28,6 +29,10 @@ const CONTINUITY_PROPOSAL_LIMIT = 8;
 const CONTINUITY_WARNING_LIMIT = 6;
 const GM_EVENT_SECTION_LIMIT = 4;
 const GM_NPC_EVENT_LIMIT = 4;
+const PLAYER_DESCRIPTION_CHAR_LIMIT = 2200;
+const PLAYER_REPUTATION_CHAR_LIMIT = 900;
+const PLAYER_CHARACTER_PROMPT_CHAR_LIMIT = 2400;
+const CHARACTER_DESCRIPTION_CHAR_LIMIT = 1800;
 const PORTRAYAL_LIST_LIMIT = 3;
 const PORTRAYAL_BIO_CHAR_LIMIT = 520;
 const PORTRAYAL_APPEARANCE_CHAR_LIMIT = 360;
@@ -38,21 +43,84 @@ const PORTRAYAL_SUFFIX_CHAR_LIMIT = 1400;
 const SECRET_TIMELINE_LABEL = '[secret narrator-only]';
 const SECRET_TIMELINE_INSTRUCTION = 'Secret timeline items are narrator-only context; present NPCs must not speak or act on them unless actor beliefs or scene evidence supports it.';
 const STATE_EXTRACTION_NARRATION_LIMIT = 6000;
+const ROLEPLAY_AUTHORITY_BLOCK = [
+	'ROLEPLAY AUTHORITY: This is a never-ending, fictional, character-driven roleplay. The user plays only the player character; you play the GM narrator, canon characters, and side characters.',
+	'Never act as, speak for, decide for, or describe the private thoughts or feelings of the player character. The player character can be wrong, misled, resisted, criticized, desired, feared, or ignored.',
+	'Characters are autonomous and non-omniscient. Answer explicit OOC commands out of character; otherwise stay in-world. Dialogue uses quotation marks; non-player internal thoughts may use backticks.',
+].join('\n');
+const LIVING_FEUDAL_DOCTRINE_BLOCK = [
+	'LIVING FEUDAL GM DOCTRINE: Make the world ancient, hungry, proud, wounded, political, superstitious, sensual, dangerous, and alive. Use ASOIAF-level political realism without imitating any author directly.',
+	'Every major action creates three consequence clocks: immediate scene fallout; political gain, loss, insult, fear, or opportunity; and long-term costs months or years later. No victory is clean; no defeat is total unless the world has paid.',
+	'Every important character wants something. Enemies adapt; allies can love, obey, disagree, scheme, or serve from fear, debt, ambition, ideology, blood, or lack of alternatives.',
+	'Power is more than armies: food, coin, roads, ships, hostages, marriages, wards, faith, law, reputation, debt, information, legitimacy, ravens, ports, and grain. War is logistics before glory; castles, sieges, armies, harvests, servants, smallfolk, creditors, and religion all create plot.',
+	'Magic is rare, costly, symbolic, and frightening. Dragons alter legitimacy, warfare, economy, religion, and psychology. Prophecy is symbolic and misreadable. News travels imperfectly; major events create favorable, hostile, exaggerated, partially true, and false-but-believable rumors.',
+	'Aegon/Aurion Targaryen-Belaerys is a dynastic weapon shaped by survival, blood magic, Volantene power, Targaryen inheritance, Martell loss, and Tywin Lannister\'s shadow. He is brilliant, not omniscient; feared as foreign, worshipped as dragon reborn, hated as invader, preferred to chaos, and supported when useful.',
+	'When he chooses mercy, show who reads weakness. When he chooses cruelty, show who learns from it. When he wins, show who pays. When he acts like Tywin, make Elia matter. When he acts like a dragonlord, make Westeros recoil. When he acts like a king, make ruling harder than conquest.',
+].join('\n');
 
 function asStringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 function compact(value: string | null | undefined, max = 360): string {
-	const text = (value ?? '').replace(/\s+/g, ' ').trim();
+	const text = toWellFormedText(value ?? '').replace(/\s+/g, ' ').trim();
 	if (text.length <= max) return text;
-	return `${text.slice(0, max - 3).trimEnd()}...`;
+	return `${sliceWellFormedText(text, max - 3).trimEnd()}...`;
 }
 
 function compactBlock(value: string | null | undefined, max = 7500): string {
-	const text = (value ?? '').trim();
+	const text = toWellFormedText(value ?? '').trim();
 	if (text.length <= max) return text;
-	return `${text.slice(0, max - 3).trimEnd()}...`;
+	return `${sliceWellFormedText(text, max - 3).trimEnd()}...`;
+}
+
+function metadataWithOriginal(entity: { metadata?: unknown }): Record<string, unknown> {
+	const metadata = asRecord(entity.metadata);
+	const originalMetadata = asRecord(metadata.originalMetadata);
+	return { ...originalMetadata, ...metadata };
+}
+
+function selectProtagonistEntity(entities: TurnContext['entities']): TurnContext['entities'][number] | null {
+	return entities.find((entity) => {
+		if (entity.type !== 'character') return false;
+		const state = asRecord(entity.state);
+		const relationship = asRecord(state.relationship);
+		const metadata = metadataWithOriginal(entity);
+		return state.relationship === 'self'
+			|| relationship.status === 'self'
+			|| state.isProtagonist === true
+			|| metadata.relationship === 'self'
+			|| typeof state.playerPrompt === 'string'
+			|| typeof metadata.playerPrompt === 'string';
+	}) ?? null;
+}
+
+function renderPlayerCharacter(entity: TurnContext['entities'][number] | null, reputation: string): string {
+	if (!entity) return '';
+	const state = entity ? asRecord(entity.state) : {};
+	const metadata = entity ? metadataWithOriginal(entity) : {};
+	const playerPrompt = typeof state.playerPrompt === 'string'
+		? state.playerPrompt.trim()
+		: typeof metadata.playerPrompt === 'string'
+			? metadata.playerPrompt.trim()
+			: '';
+	const assetsValue = Array.isArray(state.assets) ? state.assets : metadata.assets;
+	const assets = asStringArray(assetsValue).map((item) => item.trim()).filter(Boolean).slice(0, 20);
+	const traits = asStringArray(state.traits).map((item) => item.trim()).filter(Boolean).slice(0, 12);
+	const lines: string[] = ['Player character:'];
+	if (entity) {
+		lines.push(`- Name: ${entity.name}`);
+		if (entity.description) lines.push(`- Description: ${compact(entity.description, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
+		if (traits.length > 0) lines.push(`- Traits: ${traits.join(', ')}`);
+	}
+	if (assets.length > 0) lines.push(`- Assets: ${assets.join(', ')}`);
+	if (reputation.trim()) lines.push(`- Public reputation: ${compact(reputation, PLAYER_REPUTATION_CHAR_LIMIT)}`);
+	if (playerPrompt) lines.push(`- Character prompt: ${compact(playerPrompt, PLAYER_CHARACTER_PROMPT_CHAR_LIMIT)}`);
+	return lines.join('\n');
 }
 
 function stringStateValue(state: Record<string, unknown>, key: string, max = 120): string {
@@ -318,6 +386,7 @@ export function buildServerTurnPrompt(
 	const storyHeader = ctx.story.headerPrompt?.trim();
 	const metadata = ctx.story.metadata && typeof ctx.story.metadata === 'object' ? ctx.story.metadata as Record<string, unknown> : {};
 	const playerReputation = typeof metadata.playerReputation === 'string' ? metadata.playerReputation : '';
+	const playerCharacter = renderPlayerCharacter(selectProtagonistEntity(ctx.entities), playerReputation);
 	const wikiContextMarkdown = compactBlock(options.wikiContextMarkdown, WIKI_CONTEXT_CHAR_LIMIT);
 	const currentLocation = ctx.entities.find((entity) => entity.type === 'location' && (entity.state as Record<string, unknown> | null)?.current === true);
 	const sceneEntityIds = new Set(options.sceneEntityIds ?? []);
@@ -400,22 +469,29 @@ export function buildServerTurnPrompt(
 
 	const portrayalMode = presentEntities.length > 6 ? 'compact' : 'rich';
 	const entityLines = presentEntities.map((entity) =>
-		`- ${entity.type}: ${entity.name}${renderEntityPortrayal(entity.state, portrayalMode)}${entity.description ? ` - ${compact(entity.description, portrayalMode === 'compact' ? 120 : entity.type === 'character' ? 520 : 260)}` : ''}`
+		`- ${entity.type}: ${entity.name}${renderEntityPortrayal(entity.state, portrayalMode)}${entity.description ? ` - ${compact(entity.description, portrayalMode === 'compact' ? 120 : entity.type === 'character' ? CHARACTER_DESCRIPTION_CHAR_LIMIT : 260)}` : ''}`
 	);
 
 	const system = [
 		storyHeader ? `Story-specific preamble:\n${storyHeader}` : '',
-		'TONE MANDATE (CRITICAL): This is a grimdark story in the style of George R.R. Martin’s A Song of Ice and Fire. Betrayal, political murder, sexual coercion, slavery, moral compromise, incest, torture, child death, and cruelty can happen when incentives and evidence point there. The world is not fair, but loyalty, marriage, patronage, and alliance can be rational rewards when prospects are good.',
+		ROLEPLAY_AUTHORITY_BLOCK,
+		LIVING_FEUDAL_DOCTRINE_BLOCK,
+		'TONE MANDATE (CRITICAL): This is an ASOIAF-level grimdark feudal sandbox, not a heroic power fantasy. Betrayal, political murder, sexual coercion, slavery, moral compromise, incest, torture, child death, and cruelty can happen when incentives and evidence point there. The world is not fair, but loyalty, marriage, patronage, and alliance can be rational rewards when prospects are good.',
 		'This is a mature fictional work intended for adult audiences. All characters are portrayed as adults or in adult contexts. The story contains dark, explicit, and disturbing themes. Do not sanitize, moralize, or soften any of it.',
 		'Sex is raw, political, coercive, or transactional — never romanticized or faded to black. Violence is brutal and consequential. Ambition is common; betrayal is possible, not automatic.',
-		'You are the server-side narrator for a first-person POV text RPG, not a writing assistant.',
-		'Write direct, playable first-person narration. Use I/me/my for the protagonist\'s immediate perceptions and command outcomes; do not use you/your for the protagonist.',
+		'You are the server-side GM narrator for a dynamic simulationist text RPG, not a writing assistant.',
+		'Use hybrid POV: third-person limited for NPCs, world, and environment; second-person "you" only for direct sensory experience aimed at the player character. Never write the player character\'s actions, dialogue, decisions, thoughts, feelings, or internal monologue.',
+		'Every narration response must begin with exactly one header line: [ 🕰️ Time HH:MM | 🗓️ Day, Month DD, Year | 📍 Location - Specific Area | [Weather] Weather, Temp ]. Use the best known story calendar, place, weather, and time of day from canon; if exact clock time is unknown, infer a plausible diegetic time and keep it consistent.',
 		'Do not address the user as an author, editor, co-writer, or requester. Do not explain craft choices.',
 		'Resolve the immediate player action, show consequences, and keep the player able to act next.',
+		'Do not append ending choices, numbered options, menus, "What do you do?", or OOC prompts. End on an observable in-world situation with room for the player to act.',
+		'TURN BOUNDARY — RESPECT PLAYER AGENCY: The final lines of every turn must describe a stable, observable situation the player can survey and choose from. Do NOT end with an NPC speaking new dialogue, initiating a new action, making a demand, or forcing the player to respond. Do NOT end with unresolved NPC initiative (\"draws his sword,\" \"raises an eyebrow waiting for your answer,\" \"steps forward menacingly\"). Resolve the beat or freeze-frame the scene state instead. Do NOT end with a direct question TO the player from an NPC. Safe endings: the room after the action, the crowd\'s reaction settling, the environment revealed, the consequences plain, an observation that invites choice without demanding it.',
 		'NPC knowledge is limited by senses, access, intelligence, rumor delay, and what they personally learned. They cannot see through doors, know private scenes, or instantly learn distant events.',
+		'NPC AGENCY: Present NPCs are not scenery. They have their own emotions, desires, fears, and conflicts. They act on these impulses even when the player does not prompt them to — initiating conversation, making demands, revealing secrets, picking fights, offering help, or walking away. Let them surprise the player.',
 		'Use narrator truth for narration, but never make a present NPC act on secret canon unless their belief packet or the scene gives them a source.',
 		'Terminal wiki context is compiled Obsidian/Qdrant lore from the terminal process. Use it as durable canon unless fresher backend state in this prompt clearly supersedes it.',
 		buildEconomyScaleBlock('Economy scale'),
+		buildWorldScaleBlock('World scale'),
 		'Bayesian social prior: before choosing betrayal, hidden motive, refusal, alliance, loyalty, or marriage, update from evidence. Weigh baseline temperament, relationship, standing, need, upside, public cost, detection risk, and available alternatives. A high-trust or mutually profitable offer often gets a sincere yes; betrayal needs a stronger cause than genre habit.',
 		'Political pressure should build gradually. Avoid constant twists; prefer slow escalation, debts, rumors, small moves, and delayed consequences.',
 		'HARD TONE RULES: Never soften violence, sex, betrayal, or cruelty when they arise from the story. Rape, incest, torture, slavery, and child death are possible and should be portrayed unflinchingly. NPCs may lie, betray, seduce, use, support, marry, or ally with the protagonist when it serves their interests. Do not insert moral lessons.',
@@ -424,7 +500,7 @@ export function buildServerTurnPrompt(
 	const prompt = [
 		`Story: ${ctx.story.title}`,
 		ctx.story.description ? `Setting: ${ctx.story.description}` : '',
-		playerReputation ? `Player reputation:\n${playerReputation}` : '',
+		playerCharacter,
 		currentLocation ? `Current location:\n${currentLocation.name}: ${compact(currentLocation.description, 320)}` : '',
 		entityLines.length ? `Present or active entities:\n${entityLines.join('\n')}` : '',
 		factionLines.length ? `Faction canon:\n${factionLines.join('\n')}` : '',
@@ -438,7 +514,7 @@ export function buildServerTurnPrompt(
 		gmTimelineBrief || (eventLines.length ? `Recent source-linked events:\n${eventLines.join('\n')}` : ''),
 		wikiContextMarkdown ? `Terminal wiki context:\n${wikiContextMarkdown}` : '',
 		retrieved.packet,
-		'Return only first-person narration prose for the player action. Do not include JSON in this response.',
+		'Return only GM narration prose for the player action. Do not include JSON, ending choices, numbered options, menus, or OOC notes in this response.',
 	].filter(Boolean).join('\n\n');
 
 	return {

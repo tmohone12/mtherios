@@ -197,11 +197,18 @@ describe('turn prompt harness', () => {
 
 		const findings = evaluatePromptHarness(report, {
 			systemIncludes: [
-				'server-side narrator',
-				'first-person POV',
+				'server-side GM narrator',
+				'hybrid POV',
+				'Time HH:MM',
+				'Do not append ending choices',
 				'not a writing assistant',
 				'1 Volantene honor = 1 gold dragon',
 				'Bayesian social prior',
+				'ROLEPLAY AUTHORITY',
+				'LIVING FEUDAL GM DOCTRINE',
+				'three consequence clocks',
+				'War is logistics before glory',
+				'Aegon/Aurion Targaryen-Belaerys is a dynastic weapon',
 				'296 AC',
 				'15th day of the 8th moon',
 			],
@@ -216,7 +223,7 @@ describe('turn prompt harness', () => {
 				'Balaerys Heir': 3,
 			},
 			maxMessageCount: 24,
-			maxTotalBeforeGenerationTokens: 2400,
+			maxTotalBeforeGenerationTokens: 2600,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
@@ -306,6 +313,36 @@ describe('turn prompt harness', () => {
 		expect(report.prompt).toContain('do not rediscover this as if new');
 	});
 
+	it('keeps long player character descriptions visible in the server prompt', () => {
+		const longDescription = [
+			'Aegon Targaryen, hidden as Aurion Balaerys, was not merely fostered by House Balaerys.',
+			'After the death of their trueborn infant heir, the surviving elders performed a forbidden cradle rite that made his public identity both a shield and a trap.',
+			'He carries the cadence of Volantene tutors, the training scars of courtyard masters, and the private terror of a boy taught that his name could burn cities before he understood crowns.',
+			'His court mask is controlled, bright, and dangerous; underneath it sits a survivor who has learned to count every favor as a future blade.',
+			'The long-description sentinel: remembers Elia, Tywin, blood magic, Volantene debt, and the lie of the Second Cradle.',
+		].join(' ');
+		const report = buildPromptHarnessReport({
+			name: 'long-player-character-description',
+			playerText: 'I listen from the balcony before answering the envoy.',
+			ctx: baseContext({
+				entities: [
+					entity('loc_crimson_spire', 'location', 'The Crimson Spire', 'The Balaerys manse inside the Black Walls.', { current: true }),
+					entity('pc_aurion', 'character', 'Aurion Balaerys', longDescription, {
+						present: true,
+						relationship: { status: 'self', level: 100 },
+					}),
+				],
+			}),
+			retrieved: packet('Aurion identity envoy balcony', []),
+			options: {
+				sceneEntityIds: ['pc_aurion'],
+			},
+		});
+
+		expect(report.prompt).toContain('The long-description sentinel');
+		expect(report.prompt).toContain('Second Cradle');
+	});
+
 	it('keeps actor belief limits visible for secret-knowledge scenarios', () => {
 		const report = buildPromptHarnessReport({
 			name: 'secret-knowledge-boundary',
@@ -345,7 +382,7 @@ describe('turn prompt harness', () => {
 				'Lady Saera believes kitchen servants saw the heir meet Drazen Vhassar before dawn.',
 				'72% confidence',
 			],
-			maxTotalBeforeGenerationTokens: 2400,
+			maxTotalBeforeGenerationTokens: 2550,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
@@ -465,7 +502,7 @@ describe('turn prompt harness', () => {
 		const findings = evaluatePromptHarness(report, {
 			promptIncludes: ['House Balaerys', 'members: Balaerys Heir'],
 			promptExcludes: ['House Irrelevant 5'],
-			maxTotalBeforeGenerationTokens: 2200,
+			maxTotalBeforeGenerationTokens: 2600,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
@@ -574,7 +611,7 @@ describe('turn prompt harness', () => {
 				'Voice: low, precise, and dryly amused',
 				'Mannerisms: taps one ring against the table before naming a cost',
 			],
-			maxTotalBeforeGenerationTokens: 2500,
+			maxTotalBeforeGenerationTokens: 2900,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
@@ -617,7 +654,7 @@ describe('turn prompt harness', () => {
 				'Voice: soft, formal, and edged with ritual courtesy',
 				'Mannerisms: folds her fan once before naming a debt',
 			],
-			maxTotalBeforeGenerationTokens: 2400,
+			maxTotalBeforeGenerationTokens: 2600,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
@@ -677,7 +714,7 @@ describe('turn prompt harness', () => {
 				'Voice: soft, formal, and edged with ritual courtesy',
 				'Mannerisms: folds her fan once before naming a debt',
 			],
-			maxTotalBeforeGenerationTokens: 2600,
+			maxTotalBeforeGenerationTokens: 3100,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
@@ -767,7 +804,7 @@ describe('turn prompt harness', () => {
 				'[secret narrator-only] npc_saera: Saera is tied to the cupbearer plot',
 				'reveal/committed; due n/a: Public feast toast',
 			],
-			maxTotalBeforeGenerationTokens: 2600,
+			maxTotalBeforeGenerationTokens: 2850,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
@@ -822,7 +859,7 @@ describe('turn prompt harness', () => {
 				'Personality: calculating court survivor 1',
 				'Voice:',
 			],
-			maxTotalBeforeGenerationTokens: 2200,
+			maxTotalBeforeGenerationTokens: 3650,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
@@ -870,7 +907,7 @@ describe('turn prompt harness', () => {
 				'A harbor envoy entered the Crimson Spire with witnesses and a public marriage offer.',
 			],
 			promptExcludes: ['GM timeline brief:'],
-			maxTotalBeforeGenerationTokens: 2400,
+			maxTotalBeforeGenerationTokens: 2600,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);

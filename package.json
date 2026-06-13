@@ -15,6 +15,7 @@
 		"app:engine": "node scripts/app-engine.mjs",
 		"app:story": "node scripts/app-story.mjs",
 		"app:database": "node scripts/app-database.mjs",
+		"app:agent": "node scripts/app-agent.mjs",
 		"app:mcp": "node scripts/mtherios-mcp.mjs",
 		"app:wiki": "node scripts/app-wiki.mjs",
 		"dev": "vite dev",
@@ -59,10 +60,6 @@
 		"vitest": "^4.1.2"
 	},
 	"dependencies": {
-		"@ai-sdk/anthropic": "^3.0.58",
-		"@ai-sdk/openai": "^3.0.41",
-		"@ai-sdk/openai-compatible": "^2.0.35",
-		"@openrouter/ai-sdk-provider": "^2.2.5",
 		"@tailwindcss/vite": "^4.2.1",
 		"@types/dompurify": "^3.0.5",
 		"bits-ui": "^2.16.3",

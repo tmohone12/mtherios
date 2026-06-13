@@ -104,6 +104,33 @@ describe('server generation provider cache hints', () => {
 		expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
 	});
 
+	it('repairs lone surrogates before serializing provider messages', async () => {
+		stubFetch({
+			choices: [{ message: { content: 'The hall grows quiet.' } }],
+		});
+		const brokenWeatherEmoji = '🌤️'.slice(0, 1);
+
+		await generateServerTextWithMetrics({
+			profile: {
+				providerType: 'deepseek',
+				apiKey: 'test-key',
+				baseUrl: 'https://api.deepseek.com/v1',
+			} as any,
+			model: 'deepseek-chat',
+			system: `Stable narrator rules ${brokenWeatherEmoji}`,
+			systemDynamic: `Dynamic state ${brokenWeatherEmoji}`,
+			messages: [{ role: 'assistant', content: `Earlier narration ${brokenWeatherEmoji}` }],
+			prompt: `Player action ${brokenWeatherEmoji}`,
+		});
+
+		const body = requests[0].body;
+		const serialized = JSON.stringify(body);
+		expect(serialized).not.toContain('\\ud83c');
+		expect(body.messages[0].content).toContain('Stable narrator rules �');
+		expect(body.messages[1].content).toContain('Earlier narration �');
+		expect(body.messages[2].content).toContain('Player action �');
+	});
+
 	it('reports upstream provider timeout as a structured server generation error', async () => {
 		vi.useFakeTimers();
 		vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {

@@ -187,11 +187,11 @@ export interface EngineCommandHandlers {
 	upsertArc?: (storyId: string, arc: JsonRecord) => Promise<ArcCommandResponse>;
 	upsertSaga?: (storyId: string, saga: JsonRecord) => Promise<SagaCommandResponse>;
 	upsertLivingMemory?: (storyId: string, kind: Parameters<typeof upsertBackendLivingMemoryFromLocal>[1], records: JsonRecord[]) => Promise<LivingMemoryCommandResponse>;
-	previewEntityResolution?: (input: Parameters<typeof previewEntityResolution>[0]) => Promise<JsonRecord>;
-	addEntityAlias?: (input: Parameters<typeof addEntityAlias>[0]) => Promise<JsonRecord>;
-	mergeEntities?: (input: Parameters<typeof mergeEntities>[0]) => Promise<JsonRecord>;
-	reviewPatchProposal?: (input: Parameters<typeof reviewPatchProposal>[0]) => Promise<JsonRecord>;
-	continuityAudit?: (input: Parameters<typeof continuityAudit>[0]) => Promise<JsonRecord>;
+	previewEntityResolution?: (input: Parameters<typeof previewEntityResolutionCommand>[0]) => Promise<JsonRecord>;
+	addEntityAlias?: (input: Parameters<typeof addEntityAliasCommand>[0]) => Promise<JsonRecord>;
+	mergeEntities?: (input: Parameters<typeof mergeEntitiesCommand>[0]) => Promise<JsonRecord>;
+	reviewPatchProposal?: (input: Parameters<typeof reviewPatchProposalCommand>[0]) => Promise<JsonRecord>;
+	continuityAudit?: (input: Parameters<typeof continuityAuditCommand>[0]) => Promise<JsonRecord>;
 	submitTurn?: (input: unknown) => Promise<TurnResponse>;
 	loadTimelineBrief?: (input: Parameters<typeof loadGmTimelineBrief>[0]) => Promise<GmTimelineBrief>;
 	scheduleTimelineEvent?: (input: Parameters<typeof scheduleTimelineEvent>[0]) => Promise<StoryEventRow>;
@@ -1110,9 +1110,23 @@ export async function executeEngineCommand(
 			}
 			case 'entity.resolve': {
 				const args = asRecord(request.args ?? {});
+				const candidateRecord = asRecord(args.candidate);
+				const candidate = {
+					id: typeof candidateRecord.id === 'string' ? candidateRecord.id : candidateRecord.id == null ? null : String(candidateRecord.id),
+					type: typeof candidateRecord.type === 'string' ? candidateRecord.type : '',
+					name: typeof candidateRecord.name === 'string' ? candidateRecord.name : '',
+					aliases: Array.isArray(candidateRecord.aliases)
+						? candidateRecord.aliases.filter((value): value is string => typeof value === 'string')
+						: undefined,
+					description: typeof candidateRecord.description === 'string' ? candidateRecord.description : candidateRecord.description == null ? null : String(candidateRecord.description),
+					sourceEntryIds: Array.isArray(candidateRecord.sourceEntryIds) ? candidateRecord.sourceEntryIds.filter((value): value is string => typeof value === 'string') : undefined,
+					sourceEventIds: Array.isArray(candidateRecord.sourceEventIds) ? candidateRecord.sourceEventIds.filter((value): value is string => typeof value === 'string') : undefined,
+					sourcePatchIds: Array.isArray(candidateRecord.sourcePatchIds) ? candidateRecord.sourcePatchIds.filter((value): value is string => typeof value === 'string') : undefined,
+					relatedEntityIds: Array.isArray(candidateRecord.relatedEntityIds) ? candidateRecord.relatedEntityIds.filter((value): value is string => typeof value === 'string') : undefined,
+				} satisfies Parameters<typeof previewResolution>[0]['candidate'];
 				const result = await previewResolution({
 					storyId: request.storyId,
-					candidate: asRecord(args.candidate) as Parameters<typeof previewResolution>[0]['candidate'],
+					candidate,
 					includeSemantic: args.includeSemantic !== false,
 					maxCandidates: typeof args.maxCandidates === 'number' ? args.maxCandidates : undefined,
 				});

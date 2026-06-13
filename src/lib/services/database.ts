@@ -714,7 +714,7 @@ export async function getLorebookEntry(id: string): Promise<Entry | undefined> {
 export async function updateLorebookEntry(id: string, updates: Partial<Entry>): Promise<void> {
 	// Sanitize through JSON to strip Svelte 5 reactive proxies, undefineds, and
 	// circular refs before handing the payload to Dexie. Without this, edits made
-	// via $state-bound forms (e.g. EntryDetailModal) can silently fail to persist
+	// via $state-bound forms can silently fail to persist
 	// because the structuredClone path chokes on proxy objects. Mirrors the
 	// treatment in createLorebookEntry above.
 	const clean: Partial<Entry> = JSON.parse(JSON.stringify(updates));

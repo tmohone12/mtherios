@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus, Upload, Trash2, Download, FileArchive } from 'lucide-svelte';
+	import { BookOpen, Database, FileArchive, Plus, Trash2, Upload, Download } from 'lucide-svelte';
 	import { app } from '$lib/stores/app.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { refreshStoryCatalog, deleteStoryEverywhere } from '$lib/services/serverStories';
@@ -157,11 +157,19 @@
 			</div>
 		</div>
 	{:else}
-		<!-- Story list -->
+		<!-- Shelf dashboard -->
 		<div class="px-4 py-5">
-			<div class="mb-5 flex items-center justify-between">
-				<h2 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Your Chronicles</h2>
-				<div class="flex items-center gap-2">
+			<div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+				<div>
+					<div class="flex items-center gap-2">
+						<Database class="h-4 w-4 text-[var(--text-accent)]" />
+						<h2 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Shelves</h2>
+					</div>
+					<p class="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--text-muted)]">
+						Stories in this shelf use the same terminal world database and lore workspace. Open a story to play, or use its Lore screen to search and edit canon.
+					</p>
+				</div>
+				<div class="flex flex-wrap items-center gap-2">
 					<button onclick={() => fileInput.click()} disabled={importing}
 						class="flex items-center gap-2 rounded-lg bg-[rgba(212,168,83,0.06)] px-3 py-2 font-display text-xs tracking-wider uppercase text-[var(--text-muted)] transition-colors hover:bg-[rgba(212,168,83,0.12)] hover:text-[var(--text-accent)]">
 						<Upload class="h-3.5 w-3.5" /> {importing ? 'Importing...' : 'Import'}
@@ -178,6 +186,24 @@
 				</div>
 			</div>
 
+			<section class="mb-4 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
+				<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+					<div class="min-w-0">
+						<div class="flex items-center gap-2">
+							<BookOpen class="h-4 w-4 text-[var(--text-accent)]" />
+							<h3 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Mtherios Lore Shelf</h3>
+						</div>
+						<p class="mt-1 text-xs text-[var(--text-muted)]">
+							{stories.length} {stories.length === 1 ? 'story' : 'stories'} linked to the shared canon workspace.
+						</p>
+					</div>
+					<button onclick={() => app.startNewStory()}
+						class="inline-flex items-center justify-center gap-2 rounded-lg border border-[var(--color-gold-600)]/40 bg-[rgba(212,168,83,0.12)] px-4 py-2 font-display text-xs tracking-wider uppercase text-[var(--text-accent)] transition-colors hover:bg-[rgba(212,168,83,0.2)]">
+						<Plus class="h-3.5 w-3.5" /> New Story
+					</button>
+				</div>
+			</section>
+
 			<div class="space-y-2">
 				{#each stories as s}
 					<div class="group relative">
@@ -186,7 +212,7 @@
 							onclick={() => app.openStory(s.id)}
 						>
 							<div class="flex h-11 w-11 items-center justify-center rounded-lg bg-[var(--bg-primary)]">
-								<span class="text-lg">{s.mode === 'adventure' ? '⚔️' : '✍️'}</span>
+								<BookOpen class="h-5 w-5 text-[var(--text-accent)]" />
 							</div>
 							<div class="flex-1 min-w-0">
 								<div class="truncate font-story text-sm font-semibold text-[var(--text-primary)]">{s.title}</div>

@@ -5,6 +5,7 @@ import {
 	getGoogleAgentPlatformBaseUrl,
 	getGoogleAgentPlatformHeaders,
 } from '$lib/server/ai/googleAgentPlatform';
+import { toWellFormedText } from './wellFormedText';
 
 type ProviderProfile = NonNullable<TurnRequest['providerProfile']>;
 
@@ -121,6 +122,13 @@ function combinedSystem(system: string, systemDynamic?: string): string {
 	return systemDynamic ? `${system}\n\n${systemDynamic}` : system;
 }
 
+function wellFormedMessages(messages: Array<{ role: 'user' | 'assistant'; content: string }>): Array<{ role: 'user' | 'assistant'; content: string }> {
+	return messages.map((message) => ({
+		...message,
+		content: toWellFormedText(message.content),
+	}));
+}
+
 function buildAnthropicSystem(system: string, systemDynamic?: string): string | Array<Record<string, unknown>> {
 	if (systemDynamic && systemDynamic.length > 0 && system.length > 0) {
 		return [
@@ -199,7 +207,10 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 	const baseUrl = useGoogleAgentPlatform
 		? await getGoogleAgentPlatformBaseUrl()
 		: baseUrlFor(options.profile);
-	const messages = options.messages ?? [];
+	const messages = wellFormedMessages(options.messages ?? []);
+	const system = toWellFormedText(options.system);
+	const systemDynamic = options.systemDynamic == null ? undefined : toWellFormedText(options.systemDynamic);
+	const prompt = toWellFormedText(options.prompt);
 	const timeoutMs = generationTimeoutMs(options.timeoutMs);
 
 	const endpoint = useAnthropic
@@ -212,10 +223,10 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			model,
 			max_tokens: maxTokens,
 			temperature,
-			system: buildAnthropicSystem(options.system, options.systemDynamic),
+			system: buildAnthropicSystem(system, systemDynamic),
 			messages: [
 				...messages,
-				{ role: 'user', content: options.prompt },
+				{ role: 'user', content: prompt },
 			],
 		}
 		: {
@@ -223,9 +234,9 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			temperature,
 			max_tokens: maxTokens,
 			messages: [
-				buildOpenAiSystemMessage(options.profile, options.system, options.systemDynamic),
+				buildOpenAiSystemMessage(options.profile, system, systemDynamic),
 				...messages,
-				{ role: 'user', content: options.prompt },
+				{ role: 'user', content: prompt },
 			],
 			...(options.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}),
 		};

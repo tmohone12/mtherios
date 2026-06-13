@@ -238,13 +238,14 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(factInsert).toMatchObject({
 			statement: expect.stringContaining('Turn update recorded'),
 		});
+		expect(proposalInsert).toBeDefined();
 		expect(proposalInsert).toMatchObject({
 			proposalType: 'turn_summary',
 			targetRecordId: factInsert.id,
 			status: 'pending',
 		});
 		expect(sourceRefInserts.some(ref => ref.targetTable === 'facts' && ref.targetRecordId === factInsert.id)).toBe(true);
-		expect(sourceRefInserts.some(ref => ref.targetTable === 'patch_proposals' && ref.targetRecordId === proposalInsert.id)).toBe(true);
+		expect(sourceRefInserts.some(ref => ref.targetTable === 'patch_proposals' && ref.targetRecordId === proposalInsert!.id)).toBe(true);
 		expect(warningInserts).toHaveLength(0);
 		expect(linkInsert).toEqual([
 			expect.objectContaining({
@@ -273,6 +274,8 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(metadataUpdate?.metadata).toEqual({
 			campaignTone: 'wary',
 			playerReputation: 'honored',
+			playerReputationUpdatedAt: expect.any(String),
+			playerReputationUpdatedTurn: 7,
 		});
 		expect(turnUpdate).toMatchObject({
 			currentTurn: 8,

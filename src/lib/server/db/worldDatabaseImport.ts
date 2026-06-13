@@ -95,6 +95,71 @@ function asStringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
 }
 
+function firstValue(row: JsonRecord, keys: string[]): unknown {
+	for (const key of keys) {
+		if (row[key] != null) return row[key];
+	}
+	return undefined;
+}
+
+function normalizeEnum(value: unknown, fallback: string, allowed: Set<string>, aliases: Record<string, string> = {}): string {
+	const raw = typeof value === 'string' ? value.trim() : '';
+	if (!raw) return fallback;
+	const normalized = aliases[raw.toLowerCase()] ?? raw;
+	return allowed.has(normalized) ? normalized : fallback;
+}
+
+const storyModes = new Set(['adventure', 'creative-writing']);
+const storyModeAliases: Record<string, string> = {
+	terminal_core_first: 'adventure',
+	terminal: 'adventure',
+	roleplay: 'adventure',
+	rp: 'adventure',
+};
+
+const visibilityValues = new Set(['public', 'player_known', 'secret']);
+const visibilityAliases: Record<string, string> = {
+	gm: 'secret',
+	gm_only: 'secret',
+	hidden: 'secret',
+	private: 'secret',
+	confidential: 'secret',
+	known: 'player_known',
+	player: 'player_known',
+	player_visible: 'player_known',
+};
+
+const eventStatusValues = new Set(['proposed', 'scheduled', 'due', 'committed', 'cancelled']);
+const eventStatusAliases: Record<string, string> = {
+	active: 'committed',
+	done: 'committed',
+	resolved: 'committed',
+	merged: 'committed',
+};
+
+const patchStatusValues = new Set(['proposed', 'applied', 'rejected', 'needs_repair']);
+const patchStatusAliases: Record<string, string> = {
+	active: 'applied',
+	committed: 'applied',
+	merged: 'applied',
+};
+
+function normalizeStoryMode(value: unknown): string {
+	return normalizeEnum(value, 'adventure', storyModes, storyModeAliases);
+}
+
+function normalizeVisibility(value: unknown, fallback = 'player_known'): string {
+	return normalizeEnum(value, fallback, visibilityValues, visibilityAliases);
+}
+
+function normalizeEventStatus(value: unknown): string {
+	return normalizeEnum(value, 'committed', eventStatusValues, eventStatusAliases);
+}
+
+function normalizePatchStatus(value: unknown): string {
+	return normalizeEnum(value, 'proposed', patchStatusValues, patchStatusAliases);
+}
+
 function asJsonArray(value: unknown): Array<Record<string, unknown>> {
 	return Array.isArray(value) ? value.map(asRecord) : [];
 }
@@ -213,7 +278,7 @@ function storyValue(row: JsonRecord, importedAt: string): typeof stories.$inferI
 		title: asString(row.title, 'Imported World Database'),
 		description: asNullableString(row.description),
 		genre: asNullableString(row.genre),
-		mode: asString(row.mode, 'adventure'),
+		mode: normalizeStoryMode(row.mode),
 		settings: row.settings == null ? null : asRecord(row.settings),
 		headerPrompt: asNullableString(row.headerPrompt),
 		currentLocationId: asNullableString(row.currentLocationId),
@@ -254,7 +319,7 @@ function entityValue(row: JsonRecord, storyId: string, importedAt: string): type
 		name: asString(row.name, 'Unnamed Entity'),
 		description: asNullableString(row.description),
 		status: asString(row.status, 'active'),
-		visibility: asString(row.visibility, 'player_known'),
+		visibility: normalizeVisibility(row.visibility),
 		state: asRecord(row.state),
 		metadata: asRecord(row.metadata),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
@@ -284,8 +349,8 @@ function relationshipValue(row: JsonRecord, storyId: string, importedAt: string)
 	return {
 		id: asString(row.id, id('rel')),
 		storyId,
-		sourceEntityId: asString(row.sourceEntityId),
-		targetEntityId: asString(row.targetEntityId),
+		sourceEntityId: asString(firstValue(row, ['sourceEntityId', 'subjectEntityId'])),
+		targetEntityId: asString(firstValue(row, ['targetEntityId', 'objectEntityId'])),
 		type: asString(row.type, 'related-to'),
 		label: asNullableString(row.label),
 		strength: asNumber(row.strength, 0.5),
@@ -332,7 +397,7 @@ function membershipValue(row: JsonRecord, storyId: string, importedAt: string): 
 		role: asString(row.role, 'member'),
 		rank: asNullableString(row.rank),
 		status: asString(row.status, 'active'),
-		visibility: asString(row.visibility, 'player_known'),
+		visibility: normalizeVisibility(row.visibility),
 		metadata: asRecord(row.metadata),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),
@@ -353,7 +418,7 @@ function resourceValue(row: JsonRecord, storyId: string, importedAt: string): ty
 		amount: typeof row.amount === 'number' ? row.amount : null,
 		status: asString(row.status, 'available'),
 		locationId: asNullableString(row.locationId),
-		visibility: asString(row.visibility, 'player_known'),
+		visibility: normalizeVisibility(row.visibility),
 		metadata: asRecord(row.metadata),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),
@@ -397,7 +462,7 @@ function projectValue(row: JsonRecord, storyId: string, importedAt: string): typ
 		costs: asRecord(row.costs),
 		gains: asRecord(row.gains),
 		risks: asStringArray(row.risks),
-		visibility: asString(row.visibility, 'player_known'),
+		visibility: normalizeVisibility(row.visibility),
 		metadata: asRecord(row.metadata),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),
@@ -412,11 +477,11 @@ function beliefValue(row: JsonRecord, storyId: string, importedAt: string): type
 	return {
 		id: asString(row.id, id('belief')),
 		storyId,
-		believerEntityId: asString(row.believerEntityId),
+		believerEntityId: asString(firstValue(row, ['believerEntityId', 'entityId', 'npcEntityId'])),
 		subjectEntityId: asNullableString(row.subjectEntityId),
 		belief: asString(row.belief),
 		confidence: asNumber(row.confidence, 0.5),
-		visibility: asString(row.visibility, 'secret'),
+		visibility: normalizeVisibility(row.visibility, 'secret'),
 		evidenceEventIds: asStringArray(row.evidenceEventIds),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),
@@ -467,7 +532,7 @@ function threadValue(row: JsonRecord, storyId: string, importedAt: string): type
 }
 
 function eventValue(row: JsonRecord, storyId: string, importedAt: string): typeof storyEvents.$inferInsert {
-	const status = asString(row.status, 'committed');
+	const status = normalizeEventStatus(row.status);
 	const createdTurn = asNumber(row.createdTurn, 0);
 	const occurredTurn = typeof row.occurredTurn === 'number' && Number.isFinite(row.occurredTurn)
 		? row.occurredTurn
@@ -491,7 +556,7 @@ function eventValue(row: JsonRecord, storyId: string, importedAt: string): typeo
 		locationIds,
 		factionIds: asStringArray(row.factionIds),
 		threadIds: asStringArray(row.threadIds),
-		visibility: asString(row.visibility, 'player_known'),
+		visibility: normalizeVisibility(row.visibility),
 		createdTurn,
 		occurredTurn,
 		scheduledTurn: typeof row.scheduledTurn === 'number' && Number.isFinite(row.scheduledTurn) ? row.scheduledTurn : null,
@@ -511,9 +576,9 @@ function npcEventLinkValue(row: JsonRecord, storyId: string, importedAt: string)
 		id: asString(row.id, id('npc_event_link')),
 		storyId,
 		eventId: asString(row.eventId),
-		npcEntityId: asString(row.npcEntityId),
+		npcEntityId: asString(firstValue(row, ['npcEntityId', 'entityId'])),
 		role: asString(row.role, 'affected'),
-		visibility: asString(row.visibility, 'player_known'),
+		visibility: normalizeVisibility(row.visibility),
 		evidenceStrength: asNumber(row.evidenceStrength, 0.75),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourcePatchIds: asStringArray(row.sourcePatchIds),
@@ -529,7 +594,7 @@ function patchValue(row: JsonRecord, storyId: string, importedAt: string): typeo
 		storyId,
 		operations: asJsonArray(row.operations),
 		reason: asString(row.reason),
-		status: asString(row.status, 'proposed'),
+		status: normalizePatchStatus(row.status),
 		validationWarnings: asStringArray(row.validationWarnings),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),
@@ -550,7 +615,7 @@ function factValue(row: JsonRecord, storyId: string, importedAt: string): typeof
 		statement: asString(row.statement),
 		confidence: asNumber(row.confidence, 1),
 		status: asString(row.status, 'active'),
-		visibility: asString(row.visibility, 'player_known'),
+		visibility: normalizeVisibility(row.visibility),
 		firstSeenEntryId: asNullableString(row.firstSeenEntryId),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),
@@ -646,7 +711,7 @@ function memoryValue(row: JsonRecord, storyId: string, importedAt: string): type
 		factionIds: asStringArray(row.factionIds),
 		threadIds: asStringArray(row.threadIds),
 		locationId: asNullableString(row.locationId),
-		visibility: asString(row.visibility, 'player_known'),
+		visibility: normalizeVisibility(row.visibility),
 		importance: asNumber(row.importance, 0.5),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),

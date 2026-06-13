@@ -3,6 +3,13 @@
 	import { settings } from '$lib/stores/settings.svelte';
 	import { getModelContextWindow } from '$lib/services/ai/context/modelWindows';
 	import { MAX_BACKEND_CONTEXT_BUDGET, normalizeBackendContextBudget } from '$lib/services/backendTurnContext';
+	import {
+		CONTEXT_BUDGET_STEPS,
+		contextBudgetSliderIndexToValue,
+		contextBudgetValueToSliderIndex,
+		formatTokenBudgetCompact,
+	} from '$lib/services/memorySettings';
+	import { syncTerminalLlmSettingsFromBrowser } from '$lib/services/terminalSettings';
 	import { Gauge } from 'lucide-svelte';
 
 	/** Effective budget: user-set value or auto (90% of model context) */
@@ -17,15 +24,21 @@
 	// Sync from settings on mount / when effectiveBudget changes
 	$effect(() => { selectedBudget = effectiveBudget; });
 
-	function onBudgetChange() {
+	function onBudgetSliderInput(index: number) {
+		selectedBudget = contextBudgetSliderIndexToValue(index);
+	}
+
+	async function onBudgetChange() {
 		settings.contextBudget = normalizeBackendContextBudget(selectedBudget);
 		selectedBudget = settings.contextBudget || MAX_BACKEND_CONTEXT_BUDGET;
-		settings.saveContextBudget();
+		await settings.saveContextBudget();
+		await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
+			console.warn('[ContextWindow] Terminal context budget sync failed:', error);
+		});
 	}
 
 	function formatBudget(val: number): string {
-		if (val >= 1000000) return `${(val / 1000000).toFixed(1)}M`;
-		return `${Math.round(val / 1000)}K`;
+		return formatTokenBudgetCompact(val);
 	}
 
 	const estimateTokens = (text: string) => Math.ceil(text.length / 4);
@@ -105,15 +118,16 @@
 	<div class="mb-3">
 		<input
 			type="range"
-			min="1000"
-			max={MAX_BACKEND_CONTEXT_BUDGET}
-			step="1000"
-			bind:value={selectedBudget}
+			min="1"
+			max={CONTEXT_BUDGET_STEPS.length - 1}
+			step="1"
+			value={contextBudgetValueToSliderIndex(selectedBudget)}
+			oninput={(event) => onBudgetSliderInput(Number((event.target as HTMLInputElement).value))}
 			onchange={onBudgetChange}
 			class="w-full accent-[var(--color-gold-400)] h-1.5"
 		/>
 		<div class="flex justify-between text-[9px] text-[var(--text-muted)] mt-0.5">
-			<span>1K</span><span>{formatBudget(MAX_BACKEND_CONTEXT_BUDGET)}</span>
+			<span>{formatBudget(CONTEXT_BUDGET_STEPS[1])}</span><span>{formatBudget(MAX_BACKEND_CONTEXT_BUDGET)}</span>
 		</div>
 	</div>
 

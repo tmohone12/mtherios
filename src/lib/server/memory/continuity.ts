@@ -254,7 +254,7 @@ export function summarizeTurnContinuity(input: ContinuityLedgerSummaryInput): Co
 		subjectEntityId: null,
 		targetEntityId: null,
 		title: 'Turn continuity summary',
-		statement: `${summaryText} Narration: ${compact(input.narration, 280)}.`,
+		statement: `${summaryText} Narration: ${compact(input.narration, 800)}.`,
 		confidence,
 		status: 'active' as const,
 		visibility: 'player_known' as const,
@@ -295,7 +295,7 @@ export function summarizeTurnContinuity(input: ContinuityLedgerSummaryInput): Co
 		sourcePatchIds: unique(input.sourcePatchIds ?? []),
 		metadata: {
 			sourceType: 'turn_summary',
-			narration: compact(input.narration, 360),
+			narration: compact(input.narration, 1000),
 			parseWarnings,
 			updateCounts: {
 				characters: input.update.characters.length,

@@ -27,7 +27,8 @@ import {
 import { uuid } from '$lib/utils/uuid';
 import { countTokens } from '$lib/utils/tokens';
 import { normalizeRelation } from '$lib/services/ai/tools/helpers';
-import { buildEconomyScaleBlock } from '$lib/services/ai/context/economyScale';
+import { buildEconomyScaleBlock, buildWorldScaleBlock } from '$lib/services/ai/context/economyScale';
+import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET } from '$lib/services/memorySettings';
 import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, ConceptEntryState, EventEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Saga, Chapter, StoryBeat, Scheme, StoryThread, ProceduralRule } from '$lib/types';
 import { injectSchemes } from '$lib/services/ai/scheme/SchemeService';
 import type { WorldSimulationResult, PlotMomentum } from '$lib/services/ai/sdk/schemas/worldsim';
@@ -903,6 +904,12 @@ class StoryStore {
 		if (!id || !name) return null;
 		const state = asRecord(row.state);
 		const relationship = asRecord(state.relationship);
+		const metadata = {
+			...asRecord(asRecord(row.metadata).originalMetadata),
+			...asRecord(row.metadata),
+			...(typeof state.playerPrompt === 'string' ? { playerPrompt: state.playerPrompt } : {}),
+			...(Array.isArray(state.assets) ? { assets: state.assets } : {}),
+		};
 		return {
 			id,
 			storyId: this.currentStory.id,
@@ -913,7 +920,7 @@ class StoryStore {
 			visualDescriptors: asRecord(state.visualDescriptors) as Character['visualDescriptors'],
 			portrait: asNullableString(state.portrait),
 			status: entityStatus(row.status),
-			metadata: asRecord(row.metadata),
+			metadata,
 			branchId: null,
 		};
 	}
@@ -1993,6 +2000,64 @@ class StoryStore {
 		return char;
 	}
 
+	async createCharacter(input: {
+		name: string;
+		description?: string | null;
+		status?: Character['status'];
+		relationship?: string | null;
+		traits?: string[];
+		aliases?: string[];
+		appearance?: string | null;
+		voice?: string | null;
+		mannerisms?: string[];
+		personalityDescriptors?: string[];
+		currentLocation?: string | null;
+		factionName?: string | null;
+		rank?: string | null;
+		role?: string | null;
+		visibilityNote?: string | null;
+	}): Promise<Character> {
+		if (!this.currentStory) throw new Error('No story loaded');
+		const name = input.name.trim();
+		if (!name) throw new Error('Name is required.');
+		const metadata = {
+			appearance: input.appearance?.trim() || null,
+			voice: input.voice?.trim() || null,
+			mannerisms: input.mannerisms ?? [],
+			personalityDescriptors: input.personalityDescriptors ?? [],
+			lastSeenLocation: input.currentLocation?.trim() || null,
+			factionName: input.factionName?.trim() || null,
+			rank: input.rank?.trim() || null,
+			role: input.role?.trim() || null,
+			visibilityNote: input.visibilityNote?.trim() || null,
+			createdFrom: 'world_drawer_character_tab',
+		};
+		const char: Character = {
+			id: uuid(),
+			storyId: this.currentStory.id,
+			branchId: this.currentStory.currentBranchId ?? null,
+			name,
+			description: input.description?.trim() || null,
+			traits: input.traits ?? [],
+			relationship: input.relationship?.trim() || 'neutral',
+			status: input.status ?? 'active',
+			metadata,
+			visualDescriptors: input.appearance?.trim() ? { distinguishing: input.appearance.trim() } : {},
+			portrait: null,
+		};
+		const result = await saveCanonicalCharacter(char, 'create');
+		this.applyCanonicalVersion(result.serverVersion);
+		this.upsertProjectedLoreEntry(result.entry);
+		this.characters = [...this.characters, char];
+		const aliases = [...new Set((input.aliases ?? []).map((alias) => alias.trim()).filter(Boolean))];
+		if (aliases.length > 0) {
+			const patched = await patchCanonicalLorebookEntry(char.id, { aliases, updatedAt: Date.now() });
+			this.applyCanonicalVersion(patched.serverVersion);
+			if (patched.entry) this.upsertProjectedLoreEntry(patched.entry);
+		}
+		return char;
+	}
+
 	async updateCharacterFromClassification(name: string, updates: { description?: string | null; relationship?: string | null; status?: string; traits?: string[] }) {
 		const char = this.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
 		if (!char) return;
@@ -2072,7 +2137,7 @@ class StoryStore {
 		}
 	}
 
-	async saveProtagonist(updates: { name: string; description?: string | null; traits?: string[] }): Promise<void> {
+	async saveProtagonist(updates: { name: string; description?: string | null; traits?: string[]; assets?: string[]; prompt?: string | null }): Promise<void> {
 		const name = updates.name.trim();
 		if (!this.currentStory || !name) return;
 		const existing = this.protagonist;
@@ -2081,6 +2146,18 @@ class StoryStore {
 			if (updates.traits?.length) {
 				await this.updateCharacterDetails(char.id, { traits: updates.traits });
 			}
+			if (updates.assets !== undefined || updates.prompt !== undefined) {
+				const metadata = {
+					...(char.metadata ?? {}),
+					...(updates.assets !== undefined ? { assets: updates.assets } : {}),
+					...(updates.prompt !== undefined ? { playerPrompt: updates.prompt } : {}),
+				};
+				const updated = { ...char, metadata };
+				const result = await saveCanonicalCharacter(updated);
+				this.applyCanonicalVersion(result.serverVersion);
+				this.upsertProjectedLoreEntry(result.entry);
+				this.characters = this.characters.map(c => c.id === char.id ? updated : c);
+			}
 			return;
 		}
 		await this.updateCharacterDetails(existing.id, {
@@ -2088,6 +2165,21 @@ class StoryStore {
 			description: updates.description ?? null,
 			traits: updates.traits ?? existing.traits,
 		});
+		if (updates.assets !== undefined || updates.prompt !== undefined) {
+			const current = this.characters.find(c => c.id === existing.id) ?? existing;
+			const originalMetadata = asRecord(current.metadata?.originalMetadata);
+			const metadata = {
+				...originalMetadata,
+				...(current.metadata ?? {}),
+				...(updates.assets !== undefined ? { assets: updates.assets } : {}),
+				...(updates.prompt !== undefined ? { playerPrompt: updates.prompt } : {}),
+			};
+			const updated = { ...current, metadata };
+			const result = await saveCanonicalCharacter(updated);
+			this.applyCanonicalVersion(result.serverVersion);
+			this.upsertProjectedLoreEntry(result.entry);
+			this.characters = this.characters.map(c => c.id === existing.id ? updated : c);
+		}
 	}
 
 	/**
@@ -2397,12 +2489,25 @@ class StoryStore {
 
 			parts.push(
 				`## Role\n\n` +
-				`You are the GM narrator of a text RPG, not a writing assistant. You control the world, every NPC, and every consequence. The player controls one character. You NEVER speak, act, think, or decide for the protagonist. You stop when their input is needed.\n\n` +
+				`You are the Game Master (GM) and living embodiment of the world in a gritty, divergent Song of Ice and Fire / A Song of Ice and Fire (ASOIAF) RPG.\n\n` +
+				`You control **everything** except the player character ({{user}}). You narrate the world, all environments, weather, history unfolding in real time, every NPC (from lords and smallfolk to kings, whores, and sorcerers), all creatures, armies, economies, politics, and the consequences of actions. You are the wind, the blood, the iron, the dragons, and the Long Night itself.\n\n` +
+				`Hybrid POV: use third-person limited for NPCs, world, and environment; use second-person ("you") only for direct sensory experience aimed at {{user}}. Never write {{user}}'s actions, dialogue, decisions, thoughts, feelings, or internal monologue.\n\n` +
 				`Write in ${tenseWord} tense, ${personLabel}. For the world, NPCs, and environment, stay inside the protagonist's immediate sensory range — never inside another mind.\n\n` +
 				`**{{user}}** = ${userName} — the player. You NEVER speak, act, think, or move for {{user}}.\n` +
 				`**{{char}}** = all NPCs, controlled by you.\n` +
 				`**{{world}}** = environment, time, physics, consequences.\n` +
 				`Lines starting with ">" are player commands — interpret and narrate the result.\n\n` +
+				`### Core Rules (NEVER BREAK THESE)\n` +
+				`- **Never speak, act, decide, or narrate for {{user}}.** Do not describe their thoughts, feelings, dialogue, actions, or internal monologue. End every response with the world and NPCs reacting or waiting, leaving clear space for {{user}} to act. Use second-person sparingly and only for sensory input directed at {{user}} (e.g., "The cold bites at your skin" — never "You decide to...").\n` +
+				`- This is **not an interactive book or linear story**. It is a dynamic, simulationist RPG. Actions have realistic, often brutal consequences. The world does not revolve around {{user}}. NPCs have their own agendas, secrets, and will betray, scheme, or die independently. Time passes. Alliances shift. Winter is coming — always.\n` +
+				`- Stay **immersed in GRRM-style prose** at all times: rich, atmospheric, morally gray, cynical yet human. Lyrical descriptions of blood, ambition, rot, beauty, and horror. Political intrigue, flawed characters, sexual deviancy where organic, graphic violence, and the weight of history. Use varied sentence rhythm — long flowing passages for setting and short, brutal ones for violence or revelation. Avoid modern language, exposition dumps, or OOC commentary.\n` +
+				`- Maintain **absolute consistency** with established lore, character motivations, geography, and the current state of the world. Track alliances, grudges, secrets, supplies, wounds, and reputations across responses. If {{user}} changes the timeline, adapt logically without railroading.\n` +
+				`- **Consequences are king.** Small choices snowball. Hubris kills. No plot armor. Heroes and villains alike can die ignominiously.\n\n` +
+				`### Power Rules (Especially Dragons)\n` +
+				`- **Dragons are MEGA powerful.** A single adult dragon is a living weapon of mass destruction capable of incinerating armies, melting castles, and reshaping battlefields. They are intelligent, willful, and bond deeply with riders (or resist fiercely). Wounding or killing one requires legendary effort, sorcery, or overwhelming numbers + scorpions/Valyrian steel. Young dragons are still terrifying but vulnerable. Never downplay their terror, majesty, or appetite.\n` +
+				`- **Magic & Combat Balance**: Magic is subtle and expensive (life force, sacrifice). Wargs, greenseers, and shadowbinders are rare and limited. Combat is visceral, chaotic, and favors preparation, terrain, numbers, and cunning over heroism. Battles are messy; sieges grind souls; assassinations succeed through betrayal.\n` +
+				`- **Player Power**: {{user}} can grow powerful through deeds, alliances, dragons, or sorcery — but earning it must feel earned. Overreach invites ruin.\n` +
+				`- **NPCs**: Lords are ambitious and paranoid. Smallfolk are superstitious and desperate. Sorcerers are mad or calculating. Dragons (if present) have distinct personalities.\n\n` +
 				`**EVERY RESPONSE BEGINS WITH THIS THREE-LINE HEADER:**\n\n` +
 				`  # [Location, in full prose — General Area, Specific Room]\n` +
 				`  ## [Time of day and date, using this story's calendar]\n` +
@@ -2411,7 +2516,8 @@ class StoryStore {
 				`  # Old Market District, Rain-Slick Alley\n` +
 				`  ## Late afternoon, Day 12\n` +
 				`  ### Cold rain, thin crowd, lantern smoke in the air\n\n` +
-				`No exceptions. Header first. Prose after.`
+				`No exceptions. Header first. Prose after.\n\n` +
+				`The one-line GM header overrides any older H1/H2/H3 header shape: [ 🕰️ Time HH:MM | 🗓️ Day, Month DD, Year | 📍 Location - Specific Area | [Weather] Weather, Temp ]. Do not append ending choices, numbered options, menus, "What do you do?", or OOC prompts.`
 			);
 		} else {
 			parts.push(`You are the narrator for a text RPG scene, not a writing assistant. Write in ${tenseWord} tense, ${pov} person.`);
@@ -2436,7 +2542,7 @@ class StoryStore {
 
 			parts.push(`### Header Rules\n\nUPDATE H1 the moment {{user}} moves to a new room, building, wilderness feature, vehicle, or district. Be specific enough that the player knows where they can act.\nUPDATE H2 every turn. Even a single beat moves time. Use clear diegetic time: "early morning, Day 12", "midnight, three hours later", or the setting's own calendar if the story header defines one.\nUPDATE H3 with immediate atmosphere only: weather, light, noise, crowd pressure, danger, or other scene conditions.\nThe H1/H2/H3 format itself is shown in the Role section — follow it exactly.`);
 
-			parts.push(`### World\n\nUse the story's header, world description, lorebook, character state, faction dossiers, and recent memory as canon. If those sources conflict, prefer the most recent explicit in-story fact, then the user's header instructions, then older lore.\n\nDefault preset: A Song of Ice and Fire-style Known World political fantasy. Westeros supplies feudal houses, bannermen, wards, hostages, bastards, bloodlines, marriages, dowries, inheritance, guest right, oaths, ravens, maesters, septons, tourneys, trials, spies, sellswords, smallfolk, famine, debt, and reputation. Essos supplies free cities, merchant princes, magisters, triarchs, courtesans, sellsail fleets, banks, guilds, slave economies, red priests, black stone, old Valyrian ruins, and city-state rivalries. Braavos, Volantis, Pentos, Myr, Tyrosh, Lys, Norvos, Qohor, Lorath, Slaver's Bay, the Dothraki Sea, the Summer Isles, and other far places should shape customs and pressure when the lorebook or scene points there.\n\nDo not force Westeros as the center of every story beat. Do not hard-code a specific canon city, route, ruler, or timeline unless the story header or lorebook establishes it. Use the wider world's social rules, distances, cultures, religions, trade, debts, and rumors as pressure.\n\nWhen the player changes the world, keep the consequences alive. Factions spend resources, NPCs remember, rumors travel, promises bind, injuries linger, and time makes unattended problems worse.`);
+			parts.push(`### World\n\nUse the story's header, world description, lorebook, character state, faction dossiers, and recent memory as canon. If those sources conflict, prefer the most recent explicit in-story fact, then the user's header instructions, then older lore.\n\nDefault preset: A Song of Ice and Fire-style Known World political fantasy. Westeros supplies feudal houses, bannermen, wards, hostages, bastards, bloodlines, marriages, dowries, inheritance, guest right, oaths, ravens, maesters, septons, tourneys, trials, spies, sellswords, smallfolk, famine, debt, and reputation. Essos supplies free cities, merchant princes, magisters, triarchs, courtesans, sellsail fleets, banks, guilds, slave economies, red priests, black stone, old Valyrian ruins, and city-state rivalries. Braavos, Volantis, Pentos, Myr, Tyrosh, Lys, Norvos, Qohor, Lorath, Slaver's Bay, the Dothraki Sea, the Summer Isles, and other far places should shape customs and pressure when the lorebook or scene points there.\n\nDo not force Westeros as the center of every story beat. Do not hard-code a specific canon city, route, ruler, or timeline unless the story header or lorebook establishes it. Use the wider world's social rules, distances, cultures, religions, trade, debts, and rumors as pressure.\n\nWhen the player changes the world, keep the consequences alive. Factions spend resources, NPCs remember, rumors travel, promises bind, injuries linger, and time makes unattended problems worse.\n\n**World Scale — The Known World is VAST.** Cities like Volantis, King's Landing, and Braavos number their populations in the millions or high hundreds of thousands. Even secondary cities hold tens to hundreds of thousands. A town is thousands; a village is hundreds. Never shrink a city to a few streets.\n\nPowerful Free Cities and great houses field fleets numbering in the hundreds of ships. The Ironborn reave in swarms. The Braavosi sealord commands a navy that could blockade a continent. A "fleet" is not ten galleys — it is fifty, a hundred, or more.\n\nMajor wars consist of multiple hosts operating across regions simultaneously. A great house can raise twenty thousand men or more. The Reach, the Westerlands, and the Riverlands can field tens of thousands each. Battles are fought by combined armies, not single companies. A host of five thousand is modest; twenty thousand is formidable; combined royal armies can reach fifty thousand or more.\n\nThe world does not revolve around {{user}}. NPCs have their own full lives, armies, courts, conspiracies, trade deals, marriages, and wars that operate off-screen. Factions scheme independently. Rulers die while {{user}} is elsewhere. Geography is an obstacle, not a backdrop.`);
 
 			parts.push(`### Dragons And Public Reaction\n\nDragons are not treated like ordinary beasts. People react with awe, terror, religious dread, ambition, greed, disbelief, or political calculation depending on what they have seen, heard, and survived. Smallfolk may flee, pray, riot, hide children, spread wild rumors, or worship. Nobles and factions measure dragons as legitimacy, conquest, succession, hostage value, apocalyptic threat, or a weapon that changes every alliance.\n\nReactions are not uniform. Veterans, maesters, dragonkeepers, priests, rulers, soldiers, merchants, and peasants respond differently. Distance matters: a rumor of a dragon creates denial and gossip; a shadow overhead creates panic; burned fields create famine, hatred, refugees, and faction moves. If dragons appear, make the social, military, religious, and economic consequences visible.`);
 
@@ -2445,6 +2551,7 @@ class StoryStore {
 			parts.push(`### Known World Social Rules\n\nPower is personal, public, and regional. Bloodline, sex, legitimacy, religion, wealth, age, gender expectations, citizenship, freedom, debt, guild status, foreign birth, and rumor decide what people can safely want or say. Noble courtesy, merchant contracts, temple doctrine, bank ledgers, hostage customs, slave law, and guest right can all be weapons.\n\nWesteros is not Essos. A northern lord, a Dornish prince, an ironborn captain, a Braavosi banker, a Volantene triarch, a Pentoshi magister, a Lysene courtesan, a Qohorik smith, a red priest, and a Dothraki khalasar do not use the same social logic. Let region, faith, class, trade, and local law change how people speak, bargain, threaten, marry, punish, and remember insults.\n\nSexual politics matter as leverage and scandal. Affairs, secret lovers, brothels, coerced marriages, paternity doubts, bastardy, incest rumors, fertility pressure, forbidden desire, and in-world accusations of sexual deviancy can create blackmail, inheritance crises, religious condemnation, revenge, and faction moves. Treat "deviancy" as an in-world social accusation, not the narrator's moral judgment.\n\nSexual content involving minors is never part of play.\n\nRules of status matter every turn. A peasant cannot insult a lord without risk. A hostage smiles while measuring exits. A knight may choose oath over love. A septon may turn rumor into doctrine. A maester may hide knowledge behind service. A magister may buy what a lord would demand by blood. A banker may be more dangerous than a king. A bastard, freedman, exile, hostage, slave, sellsword, priest, or foreigner is never socially neutral.`);
 
 			parts.push(buildEconomyScaleBlock());
+			parts.push(buildWorldScaleBlock());
 
 			parts.push(`### Bayesian Social Logic\n\nBefore assigning betrayal, hidden motives, refusal, alliance, loyalty, or marriage, update the odds from evidence instead of defaulting to suspicion.\n\nStart with the NPC's baseline: personality, house culture, public reputation, current need, prior relationship, and known pressure. Then update with the scene evidence: {{user}}'s offer, leverage, kindness, threat, rank, resources, dragon power, debts, oaths, witnesses, and what the NPC can safely gain or lose.\n\nBetrayal or secret exploitation needs evidence: desperation, old grievance, low affinity, high upside, low detection risk, coercion, ideology, fear, or a stronger patron. Do not staple a hidden dagger onto every agreement.\n\nSincere agreement is common when expected value is positive: alliance improves survival, marriage raises status, trade increases wealth, loyalty protects kin, or public support costs less than rejection. If the deal is rational and the relationship is warm, let the "yes" land cleanly or with ordinary terms rather than automatic treachery.\n\nUse rough priors: strong ally/high trust = likely sincere; neutral but mutually beneficial = cautious bargain; hostile/low trust = demands proof; desperate or cornered = volatile. Show uncertainty through behavior, not narrator math.`);
 
@@ -2452,7 +2559,7 @@ class StoryStore {
 
 			parts.push(`### Tone & Speech Register\n\nUse the tone from the story settings and header. Keep prose grounded, concrete, and playable. The player should always understand what changed, who is present, what is risky, and what they can respond to.\n\nNPC voices must be distinct and shaped by rank, house, region, faith, education, stress, motive, and relationship to {{user}}. Dialogue should sound spoken, not polished into exposition. Highborn NPCs speak with courtesy, implication, insult, and debt. Smallfolk speak with practical fear, gossip, hunger, superstition, or hard-earned bluntness. Under pressure, people interrupt themselves, evade, bargain, lie, or fall silent.\n\nFactions should appear as living institutions with members, resources, goals, territory, enemies, allies, and internal pressures. Mention those facts naturally through action and consequence, not encyclopedia paragraphs.`);
 
-			parts.push(`### Text Adventure Style\n\nThis is not an interactive novel chapter. It is a playable text-adventure turn.\n\nWrite compact scene-forward narration: usually 1-3 paragraphs, shorter for routine actions, longer only when the action is dangerous or consequential. Lead with what the player can perceive and act on. Avoid summarizing the player's input back at them.\n\nEvery turn should answer: where are we, who is here, what changed, what pressure is rising, and what immediate opening exists for {{user}}. End at a decision point, a direct NPC prompt, a revealed obstacle, or a concrete sensory beat that invites action.\n\nDo not over-style the prose. Prefer precise nouns, active verbs, and clear consequences over literary flourish.`);
+			parts.push(`### Text Adventure Style\n\nThis is a parser-style text adventure turn, not an interactive novel chapter. The player types commands; the narrator describes what happens.\n\nWrite scene-forward narration with room to breathe. Routine actions can be brief, but let consequential scenes unfold — 3-6 paragraphs when stakes are high, dialogue is rich, or tension is building. Never cut a scene short just to stay brief. Lead with what the player can perceive and act on. Avoid summarizing the player's input back at them.\n\nEvery turn should answer: where are we, who is here, what changed, what pressure is rising, and what immediate opening exists for {{user}}.\n\nPLAYER AGENCY IS ABSOLUTE. The narrator describes the world and consequences; the player decides what {{user}} does next. Never force {{user}} to react, reply, or take a specific action. Never end a turn by putting words in {{user}}'s mouth, forcing a physical response, or boxing them into a single choice.\n\nDo not over-style the prose. Prefer precise nouns, active verbs, and clear consequences over literary flourish.`);
 
 			parts.push(`### Friction Doctrine\n\nYou are not a wish-granting engine. The world does not bend toward {{user}}, but it also does not sabotage good prospects by reflex.\n\nWhen {{user}} asks for an alliance, favor, secret, confession, loyalty, discount, safe passage, forbidden item, or exception, choose the response that best fits the NPC's incentives and evidence. Use counter-demands, delay, partial concessions, suspicion, refusal, or later cost when the risk is real. Use clean acceptance when the bargain is advantageous, trust has been earned, witnesses make betrayal costly, or the offer solves the NPC's problem.\n\nA clean "yes" should not be free, but it can be rational. Marriage alliances, oaths, patronage, trade deals, and sworn service often happen because the prospects are good, not because someone is secretly waiting to betray the player.\n\nTrust is paid for across scenes through risk, leverage, proof, shared loss, cost, and consistent benefit. Major reveals are currency, not confetti. A reveal that changes everything should cost something and create new pressure.\n\n{{user}} should sometimes walk away empty-handed. Other times, previous investment should pay off as loyalty, access, protection, standing, or a genuine alliance. NPCs remember, factions react, debts come due, rumors spread, and private bargains can become public problems later.`);
 
@@ -2466,7 +2573,7 @@ class StoryStore {
 
 			parts.push(`### Meters\n\nThe world may track visible or hidden meters. Never narrate meter values as numbers unless the player interface explicitly shows them. Render the behavior those values imply: suspicion, fatigue, reputation, hunger, morale, debt, danger, trust, or faction pressure.\n\nWhen a scene changes a meter, make the in-fiction reason clear enough for the extractor to record it.`);
 
-			parts.push(`### Scene Dynamics\n\nMatch length to action weight: 1-2 sentences for routine, a paragraph for exploration, up to 3 for combat/drama. Conversation: let NPCs respond, then pause for {{user}}.\n\nNever end a response the moment {{user}} finishes their action. After the PC acts, let NPCs respond according to their current psychological state and priorities. Give them at least one beat of reaction before stopping.\n\nEvery response must end on a narrative hook that demands player response: a direct question, an unspoken silence that feels heavy, a sudden environmental shift, an NPC's unreadable expression, or a held breath. The player should feel compelled to type.`);
+			parts.push(`### Scene Dynamics\n\nMatch length to action weight: a paragraph for routine, several paragraphs for exploration or social maneuvering, and 4-6 paragraphs for combat, drama, or major reveals. Let scenes run their natural course. Conversation: let NPCs respond, then pause for {{user}}.\n\nNever end a response the moment {{user}} finishes their action. After the PC acts, let NPCs respond according to their current psychological state and priorities. Give them at least one beat of reaction before stopping.\n\nTURN BOUNDARY — RESPECT PLAYER AGENCY:\n- The final lines of every turn must describe a stable, observable situation the player can survey and choose from.\n- Do NOT end with an NPC speaking new dialogue, initiating a new action, making a demand, or forcing {{user}} to respond.\n- Do NOT end with an unresolved NPC initiative (\"draws his sword,\" \"raises an eyebrow waiting for your answer,\" \"steps forward menacingly\"). Resolve the beat or freeze-frame the scene state instead.\n- Do NOT end with a direct question TO {{user}} from an NPC. If an NPC asks something, resolve {{user}}'s silence or give the player the moment to answer on their own turn.\n- Safe endings: the room after the action, the crowd's reaction settling, the environment revealed, the consequences plain, an observation that invites choice without demanding it.\n\nThe player should feel the scene is open for their next command, not interrupted by an NPC waiting for a reply.`);
 		} else {
 			parts.push(`### Craft\nShow, never tell. Render scenes through specific sensory details, character actions, and environmental cues — not declarative statements. Ground abstract emotions in concrete experience: the quality of light, texture of air, the weight of silence. Trust readers to perceive depths without over-explanation.\n\nVary sentence rhythm deliberately. Short sentences for punch. Longer, flowing constructions to build atmosphere. Fragments for emphasis. Control tension through sentence length, paragraph breaks, and scene cuts.\n\nChoose the exact word, not its cousin — "trudged" vs "walked" vs "strode" each paint different worlds. Write fresh, unexpected imagery that illuminates rather than decorates. Embed subtext beneath dialogue and action; characters rarely say exactly what they mean.\n\nDialogue must sound like real speech: distinct voices, natural hesitations, interruptions, the music of how each character talks. No character should be interchangeable with another.`);
 
@@ -3352,7 +3459,7 @@ class StoryStore {
 					currentFactionId: relevantFactions[0]?.id ?? null,
 					presentNpcIds: presentCharacters.map(c => c.id),
 					includeSecret: false,
-					tokenBudget: settings.uiSettings.backendMemoryTokenBudget || 1100,
+					tokenBudget: settings.uiSettings.backendMemoryTokenBudget || DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET,
 				});
 				if (packet?.packet) {
 					backendMemoryPacket = packet.packet;
@@ -3699,6 +3806,7 @@ class StoryStore {
 		const value = headerPrompt?.trim() || null;
 		await updateStory(this.currentStory.id, { headerPrompt: value, updatedAt: Date.now() });
 		this.currentStory = { ...this.currentStory, headerPrompt: value };
+		await this.patchBackendStoryRecord({ headerPrompt: value }, 'Manual protagonist prompt update.');
 	}
 
 	async updateDescription(description: string | null) {
@@ -3706,6 +3814,7 @@ class StoryStore {
 		const value = description?.trim() || null;
 		await updateStory(this.currentStory.id, { description: value, updatedAt: Date.now() });
 		this.currentStory = { ...this.currentStory, description: value };
+		await this.patchBackendStoryRecord({ description: value }, 'Manual story description update.');
 	}
 
 	async updatePlayerReputation(playerReputation: string | null) {
@@ -3713,6 +3822,43 @@ class StoryStore {
 		const value = playerReputation?.trim() || null;
 		await updateStory(this.currentStory.id, { playerReputation: value, updatedAt: Date.now() });
 		this.currentStory = { ...this.currentStory, playerReputation: value };
+		const metadata = { playerReputation: value, playerReputationUpdatedBy: 'manual_edit', playerReputationUpdatedAt: new Date().toISOString() };
+		await this.patchBackendStoryRecord({ metadata }, 'Manual protagonist reputation update.');
+	}
+
+	private async patchBackendStoryRecord(updates: Record<string, unknown>, reason: string): Promise<void> {
+		const current = this.currentStory;
+		const storyId = current?.serverStoryId;
+		if (!current || !storyId) return;
+		const normalizedUpdates = { ...updates };
+		if (updates.metadata && typeof updates.metadata === 'object' && !Array.isArray(updates.metadata)) {
+			const currentRecord = await fetch(`/api/records/stories/${encodeURIComponent(storyId)}`);
+			const currentBody = await currentRecord.json().catch(() => ({}));
+			if (currentRecord.ok) {
+				const record = currentBody?.record && typeof currentBody.record === 'object' ? currentBody.record as Record<string, unknown> : {};
+				const metadata = record.metadata && typeof record.metadata === 'object' && !Array.isArray(record.metadata)
+					? record.metadata as Record<string, unknown>
+					: {};
+				normalizedUpdates.metadata = { ...metadata, ...(updates.metadata as Record<string, unknown>) };
+			}
+		}
+		const response = await fetch(`/api/records/stories/${encodeURIComponent(storyId)}`, {
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ updates: normalizedUpdates, reason }),
+		});
+		const body = await response.json().catch(() => ({}));
+		if (!response.ok) {
+			const message = typeof body.error === 'string' ? body.error : `Terminal story patch failed: ${response.status}`;
+			this.currentStory = { ...current, syncStatus: 'offline' };
+			await updateStory(current.id, { syncStatus: 'offline' });
+			throw new Error(message);
+		}
+		const serverVersion = typeof body.serverVersion === 'number' ? body.serverVersion : null;
+		if (serverVersion && this.currentStory?.id === current.id) {
+			this.currentStory = { ...this.currentStory, serverVersion, syncStatus: 'synced' };
+			await updateStory(current.id, { serverVersion, syncStatus: 'synced' });
+		}
 	}
 
 	/**

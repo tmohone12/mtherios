@@ -17,7 +17,7 @@ describe('turn orchestrator prompt budgeting', () => {
 	});
 
 	it('bounds dynamic prompt text while preserving the final narration instruction', () => {
-		const finalInstruction = 'Return only the narration prose for the player action. Do not include JSON in this response.';
+		const finalInstruction = 'Return only GM narration prose for the player action. Do not include JSON, ending choices, numbered options, menus, or OOC notes in this response.';
 		const prompt = [
 			'Story: Long Campaign',
 			'Faction canon:',

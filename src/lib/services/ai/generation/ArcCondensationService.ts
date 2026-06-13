@@ -10,6 +10,7 @@ import { BaseAIService } from '../BaseAIService';
 import { arcSummarySchema, type ArcSummary } from '../sdk/schemas/arc';
 import { createLogger } from '../core/config';
 import type { Chapter, Arc } from '$lib/types';
+import { buildMtheriosSummaryInstruction } from '$lib/services/ai/context/mtheriosSummaryFormat';
 
 const log = createLogger('ArcCondensation');
 
@@ -164,10 +165,12 @@ For each major character, note:
 
 ═══ OUTPUT FORMAT ═══
 
+${buildMtheriosSummaryInstruction('arc')}
+
 Respond with JSON:
 {
   "title": string,
-  "summary": string,
+  "summary": "Mtherios bracketed summary string using the required format",
   "keyPlotPoints": string[],
   "characterArcs": [{ "name": string, "development": string }],
   "unresolvedThreads": string[],

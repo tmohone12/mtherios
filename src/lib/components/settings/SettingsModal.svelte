@@ -1,11 +1,18 @@
 <script lang="ts">
-	import { X, Check, ExternalLink, Eye, EyeOff, Globe, Server, Sparkles, Cpu, Zap, SlidersHorizontal, Wrench, Palette, ScrollText, ChevronDown, ImageIcon, Brain, RefreshCw, Search } from 'lucide-svelte';
+	import { X, Check, ExternalLink, Eye, EyeOff, Globe, Server, Sparkles, Cpu, Zap, SlidersHorizontal, Wrench, Palette, ScrollText, ChevronDown, ImageIcon, Brain, RefreshCw, Search, FileText } from 'lucide-svelte';
 	import ServiceConfigPanel from './ServiceConfigPanel.svelte';
+	import PromptsPanel from './PromptsPanel.svelte';
 	import PromptInspector from './PromptInspector.svelte';
 	import ContextWindow from '../story/ContextWindow.svelte';
 	import { settings, SERVICE_DEFINITIONS, SERVICE_PROFILES } from '$lib/stores/settings.svelte';
 	import { PROVIDERS, getProviderList } from '$lib/services/ai/sdk/providers/config';
 	import { STYLE_PRESETS } from '$lib/services/ai/image/ImageGenerationService';
+	import {
+		CONTEXT_BUDGET_STEPS,
+		contextBudgetSliderIndexToValue,
+		contextBudgetValueToSliderIndex,
+		formatTokenBudgetCompact,
+	} from '$lib/services/memorySettings';
 	import { defaultTerminalApiKeyRef, syncTerminalLlmSettingsFromBrowser } from '$lib/services/terminalSettings';
 	import type { ProviderType, APIProfile, UISettings } from '$lib/types';
 	import { uuid } from '$lib/utils/uuid';
@@ -19,7 +26,7 @@
 	let { open, onClose }: Props = $props();
 
 	// Tab navigation
-	type Tab = 'providers' | 'services' | 'memory' | 'images' | 'interface' | 'inspector';
+	type Tab = 'providers' | 'services' | 'prompts' | 'memory' | 'images' | 'interface' | 'inspector';
 	type NumericUiSettingKey = Extract<keyof UISettings,
 		| 'maxMessages'
 		| 'maxHistoryEntries'
@@ -63,6 +70,11 @@
 	let editModelSearch = $state('');
 	let fetchingModels = $state(false);
 	let modelFetchMessage = $state('');
+	let contextBudgetSliderIndex = $state(0);
+
+	$effect(() => {
+		contextBudgetSliderIndex = contextBudgetValueToSliderIndex(settings.contextBudget);
+	});
 
 	/**
 	 * Fetch the live model list from an OpenAI-compatible /models endpoint.
@@ -350,6 +362,26 @@
 		return Number(settings.uiSettings[key] ?? 0);
 	}
 
+	function syncRangeValue(node: HTMLInputElement, value: number) {
+		const apply = (next: number) => {
+			queueMicrotask(() => {
+				node.value = String(next);
+			});
+		};
+		apply(value);
+		return { update: apply };
+	}
+
+	function backendMemorySliderPosition(): number {
+		const value = clampDial(settingValue('backendMemoryTokenBudget'), 160, 2400);
+		return clampDial((value / 2400) * 100, 0, 100);
+	}
+
+	function backendMemoryTokensFromSlider(position: number): number {
+		const scaled = (clampDial(position, 0, 100) / 100) * 2400;
+		return clampDial(Math.round(scaled / 20) * 20, 160, 2400);
+	}
+
 	function formatDialValue(dial: MemoryDial): string {
 		const value = settingValue(dial.key);
 		if (value === 0 && dial.zeroLabel) return dial.zeroLabel;
@@ -372,6 +404,11 @@
 		await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
 			console.warn('[Settings] Terminal context budget sync failed:', error);
 		});
+	}
+
+	function saveContextBudgetFromSlider(index: number) {
+		contextBudgetSliderIndex = clampDial(index, 0, CONTEXT_BUDGET_STEPS.length - 1);
+		return saveContextBudgetValue(contextBudgetSliderIndexToValue(index));
 	}
 
 	const providerIcons: Record<string, typeof Zap> = {
@@ -459,6 +496,7 @@
 	const tabs: Array<{ id: Tab; label: string; shortLabel: string; icon: typeof Globe }> = [
 		{ id: 'providers', label: 'Providers & Models', shortLabel: 'Providers', icon: Globe },
 		{ id: 'services', label: 'AI Services', shortLabel: 'Services', icon: Wrench },
+		{ id: 'prompts', label: 'Prompts', shortLabel: 'Prompts', icon: FileText },
 		{ id: 'memory', label: 'Memory', shortLabel: 'Memory', icon: Brain },
 		{ id: 'images', label: 'Image Generation', shortLabel: 'Images', icon: ImageIcon },
 		{ id: 'interface', label: 'Interface', shortLabel: 'UI', icon: Palette },
@@ -467,12 +505,12 @@
 
 	const liveContextDials: MemoryDial[] = [
 		{ key: 'snapshotTokenCap', label: 'Dynamic Prompt Cap', description: 'Caps arcs, chapters, lore, world state, retrieved memory, and final instructions before history is added.', min: 0, max: 50000, step: 500, suffix: 'tokens', zeroLabel: 'Auto' },
-		{ key: 'maxMessages', label: 'Conversation Messages', description: 'Recent chat turns kept in the short-term prompt window.', min: 1, max: 1000, step: 5, suffix: 'messages' },
-		{ key: 'maxHistoryEntries', label: 'Raw History Scan', description: 'Raw entries allowed into the local history scan before token budgeting cuts them down.', min: 1, max: 1000, step: 5, suffix: 'entries' },
+		{ key: 'maxMessages', label: 'Conversation Messages', description: 'Recent chat turns kept in the short-term prompt window.', min: 1, max: 1000, step: 1, suffix: 'messages' },
+		{ key: 'maxHistoryEntries', label: 'Raw History Scan', description: 'Raw entries allowed into the local history scan before token budgeting cuts them down.', min: 1, max: 1000, step: 1, suffix: 'entries' },
 	];
 
 	const retrievalDials: MemoryDial[] = [
-		{ key: 'backendMemoryTokenBudget', label: 'Terminal Memory Packet', description: 'Target size for terminal-retrieved memory when a story is bound to the terminal world database.', min: 160, max: 2400, step: 40, suffix: 'tokens' },
+		{ key: 'backendMemoryTokenBudget', label: 'Terminal Memory Packet', description: 'Target size for terminal-retrieved memory when a story is bound to the terminal world database.', min: 160, max: 2400, step: 20, suffix: 'tokens' },
 		{ key: 'retrievedChapterLimit', label: 'Chapter Memories', description: 'Searchable episodic chapters injected for the current action.', min: 0, max: 12, step: 1, suffix: 'chapters', zeroLabel: 'Off' },
 		{ key: 'retrievedLoreEntryLimit', label: 'Lorebook Matches', description: 'Local lore entries pulled by current action when backend retrieval is unavailable.', min: 0, max: 24, step: 1, suffix: 'entries', zeroLabel: 'Off' },
 		{ key: 'conversationMemoryLimit', label: 'NPC Conversation Memory', description: 'NPC-specific remembered exchanges eligible for the current scene.', min: 0, max: 24, step: 1, suffix: 'memories', zeroLabel: 'Off' },
@@ -846,6 +884,10 @@
 				{:else if activeTab === 'services'}
 				<ServiceConfigPanel onBack={() => activeTab = 'providers'} />
 
+				<!-- ═══ TAB: PROMPTS ═══ -->
+				{:else if activeTab === 'prompts'}
+				<PromptsPanel />
+
 				<!-- ═══ TAB: MEMORY ═══ -->
 				{:else if activeTab === 'memory'}
 				<div class="space-y-4">
@@ -869,11 +911,12 @@
 								<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
 									<input
 										type="range"
-										value={settings.contextBudget}
+										bind:value={contextBudgetSliderIndex}
+										use:syncRangeValue={contextBudgetSliderIndex}
 										min="0"
-										max="200000"
-										step="1000"
-										oninput={(e) => saveContextBudgetValue(Number((e.target as HTMLInputElement).value))}
+										max={CONTEXT_BUDGET_STEPS.length - 1}
+										step="1"
+										oninput={(e) => saveContextBudgetFromSlider(Number((e.target as HTMLInputElement).value))}
 										class="w-full accent-[var(--color-gold-400)]"
 									/>
 									<input
@@ -886,28 +929,48 @@
 										class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-right font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none"
 									/>
 								</div>
+								<div class="grid grid-cols-4 text-[9px] text-[var(--text-muted)]">
+									<span>{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[0])}</span>
+									<span class="text-center">{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[5])}</span>
+									<span class="text-center">{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[8])}</span>
+									<span class="text-right">{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[CONTEXT_BUDGET_STEPS.length - 1])}</span>
+								</div>
 								<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">0 keeps the model-aware automatic budget.</p>
 							</div>
 
-							{#each liveContextDials as dial}
+							{#each liveContextDials as dial (dial.key)}
 								<div class="space-y-2">
 									<div class="flex items-center justify-between gap-3">
 										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
 										<span class="font-mono text-[11px] text-[var(--text-muted)]">{formatDialValue(dial)}</span>
 									</div>
 									<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
-										<input
-											type="range"
-											value={settingValue(dial.key)}
-											min={dial.min}
-											max={dial.max}
-											step={dial.step}
-											oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
-											class="w-full accent-[var(--color-gold-400)]"
-										/>
+										{#if dial.key === 'backendMemoryTokenBudget'}
+											<input
+												type="range"
+												value={String(backendMemorySliderPosition())}
+												use:syncRangeValue={backendMemorySliderPosition()}
+												min="0"
+												max="100"
+												step="1"
+												oninput={(e) => saveUiNumber(dial.key, backendMemoryTokensFromSlider(Number((e.target as HTMLInputElement).value)), dial.min, dial.max)}
+												class="w-full accent-[var(--color-gold-400)]"
+											/>
+										{:else}
+											<input
+												type="range"
+												value={String(settingValue(dial.key))}
+												use:syncRangeValue={settingValue(dial.key)}
+												min={dial.min}
+												max={dial.max}
+												step={dial.step}
+												oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+												class="w-full accent-[var(--color-gold-400)]"
+											/>
+										{/if}
 										<input
 											type="number"
-											value={settingValue(dial.key)}
+											bind:value={settings.uiSettings[dial.key]}
 											min={dial.min}
 											max={dial.max}
 											step={dial.step}
@@ -933,22 +996,36 @@
 						</div>
 
 						<div class="space-y-5">
-							{#each retrievalDials as dial}
+							{#each retrievalDials as dial (dial.key)}
 								<div class="space-y-2">
 									<div class="flex items-center justify-between gap-3">
 										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
 										<span class="font-mono text-[11px] text-[var(--text-muted)]">{formatDialValue(dial)}</span>
 									</div>
 									<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
-										<input
-											type="range"
-											value={settingValue(dial.key)}
-											min={dial.min}
-											max={dial.max}
-											step={dial.step}
-											oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
-											class="w-full accent-[var(--color-gold-400)]"
-										/>
+										{#if dial.key === 'backendMemoryTokenBudget'}
+											<input
+												type="range"
+												value={String(backendMemorySliderPosition())}
+												use:syncRangeValue={backendMemorySliderPosition()}
+												min="0"
+												max="100"
+												step="1"
+												oninput={(e) => saveUiNumber(dial.key, backendMemoryTokensFromSlider(Number((e.target as HTMLInputElement).value)), dial.min, dial.max)}
+												class="w-full accent-[var(--color-gold-400)]"
+											/>
+										{:else}
+											<input
+												type="range"
+												value={String(settingValue(dial.key))}
+												use:syncRangeValue={settingValue(dial.key)}
+												min={dial.min}
+												max={dial.max}
+												step={dial.step}
+												oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+												class="w-full accent-[var(--color-gold-400)]"
+											/>
+										{/if}
 										<input
 											type="number"
 											value={settingValue(dial.key)}
@@ -972,7 +1049,7 @@
 						</div>
 
 						<div class="space-y-5">
-							{#each summaryDials as dial}
+							{#each summaryDials as dial (dial.key)}
 								<div class="space-y-2">
 									<div class="flex items-center justify-between gap-3">
 										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>

@@ -13,6 +13,7 @@ import { BaseAIService } from '../BaseAIService';
 import { sagaSummarySchema, type SagaSummary } from '../sdk/schemas/saga';
 import { createLogger } from '../core/config';
 import type { Arc } from '$lib/types';
+import { buildMtheriosSummaryInstruction } from '$lib/services/ai/context/mtheriosSummaryFormat';
 
 const log = createLogger('SagaCondensation');
 
@@ -82,10 +83,12 @@ Preserve only durable consequences:
 
 Avoid scene detail, combat choreography, and sudden off-screen character rewrites. NPC and faction changes should feel gradual unless the arcs explicitly justify a break.
 
+${buildMtheriosSummaryInstruction('saga')}
+
 Respond with JSON:
 {
   "title": string,
-  "summary": string,
+  "summary": "Mtherios bracketed summary string using the required format",
   "arcRange": string,
   "keyFactionShifts": string[],
   "majorPowerChanges": string[],

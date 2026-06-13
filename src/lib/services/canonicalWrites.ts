@@ -83,9 +83,28 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 	const previousState = existing?.state?.type === 'character'
 		? existing.state as CharacterEntryState
 		: null;
+	const previousStateRecord = previousState as unknown as Record<string, unknown> | null;
 	const isSelf = character.relationship === 'self';
 	const relationship = previousState?.relationship ?? { level: isSelf ? 100 : 0, status: isSelf ? 'self' : 'neutral', history: [] };
 	const lastSeenLocation = stringFrom(metadata.lastSeenLocation) ?? previousState?.lastSeenLocation ?? null;
+	const playerPrompt = stringFrom(metadata.playerPrompt) ?? stringFrom(previousStateRecord?.playerPrompt);
+	const assets = Array.isArray(metadata.assets)
+		? metadata.assets.filter((asset): asset is string => typeof asset === 'string' && asset.trim().length > 0)
+		: Array.isArray(previousStateRecord?.assets)
+			? (previousStateRecord.assets as unknown[]).filter((asset): asset is string => typeof asset === 'string' && asset.trim().length > 0)
+			: [];
+	const appearance = stringFrom(metadata.appearance) ?? stringFrom(previousStateRecord?.appearance);
+	const voice = stringFrom(metadata.voice) ?? stringFrom(previousStateRecord?.voice);
+	const mannerisms = Array.isArray(metadata.mannerisms)
+		? metadata.mannerisms.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+		: Array.isArray(previousStateRecord?.mannerisms)
+			? (previousStateRecord.mannerisms as unknown[]).filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+			: [];
+	const personalityDescriptors = Array.isArray(metadata.personalityDescriptors)
+		? metadata.personalityDescriptors.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+		: Array.isArray(previousStateRecord?.personalityDescriptors)
+			? (previousStateRecord.personalityDescriptors as unknown[]).filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+			: [];
 	const state = {
 		...(previousState ?? {}),
 		type: 'character',
@@ -103,6 +122,15 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 		visualDescriptors: character.visualDescriptors,
 		portrait: character.portrait,
 		status: character.status,
+		playerPrompt,
+		assets,
+		appearance,
+		voice,
+		mannerisms,
+		personalityDescriptors,
+		factionName: stringFrom(metadata.factionName) ?? stringFrom(previousStateRecord?.factionName),
+		rank: stringFrom(metadata.rank) ?? stringFrom(previousStateRecord?.rank),
+		role: stringFrom(metadata.role) ?? stringFrom(previousStateRecord?.role),
 	} as CharacterEntryState;
 	return {
 		id: character.id,

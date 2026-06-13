@@ -5,6 +5,7 @@
 
 import { getSetting, setSetting, getAllSettings } from '$lib/services/database';
 import { PROVIDERS, type ProviderConfig } from '$lib/services/ai/sdk/providers/config';
+import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET } from '$lib/services/memorySettings';
 import type { UISettings, APIProfile, ProviderType, ReasoningEffort } from '$lib/types';
 
 // ── Per-Service Configuration ──
@@ -122,7 +123,7 @@ class SettingsStore {
 		retrievedLoreEntryLimit: 8,
 		conversationMemoryLimit: 6,
 		proceduralMemoryLimit: 8,
-		backendMemoryTokenBudget: 800,
+		backendMemoryTokenBudget: DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET,
 		snapshotTokenCap: 0,
 		serverAuthoritativeTurns: true,
 	});
@@ -274,7 +275,7 @@ class SettingsStore {
 		this.uiSettings.retrievedLoreEntryLimit = this.clampNumber(this.uiSettings.retrievedLoreEntryLimit, 0, 24, 8);
 		this.uiSettings.conversationMemoryLimit = this.clampNumber(this.uiSettings.conversationMemoryLimit, 0, 24, 6);
 		this.uiSettings.proceduralMemoryLimit = this.clampNumber(this.uiSettings.proceduralMemoryLimit, 0, 24, 8);
-		this.uiSettings.backendMemoryTokenBudget = this.clampNumber(this.uiSettings.backendMemoryTokenBudget, 160, 2400, 800);
+		this.uiSettings.backendMemoryTokenBudget = this.clampNumber(this.uiSettings.backendMemoryTokenBudget, 160, 2400, DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET);
 		this.uiSettings.snapshotTokenCap = this.clampNumber(this.uiSettings.snapshotTokenCap, 0, 50000, 0);
 	}
 

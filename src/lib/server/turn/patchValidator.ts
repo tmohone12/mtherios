@@ -372,6 +372,18 @@ function makeOperations(update: WorldStateUpdate): Array<Record<string, unknown>
 	return operations;
 }
 
+const PLAYER_REPUTATION_UPDATE_TURN_CADENCE = 5;
+
+function shouldApplyPlayerReputationUpdate(metadata: Record<string, unknown>, currentTurn: number): boolean {
+	const previous = typeof metadata.playerReputation === 'string' ? metadata.playerReputation.trim() : '';
+	if (!previous) return true;
+	const lastTurn = typeof metadata.playerReputationUpdatedTurn === 'number'
+		? Math.trunc(metadata.playerReputationUpdatedTurn)
+		: null;
+	if (lastTurn === null) return true;
+	return currentTurn - lastTurn >= PLAYER_REPUTATION_UPDATE_TURN_CADENCE;
+}
+
 export function turnUpdateOperationCount(update: WorldStateUpdate): number {
 	return makeOperations(update).length;
 }
@@ -501,11 +513,20 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 
 		if (input.update.player_reputation) {
 			const metadata = story?.metadata && typeof story.metadata === 'object' ? story.metadata as Record<string, unknown> : {};
-			await tx.update(stories).set({
-				metadata: { ...metadata, playerReputation: input.update.player_reputation },
-				serverVersion: input.serverVersion,
-				updatedAt: createdAt,
-			}).where(eq(stories.id, input.storyId));
+			if (shouldApplyPlayerReputationUpdate(metadata, currentTurn)) {
+				await tx.update(stories).set({
+					metadata: {
+						...metadata,
+						playerReputation: input.update.player_reputation,
+						playerReputationUpdatedTurn: currentTurn,
+						playerReputationUpdatedAt: createdAt,
+					},
+					serverVersion: input.serverVersion,
+					updatedAt: createdAt,
+				}).where(eq(stories.id, input.storyId));
+			} else {
+				warnings.push(`Player reputation update skipped: reputation was updated less than ${PLAYER_REPUTATION_UPDATE_TURN_CADENCE} turns ago.`);
+			}
 		}
 
 		if (!isSupplemental) {
@@ -515,7 +536,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				storyId: input.storyId,
 				type: 'scene_transition',
 				title: 'Turn resolved',
-				body: input.narration.replace(/\s+/g, ' ').slice(0, 500),
+				body: input.narration.replace(/\s+/g, ' ').slice(0, 2000),
 				...timelineDefaults({ currentTurn, currentWorldTime: nextWorldTime }),
 				visibility: 'player_known',
 				sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
@@ -551,7 +572,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 						storyId: input.storyId,
 						type: 'scene_transition',
 						title: 'Turn resolved',
-						body: input.narration.replace(/\s+/g, ' ').slice(0, 500),
+						body: input.narration.replace(/\s+/g, ' ').slice(0, 2000),
 					},
 				}],
 				reason: 'Narration generated a scene-transition turn event.',
@@ -1168,7 +1189,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				type: 'episodic',
 				title: 'Recent turn',
 				content: input.narration,
-				summary: input.narration.replace(/\s+/g, ' ').slice(0, 360),
+				summary: input.narration.replace(/\s+/g, ' ').slice(0, 1200),
 				keywords: [],
 				entityIds: [],
 				factionIds: [],

@@ -13,6 +13,7 @@ import {
 import { createLogger } from '../core/config';
 import { countTokens } from '$lib/utils/tokens';
 import type { Chapter, Arc, StoryEntry } from '$lib/types';
+import { buildMtheriosSummaryInstruction } from '$lib/services/ai/context/mtheriosSummaryFormat';
 
 const log = createLogger('Memory');
 
@@ -172,10 +173,12 @@ Every binding commitment must be recorded with exact terms:
 
 ═══ OUTPUT FORMAT ═══
 
+${buildMtheriosSummaryInstruction('chapter')}
+
 Respond with JSON:
 {
   "title": "Evocative 2-5 word chapter title",
-  "summary": "400-700 word summary of this chapter",
+  "summary": "Mtherios bracketed summary string using the required format",
   "keywords": ["keyword1", "keyword2", "...5-10 terms for retrieval"],
   "keyCharacters": ["character names that appear in this chapter"],
   "keyLocations": ["location names visited in this chapter"],

@@ -1,4 +1,5 @@
 import type { RetrievedMemoryPacket } from '$lib/contracts/memory';
+import { sliceWellFormedText, toWellFormedText } from './wellFormedText';
 
 const LONG_TEXT_LIMIT = 12_000;
 const SOURCE_TEXT_LIMIT = 8_000;
@@ -92,9 +93,9 @@ type BuildTurnDebugSnapshotInput = Omit<TurnDebugSnapshot, 'retrievedMemory' | '
 };
 
 function clip(value: string | null | undefined, limit: number): string {
-	const text = value ?? '';
+	const text = toWellFormedText(value ?? '');
 	if (text.length <= limit) return text;
-	return `${text.slice(0, limit)}\n...[truncated ${text.length - limit} chars]`;
+	return `${sliceWellFormedText(text, limit)}\n...[truncated ${text.length - limit} chars]`;
 }
 
 function stringArray(value: unknown): string[] {

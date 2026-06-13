@@ -25,6 +25,11 @@
 		updatedAt?: string | null;
 	};
 
+	let { storyId: fixedStoryId = null, title = 'World Database' } = $props<{
+		storyId?: string | null;
+		title?: string;
+	}>();
+
 	const sections: SectionEntry[] = [
 		{ id: 'transcript', label: 'Transcript' },
 		{ id: 'characters', label: 'Characters' },
@@ -70,6 +75,7 @@
 	});
 
 	const selectedStory = $derived(stories.find((story) => story.id === selectedStoryId) ?? null);
+	const isStoryLocked = $derived(Boolean(fixedStoryId));
 	const isRecordSection = $derived(activeSection !== 'jobs' && activeSection !== 'llmSettings');
 	const isReadOnlySection = $derived(activeSection === 'apiCallLogs');
 	const selectedApiCallRecord = $derived.by(() => {
@@ -158,7 +164,8 @@
 		status = '';
 		const body = await runEngineCommand('__app__', 'story.list');
 		stories = Array.isArray(body.stories) ? body.stories as StorySummary[] : [];
-		if (!selectedStoryId && stories[0]) selectedStoryId = stories[0].id;
+		if (fixedStoryId) selectedStoryId = fixedStoryId;
+		else if (!selectedStoryId && stories[0]) selectedStoryId = stories[0].id;
 	}
 
 	async function loadSection(cursor: string | null = null) {
@@ -315,6 +322,12 @@
 
 		return () => mediaQuery.removeEventListener('change', syncViewport);
 	});
+
+	$effect(() => {
+		if (!fixedStoryId || selectedStoryId === fixedStoryId) return;
+		selectedStoryId = fixedStoryId;
+		void loadSection();
+	});
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-[var(--bg-primary)] text-[var(--text-primary)]">
@@ -322,23 +335,25 @@
 		<div class="flex min-w-0 items-center gap-2">
 			<Database class="h-5 w-5 text-[var(--text-accent)]" />
 			<div class="min-w-0">
-				<div class="font-display text-sm tracking-wide text-[var(--text-accent)]">World Database</div>
+				<div class="font-display text-sm tracking-wide text-[var(--text-accent)]">{title}</div>
 				<div class="truncate text-xs text-[var(--text-muted)]">{selectedStory?.title ?? 'No story selected'}</div>
 			</div>
 		</div>
 
-		<select
-			bind:value={selectedStoryId}
-			onchange={() => {
-				ensureActiveSectionVisible();
-				loadSection();
-			}}
-			class="w-full min-w-0 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-xs text-[var(--text-primary)] sm:min-w-48 sm:w-auto"
-		>
-			{#each stories as item}
-				<option value={item.id}>{item.title ?? item.id}</option>
-			{/each}
-		</select>
+		{#if !isStoryLocked}
+			<select
+				bind:value={selectedStoryId}
+				onchange={() => {
+					ensureActiveSectionVisible();
+					loadSection();
+				}}
+				class="w-full min-w-0 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-xs text-[var(--text-primary)] sm:min-w-48 sm:w-auto"
+			>
+				{#each stories as item}
+					<option value={item.id}>{item.title ?? item.id}</option>
+				{/each}
+			</select>
+		{/if}
 
 		<div class="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:flex-1 sm:items-center">
 			<div class="relative min-w-40 flex-1">
