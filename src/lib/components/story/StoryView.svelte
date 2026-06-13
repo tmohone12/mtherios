@@ -4,14 +4,13 @@
 	import { settings } from '$lib/stores/settings.svelte';
 	import { ai } from '$lib/services/ai';
 	import ActionInput from './ActionInput.svelte';
-	import ActionChoiceCards from './ActionChoiceCards.svelte';
 	import WorldDrawer from './WorldDrawer.svelte';
+	import WorldExplorer from '$lib/components/database/WorldExplorer.svelte';
 	import { downloadStoryAsJson } from '$lib/services/storySync';
-	import { deleteStory } from '$lib/services/database';
+	import { deleteStoryEverywhere } from '$lib/services/serverStories';
 	import { formatNarrative } from '$lib/utils/narrativeHtml';
-	import { ArrowLeft, Loader2, Users, BookOpen, Image, AlertTriangle, Download, Trash2, MoreVertical, X, ScrollText, UserRound, Scissors } from 'lucide-svelte';
+	import { ArrowLeft, Database, Loader2, Users, BookOpen, Image, AlertTriangle, Download, Trash2, MoreVertical, X, ScrollText, Scissors } from 'lucide-svelte';
 	import { tick, onMount } from 'svelte';
-	import type { ActionChoice } from '$lib/services/ai/sdk/schemas/actionchoices';
 	import type { StyleReview } from '$lib/services/ai/sdk/schemas/style';
 	import type { StoryEntry } from '$lib/types';
 
@@ -21,7 +20,6 @@
 	let isStreaming = $state(false);
 
 	// Service output states
-	let actionChoices = $state<ActionChoice[]>([]);
 	let styleReview = $state<StyleReview | null>(null);
 	let sceneImageUrl = $state<string | null>(null);
 	let loadingImage = $state(false);
@@ -42,10 +40,10 @@
 	let characterDescriptionDraft = $state('');
 	let characterTraitsDraft = $state('');
 	let reputationDraft = $state('');
-	let playerLedgerDraft = $state('');
 	let confirmingEntryDeleteId = $state<string | null>(null);
 	let confirmingDeleteFromId = $state<string | null>(null);
 	let messageControlError = $state<string | null>(null);
+	let workspaceTab = $state<'play' | 'lore'>('play');
 
 	async function handleExport() {
 		if (!story.currentStory || exporting) return;
@@ -62,12 +60,6 @@
 		titleDraft = story.currentStory?.title ?? '';
 		headerDraft = story.currentStory?.headerPrompt ?? '';
 		descriptionDraft = story.currentStory?.description ?? '';
-		const protag = story.protagonist;
-		characterNameDraft = protag?.name ?? '';
-		characterDescriptionDraft = protag?.description ?? '';
-		characterTraitsDraft = protag?.traits?.join(', ') ?? '';
-		reputationDraft = story.currentStory?.playerReputation ?? '';
-		playerLedgerDraft = story.currentStory?.playerLedger ?? '';
 		editorTab = 'story';
 		headerEditorOpen = true;
 	}
@@ -81,29 +73,15 @@
 		if (descriptionDraft !== (story.currentStory?.description ?? '')) {
 			await story.updateDescription(descriptionDraft);
 		}
-		if (reputationDraft !== (story.currentStory?.playerReputation ?? '')) {
-			await story.updatePlayerReputation(reputationDraft);
-		}
-		if (playerLedgerDraft !== (story.currentStory?.playerLedger ?? '')) {
-			await story.updatePlayerLedger(playerLedgerDraft);
-		}
-		const traits = characterTraitsDraft.split(/[,;\n]/).map(t => t.trim()).filter(Boolean);
-		if (characterNameDraft.trim()) {
-			await story.saveProtagonist({
-				name: characterNameDraft,
-				description: characterDescriptionDraft,
-				traits,
-			});
-		}
 		headerEditorOpen = false;
 	}
 
 	async function handleDelete() {
 		if (!story.currentStory) return;
-		const storyId = story.currentStory.id;
+		const currentStory = story.currentStory;
+		await deleteStoryEverywhere(currentStory);
 		story.clear();
 		app.closeStory();
-		await deleteStory(storyId);
 	}
 
 	async function handleDeleteEntry(entry: StoryEntry) {
@@ -208,7 +186,6 @@
 	function handleStreamStart() {
 		streamingContent = '';
 		isStreaming = true;
-		actionChoices = [];
 		styleReview = null;
 		// Don't clear sceneImageUrl here — leave the previous scene visible
 		// until the new image actually arrives (or image gen is disabled,
@@ -232,23 +209,6 @@
 		// only optional UI enrichment services in parallel.
 		const errors: string[] = [];
 		const jobs: Promise<void>[] = [];
-
-		const choicesConfig = settings.getServiceConfig('actionChoices');
-		if (choicesConfig.enabled && isAdventure && story.entries.length >= 4) {
-			jobs.push(
-				(async () => {
-					try {
-						const currentLoc = story.locations.find(l => l.current);
-						const result = await ai.actionChoices.generateChoices(
-							story.entries.slice(-5), story.protagonist, currentLoc, story.storyMode,
-						);
-						if (result.choices.length > 0) actionChoices = result.choices;
-					} catch (e) {
-						errors.push(`ActionChoices: ${e}`);
-					}
-				})()
-			);
-		}
 
 		const styleConfig = settings.getServiceConfig('styleReviewer');
 		if (styleConfig.enabled) {
@@ -305,7 +265,6 @@
 
 	function handleSuggestionSelect(text: string) {
 		window.dispatchEvent(new CustomEvent('mtherios:inject-input', { detail: text }));
-		actionChoices = [];
 	}
 
 	function goBack() {
@@ -332,11 +291,42 @@
 				{story.currentStory?.genre ?? ''} · {isAdventure ? 'Adventure' : 'Creative Writing'}
 			</span>
 		</div>
+		<div class="hidden items-center gap-1 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] p-1 sm:flex">
+			<button
+				onclick={() => workspaceTab = 'play'}
+				class="rounded-md px-3 py-1.5 text-xs transition-colors {workspaceTab === 'play' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+			>
+				Play
+			</button>
+			<button
+				onclick={() => workspaceTab = 'lore'}
+				class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors {workspaceTab === 'lore' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+			>
+				<Database class="h-3.5 w-3.5" />
+				Lore
+			</button>
+		</div>
 		<button onclick={() => drawerOpen = true} class="relative rounded-lg p-2 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" title="World State">
 			<Users class="h-4 w-4" />
 			{#if story.characters.length > 0}
 				<span class="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--color-gold-400)] text-[8px] font-bold text-[var(--bg-primary)]">{story.characters.length}</span>
 			{/if}
+		</button>
+	</div>
+
+	<div class="grid grid-cols-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] sm:hidden">
+		<button
+			onclick={() => workspaceTab = 'play'}
+			class="px-3 py-2 text-xs transition-colors {workspaceTab === 'play' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)]'}"
+		>
+			Play
+		</button>
+		<button
+			onclick={() => workspaceTab = 'lore'}
+			class="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs transition-colors {workspaceTab === 'lore' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)]'}"
+		>
+			<Database class="h-3.5 w-3.5" />
+			Lore
 		</button>
 	</div>
 
@@ -359,6 +349,11 @@
 		</div>
 	{/if}
 
+	{#if workspaceTab === 'lore'}
+		<div class="min-h-0 flex-1 overflow-hidden">
+			<WorldExplorer storyId={story.currentStory?.serverStoryId ?? story.currentStory?.id ?? null} title="Story Lore" />
+		</div>
+	{:else}
 	<!-- Story entries -->
 	<div bind:this={scrollContainer} class="flex-1 overflow-y-auto pb-4">
 		{#if story.loading}
@@ -583,13 +578,6 @@
 					</div>
 				{/if}
 
-				<!-- Action Choices (cards) -->
-				{#if actionChoices.length > 0 && !isStreaming}
-					<div class="pt-1">
-						<div class="mb-2 font-display text-[10px] tracking-wider uppercase text-[var(--text-accent)]">What will you do?</div>
-						<ActionChoiceCards choices={actionChoices} onSelect={handleSuggestionSelect} />
-					</div>
-				{/if}
 			</div>
 		{/if}
 	</div>
@@ -623,6 +611,13 @@
 									{#if story.characters.length > 0}
 										<span class="ml-auto flex h-4 w-4 items-center justify-center rounded-full bg-[var(--color-gold-400)] text-[8px] font-bold text-[var(--bg-primary)]">{story.characters.length}</span>
 									{/if}
+								</button>
+								<button
+									onclick={() => { workspaceTab = 'lore'; fabOpen = false; }}
+									class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+								>
+									<Database class="h-4 w-4 text-[var(--text-accent)]" />
+									<span class="text-xs font-medium text-[var(--text-primary)]">Lore</span>
 								</button>
 								<button
 									onclick={() => { openHeaderEditor(); fabOpen = false; }}
@@ -691,6 +686,7 @@
 			</div>
 		</div>
 	</div>
+	{/if}
 </div>
 
 
@@ -727,13 +723,6 @@
 				>
 					<ScrollText class="h-3.5 w-3.5" />
 					<span>Story</span>
-				</button>
-				<button
-					onclick={() => editorTab = 'character'}
-					class="flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors {editorTab === 'character' ? 'border-purple-400 text-purple-300' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
-				>
-					<UserRound class="h-3.5 w-3.5" />
-					<span>Character</span>
 				</button>
 			</div>
 
@@ -835,24 +824,10 @@
 					></textarea>
 				</div>
 
-				<div class="space-y-1.5">
-					<label for="player-ledger-input" class="text-xs font-medium text-[var(--text-muted)]">Player Ledger</label>
-					<p class="text-[10px] text-[var(--text-muted)]/80 leading-relaxed">
-						Income, assets, holdings, debts, payroll, claims, stores, ships, troops under pay, and regular expenses. The narrator sees this as its own prompt section.
-					</p>
-					<textarea
-						id="player-ledger-input"
-						bind:value={playerLedgerDraft}
-						placeholder={"Coin: ...\nIncome: ...\nAssets and holdings: ...\nDebts owed: ...\nDebts due: ...\nRegular expenses: ..."}
-						rows="8"
-						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
-					></textarea>
-				</div>
-
 				<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-muted)]">
 					This is the live protagonist record used in prompts. Update age, injuries, identity changes, titles, or appearance here when long play drifts.
 				</div>
-				{#if characterNameDraft !== (story.protagonist?.name ?? '') || characterDescriptionDraft !== (story.protagonist?.description ?? '') || characterTraitsDraft !== (story.protagonist?.traits?.join(', ') ?? '') || reputationDraft !== (story.currentStory?.playerReputation ?? '') || playerLedgerDraft !== (story.currentStory?.playerLedger ?? '')}
+				{#if characterNameDraft !== (story.protagonist?.name ?? '') || characterDescriptionDraft !== (story.protagonist?.description ?? '') || characterTraitsDraft !== (story.protagonist?.traits?.join(', ') ?? '') || reputationDraft !== (story.currentStory?.playerReputation ?? '')}
 					<div class="text-right text-[10px] text-purple-400">Unsaved changes</div>
 				{/if}
 				{/if}

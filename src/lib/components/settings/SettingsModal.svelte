@@ -1,11 +1,19 @@
 <script lang="ts">
-	import { X, Check, ExternalLink, Eye, EyeOff, Globe, Server, Sparkles, Cpu, Zap, SlidersHorizontal, Wrench, Palette, ScrollText, ChevronDown, ImageIcon, Brain, RefreshCw, Search } from 'lucide-svelte';
+	import { X, Check, ExternalLink, Eye, EyeOff, Globe, Server, Sparkles, Cpu, Zap, SlidersHorizontal, Wrench, Palette, ScrollText, ChevronDown, ImageIcon, Brain, RefreshCw, Search, FileText } from 'lucide-svelte';
 	import ServiceConfigPanel from './ServiceConfigPanel.svelte';
+	import PromptsPanel from './PromptsPanel.svelte';
 	import PromptInspector from './PromptInspector.svelte';
 	import ContextWindow from '../story/ContextWindow.svelte';
 	import { settings, SERVICE_DEFINITIONS, SERVICE_PROFILES } from '$lib/stores/settings.svelte';
 	import { PROVIDERS, getProviderList } from '$lib/services/ai/sdk/providers/config';
 	import { STYLE_PRESETS } from '$lib/services/ai/image/ImageGenerationService';
+	import {
+		CONTEXT_BUDGET_STEPS,
+		contextBudgetSliderIndexToValue,
+		contextBudgetValueToSliderIndex,
+		formatTokenBudgetCompact,
+	} from '$lib/services/memorySettings';
+	import { defaultTerminalApiKeyRef, syncTerminalLlmSettingsFromBrowser } from '$lib/services/terminalSettings';
 	import type { ProviderType, APIProfile, UISettings } from '$lib/types';
 	import { uuid } from '$lib/utils/uuid';
 	import { fade } from 'svelte/transition';
@@ -18,7 +26,7 @@
 	let { open, onClose }: Props = $props();
 
 	// Tab navigation
-	type Tab = 'providers' | 'services' | 'memory' | 'images' | 'interface' | 'inspector';
+	type Tab = 'providers' | 'services' | 'prompts' | 'memory' | 'images' | 'interface' | 'inspector';
 	type NumericUiSettingKey = Extract<keyof UISettings,
 		| 'maxMessages'
 		| 'maxHistoryEntries'
@@ -49,6 +57,7 @@
 	// Provider editing
 	let editingProvider = $state<ProviderType | null>(null);
 	let apiKey = $state('');
+	let terminalApiKeyRef = $state('');
 	let customUrl = $state('');
 	let model = $state('');
 	let showApiKey = $state(false);
@@ -61,6 +70,11 @@
 	let editModelSearch = $state('');
 	let fetchingModels = $state(false);
 	let modelFetchMessage = $state('');
+	let contextBudgetSliderIndex = $state(0);
+
+	$effect(() => {
+		contextBudgetSliderIndex = contextBudgetValueToSliderIndex(settings.contextBudget);
+	});
 
 	/**
 	 * Fetch the live model list from an OpenAI-compatible /models endpoint.
@@ -160,6 +174,7 @@
 		editingProvider = id;
 		const existing = getProfileByProvider(id);
 		apiKey = existing?.apiKey ?? '';
+		terminalApiKeyRef = existing?.terminalApiKeyRef ?? defaultTerminalApiKeyRef(id);
 		model = existing ? (settings.narrativeSettings.model || '') : '';
 		customUrl = existing?.baseUrl ?? '';
 		showApiKey = false;
@@ -217,9 +232,11 @@
 		const providerType = editingProvider;
 		const providerConfig = PROVIDERS[providerType];
 		const existing = getProfileByProvider(providerType);
+		const normalizedKeyRef = terminalApiKeyRef.trim() || null;
 
 		if (existing) {
 			existing.apiKey = apiKey;
+			existing.terminalApiKeyRef = normalizedKeyRef;
 			if (customUrl) existing.baseUrl = customUrl;
 			else delete existing.baseUrl;
 			if (fetchedModelsForProfile.length > 0) existing.fetchedModels = [...fetchedModelsForProfile];
@@ -231,6 +248,7 @@
 				name: providerConfig?.name ?? providerType,
 				providerType,
 				apiKey,
+				terminalApiKeyRef: normalizedKeyRef,
 				...(customUrl ? { baseUrl: customUrl } : {}),
 				customModels: [],
 				fetchedModels: [...fetchedModelsForProfile],
@@ -245,7 +263,15 @@
 
 		if (model) {
 			settings.narrativeSettings.model = model;
-			await settings.saveNarrativeSettings();
+			await saveNarrativeSettingsAndSync();
+		}
+		try {
+			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']);
+			testStatus = 'success';
+			testMessage = 'Saved provider and synced terminal runtime settings.';
+		} catch (error) {
+			testStatus = 'error';
+			testMessage = `Saved locally, but terminal sync failed: ${error instanceof Error ? error.message : String(error)}`;
 		}
 	}
 
@@ -305,13 +331,26 @@
 	}
 
 	// Generation settings (bound and saved)
+	async function syncNarrativeRuntimeSetting() {
+		try {
+			await syncTerminalLlmSettingsFromBrowser(['narrative']);
+		} catch (error) {
+			console.warn('[Settings] Terminal sync for narrative settings failed:', error);
+		}
+	}
+
+	async function saveNarrativeSettingsAndSync() {
+		await settings.saveNarrativeSettings();
+		await syncNarrativeRuntimeSetting();
+	}
+
 	async function saveTemp(val: number) {
 		settings.narrativeSettings.temperature = val;
-		await settings.saveNarrativeSettings();
+		await saveNarrativeSettingsAndSync();
 	}
 	async function saveMaxTokens(val: number) {
 		settings.narrativeSettings.maxTokens = val;
-		await settings.saveNarrativeSettings();
+		await saveNarrativeSettingsAndSync();
 	}
 
 	function clampDial(value: number, min: number, max: number): number {
@@ -323,6 +362,26 @@
 		return Number(settings.uiSettings[key] ?? 0);
 	}
 
+	function syncRangeValue(node: HTMLInputElement, value: number) {
+		const apply = (next: number) => {
+			queueMicrotask(() => {
+				node.value = String(next);
+			});
+		};
+		apply(value);
+		return { update: apply };
+	}
+
+	function backendMemorySliderPosition(): number {
+		const value = clampDial(settingValue('backendMemoryTokenBudget'), 160, 2400);
+		return clampDial((value / 2400) * 100, 0, 100);
+	}
+
+	function backendMemoryTokensFromSlider(position: number): number {
+		const scaled = (clampDial(position, 0, 100) / 100) * 2400;
+		return clampDial(Math.round(scaled / 20) * 20, 160, 2400);
+	}
+
 	function formatDialValue(dial: MemoryDial): string {
 		const value = settingValue(dial.key);
 		if (value === 0 && dial.zeroLabel) return dial.zeroLabel;
@@ -332,11 +391,24 @@
 	async function saveUiNumber(key: NumericUiSettingKey, value: number, min: number, max: number) {
 		settings.uiSettings[key] = clampDial(value, min, max);
 		await settings.saveUISettings();
+		if (key === 'backendMemoryTokenBudget') {
+			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
+				console.warn('[Settings] Terminal memory setting sync failed:', error);
+			});
+		}
 	}
 
 	async function saveContextBudgetValue(value: number) {
 		settings.contextBudget = clampDial(value, 0, 200000);
 		await settings.saveContextBudget();
+		await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
+			console.warn('[Settings] Terminal context budget sync failed:', error);
+		});
+	}
+
+	function saveContextBudgetFromSlider(index: number) {
+		contextBudgetSliderIndex = clampDial(index, 0, CONTEXT_BUDGET_STEPS.length - 1);
+		return saveContextBudgetValue(contextBudgetSliderIndexToValue(index));
 	}
 
 	const providerIcons: Record<string, typeof Zap> = {
@@ -424,6 +496,7 @@
 	const tabs: Array<{ id: Tab; label: string; shortLabel: string; icon: typeof Globe }> = [
 		{ id: 'providers', label: 'Providers & Models', shortLabel: 'Providers', icon: Globe },
 		{ id: 'services', label: 'AI Services', shortLabel: 'Services', icon: Wrench },
+		{ id: 'prompts', label: 'Prompts', shortLabel: 'Prompts', icon: FileText },
 		{ id: 'memory', label: 'Memory', shortLabel: 'Memory', icon: Brain },
 		{ id: 'images', label: 'Image Generation', shortLabel: 'Images', icon: ImageIcon },
 		{ id: 'interface', label: 'Interface', shortLabel: 'UI', icon: Palette },
@@ -432,12 +505,12 @@
 
 	const liveContextDials: MemoryDial[] = [
 		{ key: 'snapshotTokenCap', label: 'Dynamic Prompt Cap', description: 'Caps arcs, chapters, lore, world state, retrieved memory, and final instructions before history is added.', min: 0, max: 50000, step: 500, suffix: 'tokens', zeroLabel: 'Auto' },
-		{ key: 'maxMessages', label: 'Conversation Messages', description: 'Recent chat turns kept in the short-term prompt window.', min: 1, max: 1000, step: 5, suffix: 'messages' },
-		{ key: 'maxHistoryEntries', label: 'Raw History Scan', description: 'Raw entries allowed into the local history scan before token budgeting cuts them down.', min: 1, max: 1000, step: 5, suffix: 'entries' },
+		{ key: 'maxMessages', label: 'Conversation Messages', description: 'Recent chat turns kept in the short-term prompt window.', min: 1, max: 1000, step: 1, suffix: 'messages' },
+		{ key: 'maxHistoryEntries', label: 'Raw History Scan', description: 'Raw entries allowed into the local history scan before token budgeting cuts them down.', min: 1, max: 1000, step: 1, suffix: 'entries' },
 	];
 
 	const retrievalDials: MemoryDial[] = [
-		{ key: 'backendMemoryTokenBudget', label: 'Backend Memory Packet', description: 'Target size for server-retrieved memory when a story is bound to backend canon.', min: 160, max: 2400, step: 40, suffix: 'tokens' },
+		{ key: 'backendMemoryTokenBudget', label: 'Terminal Memory Packet', description: 'Target size for terminal-retrieved memory when a story is bound to the terminal world database.', min: 160, max: 2400, step: 20, suffix: 'tokens' },
 		{ key: 'retrievedChapterLimit', label: 'Chapter Memories', description: 'Searchable episodic chapters injected for the current action.', min: 0, max: 12, step: 1, suffix: 'chapters', zeroLabel: 'Off' },
 		{ key: 'retrievedLoreEntryLimit', label: 'Lorebook Matches', description: 'Local lore entries pulled by current action when backend retrieval is unavailable.', min: 0, max: 24, step: 1, suffix: 'entries', zeroLabel: 'Off' },
 		{ key: 'conversationMemoryLimit', label: 'NPC Conversation Memory', description: 'NPC-specific remembered exchanges eligible for the current scene.', min: 0, max: 24, step: 1, suffix: 'memories', zeroLabel: 'Off' },
@@ -556,7 +629,7 @@
 							</button>
 							<button
 								class="rounded-lg bg-[var(--color-gold-400)]/20 px-3 py-2 text-xs font-semibold text-[var(--text-accent)] hover:bg-[var(--color-gold-400)]/30"
-								onclick={() => settings.saveNarrativeSettings()}
+								onclick={saveNarrativeSettingsAndSync}
 							>Save</button>
 						</div>
 						{#if modelChips.length > 0}
@@ -575,8 +648,8 @@
 										{#each filteredModelChips as fm}
 											<button
 												class="max-w-full truncate rounded border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]
-													{settings.narrativeSettings.model === fm ? 'border-[var(--color-gold-600)] text-[var(--text-accent)]' : ''}"
-												onclick={() => { settings.narrativeSettings.model = fm; settings.saveNarrativeSettings(); }}
+												{settings.narrativeSettings.model === fm ? 'border-[var(--color-gold-600)] text-[var(--text-accent)]' : ''}"
+												onclick={() => { settings.narrativeSettings.model = fm; saveNarrativeSettingsAndSync(); }}
 												title={fm}
 											>{fm}</button>
 										{/each}
@@ -597,7 +670,7 @@
 							<label class="text-xs text-[var(--text-muted)]">Temperature</label>
 							<input type="range" min="0" max="2" step="0.1"
 								bind:value={settings.narrativeSettings.temperature}
-								onchange={() => settings.saveNarrativeSettings()}
+								onchange={() => saveNarrativeSettingsAndSync()}
 								class="w-full accent-[var(--color-gold-400)]" />
 							<div class="text-center font-mono text-xs text-[var(--text-primary)]">{settings.narrativeSettings.temperature?.toFixed(1) ?? '1.0'}</div>
 						</div>
@@ -605,7 +678,7 @@
 							<label class="text-xs text-[var(--text-muted)]">Max Tokens</label>
 							<input type="number" min="256" max="65536" step="256"
 								bind:value={settings.narrativeSettings.maxTokens}
-								onchange={() => settings.saveNarrativeSettings()}
+								onchange={() => saveNarrativeSettingsAndSync()}
 								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-1.5 font-mono text-sm text-[var(--text-primary)] focus:outline-none" />
 						</div>
 					</div>
@@ -695,6 +768,20 @@
 								</div>
 							{/if}
 
+							<div class="space-y-1.5">
+								<label for="terminal-key-ref-{editingProvider}" class="text-xs text-[var(--text-muted)]">Terminal key ref</label>
+								<input
+									id="terminal-key-ref-{editingProvider}"
+									type="text"
+									bind:value={terminalApiKeyRef}
+									placeholder={defaultTerminalApiKeyRef(editingProvider)}
+									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
+								/>
+								<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">
+									Saved to terminal settings as an env/config reference. The raw key stays in browser settings or ignored local config, not Postgres.
+								</p>
+							</div>
+
 							<!-- Custom URL -->
 							{#if editingProvider === 'openai-compatible' || editingProvider === 'ollama' || editingProvider === 'lmstudio' || editingProvider === 'anthropic-proxy'}
 								<div class="space-y-1.5">
@@ -782,25 +869,24 @@
 						<ContextWindow />
 					</div>
 					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
-						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Backend Canon</h4>
-						<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
-							<input
-								type="checkbox"
-								checked={settings.uiSettings.serverAuthoritativeTurns ?? false}
-								onchange={(e) => { settings.uiSettings.serverAuthoritativeTurns = (e.target as HTMLInputElement).checked; settings.saveUISettings(); }}
-								class="mt-0.5 accent-[var(--color-gold-400)]"
-							/>
+						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Terminal Runtime</h4>
+						<div class="flex items-start gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+							<span class="mt-0.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">On</span>
 							<span class="min-w-0">
-								<span class="block text-xs font-medium text-[var(--text-primary)]">Server-authoritative online turns</span>
-								<span class="mt-1 block text-[10px] leading-relaxed text-[var(--text-muted)]">For backend-bound stories, route turns through /api/turn so canon, events, patches, and memory nodes are written server-side.</span>
+								<span class="block text-xs font-medium text-[var(--text-primary)]">Terminal-bound turns</span>
+								<span class="mt-1 block text-[10px] leading-relaxed text-[var(--text-muted)]">Bound stories always route turns through the engine command gateway.</span>
 							</span>
-						</label>
+						</div>
 					</div>
 				</div>
 
 				<!-- ═══ TAB: AI SERVICES ═══ -->
 				{:else if activeTab === 'services'}
 				<ServiceConfigPanel onBack={() => activeTab = 'providers'} />
+
+				<!-- ═══ TAB: PROMPTS ═══ -->
+				{:else if activeTab === 'prompts'}
+				<PromptsPanel />
 
 				<!-- ═══ TAB: MEMORY ═══ -->
 				{:else if activeTab === 'memory'}
@@ -825,11 +911,12 @@
 								<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
 									<input
 										type="range"
-										value={settings.contextBudget}
+										bind:value={contextBudgetSliderIndex}
+										use:syncRangeValue={contextBudgetSliderIndex}
 										min="0"
-										max="200000"
-										step="1000"
-										oninput={(e) => saveContextBudgetValue(Number((e.target as HTMLInputElement).value))}
+										max={CONTEXT_BUDGET_STEPS.length - 1}
+										step="1"
+										oninput={(e) => saveContextBudgetFromSlider(Number((e.target as HTMLInputElement).value))}
 										class="w-full accent-[var(--color-gold-400)]"
 									/>
 									<input
@@ -842,28 +929,48 @@
 										class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-right font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none"
 									/>
 								</div>
+								<div class="grid grid-cols-4 text-[9px] text-[var(--text-muted)]">
+									<span>{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[0])}</span>
+									<span class="text-center">{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[5])}</span>
+									<span class="text-center">{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[8])}</span>
+									<span class="text-right">{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[CONTEXT_BUDGET_STEPS.length - 1])}</span>
+								</div>
 								<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">0 keeps the model-aware automatic budget.</p>
 							</div>
 
-							{#each liveContextDials as dial}
+							{#each liveContextDials as dial (dial.key)}
 								<div class="space-y-2">
 									<div class="flex items-center justify-between gap-3">
 										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
 										<span class="font-mono text-[11px] text-[var(--text-muted)]">{formatDialValue(dial)}</span>
 									</div>
 									<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
-										<input
-											type="range"
-											value={settingValue(dial.key)}
-											min={dial.min}
-											max={dial.max}
-											step={dial.step}
-											oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
-											class="w-full accent-[var(--color-gold-400)]"
-										/>
+										{#if dial.key === 'backendMemoryTokenBudget'}
+											<input
+												type="range"
+												value={String(backendMemorySliderPosition())}
+												use:syncRangeValue={backendMemorySliderPosition()}
+												min="0"
+												max="100"
+												step="1"
+												oninput={(e) => saveUiNumber(dial.key, backendMemoryTokensFromSlider(Number((e.target as HTMLInputElement).value)), dial.min, dial.max)}
+												class="w-full accent-[var(--color-gold-400)]"
+											/>
+										{:else}
+											<input
+												type="range"
+												value={String(settingValue(dial.key))}
+												use:syncRangeValue={settingValue(dial.key)}
+												min={dial.min}
+												max={dial.max}
+												step={dial.step}
+												oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+												class="w-full accent-[var(--color-gold-400)]"
+											/>
+										{/if}
 										<input
 											type="number"
-											value={settingValue(dial.key)}
+											bind:value={settings.uiSettings[dial.key]}
 											min={dial.min}
 											max={dial.max}
 											step={dial.step}
@@ -883,34 +990,42 @@
 								<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Retrieval</h4>
 								<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">How much searchable memory is pulled for the current action.</p>
 							</div>
-							<label class="flex items-center gap-2 rounded-full border border-[var(--border-primary)] px-2 py-1 text-[10px] text-[var(--text-muted)]">
-								<input
-									type="checkbox"
-									checked={settings.uiSettings.serverAuthoritativeTurns ?? false}
-									onchange={(e) => { settings.uiSettings.serverAuthoritativeTurns = (e.target as HTMLInputElement).checked; settings.saveUISettings(); }}
-									class="accent-[var(--color-gold-400)]"
-								/>
-								Backend turns
-							</label>
+							<span class="rounded-full border border-[var(--border-primary)] px-2 py-1 text-[10px] text-[var(--text-muted)]">
+								Terminal-bound
+							</span>
 						</div>
 
 						<div class="space-y-5">
-							{#each retrievalDials as dial}
+							{#each retrievalDials as dial (dial.key)}
 								<div class="space-y-2">
 									<div class="flex items-center justify-between gap-3">
 										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
 										<span class="font-mono text-[11px] text-[var(--text-muted)]">{formatDialValue(dial)}</span>
 									</div>
 									<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
-										<input
-											type="range"
-											value={settingValue(dial.key)}
-											min={dial.min}
-											max={dial.max}
-											step={dial.step}
-											oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
-											class="w-full accent-[var(--color-gold-400)]"
-										/>
+										{#if dial.key === 'backendMemoryTokenBudget'}
+											<input
+												type="range"
+												value={String(backendMemorySliderPosition())}
+												use:syncRangeValue={backendMemorySliderPosition()}
+												min="0"
+												max="100"
+												step="1"
+												oninput={(e) => saveUiNumber(dial.key, backendMemoryTokensFromSlider(Number((e.target as HTMLInputElement).value)), dial.min, dial.max)}
+												class="w-full accent-[var(--color-gold-400)]"
+											/>
+										{:else}
+											<input
+												type="range"
+												value={String(settingValue(dial.key))}
+												use:syncRangeValue={settingValue(dial.key)}
+												min={dial.min}
+												max={dial.max}
+												step={dial.step}
+												oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+												class="w-full accent-[var(--color-gold-400)]"
+											/>
+										{/if}
 										<input
 											type="number"
 											value={settingValue(dial.key)}
@@ -934,7 +1049,7 @@
 						</div>
 
 						<div class="space-y-5">
-							{#each summaryDials as dial}
+							{#each summaryDials as dial (dial.key)}
 								<div class="space-y-2">
 									<div class="flex items-center justify-between gap-3">
 										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>

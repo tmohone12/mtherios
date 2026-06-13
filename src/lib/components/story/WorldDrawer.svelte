@@ -1,15 +1,20 @@
 <script lang="ts">
-	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search, Trash2 } from 'lucide-svelte';
+	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search, Database, RefreshCw, AlertTriangle, User, Save } from 'lucide-svelte';
 	import { WORLD_SIM_DAY_INTERVAL, normalizeRelation } from '$lib/services/ai/tools/helpers';
 	import { maybeRunWorldSim } from '$lib/services/ai/tools/executor';
-	import { runStrategicWorldBrainNow } from '$lib/services/ai/background/runner';
+	import { runBackendWorldSimTick } from '$lib/services/backendMemory';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { story } from '$lib/stores/story.svelte';
-	import { getChapters, getArcs, createArc } from '$lib/services/database';
+	import { getChapters, getArcs, getSyncOpsForStory } from '$lib/services/database';
+	import { fetchEngineCacheStatus } from '$lib/services/serverStories';
+	import { saveCanonicalArc } from '$lib/services/canonicalWrites';
 	import { ai } from '$lib/services/ai';
 	import { uuid } from '$lib/utils/uuid';
 	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
-	import type { Agreement, Arc, Entry, FactionActionRecord, FactionEntryState } from '$lib/types';
+	import { downloadStoryVaultArchive, fetchStoryVaultStatus, runStoryVaultJob, type StoryVaultStatus } from '$lib/services/storyVault';
+	import { terminalSyncDisplay, terminalSyncToneClass } from './terminalSyncDisplay';
+	import type { EngineCacheSegmentDiagnostics } from '$lib/contracts/engine';
+	import type { Arc, Character, Entry, FactionActionRecord, FactionEntryState, Story, SyncOutboxOp } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import type { Chapter } from '$lib/types';
 
@@ -55,7 +60,23 @@
 	let { open, onClose }: Props = $props();
 
 	const activeChars = $derived(story.characters.filter(c => c.status === 'active'));
+	const activeNpcs = $derived(activeChars.filter(c => c.relationship !== 'self'));
 	const protagonist = $derived(story.protagonist);
+	function characterMetadata(character?: Character | null): Record<string, unknown> {
+		const metadata = character?.metadata && typeof character.metadata === 'object' ? character.metadata : {};
+		const originalMetadata = metadata.originalMetadata && typeof metadata.originalMetadata === 'object'
+			? metadata.originalMetadata as Record<string, unknown>
+			: {};
+		return { ...originalMetadata, ...metadata };
+	}
+	function protagonistPrompt(character?: Character | null): string {
+		const metadata = characterMetadata(character);
+		return typeof metadata.playerPrompt === 'string' ? metadata.playerPrompt : '';
+	}
+	const protagonistAssets = $derived.by(() => {
+		const assets = characterMetadata(protagonist).assets;
+		return Array.isArray(assets) ? assets.filter((asset): asset is string => typeof asset === 'string' && asset.trim().length > 0) : [];
+	});
 
 	type FactionStatusFilter = 'all' | FactionEntryState['status'];
 	type FactionSortMode = 'relevance' | 'standing' | 'resources' | 'name';
@@ -188,6 +209,15 @@
 	// Need at least 3 uncovered chapters to condense into an arc
 	const condensableChapters = $derived(uncoveredChapters.length >= 3 ? uncoveredChapters : []);
 
+	function applyBackendVersion(serverVersion: number | null) {
+		if (!serverVersion || !story.currentStory) return;
+		story.currentStory = {
+			...story.currentStory,
+			serverVersion,
+			syncStatus: 'synced',
+		};
+	}
+
 	async function generateArc() {
 		if (!story.currentStory || condensableChapters.length === 0) return;
 		generatingArc = true;
@@ -223,7 +253,7 @@
 				createdAt: Date.now(),
 			};
 
-			await createArc(arc);
+			applyBackendVersion(await saveCanonicalArc(arc, 'create'));
 			arcs = [...arcs, arc];
 			console.log(`Arc ${arcNumber} created: "${arc.title}" (chapters ${arc.chapterRange})`);
 		} catch (e) {
@@ -308,32 +338,23 @@
 
 	// Manual world-sim trigger ─────────────────────────────────────────
 	let runningWorldSim = $state(false);
-	let runningStrategicBrain = $state(false);
-	let strategicBrainMessage = $state<string | null>(null);
 	const worldSimEnabled = $derived(settings.getServiceConfig('worldSimulation').enabled);
-	const strategicWorldBrainEnabled = $derived(settings.getServiceConfig('strategicWorldBrain').enabled);
+	const backendWorldSim = $derived(Boolean(story.currentStory?.serverStoryId));
+	const canRunWorldSim = $derived(backendWorldSim || worldSimEnabled);
 	async function runWorldSimNow() {
-		if (runningWorldSim || !worldSimEnabled || !story.currentStory) return;
+		const current = story.currentStory;
+		if (runningWorldSim || !canRunWorldSim || !current) return;
 		runningWorldSim = true;
-		try { await maybeRunWorldSim({ force: true }); }
+		try {
+			if (current.serverStoryId) {
+				await runBackendWorldSimTick(current);
+				await story.pullBackendProjection();
+			} else {
+				await maybeRunWorldSim({ force: true });
+			}
+		}
 		catch (e) { console.error('[WorldDrawer] manual world sim failed:', e); }
 		runningWorldSim = false;
-	}
-	async function runStrategicBrainNow() {
-		if (runningStrategicBrain || !strategicWorldBrainEnabled || !story.currentStory) return;
-		runningStrategicBrain = true;
-		strategicBrainMessage = null;
-		try {
-			const frame = await runStrategicWorldBrainNow();
-			strategicBrainMessage = frame
-				? `Frame ${frame.arcNumber} saved (${frame.reconcilerResult?.applied ?? 0} scheme updates).`
-				: 'No frame was created.';
-		} catch (e) {
-			console.error('[WorldDrawer] manual strategic world brain failed:', e);
-			strategicBrainMessage = e instanceof Error ? e.message : String(e);
-		} finally {
-			runningStrategicBrain = false;
-		}
 	}
 
 	// ── Meters (player only sees visible meters) ──
@@ -386,16 +407,6 @@
 	let livingWorldCollapsed = $state(false);
 	let agreementsCollapsed = $state(false);
 	let alliancesCollapsed = $state(false);
-	let confirmingAgreementDeleteId = $state<string | null>(null);
-
-	async function removeAgreement(agreement: Agreement) {
-		if (confirmingAgreementDeleteId !== agreement.id) {
-			confirmingAgreementDeleteId = agreement.id;
-			return;
-		}
-		await story.removeAgreement(agreement.id);
-		confirmingAgreementDeleteId = null;
-	}
 
 	// ── Alliances: flattened, deduped inter-faction relations ──
 	interface AllianceRow {
@@ -459,16 +470,417 @@
 
 	// Wiki export
 	let exportingWiki = $state(false);
+	let wikiVaultStatus = $state<StoryVaultStatus | null>(null);
+	let wikiVaultLoading = $state(false);
+	let wikiVaultAction = $state<'sync' | 'index' | 'lint' | null>(null);
+	let wikiVaultError = $state<string | null>(null);
+	let lastWikiVaultStatusKey = $state<string | null>(null);
+	let syncOutboxRows = $state<SyncOutboxOp[]>([]);
+	let syncOutboxLoading = $state(false);
+	let syncOutboxError = $state<string | null>(null);
+	let lastSyncOutboxKey = $state<string | null>(null);
+	let syncRepairAction = $state<string | null>(null);
+	let engineProjectionLoading = $state(false);
+	let engineProjectionError = $state<string | null>(null);
+	let lastEngineProjectionKey = $state<string | null>(null);
+	let drawerTab = $state<'player' | 'characters' | 'story' | 'technical'>('story');
+	let protagonistNameDraft = $state('');
+	let protagonistDescriptionDraft = $state('');
+	let protagonistPromptDraft = $state('');
+	let protagonistReputationDraft = $state('');
+	let protagonistAssetsDraft = $state('');
+	let protagonistSaving = $state(false);
+	let protagonistSaveError = $state<string | null>(null);
+	let protagonistSavedAt = $state<number | null>(null);
+	let protagonistDraftKey = $state<string | null>(null);
+	let characterNameDraft = $state('');
+	let characterDescriptionDraft = $state('');
+	let characterStatusDraft = $state<Character['status']>('active');
+	let characterRelationshipDraft = $state('neutral');
+	let characterAliasesDraft = $state('');
+	let characterTraitsDraft = $state('');
+	let characterAppearanceDraft = $state('');
+	let characterVoiceDraft = $state('');
+	let characterMannerismsDraft = $state('');
+	let characterPersonalityDraft = $state('');
+	let characterLocationDraft = $state('');
+	let characterFactionDraft = $state('');
+	let characterRankDraft = $state('');
+	let characterRoleDraft = $state('');
+	let characterVisibilityDraft = $state('');
+	let characterSaving = $state(false);
+	let characterCreateError = $state<string | null>(null);
+	let characterCreatedAt = $state<number | null>(null);
+	const terminalStoryId = $derived(story.currentStory?.serverStoryId ?? null);
+	const localStoryId = $derived(story.currentStory?.id ?? null);
+	const wikiVaultStatusKey = $derived(terminalStoryId ? `${terminalStoryId}:${story.currentStory?.serverVersion ?? 0}` : null);
+	const engineProjectionKey = $derived(terminalStoryId ? `${terminalStoryId}:${story.currentStory?.serverVersion ?? 0}` : null);
+	const syncOutboxKey = $derived(localStoryId && terminalStoryId
+		? `${localStoryId}:${story.currentStory?.syncStatus ?? 'synced'}:${story.currentStory?.serverVersion ?? 0}`
+		: null);
+	const wikiVaultCounts = $derived(wikiVaultStatus?.manifest?.counts ?? null);
+	const openSyncOps = $derived(syncOutboxRows.filter((op) => ['pending', 'pushing', 'rejected', 'needs_repair'].includes(op.status)));
+	const repairSyncOps = $derived(openSyncOps.filter((op) => op.status === 'needs_repair' || op.status === 'rejected'));
+	const pendingSyncOps = $derived(openSyncOps.filter((op) => op.status === 'pending' || op.status === 'pushing'));
+	const terminalSync = $derived(terminalSyncDisplay({
+		syncStatus: story.currentStory?.syncStatus,
+		gatewayConnected: story.engineStreamStatus.connected,
+		pendingCount: pendingSyncOps.length,
+		repairCount: repairSyncOps.length,
+	}));
+	const terminalSyncClass = $derived(terminalSyncToneClass(terminalSync.tone));
+	const engineProjection = $derived(story.campaignProjection);
+	const engineCacheTotal = $derived((engineProjection?.cache.hitCount ?? 0) + (engineProjection?.cache.missCount ?? 0));
+	const engineCacheHitRate = $derived(engineCacheTotal > 0 ? Math.round(((engineProjection?.cache.hitCount ?? 0) / engineCacheTotal) * 100) : null);
+	const engineCacheSegments = $derived((engineProjection?.cache.segments ?? []).slice(0, 5));
+	const engineCacheInvalidations = $derived((engineProjection?.cache.byKind ?? []).reduce((sum, kind) => sum + kind.invalidatedCount, 0));
+	const lastTurnPerformance = $derived(story.lastTurnPerformance);
+
+	$effect(() => {
+		if (!open || !story.currentStory) return;
+		const key = [
+			story.currentStory.id,
+			protagonist?.id ?? 'none',
+			protagonist?.name ?? '',
+			protagonist?.description ?? '',
+			protagonist?.traits?.join('|') ?? '',
+			protagonistPrompt(protagonist),
+			story.currentStory.playerReputation ?? '',
+			protagonistAssets.join('|'),
+		].join(':');
+		if (key === protagonistDraftKey) return;
+		protagonistDraftKey = key;
+		protagonistNameDraft = protagonist?.name ?? '';
+		protagonistDescriptionDraft = protagonist?.description ?? '';
+		protagonistPromptDraft = protagonistPrompt(protagonist);
+		protagonistReputationDraft = story.currentStory.playerReputation ?? '';
+		protagonistAssetsDraft = protagonistAssets.join('\n');
+		protagonistSaveError = null;
+		protagonistSavedAt = null;
+	});
+
+	function splitDraftLines(value: string): string[] {
+		return [...new Set(value
+			.split(/\r?\n|,/)
+			.map((item) => item.trim())
+			.filter(Boolean))];
+	}
+
+	function resetCharacterDraft() {
+		characterNameDraft = '';
+		characterDescriptionDraft = '';
+		characterStatusDraft = 'active';
+		characterRelationshipDraft = 'neutral';
+		characterAliasesDraft = '';
+		characterTraitsDraft = '';
+		characterAppearanceDraft = '';
+		characterVoiceDraft = '';
+		characterMannerismsDraft = '';
+		characterPersonalityDraft = '';
+		characterLocationDraft = '';
+		characterFactionDraft = '';
+		characterRankDraft = '';
+		characterRoleDraft = '';
+		characterVisibilityDraft = '';
+	}
+
+	async function createCharacterFromDrawer() {
+		if (!story.currentStory || characterSaving) return;
+		const name = characterNameDraft.trim();
+		if (!name) {
+			characterCreateError = 'Name is required.';
+			return;
+		}
+		characterSaving = true;
+		characterCreateError = null;
+		try {
+			await story.createCharacter({
+				name,
+				description: characterDescriptionDraft,
+				status: characterStatusDraft,
+				relationship: characterRelationshipDraft,
+				aliases: splitDraftLines(characterAliasesDraft),
+				traits: splitDraftLines(characterTraitsDraft),
+				appearance: characterAppearanceDraft,
+				voice: characterVoiceDraft,
+				mannerisms: splitDraftLines(characterMannerismsDraft),
+				personalityDescriptors: splitDraftLines(characterPersonalityDraft),
+				currentLocation: characterLocationDraft,
+				factionName: characterFactionDraft,
+				rank: characterRankDraft,
+				role: characterRoleDraft,
+				visibilityNote: characterVisibilityDraft,
+			});
+			characterCreatedAt = Date.now();
+			resetCharacterDraft();
+		} catch (e) {
+			characterCreateError = e instanceof Error ? e.message : 'Could not create character.';
+		}
+		characterSaving = false;
+	}
+
+	async function saveProtagonistControls() {
+		if (!story.currentStory || protagonistSaving) return;
+		const name = protagonistNameDraft.trim();
+		if (!name) {
+			protagonistSaveError = 'Name is required.';
+			return;
+		}
+		protagonistSaving = true;
+		protagonistSaveError = null;
+		try {
+			await story.saveProtagonist({
+				name,
+				description: protagonistDescriptionDraft.trim() || null,
+				prompt: protagonistPromptDraft.trim() || null,
+				assets: splitDraftLines(protagonistAssetsDraft),
+			});
+			await story.updatePlayerReputation(protagonistReputationDraft.trim() || null);
+			protagonistSavedAt = Date.now();
+		} catch (e) {
+			protagonistSaveError = e instanceof Error ? e.message : 'Could not save protagonist controls.';
+		}
+		protagonistSaving = false;
+	}
 
 	async function handleExportWiki() {
 		if (!story.currentStory || exportingWiki) return;
 		exportingWiki = true;
 		try {
-			await downloadStoryAsWiki(story.currentStory.id);
+			if (terminalStoryId) {
+				await downloadStoryVaultArchive(terminalStoryId);
+				await refreshWikiVaultStatus(terminalStoryId);
+			} else {
+				await downloadStoryAsWiki(story.currentStory.id);
+			}
 		} catch (e) {
 			console.error('[Wiki Export] failed:', e);
 		}
 		exportingWiki = false;
+	}
+
+	$effect(() => {
+		const key = wikiVaultStatusKey;
+		const storyId = terminalStoryId;
+		if (!open) {
+			lastWikiVaultStatusKey = null;
+			return;
+		}
+		if (!storyId || !key) {
+			wikiVaultStatus = null;
+			wikiVaultError = null;
+			lastWikiVaultStatusKey = null;
+			return;
+		}
+		if (lastWikiVaultStatusKey !== key) {
+			lastWikiVaultStatusKey = key;
+			void refreshWikiVaultStatus(storyId);
+		}
+	});
+
+	$effect(() => {
+		const key = syncOutboxKey;
+		const storyId = localStoryId;
+		if (!open) {
+			lastSyncOutboxKey = null;
+			return;
+		}
+		if (!storyId || !key) {
+			syncOutboxRows = [];
+			syncOutboxError = null;
+			lastSyncOutboxKey = null;
+			return;
+		}
+		if (lastSyncOutboxKey !== key) {
+			lastSyncOutboxKey = key;
+			void refreshSyncOutbox(storyId);
+		}
+	});
+
+	$effect(() => {
+		const key = engineProjectionKey;
+		if (!open) {
+			lastEngineProjectionKey = null;
+			return;
+		}
+		if (!terminalStoryId || !key) {
+			engineProjectionError = null;
+			lastEngineProjectionKey = null;
+			return;
+		}
+		if (lastEngineProjectionKey !== key) {
+			lastEngineProjectionKey = key;
+			void refreshEngineProjection();
+		}
+	});
+
+	async function refreshEngineProjection() {
+		const storyId = terminalStoryId;
+		if (!storyId || engineProjectionLoading) return;
+		engineProjectionLoading = true;
+		engineProjectionError = null;
+		try {
+			await story.refreshCampaignProjection();
+			const cache = await fetchEngineCacheStatus(storyId, {
+				includeSegments: true,
+				segmentLimit: 5,
+			});
+			if (story.currentStory?.serverStoryId === storyId && story.campaignProjection) {
+				story.campaignProjection = { ...story.campaignProjection, cache };
+			}
+			lastEngineProjectionKey = engineProjectionKey;
+		} catch (e) {
+			engineProjectionError = e instanceof Error ? e.message : 'Could not refresh engine projection.';
+		}
+		engineProjectionLoading = false;
+	}
+
+	async function refreshWikiVaultStatus(storyId = terminalStoryId) {
+		if (!storyId || wikiVaultLoading) return;
+		wikiVaultLoading = true;
+		wikiVaultError = null;
+		try {
+			wikiVaultStatus = await fetchStoryVaultStatus(storyId);
+		} catch (e) {
+			wikiVaultError = e instanceof Error ? e.message : 'Could not read terminal wiki status.';
+		}
+		wikiVaultLoading = false;
+	}
+
+	async function syncWikiVault(index: boolean, lint = false) {
+		const storyId = terminalStoryId;
+		if (!storyId || wikiVaultAction) return;
+		wikiVaultAction = lint ? 'lint' : index ? 'index' : 'sync';
+		wikiVaultError = null;
+		try {
+			const result = await runStoryVaultJob({ storyId, index, lint, runNow: true });
+			wikiVaultStatus = result.status;
+			lastWikiVaultStatusKey = wikiVaultStatusKey;
+		} catch (e) {
+			wikiVaultError = e instanceof Error ? e.message : 'Terminal wiki job failed.';
+		}
+		wikiVaultAction = null;
+	}
+
+	async function refreshSyncOutbox(storyId = localStoryId) {
+		if (!storyId || syncOutboxLoading) return;
+		syncOutboxLoading = true;
+		syncOutboxError = null;
+		try {
+			syncOutboxRows = await getSyncOpsForStory(storyId);
+		} catch (e) {
+			syncOutboxError = e instanceof Error ? e.message : 'Could not read local sync outbox.';
+		}
+		syncOutboxLoading = false;
+	}
+
+	async function retrySyncRepair(opId: string) {
+		if (syncRepairAction) return;
+		syncRepairAction = repairActionKey('retry', opId);
+		syncOutboxError = null;
+		try {
+			await story.retryBackendSyncRepair(opId);
+			await refreshSyncOutbox();
+		} catch (e) {
+			syncOutboxError = e instanceof Error ? e.message : 'Could not retry sync repair item.';
+		}
+		syncRepairAction = null;
+	}
+
+	async function discardSyncRepair(opId: string) {
+		if (syncRepairAction) return;
+		syncRepairAction = repairActionKey('discard', opId);
+		syncOutboxError = null;
+		try {
+			await story.discardBackendSyncRepair(opId);
+			await refreshSyncOutbox();
+		} catch (e) {
+			syncOutboxError = e instanceof Error ? e.message : 'Could not discard sync repair item.';
+		}
+		syncRepairAction = null;
+	}
+
+	function formatIso(value?: string | null): string {
+		if (!value) return 'never';
+		const time = Date.parse(value);
+		if (!Number.isFinite(time)) return 'unknown';
+		return new Date(time).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+	}
+
+	function formatTimeMs(value?: number | null): string {
+		if (!value) return 'unknown';
+		return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+	}
+
+	function syncOpTitle(op: SyncOutboxOp): string {
+		if (op.type === 'turn_command') return 'Queued turn';
+		if (op.type === 'delete_entry') return 'Delete entry';
+		if (op.type === 'state_correction') return 'State correction';
+		return op.type.replaceAll('_', ' ');
+	}
+
+	function repairActionKey(action: 'retry' | 'discard', opId: string): string {
+		return `${action}:${opId}`;
+	}
+
+	function shortPath(value?: string | null): string {
+		if (!value) return '';
+		return value.split(/[\\/]/).filter(Boolean).slice(-3).join('/');
+	}
+
+	function formatCacheRate(value: number | null): string {
+		return value === null ? 'n/a' : `${value}%`;
+	}
+
+	function formatDurationMs(value: number | null | undefined): string {
+		const duration = Math.max(0, Math.trunc(value ?? 0));
+		return duration >= 1000 ? `${(duration / 1000).toFixed(1)}s` : `${duration}ms`;
+	}
+
+	function formatOptionalTokens(value: number | null | undefined): string {
+		return value === null || value === undefined ? 'n/a' : formatTokens(value);
+	}
+
+	function formatHash(value?: string | null): string {
+		return value ? value.slice(0, 8) : 'none';
+	}
+
+	function cacheSegmentTitle(segment: EngineCacheSegmentDiagnostics): string {
+		const dependencyCount = segment.dependencyHashes.length;
+		return [
+			`${segment.kind}: ${segment.hitCount} hits, ${segment.missCount} misses`,
+			`${segment.tokenEstimate} tokens`,
+			`${segment.invalidatedCount} invalidations`,
+			`${dependencyCount} dependencies`,
+			`hash ${formatHash(segment.contentHash)}`,
+		].join(' | ');
+	}
+
+	function vaultFreshText(status: StoryVaultStatus | null): string {
+		if (!status) return wikiVaultLoading ? 'Checking' : 'Unknown';
+		if (status.vaultFresh) return 'Fresh';
+		return status.exists ? 'Stale' : 'Missing';
+	}
+
+	function indexFreshText(status: StoryVaultStatus | null): string {
+		if (!status) return wikiVaultLoading ? 'Checking' : 'Unknown';
+		if (status.indexFresh) return 'Fresh';
+		return status.indexedVersion ? 'Stale' : 'Missing';
+	}
+
+	function lintFreshText(status: StoryVaultStatus | null): string {
+		if (!status) return wikiVaultLoading ? 'Checking' : 'Unknown';
+		if (!status.lint.exists) return 'Not run';
+		if (!status.lint.fresh) return 'Stale';
+		if (status.lint.ok === true) return 'Healthy';
+		if (status.lint.ok === false) return 'Issues';
+		return 'Recorded';
+	}
+
+	function lintHealthClass(status: StoryVaultStatus | null): string {
+		if (!status?.lint.exists) return 'text-[var(--text-muted)]';
+		if (!status.lint.fresh) return 'text-amber-400';
+		return status.lint.ok === false ? 'text-amber-400' : 'text-emerald-400';
 	}
 
 	const timelineRows = $derived.by(() => {
@@ -519,7 +931,7 @@
 			<div class="flex items-center gap-1">
 				<button onclick={handleExportWiki} disabled={exportingWiki || !story.currentStory}
 					class="rounded p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-amber-400 disabled:opacity-40"
-					title="Export wiki as Obsidian-compatible .zip">
+					title="Export agent-maintained Obsidian wiki vault">
 					{#if exportingWiki}<Loader2 class="h-4 w-4 animate-spin" />{:else}<FileArchive class="h-4 w-4" />{/if}
 				</button>
 				<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]" aria-label="Close world drawer">
@@ -528,27 +940,259 @@
 			</div>
 		</div>
 
+		<!-- Tabs -->
+		<div class="flex border-b border-[var(--border-primary)]">
+			<button
+				class="flex-1 px-4 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'player' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				onclick={() => drawerTab = 'player'}
+			>
+				Player
+			</button>
+			<button
+				class="flex-1 px-4 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'characters' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				onclick={() => drawerTab = 'characters'}
+			>
+				Characters
+			</button>
+			<button
+				class="flex-1 px-4 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'story' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				onclick={() => drawerTab = 'story'}
+			>
+				Story
+			</button>
+			<button
+				class="flex-1 px-4 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'technical' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				onclick={() => drawerTab = 'technical'}
+			>
+				Technical
+			</button>
+		</div>
+
 		<div class="flex-1 overflow-y-auto px-4 py-4 space-y-6">
-			<!-- Context Usage -->
-			{#if story.currentStory}
+			{#if drawerTab === 'player'}
 			<div>
-				<div class="mb-1.5 flex items-center justify-between">
-					<div class="flex items-center gap-1.5">
-						<Gauge class="h-3.5 w-3.5 text-cyan-400" />
-						<span class="font-display text-[10px] tracking-wider uppercase text-cyan-400">Context</span>
-					</div>
-					<span class="text-[10px] tabular-nums {contextPercent > 80 ? 'text-rose-400' : contextPercent > 50 ? 'text-amber-400' : 'text-emerald-400'}">
-						~{formatTokens(contextTotal)} / 200K
-					</span>
+				<div class="mb-2 flex items-center gap-2">
+					<User class="h-4 w-4 text-[var(--text-accent)]" />
+					<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">User Character</span>
 				</div>
-				<div class="rounded-full bg-[var(--bg-primary)] h-2 overflow-hidden">
-					<div
-						class="h-full transition-all duration-300 rounded-full {contextPercent > 80 ? 'bg-rose-500' : contextPercent > 50 ? 'bg-amber-500' : 'bg-cyan-500'}"
-						style="width: {contextPercent}%"
-					></div>
+				<div class="space-y-3 rounded-lg bg-[var(--bg-tertiary)] p-3">
+					<label class="block space-y-1.5">
+						<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Name</span>
+						<input
+							class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--text-accent)]"
+							bind:value={protagonistNameDraft}
+							placeholder="Player character"
+						/>
+					</label>
+
+					<label class="block space-y-1.5">
+						<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Description</span>
+						<textarea
+							class="min-h-24 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--text-accent)]"
+							bind:value={protagonistDescriptionDraft}
+							placeholder="Appearance, manner, role, and current situation"
+						></textarea>
+					</label>
+
+					<label class="block space-y-1.5">
+						<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Prompt</span>
+						<textarea
+							class="min-h-28 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--text-accent)]"
+							bind:value={protagonistPromptDraft}
+							placeholder="Player-facing guidance for narration and agency"
+						></textarea>
+					</label>
+
+					<label class="block space-y-1.5">
+						<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Reputation</span>
+						<textarea
+							class="min-h-20 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--text-accent)]"
+							bind:value={protagonistReputationDraft}
+							placeholder="Known standing, rumors, debts, titles, and public pressure"
+						></textarea>
+					</label>
+
+					<label class="block space-y-1.5">
+						<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Assets</span>
+						<textarea
+							class="min-h-20 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none transition-colors focus:border-[var(--text-accent)]"
+							bind:value={protagonistAssetsDraft}
+							placeholder="Safehouse, contacts, gear, favors"
+						></textarea>
+					</label>
+
+					<div class="flex items-center justify-between gap-3">
+						<div class="min-h-5 text-[10px]">
+							{#if protagonistSaveError}
+								<span class="text-rose-300">{protagonistSaveError}</span>
+							{:else if protagonistSavedAt}
+								<span class="text-emerald-300">Saved {formatTimeMs(protagonistSavedAt)}</span>
+							{:else}
+								<span class="text-[var(--text-muted)]">AI reputation updates use turn cadence; manual saves apply now.</span>
+							{/if}
+						</div>
+						<button
+							onclick={saveProtagonistControls}
+							disabled={protagonistSaving || !story.currentStory}
+							class="inline-flex shrink-0 items-center gap-2 rounded-md border border-[var(--text-accent)]/35 bg-[var(--text-accent)]/10 px-3 py-2 text-xs font-medium text-[var(--text-accent)] transition-colors hover:bg-[var(--text-accent)]/15 disabled:cursor-not-allowed disabled:opacity-40"
+						>
+							{#if protagonistSaving}
+								<Loader2 class="h-3.5 w-3.5 animate-spin" />
+							{:else}
+								<Save class="h-3.5 w-3.5" />
+							{/if}
+							<span>Save</span>
+						</button>
+					</div>
 				</div>
 			</div>
 			{/if}
+
+			{#if drawerTab === 'characters'}
+			<div class="space-y-4">
+				<div>
+					<div class="mb-2 flex items-center gap-2">
+						<Users class="h-4 w-4 text-[var(--text-accent)]" />
+						<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Create Character</span>
+					</div>
+					<div class="space-y-3 rounded-lg bg-[var(--bg-tertiary)] p-3">
+						<label class="block space-y-1.5">
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Name</span>
+							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterNameDraft} placeholder="Character name" />
+						</label>
+						<label class="block space-y-1.5">
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Description</span>
+							<textarea class="min-h-20 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterDescriptionDraft} placeholder="Role, background, visible state, and current situation"></textarea>
+						</label>
+						<div class="grid grid-cols-2 gap-2">
+							<label class="block space-y-1.5">
+								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Status</span>
+								<select class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterStatusDraft}>
+									<option value="active">Active</option>
+									<option value="inactive">Inactive</option>
+									<option value="deceased">Deceased</option>
+								</select>
+							</label>
+							<label class="block space-y-1.5">
+								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Relationship</span>
+								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterRelationshipDraft} placeholder="neutral, ally, rival" />
+							</label>
+						</div>
+						<label class="block space-y-1.5">
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Aliases</span>
+							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterAliasesDraft} placeholder="Comma or line separated" />
+						</label>
+						<label class="block space-y-1.5">
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Traits</span>
+							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterTraitsDraft} placeholder="ambitious, cautious, proud" />
+						</label>
+						<label class="block space-y-1.5">
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Appearance</span>
+							<textarea class="min-h-16 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterAppearanceDraft} placeholder="Face, clothes, build, scars, weapons, heraldry"></textarea>
+						</label>
+						<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+							<label class="block space-y-1.5">
+								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Voice</span>
+								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterVoiceDraft} placeholder="Soft, clipped, courtly" />
+							</label>
+							<label class="block space-y-1.5">
+								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Location</span>
+								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterLocationDraft} placeholder="Current location" />
+							</label>
+						</div>
+						<label class="block space-y-1.5">
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Mannerisms</span>
+							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterMannerismsDraft} placeholder="Comma or line separated" />
+						</label>
+						<label class="block space-y-1.5">
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Personality</span>
+							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterPersonalityDraft} placeholder="Comma or line separated" />
+						</label>
+						<div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+							<label class="block space-y-1.5">
+								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Faction</span>
+								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterFactionDraft} />
+							</label>
+							<label class="block space-y-1.5">
+								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Rank</span>
+								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterRankDraft} />
+							</label>
+							<label class="block space-y-1.5">
+								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Role</span>
+								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterRoleDraft} />
+							</label>
+						</div>
+						<label class="block space-y-1.5">
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Visibility Note</span>
+							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterVisibilityDraft} placeholder="public, player-known, secret context note" />
+						</label>
+						<div class="flex items-center justify-between gap-3">
+							<div class="min-h-5 text-[10px]">
+								{#if characterCreateError}
+									<span class="text-rose-300">{characterCreateError}</span>
+								{:else if characterCreatedAt}
+									<span class="text-emerald-300">Created {formatTimeMs(characterCreatedAt)}</span>
+								{:else}
+									<span class="text-[var(--text-muted)]">Creates a canonical character record.</span>
+								{/if}
+							</div>
+							<button onclick={createCharacterFromDrawer} disabled={characterSaving || !story.currentStory} class="inline-flex shrink-0 items-center gap-2 rounded-md border border-[var(--text-accent)]/35 bg-[var(--text-accent)]/10 px-3 py-2 text-xs font-medium text-[var(--text-accent)] transition-colors hover:bg-[var(--text-accent)]/15 disabled:cursor-not-allowed disabled:opacity-40">
+								{#if characterSaving}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Save class="h-3.5 w-3.5" />{/if}
+								<span>Create</span>
+							</button>
+						</div>
+					</div>
+				</div>
+
+				<div>
+					<div class="mb-2 flex items-center justify-between">
+						<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Current Characters</span>
+						<span class="text-[10px] text-[var(--text-muted)]">{story.characters.length}</span>
+					</div>
+					<div class="space-y-2">
+						{#each story.characters as character}
+							<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
+								<div class="flex items-start justify-between gap-2">
+									<div class="min-w-0">
+										<div class="truncate text-sm font-semibold text-[var(--text-primary)]">{character.name}</div>
+										<div class="mt-0.5 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">{character.relationship ?? 'neutral'} / {character.status}</div>
+									</div>
+								</div>
+								{#if character.description}
+									<p class="mt-1 line-clamp-3 text-xs leading-relaxed text-[var(--text-muted)]">{character.description}</p>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				</div>
+			</div>
+			{/if}
+
+			{#if drawerTab === 'story'}
+				<!-- Protagonist -->
+				{#if protagonist && false}
+				<div>
+					<div class="mb-2 flex items-center gap-2">
+						<span class="text-xs">⭐</span>
+						<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Protagonist</span>
+					</div>
+					<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2">
+						<div class="flex items-center gap-2">
+							<span class="text-sm font-semibold text-[var(--text-primary)]">{protagonist?.name ?? ''}</span>
+						</div>
+						{#if protagonist?.description}
+							<p class="mt-1 text-xs text-[var(--text-muted)] line-clamp-3">{protagonist?.description}</p>
+						{/if}
+						{#if (protagonist?.traits?.length ?? 0) > 0}
+							<div class="mt-1.5 flex flex-wrap gap-1">
+								{#each protagonist?.traits ?? [] as trait}
+									<span class="rounded bg-[var(--bg-primary)] px-1.5 py-0.5 text-[9px] text-[var(--text-muted)]">{trait}</span>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				</div>
+				{/if}
 
 			<!-- Time + World-sim Cadence -->
 			{#if currentTime}
@@ -571,39 +1215,9 @@
 					</span>
 					<span class="ml-auto text-sm tabular-nums text-[var(--text-primary)]">{currentTime.hms}</span>
 				</div>
-				<button
-					onclick={runWorldSimNow}
-					disabled={runningWorldSim || !worldSimEnabled || !story.currentStory}
-					class="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-1.5 text-xs text-sky-400 transition-colors hover:bg-sky-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
-					title={worldSimEnabled ? 'Run world simulation now (bypasses the 7-day cadence)' : 'World simulation is disabled in settings'}
-				>
-					{#if runningWorldSim}
-						<Loader2 class="h-3.5 w-3.5 animate-spin" />
-						<span>Running world sim…</span>
-					{:else}
-						<Play class="h-3.5 w-3.5" />
-						<span>Run world sim now</span>
-					{/if}
-				</button>
-				<button
-					onclick={runStrategicBrainNow}
-					disabled={runningStrategicBrain || !strategicWorldBrainEnabled || !story.currentStory}
-					class="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/5 px-3 py-1.5 text-xs text-violet-300 transition-colors hover:bg-violet-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
-					title={strategicWorldBrainEnabled ? 'Run the strategic world brain now and save a new strategic frame' : 'Strategic World Brain is disabled in settings'}
-				>
-					{#if runningStrategicBrain}
-						<Loader2 class="h-3.5 w-3.5 animate-spin" />
-						<span>Running strategic brain...</span>
-					{:else}
-						<Activity class="h-3.5 w-3.5" />
-						<span>Run strategic brain</span>
-					{/if}
-				</button>
-				{#if strategicBrainMessage}
-					<p class="mt-1 text-[10px] text-[var(--text-muted)]">{strategicBrainMessage}</p>
-				{/if}
 			</div>
 			{/if}
+
 
 			<!-- Current Location (above meters so the player's "where am I" is at the top) -->
 			<div>
@@ -634,6 +1248,7 @@
 				{/if}
 			</div>
 
+
 			<!-- Meters (visible only) -->
 			{#if visibleMeters.length > 0}
 			<div>
@@ -658,54 +1273,6 @@
 			</div>
 			{/if}
 
-			<!-- Timeline -->
-			{#if timelineRows.length > 0 || true}
-			<div>
-				<button class="mb-2 flex w-full items-center justify-between gap-2"
-					onclick={() => timelineCollapsed = !timelineCollapsed}>
-					<div class="flex items-center gap-2">
-						<ScrollText class="h-4 w-4 text-amber-400" />
-						<span class="font-display text-xs tracking-wider uppercase text-amber-400">Timeline</span>
-						<span class="text-[10px] text-[var(--text-muted)]">{timelineRows.length}</span>
-					</div>
-					{#if timelineCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
-					{:else}<ChevronDown class="h-3.5 w-3.5 text-[var(--text-muted)]" />{/if}
-				</button>
-				{#if !timelineCollapsed}
-					<div class="mb-2 flex gap-1 text-[10px]">
-						{#each [{ v: 'all', l: 'All' }, { v: 'chapter', l: 'Chapters' }, { v: 'event', l: 'Events' }, { v: 'entry', l: 'Entries' }] as f}
-							<button class="rounded-md px-1.5 py-0.5 tracking-wider transition-colors
-								{timelineFilter === f.v ? 'bg-[var(--bg-primary)] text-[var(--text-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
-								onclick={() => timelineFilter = f.v as any}>{f.l}</button>
-						{/each}
-					</div>
-					{#if timelineRows.length === 0}
-						<p class="text-xs text-[var(--text-muted)] italic">Nothing here yet.</p>
-					{:else}
-						<div class="max-h-64 overflow-y-auto space-y-1.5 pr-1">
-							{#each timelineRows.slice(0, 80) as row}
-								<div class="rounded-lg bg-[var(--bg-tertiary)] px-2 py-1.5">
-									<div class="flex items-baseline gap-1.5 text-[10px]">
-										<span>{kindIcons[row.kind]}</span>
-										<span class="truncate font-semibold text-[var(--text-primary)] text-xs">{row.title}</span>
-										{#if row.entryType}
-											<span class="rounded bg-[var(--bg-primary)] px-1 py-0 text-[9px] text-[var(--text-muted)]">{row.entryType}</span>
-										{/if}
-										<span class="ml-auto shrink-0 text-[var(--text-muted)]">{new Date(row.when).toLocaleDateString()}</span>
-									</div>
-									{#if row.detail}
-										<p class="mt-0.5 line-clamp-2 text-[10px] leading-relaxed text-[var(--text-muted)]">{row.detail}</p>
-									{/if}
-								</div>
-							{/each}
-							{#if timelineRows.length > 80}
-								<p class="text-center text-[10px] text-[var(--text-muted)]">+{timelineRows.length - 80} older entries</p>
-							{/if}
-						</div>
-					{/if}
-				{/if}
-			</div>
-			{/if}
 
 			<!-- Presence Map -->
 			{#if presenceMap.size > 0}
@@ -744,17 +1311,18 @@
 			</div>
 			{/if}
 
+
 			<!-- Characters -->
 			<div>
 				<div class="mb-2 flex items-center gap-2">
 					<Users class="h-4 w-4 text-[var(--text-accent)]" />
-					<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Characters ({activeChars.length})</span>
+					<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Characters ({activeNpcs.length})</span>
 				</div>
-				{#if activeChars.length === 0}
+				{#if activeNpcs.length === 0}
 					<p class="text-xs text-[var(--text-muted)]">No characters yet.</p>
 				{:else}
 					<div class="space-y-2">
-						{#each activeChars as char}
+						{#each activeNpcs as char}
 							<div class="rounded-lg bg-[var(--bg-tertiary)] p-2.5">
 								<div class="flex items-center gap-2">
 									<span class="text-xs">{char.relationship === 'self' ? '⭐' : '👤'}</span>
@@ -785,6 +1353,7 @@
 				{/if}
 			</div>
 
+
 			<!-- Items -->
 			<div>
 				<div class="mb-2 flex items-center gap-2">
@@ -807,6 +1376,7 @@
 					</div>
 				{/if}
 			</div>
+
 
 			<!-- Promises & Agreements — treaties, oaths, debts, marriages, bargains -->
 			{#if activeAgreements.length > 0 || pastAgreements.length > 0}
@@ -837,19 +1407,11 @@
 											<span class="rounded bg-violet-500/10 px-1 py-0.5 text-violet-400 capitalize">{a.category}</span>
 											<span class="text-[var(--text-primary)] truncate">{a.parties.join(' ↔ ')}</span>
 											{#if a.secrecy !== 'public'}
-												<span class="rounded bg-rose-500/10 px-1 py-0 text-rose-400 italic">{a.secrecy}</span>
+												<span class="ml-auto rounded bg-rose-500/10 px-1 py-0 text-rose-400 italic">{a.secrecy}</span>
 											{/if}
 											{#if a.createdChapterNumber != null}
 												<span class="text-[9px] text-[var(--text-muted)]">ch.{a.createdChapterNumber}</span>
 											{/if}
-											<button
-												class="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-rose-500/10 hover:text-rose-300 {confirmingAgreementDeleteId === a.id ? 'bg-rose-500/10 text-rose-300' : ''}"
-												onclick={() => removeAgreement(a)}
-												title={confirmingAgreementDeleteId === a.id ? 'Click again to remove agreement' : 'Remove agreement'}
-												aria-label={confirmingAgreementDeleteId === a.id ? 'Confirm remove agreement' : 'Remove agreement'}
-											>
-												<Trash2 class="h-3 w-3" />
-											</button>
 										</div>
 										<p class="mt-0.5 text-[10px] leading-relaxed text-[var(--text-muted)] line-clamp-2">{a.terms}</p>
 										{#if a.consequences && a.consequences.length > 0}
@@ -873,18 +1435,10 @@
 										<div class="flex items-baseline gap-1.5 text-[10px]">
 											<span class="rounded bg-[var(--bg-primary)] px-1 py-0.5 text-[var(--text-muted)] capitalize">{a.category}</span>
 											<span class="text-[var(--text-muted)] truncate line-through">{a.parties.join(' ↔ ')}</span>
-											<span class="italic capitalize {statusColor}">{a.status}</span>
+											<span class="ml-auto italic capitalize {statusColor}">{a.status}</span>
 											{#if a.resolvedChapterNumber != null}
 												<span class="text-[9px] text-[var(--text-muted)]">ch.{a.resolvedChapterNumber}</span>
 											{/if}
-											<button
-												class="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-rose-500/10 hover:text-rose-300 {confirmingAgreementDeleteId === a.id ? 'bg-rose-500/10 text-rose-300' : ''}"
-												onclick={() => removeAgreement(a)}
-												title={confirmingAgreementDeleteId === a.id ? 'Click again to remove agreement' : 'Remove agreement'}
-												aria-label={confirmingAgreementDeleteId === a.id ? 'Confirm remove agreement' : 'Remove agreement'}
-											>
-												<Trash2 class="h-3 w-3" />
-											</button>
 										</div>
 										<p class="mt-0.5 text-[9px] leading-relaxed text-[var(--text-muted)]/70 line-clamp-1">{a.terms}</p>
 									</div>
@@ -895,6 +1449,7 @@
 				{/if}
 			</div>
 			{/if}
+
 
 			<!-- Factions -->
 			{#if allFactionEntries.length > 0}
@@ -1023,6 +1578,7 @@
 			</div>
 			{/if}
 
+
 			<!-- Alliances — inter-faction relations, deduped symmetric pairs -->
 			{#if alliances.length > 0}
 			<div>
@@ -1065,6 +1621,7 @@
 			</div>
 			{/if}
 
+
 			<!-- Living World — factions, rumors, world events -->
 			{#if recentFactionActions.length > 0 || activeRumors.length > 0 || recentWorldEvents.length > 0}
 			<div>
@@ -1096,6 +1653,9 @@
 											<span class="rounded bg-[var(--bg-primary)] px-1 py-0 text-[var(--text-muted)] italic">{fa.actionType}</span>
 											<span class="ml-auto text-[var(--text-muted)] uppercase tracking-wider {fa.urgency === 'critical' ? 'text-rose-400' : fa.urgency === 'high' ? 'text-amber-400' : ''}">{fa.urgency}</span>
 										</div>
+										{#if fa.motivation && (fa.actionType === 'pressure' || fa.actionType === 'world_tick')}
+											<div class="mt-0.5 text-[9px] uppercase tracking-wider text-orange-300/70">{fa.motivation}</div>
+										{/if}
 										<p class="mt-0.5 text-[10px] leading-relaxed text-[var(--text-muted)] line-clamp-2">{fa.action}</p>
 									</div>
 								{/each}
@@ -1151,6 +1711,7 @@
 			</div>
 			{/if}
 
+
 			<!-- Lorebook -->
 			{#if story.lorebookEntries.length > 0}
 			<div>
@@ -1171,6 +1732,7 @@
 				</div>
 			</div>
 			{/if}
+
 
 			<!-- Story Memory: Arcs → Uncovered Chapters -->
 			<div>
@@ -1334,6 +1896,364 @@
 					<p class="text-xs text-[var(--text-muted)]">All {chapters.length} chapters condensed into arcs.</p>
 				{/if}
 			</div>
+
+			{/if}
+
+			{#if drawerTab === 'technical'}
+			<!-- Context Usage -->
+			{#if story.currentStory}
+			<div>
+				<div class="mb-1.5 flex items-center justify-between">
+					<div class="flex items-center gap-1.5">
+						<Gauge class="h-3.5 w-3.5 text-cyan-400" />
+						<span class="font-display text-[10px] tracking-wider uppercase text-cyan-400">Context</span>
+					</div>
+					<span class="text-[10px] tabular-nums {contextPercent > 80 ? 'text-rose-400' : contextPercent > 50 ? 'text-amber-400' : 'text-emerald-400'}">
+						~{formatTokens(contextTotal)} / 200K
+					</span>
+				</div>
+				<div class="rounded-full bg-[var(--bg-primary)] h-2 overflow-hidden">
+					<div
+						class="h-full transition-all duration-300 rounded-full {contextPercent > 80 ? 'bg-rose-500' : contextPercent > 50 ? 'bg-amber-500' : 'bg-cyan-500'}"
+						style="width: {contextPercent}%"
+					></div>
+				</div>
+			</div>
+			{/if}
+
+
+			<!-- World Tick -->
+			{#if backendWorldSim || worldSimEnabled}
+			<div>
+				<div class="mb-2 flex items-center gap-1.5">
+					<Play class="h-3.5 w-3.5 text-sky-400" />
+					<span class="font-display text-[10px] tracking-wider uppercase text-sky-400">World Tick</span>
+				</div>
+				<button
+					onclick={runWorldSimNow}
+					disabled={runningWorldSim || !canRunWorldSim || !story.currentStory}
+					class="flex w-full items-center justify-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-1.5 text-xs text-sky-400 transition-colors hover:bg-sky-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
+					title={backendWorldSim ? 'Run a terminal-owned world tick now' : worldSimEnabled ? 'Run browser world simulation now (bypasses the 7-day cadence)' : 'World simulation is disabled in settings'}
+				>
+					{#if runningWorldSim}
+						<Loader2 class="h-3.5 w-3.5 animate-spin" />
+						<span>Running world sim…</span>
+					{:else}
+						<Play class="h-3.5 w-3.5" />
+						<span>{backendWorldSim ? 'Run terminal world tick' : 'Run world sim now'}</span>
+					{/if}
+				</button>
+			</div>
+			{/if}
+
+
+			<!-- Terminal engine projection -->
+			{#if backendWorldSim}
+			<div>
+				<div class="mb-2 flex items-center justify-between">
+					<div class="flex items-center gap-1.5">
+						<Activity class="h-3.5 w-3.5 text-sky-400" />
+						<span class="font-display text-[10px] tracking-wider uppercase text-sky-400">Engine Core</span>
+					</div>
+					<button
+						onclick={() => refreshEngineProjection()}
+						disabled={engineProjectionLoading}
+						class="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-sky-400 disabled:opacity-40"
+						title="Refresh terminal engine projection"
+						aria-label="Refresh terminal engine projection"
+					>
+						<RefreshCw class="h-3.5 w-3.5 {engineProjectionLoading ? 'animate-spin' : ''}" />
+					</button>
+				</div>
+
+				<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2">
+					<div class="grid grid-cols-4 gap-2 text-[10px]">
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Transcript</div>
+							<div class="tabular-nums text-[var(--text-primary)]">{story.entries.length}/{engineProjection?.counts.entries ?? story.entryCount}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Entities</div>
+							<div class="tabular-nums text-[var(--text-primary)]">{engineProjection?.counts.entities ?? story.lorebookEntries.length}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Vault</div>
+							<div class="tabular-nums {engineProjection?.vault.fileCount ? 'text-emerald-400' : 'text-amber-400'}">{engineProjection?.vault.fileCount ?? 0}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Cache Hit</div>
+							<div class="tabular-nums {engineCacheHitRate !== null && engineCacheHitRate >= 50 ? 'text-emerald-400' : engineCacheHitRate !== null ? 'text-amber-400' : 'text-[var(--text-primary)]'}">
+								{formatCacheRate(engineCacheHitRate)}
+							</div>
+						</div>
+					</div>
+
+					<div class="mt-2 grid grid-cols-3 gap-2 text-[10px]">
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Version</div>
+							<div class="tabular-nums text-[var(--text-primary)]">v{engineProjection?.vault.lastIndexedVersion ?? story.currentStory?.serverVersion ?? 0}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Segments</div>
+							<div class="tabular-nums text-[var(--text-primary)]">{engineProjection?.cache.entryCount ?? 0}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Cached Tokens</div>
+							<div class="tabular-nums text-[var(--text-primary)]">{formatTokens(engineProjection?.cache.tokenEstimate ?? 0)}</div>
+						</div>
+					</div>
+
+					{#if engineProjection?.cache.byKind?.length}
+						<div class="mt-2 flex flex-wrap gap-1">
+							{#each engineProjection.cache.byKind as kind}
+								<span class="rounded bg-[var(--bg-primary)] px-1.5 py-0.5 text-[9px] text-[var(--text-muted)]" title={`${kind.kind}: ${kind.hitCount} hits, ${kind.missCount} misses, ${kind.invalidatedCount} invalidations`}>
+									{kind.kind.replaceAll('_', ' ')} {kind.hitCount}/{kind.hitCount + kind.missCount}
+									{#if kind.invalidatedCount > 0}
+										<span class="text-amber-400">inv {kind.invalidatedCount}</span>
+									{/if}
+								</span>
+							{/each}
+						</div>
+					{/if}
+
+					{#if engineCacheSegments.length}
+						<div class="mt-2 space-y-1">
+							{#each engineCacheSegments as segment}
+								<div class="rounded bg-[var(--bg-primary)] px-2 py-1 text-[9px]" title={cacheSegmentTitle(segment)}>
+									<div class="flex items-center justify-between gap-2">
+										<span class="truncate text-[var(--text-primary)]">{segment.kind.replaceAll('_', ' ')}</span>
+										<span class="shrink-0 tabular-nums text-cyan-300">{formatTokens(segment.tokenEstimate)}</span>
+									</div>
+									<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[var(--text-muted)]">
+										<span class="tabular-nums">hit {segment.hitCount}/{segment.hitCount + segment.missCount}</span>
+										<span class="tabular-nums {segment.invalidatedCount > 0 ? 'text-amber-400' : ''}">inv {segment.invalidatedCount}</span>
+										<span class="tabular-nums">deps {segment.dependencyHashes.length}</span>
+										<span class="tabular-nums">hash {formatHash(segment.contentHash)}</span>
+									</div>
+								</div>
+							{/each}
+						</div>
+					{:else if (engineProjection?.cache.entryCount ?? 0) > 0}
+						<div class="mt-2 rounded bg-[var(--bg-primary)] px-2 py-1 text-[9px] text-[var(--text-muted)]">
+							Segment diagnostics pending refresh
+						</div>
+					{/if}
+
+					{#if lastTurnPerformance}
+						<div class="mt-2 rounded bg-[var(--bg-primary)] px-2 py-1.5 text-[9px]">
+							<div class="mb-1 flex items-center justify-between gap-2">
+								<span class="uppercase tracking-wider text-[var(--text-muted)]">Last Turn</span>
+								<span class="tabular-nums {lastTurnPerformance.preparedCacheHit ? 'text-emerald-400' : 'text-amber-400'}">
+									Prepared {lastTurnPerformance.preparedCacheHit ? 'hit' : 'miss'}
+								</span>
+							</div>
+							<div class="grid grid-cols-3 gap-2 text-[9px]">
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Prompt</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{formatTokens(lastTurnPerformance.prompt.tokenEstimate)}</div>
+								</div>
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Gen</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{formatDurationMs(lastTurnPerformance.generation.durationMs)}</div>
+								</div>
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Tokens</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{formatOptionalTokens(lastTurnPerformance.generation.totalTokens)}</div>
+								</div>
+							</div>
+							<div class="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--text-muted)]">
+								<span>{lastTurnPerformance.prompt.messageCount} messages</span>
+								<span>{lastTurnPerformance.prompt.totalChars} chars</span>
+								{#if lastTurnPerformance.cache}
+									<span>cache {lastTurnPerformance.cache.hitCount}/{lastTurnPerformance.cache.hitCount + lastTurnPerformance.cache.missCount}</span>
+									<span>{lastTurnPerformance.cache.segmentCount} segments</span>
+								{/if}
+							</div>
+							{#if lastTurnPerformance.slowTimings.length}
+								<div class="mt-1 flex flex-wrap gap-1">
+									{#each lastTurnPerformance.slowTimings.slice(0, 3) as timing}
+										<span class="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[9px] text-amber-300" title={timing.operation}>
+											{timing.operation.replace('turn.', '')} {formatDurationMs(timing.durationMs)}
+										</span>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/if}
+
+					<div class="mt-2 space-y-1 text-[10px] text-[var(--text-muted)]">
+						<div class="truncate" title={engineProjection?.vault.vaultPath ?? ''}>
+							{shortPath(engineProjection?.vault.vaultPath) || 'campaign vault pending'}
+						</div>
+						<div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+							<span>Projection {engineProjection?.mode ?? 'loading'}</span>
+							<span>Manifest {engineProjection?.vault.manifestHash ? engineProjection.vault.manifestHash.slice(0, 8) : 'none'}</span>
+							<span>Invalidations {engineCacheInvalidations}</span>
+							<span>Updated {formatIso(engineProjection?.vault.updatedAt)}</span>
+						</div>
+					</div>
+
+					{#if engineProjectionError}
+						<div class="mt-2 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[10px] text-rose-300">
+							{engineProjectionError}
+						</div>
+					{/if}
+				</div>
+			</div>
+			{/if}
+
+
+			<!-- Terminal sync repair queue -->
+			{#if backendWorldSim}
+			<div>
+				<div class="mb-2 flex items-center justify-between">
+					<div class="flex items-center gap-1.5">
+						<AlertTriangle class="h-3.5 w-3.5 {terminalSyncClass}" />
+						<span class="font-display text-[10px] tracking-wider uppercase {terminalSyncClass}">
+							Terminal Sync
+						</span>
+					</div>
+					<button
+						onclick={() => refreshSyncOutbox()}
+						disabled={syncOutboxLoading}
+						class="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-teal-400 disabled:opacity-40"
+						title="Refresh local terminal sync outbox"
+					>
+						<RefreshCw class="h-3.5 w-3.5 {syncOutboxLoading ? 'animate-spin' : ''}" />
+					</button>
+				</div>
+				<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2">
+					<div class="grid grid-cols-3 gap-2 text-[10px]">
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Status</div>
+							<div class="{terminalSyncClass}">
+								{terminalSync.label}
+							</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Pending</div>
+							<div class="tabular-nums {pendingSyncOps.length > 0 ? 'text-amber-400' : 'text-[var(--text-primary)]'}">{pendingSyncOps.length}</div>
+						</div>
+						<div>
+							<div class="uppercase tracking-wider text-[var(--text-muted)]">Repair</div>
+							<div class="tabular-nums {repairSyncOps.length > 0 ? 'text-rose-400' : 'text-[var(--text-primary)]'}">{repairSyncOps.length}</div>
+						</div>
+					</div>
+
+					{#if syncOutboxError}
+						<div class="mt-2 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[10px] text-rose-300">
+							{syncOutboxError}
+						</div>
+					{/if}
+
+					{#if repairSyncOps.length > 0}
+						<div class="mt-2 space-y-1.5">
+							{#each repairSyncOps.slice(0, 3) as op}
+								<div class="rounded border border-rose-500/25 bg-rose-500/5 px-2 py-1.5">
+									<div class="flex items-center justify-between gap-2">
+										<span class="text-[10px] font-medium text-rose-300">{syncOpTitle(op)}</span>
+										<span class="text-[9px] tabular-nums text-[var(--text-muted)]">{formatTimeMs(op.repairCreatedAt ?? op.updatedAt)}</span>
+									</div>
+									<p class="mt-0.5 line-clamp-2 text-[10px] leading-snug text-[var(--text-muted)]" title={op.repairReason ?? op.error ?? ''}>
+										{op.repairReason ?? op.error ?? 'Terminal rejected this queued command.'}
+									</p>
+									<div class="mt-1.5 flex justify-end gap-1.5">
+										<button
+											onclick={() => retrySyncRepair(op.id)}
+											disabled={Boolean(syncRepairAction)}
+											class="flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-[9px] text-amber-300 transition-colors hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+											title="Put this command back in the terminal sync queue and try it now"
+										>
+											{#if syncRepairAction === repairActionKey('retry', op.id)}
+												<Loader2 class="h-3 w-3 animate-spin" />
+											{:else}
+												<RefreshCw class="h-3 w-3" />
+											{/if}
+											<span>Retry</span>
+										</button>
+										<button
+											onclick={() => discardSyncRepair(op.id)}
+											disabled={Boolean(syncRepairAction)}
+											class="flex items-center gap-1 rounded border border-rose-500/30 bg-rose-500/5 px-1.5 py-0.5 text-[9px] text-rose-300 transition-colors hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+											title="Discard this queued local command and keep terminal canon"
+										>
+											{#if syncRepairAction === repairActionKey('discard', op.id)}
+												<Loader2 class="h-3 w-3 animate-spin" />
+											{:else}
+												<X class="h-3 w-3" />
+											{/if}
+											<span>Discard</span>
+										</button>
+									</div>
+								</div>
+							{/each}
+							{#if repairSyncOps.length > 3}
+								<div class="text-[10px] text-[var(--text-muted)]">+{repairSyncOps.length - 3} more repair items</div>
+							{/if}
+						</div>
+					{:else if pendingSyncOps.length > 0}
+						<div class="mt-2 text-[10px] leading-relaxed text-[var(--text-muted)]">
+							{pendingSyncOps.length} queued command{pendingSyncOps.length === 1 ? '' : 's'} will push before the next backend turn or projection refresh.
+						</div>
+					{:else}
+						<div class="mt-2 text-[10px] text-[var(--text-muted)]">Local cache is caught up with terminal canon.</div>
+					{/if}
+				</div>
+			</div>
+			{/if}
+
+
+			<!-- Timeline -->
+			{#if timelineRows.length > 0 || true}
+			<div>
+				<button class="mb-2 flex w-full items-center justify-between gap-2"
+					onclick={() => timelineCollapsed = !timelineCollapsed}>
+					<div class="flex items-center gap-2">
+						<ScrollText class="h-4 w-4 text-amber-400" />
+						<span class="font-display text-xs tracking-wider uppercase text-amber-400">Timeline</span>
+						<span class="text-[10px] text-[var(--text-muted)]">{timelineRows.length}</span>
+					</div>
+					{#if timelineCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
+					{:else}<ChevronDown class="h-3.5 w-3.5 text-[var(--text-muted)]" />{/if}
+				</button>
+				{#if !timelineCollapsed}
+					<div class="mb-2 flex gap-1 text-[10px]">
+						{#each [{ v: 'all', l: 'All' }, { v: 'chapter', l: 'Chapters' }, { v: 'event', l: 'Events' }, { v: 'entry', l: 'Entries' }] as f}
+							<button class="rounded-md px-1.5 py-0.5 tracking-wider transition-colors
+								{timelineFilter === f.v ? 'bg-[var(--bg-primary)] text-[var(--text-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+								onclick={() => timelineFilter = f.v as any}>{f.l}</button>
+						{/each}
+					</div>
+					{#if timelineRows.length === 0}
+						<p class="text-xs text-[var(--text-muted)] italic">Nothing here yet.</p>
+					{:else}
+						<div class="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+							{#each timelineRows.slice(0, 80) as row}
+								<div class="rounded-lg bg-[var(--bg-tertiary)] px-2 py-1.5">
+									<div class="flex items-baseline gap-1.5 text-[10px]">
+										<span>{kindIcons[row.kind]}</span>
+										<span class="truncate font-semibold text-[var(--text-primary)] text-xs">{row.title}</span>
+										{#if row.entryType}
+											<span class="rounded bg-[var(--bg-primary)] px-1 py-0 text-[9px] text-[var(--text-muted)]">{row.entryType}</span>
+										{/if}
+										<span class="ml-auto shrink-0 text-[var(--text-muted)]">{new Date(row.when).toLocaleDateString()}</span>
+									</div>
+									{#if row.detail}
+										<p class="mt-0.5 line-clamp-2 text-[10px] leading-relaxed text-[var(--text-muted)]">{row.detail}</p>
+									{/if}
+								</div>
+							{/each}
+							{#if timelineRows.length > 80}
+								<p class="text-center text-[10px] text-[var(--text-muted)]">+{timelineRows.length - 80} older entries</p>
+							{/if}
+						</div>
+					{/if}
+				{/if}
+			</div>
+			{/if}
+
+
+			{/if}
 		</div>
 	</div>
 </div>

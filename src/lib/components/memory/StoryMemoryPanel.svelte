@@ -2,17 +2,17 @@
 	import { onMount } from 'svelte';
 	import { BookOpen, CloudUpload, Edit3, GitBranch, Loader2, Save, Search, Shield, X } from 'lucide-svelte';
 	import {
-		getAllStories,
 		getAgreements,
 		getArcs,
 		getChapters,
 		getConversationMemory,
 		getFactionActions,
 		getStoryThreads,
-		updateArc,
-		updateChapter,
 	} from '$lib/services/database';
 	import { importLocalStoryToBackend } from '$lib/services/backendMemory';
+	import { saveCanonicalArc, saveCanonicalChapter } from '$lib/services/canonicalWrites';
+	import { refreshStoryCatalog } from '$lib/services/serverStories';
+	import { story } from '$lib/stores/story.svelte';
 	import type { Agreement, Arc, Chapter, ConversationMemoryEntry, FactionActionRecord, Story, StoryThread } from '$lib/types';
 
 	let stories = $state<Story[]>([]);
@@ -49,7 +49,7 @@
 	let arcEmotionDraft = $state('');
 
 	onMount(async () => {
-		stories = (await getAllStories()).sort((a, b) => b.updatedAt - a.updatedAt);
+		stories = await refreshStoryCatalog();
 		selectedStoryId = stories[0]?.id ?? null;
 		await loadMemory();
 	});
@@ -67,6 +67,9 @@
 
 		loading = true;
 		try {
+			if (story.currentStory?.id === selectedStoryId && story.currentStory.serverStoryId) {
+				await story.pullBackendProjection();
+			}
 			const [loadedChapters, loadedArcs, loadedThreads, loadedAgreements, loadedFactionActions, loadedConversationMemory] = await Promise.all([
 				getChapters(selectedStoryId),
 				getArcs(selectedStoryId),
@@ -131,21 +134,44 @@
 		.slice(0, 8));
 	const chapterLookup = $derived.by(() => new Map(chapters.map(chapter => [chapter.id, chapter])));
 
+	function applyBackendVersion(localStoryId: string, serverVersion: number) {
+		stories = stories.map(s => s.id === localStoryId
+			? { ...s, serverVersion, syncStatus: 'synced' }
+			: s);
+		if (story.currentStory?.id === localStoryId) {
+			story.currentStory = {
+				...story.currentStory,
+				serverVersion,
+				syncStatus: 'synced',
+			};
+		}
+	}
+
 	async function bindStoryToBackend() {
 		if (!selectedStory || backendSyncing) return;
 		backendSyncing = true;
 		backendMessage = null;
 		try {
 			const result = await importLocalStoryToBackend(selectedStory.id);
-			backendMessage = `Backend canon bound: ${Object.entries(result.counts).map(([key, value]) => `${key} ${value}`).join(', ')}`;
+			backendMessage = `Terminal database bound: ${Object.entries(result.counts).map(([key, value]) => `${key} ${value}`).join(', ')}`;
 			stories = stories.map(story => story.id === selectedStory.id
 				? { ...story, serverStoryId: result.serverStoryId, serverVersion: result.serverVersion, syncStatus: 'synced' }
 				: story);
 		} catch (error) {
-			backendMessage = error instanceof Error ? error.message : 'Backend import failed.';
+			backendMessage = error instanceof Error ? error.message : 'Terminal import failed.';
 		} finally {
 			backendSyncing = false;
 		}
+	}
+
+	async function saveChapterMemory(chapter: Chapter) {
+		const serverVersion = await saveCanonicalChapter(chapter, 'update');
+		if (serverVersion) applyBackendVersion(chapter.storyId, serverVersion);
+	}
+
+	async function saveArcMemory(arc: Arc) {
+		const serverVersion = await saveCanonicalArc(arc, 'update');
+		if (serverVersion) applyBackendVersion(arc.storyId, serverVersion);
 	}
 
 	function chapterTitle(chapter: Chapter): string {
@@ -208,9 +234,10 @@
 			pinned: chapterPinnedDraft,
 		};
 		try {
-			await updateChapter(editingChapter.id, updates);
+			const updatedChapter: Chapter = { ...editingChapter, ...updates };
+			await saveChapterMemory(updatedChapter);
 			chapters = chapters.map(chapter =>
-				chapter.id === editingChapter?.id ? { ...chapter, ...updates } : chapter,
+				chapter.id === editingChapter?.id ? updatedChapter : chapter,
 			);
 			closeChapterEditor();
 		} finally {
@@ -261,9 +288,10 @@
 			emotionalProgression: arcEmotionDraft.trim(),
 		};
 		try {
-			await updateArc(editingArc.id, updates);
+			const updatedArc: Arc = { ...editingArc, ...updates };
+			await saveArcMemory(updatedArc);
 			arcs = arcs.map(arc =>
-				arc.id === editingArc?.id ? { ...arc, ...updates } : arc,
+				arc.id === editingArc?.id ? updatedArc : arc,
 			);
 			closeArcEditor();
 		} finally {
@@ -324,18 +352,18 @@
 			<div class="mb-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
 				<div class="flex items-center justify-between gap-3">
 					<div class="min-w-0">
-						<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Backend Canon</div>
+						<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Terminal Database</div>
 						<p class="mt-1 truncate text-xs text-[var(--text-secondary)]">
 							{selectedStory.serverStoryId
 								? `Bound at v${selectedStory.serverVersion ?? 0} (${selectedStory.syncStatus ?? 'synced'})`
-								: 'Local-only. Import to enable canonical memory retrieval and sync.'}
+								: 'Local-only. Import to use terminal memory retrieval and sync.'}
 						</p>
 					</div>
 					<button
 						class="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-primary)] px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-accent)] disabled:opacity-50"
 						disabled={backendSyncing}
 						onclick={bindStoryToBackend}
-						title="Import local story to backend canon"
+						title="Import local story to the terminal world database"
 					>
 						{#if backendSyncing}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<CloudUpload class="h-3.5 w-3.5" />{/if}
 						{selectedStory.serverStoryId ? 'Reimport' : 'Bind'}
@@ -414,8 +442,14 @@
 								<div class="rounded-lg bg-[var(--bg-primary)] px-3 py-2">
 									<div class="flex items-center justify-between gap-3">
 										<span class="text-xs font-semibold text-[var(--text-primary)]">{action.factionName}</span>
-										<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{action.urgency}</span>
+										<div class="flex items-center gap-1.5">
+											<span class="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--text-muted)]">{action.actionType}</span>
+											<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{action.urgency}</span>
+										</div>
 									</div>
+									{#if action.motivation}
+										<div class="mt-1 text-[10px] uppercase tracking-wider text-[var(--text-accent)]/80">{action.motivation}</div>
+									{/if}
 									<p class="mt-1 text-xs leading-relaxed text-[var(--text-secondary)]">{action.action}</p>
 									{#if action.consequences.length > 0}
 										<p class="mt-1 text-[11px] text-[var(--text-muted)]">{action.consequences.slice(0, 2).join('; ')}</p>

@@ -8,6 +8,11 @@ import {
 	type MemoryRetrieveRequest,
 	type RetrievedMemoryPacket,
 } from '$lib/contracts/memory';
+import {
+	embedMemoryText,
+	memoryEmbeddingConfig,
+	validateMemoryEmbeddingVector,
+} from '$lib/server/memory/embeddings';
 import { buildMemoryPacket, normalizeLookup, scoreMemoryNode } from './ranking';
 
 type MemoryNodeRow = typeof memoryNodes.$inferSelect;
@@ -141,6 +146,7 @@ async function candidateNodes(request: MemoryRetrieveRequest): Promise<MemoryNod
 		visibilityFilter,
 		sourceTypeFilter,
 	].filter(Boolean);
+	const expandedRequest = { ...request, sceneEntityIds };
 
 	const broad = await db
 		.select()
@@ -162,6 +168,10 @@ async function candidateNodes(request: MemoryRetrieveRequest): Promise<MemoryNod
 				),
 			))
 			.limit(80)
+		: [];
+
+	const vectorMatches = request.query.trim()
+		? await vectorCandidateNodes(request, baseFilters)
 		: [];
 
 	const beliefRows = sceneEntityIds.length > 0
@@ -203,14 +213,43 @@ async function candidateNodes(request: MemoryRetrieveRequest): Promise<MemoryNod
 	const nodes = [
 		...broad.map(toMemoryNode),
 		...textMatches.map(toMemoryNode),
+		...vectorMatches,
 		...beliefRows.map(beliefToMemoryNode),
 		...eventRows.map(eventToMemoryNode),
 	].map((node) => ({
 		...node,
-		score: scoreMemoryNode(node, { ...request, sceneEntityIds }),
+		score: Math.max(node.score ?? 0, scoreMemoryNode(node, expandedRequest)),
 	}));
 
 	return dedupe(nodes);
+}
+
+async function vectorCandidateNodes(
+	request: MemoryRetrieveRequest,
+	baseFilters: Array<ReturnType<typeof eq> | ReturnType<typeof or> | undefined>,
+): Promise<MemoryNode[]> {
+	const config = memoryEmbeddingConfig();
+	if (!config) return [];
+	try {
+		const queryVector = validateMemoryEmbeddingVector(await embedMemoryText(request.query, config), config.dimensions);
+		const vectorLiteral = `[${queryVector.join(',')}]`;
+		const rows = await getDb()
+			.select()
+			.from(memoryNodes)
+			.where(and(
+				...baseFilters,
+				sql`${memoryNodes.embedding} is not null`,
+			))
+			.orderBy(sql`${memoryNodes.embedding} <=> ${vectorLiteral}::vector`)
+			.limit(80);
+		return rows.map((row, index) => ({
+			...toMemoryNode(row),
+			score: Math.max(0.2, 0.95 - (index * 0.006)),
+		}));
+	} catch (error) {
+		console.warn('[BackendMemory] Vector retrieval unavailable; using text/ranking fallback:', error);
+		return [];
+	}
 }
 
 export async function retrieveMemoryPacket(input: unknown): Promise<RetrievedMemoryPacket> {

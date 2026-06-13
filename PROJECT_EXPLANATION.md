@@ -2,301 +2,124 @@
 
 ## What This Project Is
 
-Mtherios is an AI-driven interactive fiction and living-world simulation app.
-The player writes actions, the AI narrates the result, and the app turns those
-results into durable world state: characters, locations, items, factions,
-relationships, promises, debts, rumors, plot threads, memories, and player
-resources.
+Mtherios is a terminal-run AI interactive fiction engine with a browser frontend. It lets a player create and continue stories where the world reacts to their actions: characters remember events, locations and items change, factions move in the background, and the narrative can be guided by lorebook entries, world state, summaries, and AI-generated suggestions.
 
-The important idea is that a story is not just a chat transcript. The
-transcript is evidence. The app extracts structured facts from that evidence
-and uses those facts to keep the world coherent over long play.
+The project is built around a local Node app process started by `server.js`. That process initializes the data root, owns server environment, serves the SvelteKit frontend, exposes backend canon APIs, and brokers terminal-side wiki operations. IndexedDB remains as a browser cache and compatibility layer, while the story catalog, backend-bound turns, and large-world canon are moving to the server-owned local process plus a syncable data root.
 
-## The Core Mental Model
+## Main User Experience
 
-Think of Mtherios as three layers working together:
+The application opens into the Mtherios shell with panels for the story library, lorebook, world state, and settings. A user can create or open a story, enter actions, and receive generated narration. The story interface supports different action types such as doing, saying, thinking, story direction, or free-form input.
 
-1. The play surface: the user writes, reads narration, opens drawers, edits
-   lore, and manages the story.
-2. The world model: code stores structured facts about the world, including
-   entities, factions, agreements, memories, and player ledger notes.
-3. The AI layer: prompts, retrieval, tools, and validators ask models to
-   narrate, summarize, extract state, and suggest future motion.
+As the story progresses, the app keeps track of:
 
-For local-only stories, IndexedDB is the working store. For backend-backed
-stories, the backend database is the canonical truth, while IndexedDB acts as a
-local/offline cache.
-
-The intended canon pattern is:
-
-```text
-transcript evidence -> AI proposes structured changes -> code validates and merges -> durable canon
-```
-
-That means a line of narration can become a real record: a new NPC, a changed
-location, a broken oath, a faction membership, a rumor, a faction goal, or a
-ledger change.
-
-## What The Player Experiences
-
-The app opens into a SvelteKit interface where the player can create or open a
-story, type an action, and receive generated narration. The player can also
-inspect and edit world state through story controls, the lorebook, the world
-drawer, settings, and import/export tools.
-
-The story UI supports several action styles:
-
-- Do: physical action.
-- Say: dialogue.
-- Think: private thought.
-- Story: direct authorial instruction.
-- Free-form: raw input without prefixing.
-
-As the story continues, Mtherios tracks:
-
-- The ordered transcript of player actions and narration.
+- Story entries, including player actions and AI narration.
 - Characters, locations, and items.
-- Lorebook/wiki entries for characters, factions, places, items, concepts, and events.
-- Conversations and what NPCs learned.
-- Relationships between entities.
-- Agreements, promises, debts, oaths, marriages, treaties, and bargains.
-- Faction resources, goals, membership, standings, and off-screen moves.
-- Rumors, schemes, story threads, world events, chapters, and arcs.
-- Player-facing resources through the player ledger.
+- Lorebook entries for characters, factions, places, concepts, items, and events.
+- Conversation memory and relationships.
+- Agreements, rumors, faction actions, schemes, plot threads, chapters, and arcs.
 - Optional generated images attached to story entries.
 
 ## Technology Stack
 
-The project is a SvelteKit app written in TypeScript.
-
-Main technologies:
-
-- SvelteKit and Svelte 5 for the app and UI.
-- TypeScript for domain logic.
+- SvelteKit and Svelte 5 for the frontend.
+- TypeScript for application logic and types.
 - TailwindCSS for styling.
-- Dexie.js and IndexedDB for browser persistence.
-- Drizzle ORM and Postgres for the optional backend canon path.
-- Zod for validating AI/tool payloads.
-- Vitest for tests.
-- OpenAI-compatible and provider-specific AI SDKs for model calls.
+- Node/SvelteKit adapter for the terminal app process.
+- Postgres/pgvector for backend-bound canonical story state.
+- Qdrant for local semantic wiki search.
+- Dexie.js and IndexedDB for browser cache/offline compatibility.
+- Zod for AI response schema validation.
+- Vitest for unit tests.
+- OpenAI-compatible APIs for narrative generation, world simulation, embeddings, image generation, and supporting AI services.
 
-Important npm scripts:
+The important npm scripts are:
 
 ```sh
 npm run dev
-npm run dev:backend
+npm run app:dev
+npm run build
+npm run app:start
 npm run check
 npm run test
-npm run build
-npm run backend:up
-npm run backend:migrate
-npm run backend:health
 ```
 
-## Local-First And Backend-Backed Modes
+## Codebase Structure
 
-Mtherios can run as a local-first browser app. In that mode, story data lives in
-IndexedDB and API provider settings are configured by the user in the app.
+The root documentation already includes deeper technical notes in `README.md`, `ARCHITECTURE.md`, and several planning documents. The main application code lives under `src/`.
 
-The newer backend path adds a server-side canon store. It is useful for longer
-stories because it can keep structured state, memory nodes, source links, and
-sync changes in a more authoritative place.
+- `src/routes/` contains the SvelteKit route entry points.
+- `src/lib/components/` contains UI components for layout, story play, lorebook management, settings, onboarding, library, and world state.
+- `src/lib/stores/` contains Svelte stores for global app state, active story state, and settings.
+- `src/lib/services/` contains persistence, import/export, synchronization, AI services, and background processing.
+- `src/lib/types/` defines the core domain types used across the app.
+- `src/lib/utils/` contains small utilities such as dice rolling, UUIDs, tokens, and wikilinks.
+- `src/lib/data/seeds/` contains seed data for an ASOIAF-style lorebook and factions.
 
-In backend-backed mode:
+## Core Data Model
 
-- The browser sends a turn request to `/api/turn`.
-- The backend writes the player entry.
-- The backend retrieves relevant memory.
-- The backend builds the server prompt.
-- The model narrates.
-- A structured extractor proposes world-state updates.
-- The validator writes state patches, entities, events, memory nodes, and other canon records.
-- The browser mirrors the returned entries and sync metadata back into IndexedDB.
+The main persistent objects are defined in `src/lib/types/index.ts` and stored in IndexedDB by `src/lib/services/database.ts`.
 
-In plain language: the backend is truth, the transcript is evidence, and code is
-the referee that decides what gets merged into canon.
+At the center is a `Story`, which has settings, metadata, time tracking, branch information, optional meters, and links to many related records. A story is made of ordered `StoryEntry` records. Entries can represent player actions, narration, system notes, or retry markers.
 
-## AI Turn Flow
+The world is represented by related records such as:
 
-A normal local generation turn works roughly like this:
-
-1. The player submits an action in `ActionInput.svelte`.
-2. The story store builds a structured snapshot of the current world.
-3. Prompt sections are assembled and budgeted.
-4. The narrative model streams narration.
-5. Inline tools or a follow-up classifier extract world-state changes.
-6. The executor merges those changes into IndexedDB.
-7. Background jobs may summarize chapters, update procedural memory, generate
-   plot momentum, run world simulation, or prepare embeddings.
-
-A backend generation turn follows a similar shape, but the server owns the
-canonical write path through the turn orchestrator and patch validator.
-
-## Prompt And Memory Design
-
-Prompt construction is a major part of the project. The app tries to give the
-model enough context to stay coherent without dumping the entire story every
-turn.
-
-Important prompt inputs include:
-
-- Current scene: location, present characters, equipped items, time, meters.
-- Player reputation and player ledger.
-- Relevant factions and faction pressure.
-- Retrieved lorebook/wiki context.
-- Conversation memory and actor belief limits.
-- Agreements and obligations.
-- Open plot ledger, threads, schemes, and world events.
-- Selected chapter/arc memory.
-- Backend memory packets when available.
-- Procedural narrative rules.
-
-The app uses token budgeting to keep these sections bounded. This matters
-because long stories can accumulate far more context than a model should see at
-once.
-
-## Living World Systems
-
-The living world is the part that makes the app more than a chat frontend.
-
-Key systems:
-
-- Factions: goals, resources, territories, known members, player standing, and inter-faction relations.
-- Agreements: active and past commitments such as promises, oaths, debts, treaties, bargains, and marriages.
-- Player ledger: user-editable material state such as coin, income, assets, holdings, debts, payroll, claims, stores, ships, paid troops, and recurring expenses.
-- Rumors: uncertain information that can travel through the world.
-- Schemes: plans by NPCs or factions that can progress over time.
-- Story threads: open narrative problems or opportunities.
-- World events: source-linked consequences from previous turns.
-- Chapters and arcs: summarized long-term memory.
-- Procedural rules: learned narrative patterns and anti-patterns.
-
-These records are meant to be queryable and durable, not just prose the model
-has to remember.
-
-## Lorebook And Wiki Layer
-
-The lorebook stores reusable world knowledge. Entries can represent:
-
-- Characters
-- Locations
-- Items
-- Factions
-- Concepts
-- Events
-
-Entries can have aliases, keywords, hidden information, injection settings, and
-type-specific mutable state. The retrieval layer can pull relevant entries into
-the prompt so the model sees only the lore that matters for the current turn.
-
-The server path also has a compact wiki context step, so durable lorebook facts
-can help backend narration without requiring the prompt to include the whole
-wiki.
-
-## Data Model
-
-The main domain types live in `src/lib/types/index.ts`.
-
-Important local records include:
-
-- `Story`
-- `StoryEntry`
 - `Character`
 - `Location`
 - `Item`
 - `Entry` for lorebook records
-- `EntryRelationship`
-- `ConversationMemoryEntry`
-- `WorldEvent`
-- `Agreement`
-- `RumorRecord`
-- `FactionActionRecord`
-- `Scheme`
-- `StoryThread`
-- `Chapter`
-- `Arc`
-- `ProceduralRule`
-- `EmbeddedImage`
+- `Chapter` and `Arc` for summarized long-term memory
+- `Agreement`, `RumorRecord`, `FactionActionRecord`, `Scheme`, and `StoryThread` for living-world state
+- `ConversationMemoryEntry` and `EntryRelationship` for social and lore relationships
 
-The browser database is managed by `src/lib/services/database.ts`.
+The database schema is versioned in Dexie and has grown through several migrations, adding procedural memory, embeddings, relationships, world events, agreements, rumors, schemes, and story threads.
 
-The backend database schema lives in `src/lib/server/db/schema.ts` and includes
-server-side tables for stories, entries, entities, aliases, factions,
-relationships, agreements, threads, events, beliefs, memory nodes, state
-patches, and sync operations.
+## State Management
 
-## Codebase Map
+The active story is managed by `src/lib/stores/story.svelte.ts`. This store loads all story-related records, keeps the UI reactive, updates entities after world-state changes, builds prompts, prepares snapshots for AI generation, and maintains context statistics.
 
-Top-level docs:
+The global app store in `src/lib/stores/app.svelte.ts` tracks onboarding, the current story ID, the wizard state, and high-level navigation.
 
-- `README.md`: quick feature and setup overview.
-- `ARCHITECTURE.md`: broad technical reference.
-- `PROJECT_EXPLANATION.md`: this plain-language project guide.
-- `SCHEME_SERVICE_SPEC.md`: details for the scheme system.
+The settings store in `src/lib/stores/settings.svelte.ts` persists user settings, API profiles, model choices, UI preferences, per-service AI configuration, translation options, and context limits.
 
-Main app folders:
+## AI Architecture
 
-- `src/routes/`: SvelteKit pages and API routes.
-- `src/lib/components/`: UI components.
-- `src/lib/stores/`: reactive stores for app, settings, and story state.
-- `src/lib/services/`: persistence, AI services, import/export, sync, and background work.
-- `src/lib/services/ai/`: model-facing services, tool schemas, retrieval, memory, generation, and world simulation.
-- `src/lib/server/`: backend database, routes, memory, sync, and turn processing.
-- `src/lib/types/`: shared domain types.
-- `src/lib/utils/`: helper utilities.
-- `src/lib/data/seeds/`: bundled seed packs.
-- `docs/`: planning and implementation notes.
+AI services are exposed through singleton instances from `src/lib/services/ai/index.ts`. The services cover narrative support, memory, suggestions, action choices, style review, lore management, image generation, world simulation, arc condensation, procedural memory, embeddings, and wiki linting.
 
-## Important Files
+The current architecture has moved some older classifier and pipeline responsibilities into an orchestrator/tool approach. Tool schemas in `src/lib/services/ai/tools/schemas.ts` define structured updates such as characters, locations, items, conversations, relationships, story beats, meters, agreements, and lorebook entries.
 
-- `src/lib/stores/story.svelte.ts`: the central local story store. It loads
-  story data, builds snapshots, assembles prompts, applies updates, and manages
-  local world state.
-- `src/lib/components/story/ActionInput.svelte`: player input and generation
-  orchestration from the UI.
-- `src/lib/components/story/StoryView.svelte`: main play surface and story
-  controls.
-- `src/lib/components/story/WorldDrawer.svelte`: inspectable world-state panel.
-- `src/lib/services/ai/tools/schemas.ts`: structured tool schemas for world
-  updates.
-- `src/lib/services/ai/tools/executor.ts`: applies local tool output to the
-  browser database.
-- `src/lib/services/ai/context/ContextBudgetService.ts`: budgets prompt
-  sections.
-- `src/lib/services/ai/context/storyMemorySelector.ts`: selects chapter/arc
-  memory for prompts.
-- `src/lib/server/turn/orchestrator.ts`: backend turn pipeline.
-- `src/lib/server/turn/promptPacket.ts`: backend server prompt construction.
-- `src/lib/server/turn/patchValidator.ts`: validates and merges structured
-  backend world-state updates.
-- `src/lib/server/memory/retrieval.ts`: backend memory retrieval.
-- `src/lib/server/memory/canonical.ts`: backend import, sync, and canonical
-  story operations.
-- `src/lib/server/db/schema.ts`: backend database schema.
+In practice, a generation turn works roughly like this:
+
+1. The player submits an action.
+2. The story store builds a system prompt and conversation history from current state.
+3. The AI generates narration.
+4. Structured tool output updates the world state.
+5. The app saves narration, world updates, suggestions, memory, and related records.
+6. Background services can summarize chapters, condense arcs, run world simulation, update procedural memory, or prepare embeddings.
+
+## Lorebook And Living World
+
+The lorebook system is one of the central features. Lorebook entries can be imported, manually edited, refined by AI, retrieved for context, and used to keep the story grounded. Entries support types such as character, location, item, faction, concept, and event.
+
+The living-world layer expands this beyond simple notes. It tracks faction resources, faction actions, rumors, agreements, schemes, story threads, relationships, and events. These records help the app maintain continuity and let off-screen world activity influence future narration.
+
+The wiki export turns that state into an Obsidian-compatible knowledge base rather than a flat dump. Exported vaults now separate immutable raw transcript sources under `raw/` from the compiled wiki pages, include an `AGENTS.md` maintainer schema for future LLM sessions, and generate `index.md`, `log.md`, `synthesis.md`, arc pages, source trails, relationship tables, agreements, rumors, and meters. The intent is that the LLM can keep the wiki maintained over time while the raw source layer remains the evidence record.
+
+The first terminal-side wiki core lives under `scripts/wiki-core/`. It can materialize a backend-bound story into an Obsidian-style markdown vault under `data/vaults/stories/<storyId>`, index that generated vault into a story-specific Qdrant collection through a local embedding endpoint, then support semantic search plus exact search, wikilink traversal, and backlink traversal. Each generated story vault includes `.mtherios/story-vault.json`, which records the backend `serverVersion` used to generate the markdown and, after indexing, the Qdrant collection/version that is fresh. Server routes under `/api/wiki/*` wrap these tools so the frontend and future agents can use the same terminal-owned search brain. A `sync_story_vault` backend job is queued after turn/import projection so the markdown lore vault follows backend canon without the browser manually exporting a zip; search, follow, and index requests also self-heal missing or stale generated vaults before reading. Full Qdrant re-indexing can be enabled with `wikiAutoIndexStoryVaults`, but defaults off to avoid expensive whole-vault embedding work on every turn. Deleting a backend-bound story deletes backend canon first, then cleans up the generated vault and attempts to remove the story-specific Qdrant collection. The GM `search_wiki` tool now tries that terminal wiki first and includes linked/backlinked page neighborhoods in tool results, falling back to the browser lorebook cache only when the terminal wiki is unavailable or has no matching pages. Backend story memory has a separate optional embedding worker for Postgres `memory_nodes`; it is disabled until a matching-dimension embedding provider is configured. The same terminal job loop also updates faction pressure from canonical events, converts high-pressure factions into deterministic world-tick events, and writes compact faction memory nodes for retrieval.
+
+## Local-First Design
+
+Mtherios is being refactored from browser-first local storage into a terminal-owned local app. The data root can live in a synced folder, Postgres holds canonical large-story state, generated Obsidian markdown holds durable lore projections, and Qdrant is a rebuildable semantic index. The frontend now refreshes its story list from `/api/stories`, deletes backend-bound stories through the terminal process, and imports new or transferred stories into backend canon by default. IndexedDB remains useful as a frontend cache and offline command queue, but it is no longer the intended ceiling for large worlds. When a backend-bound story reconnects, queued commands are pushed before projection pulls or new backend turns, and server sync operation IDs make retries safe.
 
 ## How To Run It
 
-Install dependencies:
+Install dependencies and start the development server:
 
 ```sh
 npm install
+npm run app:dev
 ```
 
-Run the local app:
-
-```sh
-npm run dev
-```
-
-Run with the backend database path:
-
-```sh
-npm run backend:up
-npm run backend:migrate
-npm run dev:backend
-```
-
-Validate the project:
+For validation:
 
 ```sh
 npm run check
@@ -304,24 +127,6 @@ npm run test
 npm run build
 ```
 
-## What To Know Before Changing It
-
-- The story store is large and central. Read the nearby prompt and snapshot
-  code before patching it.
-- Do not treat transcript text as the only source of truth. Durable state should
-  go into typed records when possible.
-- Keep prompt additions budgeted. Every always-on section becomes recurring
-  token cost.
-- AI tool output is untrusted input. Validate and merge it through schemas and
-  helper logic.
-- Backend-backed stories should preserve the pattern: backend truth, transcript
-  evidence, code validates and merges.
-- Avoid committing local story artifacts, prompt scratch files, API keys, or
-  provider secrets.
-
 ## Short Summary
 
-Mtherios is a SvelteKit interactive fiction engine that turns AI narration into
-a persistent simulated world. Its goal is long-form play where memory, lore,
-factions, obligations, resources, relationships, and consequences survive
-beyond the current prompt window.
+Mtherios is a local-first SvelteKit app for AI-driven interactive fiction. Its main idea is that a story should not be only a chat transcript: it should become a persistent simulated world with memory, lore, factions, relationships, time, consequences, and player agency.

@@ -13,10 +13,16 @@ export function apiError(error: unknown) {
 	if (error instanceof BackendNotConfiguredError) {
 		return json({ error: error.message, code: 'BACKEND_NOT_CONFIGURED' }, { status: 503 });
 	}
+	if (error instanceof Error && error.name === 'TerminalLlmNotConfiguredError') {
+		return json({ error: error.message, code: 'TERMINAL_LLM_NOT_CONFIGURED' }, { status: 503 });
+	}
 	if (error instanceof ZodError) {
 		return json({ error: 'Invalid request payload.', issues: error.issues }, { status: 400 });
 	}
 	if (error instanceof Error) {
+		if (/^Story not found:/i.test(error.message)) {
+			return json({ error: error.message }, { status: 404 });
+		}
 		return json({ error: error.message }, { status: 500 });
 	}
 	return json({ error: 'Unknown server error.' }, { status: 500 });

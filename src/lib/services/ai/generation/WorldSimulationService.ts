@@ -250,6 +250,151 @@ function truncateText(value: string | null | undefined, max: number): string {
 	return value.length > max ? value.slice(0, max - 1) + '...' : value;
 }
 
+function compactText(value: string | null | undefined): string {
+	return (value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function recordFrom(value: unknown): Record<string, unknown> {
+	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringArrayFrom(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
+function normalizeForMatch(value: string): string {
+	return compactText(value).toLowerCase();
+}
+
+function containsName(text: string, name: string): boolean {
+	const normalized = normalizeForMatch(name);
+	if (normalized.length < 3) return false;
+	return normalizeForMatch(text).includes(normalized);
+}
+
+function factionMatchTerms(faction: Entry): string[] {
+	const state = recordFrom(faction.state);
+	const injection = recordFrom(faction.injection);
+	return [...new Set([
+		faction.name,
+		...faction.aliases,
+		...stringArrayFrom(injection.keywords),
+		...stringArrayFrom(state.aliases),
+	].map(compactText).filter((item) => item.length >= 3))];
+}
+
+function selectChapterRelevantFactions(input: {
+	latestChapter: Chapter;
+	recentEntries: StoryEntry[];
+	factionEntries: Entry[];
+	involvedFactionNames: string[];
+}): Entry[] {
+	const explicit = input.involvedFactionNames.map(normalizeForMatch).filter(Boolean);
+	const evidenceText = [
+		input.latestChapter.title ?? '',
+		input.latestChapter.summary,
+		...(input.latestChapter.keywords ?? []),
+		...(input.latestChapter.characters ?? []),
+		...(input.latestChapter.locations ?? []),
+		...(input.latestChapter.plotThreads ?? []),
+		...input.recentEntries.slice(-12).map((entry) => entry.content),
+	].join('\n');
+	return input.factionEntries
+		.filter((faction) => {
+			const terms = factionMatchTerms(faction);
+			if (explicit.length > 0 && terms.some((term) => explicit.includes(normalizeForMatch(term)))) return true;
+			return terms.some((term) => containsName(evidenceText, term));
+		})
+		.slice(0, 6);
+}
+
+function factionPromptLine(faction: Entry): string {
+	const state = recordFrom(faction.state);
+	const goals = stringArrayFrom(state.goals).slice(0, 2);
+	const resources = recordFrom(state.resources);
+	const resourceKeys = Object.entries(resources)
+		.filter(([, value]) => value !== null && value !== undefined && value !== '')
+		.slice(0, 4)
+		.map(([key, value]) => `${key}: ${String(value)}`);
+	const details = [
+		goals.length > 0 ? `goals: ${goals.join('; ')}` : null,
+		resourceKeys.length > 0 ? `resources: ${resourceKeys.join(', ')}` : null,
+	].filter((item): item is string => Boolean(item));
+	return `- ${faction.name}${details.length > 0 ? ` (${details.join(' | ')})` : ''}`;
+}
+
+export interface ChapterWorldSimulationPrompt {
+	system: string;
+	user: string;
+	relevantFactions: Entry[];
+}
+
+export function buildChapterWorldSimulationPrompt(input: {
+	latestChapter: Chapter;
+	recentEntries: StoryEntry[];
+	factionEntries?: Entry[];
+	involvedFactions?: string[];
+	mode?: string;
+	pov?: string;
+	tense?: string;
+}): ChapterWorldSimulationPrompt {
+	const {
+		latestChapter,
+		recentEntries,
+		factionEntries = [],
+		involvedFactions = [],
+		mode = 'adventure',
+		pov = 'second',
+		tense = 'present',
+	} = input;
+	const recent = recentEntries.slice(-12);
+	const relevantFactions = selectChapterRelevantFactions({
+		latestChapter,
+		recentEntries: recent,
+		factionEntries,
+		involvedFactionNames: involvedFactions,
+	});
+	const recentBlock = recent.length > 0
+		? recent.map((entry) => `[${entry.type}] ${truncateText(entry.content, 280)}`).join('\n')
+		: 'No recent transcript entries supplied.';
+	const factionBlock = relevantFactions.length > 0
+		? relevantFactions.map(factionPromptLine).join('\n')
+		: 'No faction dossiers were directly relevant to this chapter.';
+	const chapterBlock = [
+		`Chapter ${latestChapter.number}: ${latestChapter.title ?? 'Untitled'}`,
+		truncateText(latestChapter.summary, 1600),
+		latestChapter.characters?.length ? `Characters: ${latestChapter.characters.join(', ')}` : null,
+		latestChapter.locations?.length ? `Locations: ${latestChapter.locations.join(', ')}` : null,
+		latestChapter.plotThreads?.length ? `Open threads: ${latestChapter.plotThreads.join('; ')}` : null,
+		latestChapter.emotionalTone ? `Tone: ${latestChapter.emotionalTone}` : null,
+	].filter((line): line is string => Boolean(line)).join('\n');
+
+	const system = `You are the Mtherios living-world engine for a ${mode} story (${pov} person, ${tense} tense).
+
+React ONLY the newly closed chapter and the recent transcript excerpt. Do not read ahead, recap old arcs, or make sweeping off-screen changes.
+
+Keep the update slow-burn:
+- 0-2 faction actions, only from factions shown below
+- 0-2 rumors, tied to chapter evidence
+- small world-state changes that memory can carry forward
+- no sudden personality rewrites or major faction reversals without evidence
+
+Return JSON matching the world simulation schema. Use worldNarrative for the compact world-state delta.`;
+
+	const user = `Latest chapter:
+${chapterBlock}
+
+Recent transcript excerpt:
+${recentBlock}
+
+Relevant factions:
+${factionBlock}
+
+Generate the per-chapter world update now.`;
+
+	return { system, user, relevantFactions };
+}
+
 function hasPayoffCue(value: string | null | undefined): boolean {
 	if (!value) return false;
 	const lower = value.toLowerCase();
@@ -1103,6 +1248,48 @@ function applySlowBurnGuard(momentum: PlotMomentum): PlotMomentum {
 export class WorldSimulationService extends BaseAIService {
 	constructor() {
 		super('worldSimulation');
+	}
+
+	/**
+	 * Lightweight world simulation triggered once per new chapter.
+	 * Focuses on the most recent chapter + recent conversation history
+	 * and only the factions directly relevant to recent events.
+	 * This prevents characters from changing too quickly.
+	 */
+	async simulateForNewChapter(params: {
+		storyId: string;
+		latestChapter: Chapter;
+		recentEntries: StoryEntry[];
+		factionEntries?: Entry[];
+		involvedFactions?: string[];
+		mode?: string;
+		pov?: string;
+		tense?: string;
+	}): Promise<WorldSimulationResult> {
+		const { latestChapter, recentEntries, factionEntries = [], involvedFactions = [], mode = 'adventure', pov = 'second', tense = 'present' } = params;
+
+		log('simulateForNewChapter', {
+			chapter: latestChapter.number,
+			entries: recentEntries.length,
+			factions: factionEntries.length,
+		});
+
+		// Build lightweight context (last chapter + recent conversation only)
+		const prompt = buildChapterWorldSimulationPrompt({
+			latestChapter,
+			recentEntries,
+			factionEntries,
+			involvedFactions,
+			mode,
+			pov,
+			tense,
+		});
+
+		const result = await this.generateStructured(worldSimulationResultSchema, prompt.system, prompt.user);
+		return result.plotMomentum
+			? { ...result, plotMomentum: applySlowBurnGuard(result.plotMomentum) }
+			: result;
+
 	}
 
 	/**

@@ -1,15 +1,18 @@
 import {
-	indexedDbImportResponseSchema,
 	memoryRetrieveRequestSchema,
 	retrievedMemoryPacketSchema,
+	syncPullResponseSchema,
 	syncPushResponseSchema,
 	turnResponseSchema,
 	type MemoryRetrieveRequest,
 	type RetrievedMemoryPacket,
+	type SyncChange,
 	type SyncOperation,
 	type TurnRequest,
 	type TurnResponse,
 } from '$lib/contracts/memory';
+import { engineCommandResponseSchema } from '$lib/contracts/engine';
+import { importStoryBundleToBackend } from '$lib/services/backendImport';
 import { exportStory } from '$lib/services/storySync';
 import {
 	enqueueSyncOp,
@@ -20,6 +23,25 @@ import {
 import { uuid } from '$lib/utils/uuid';
 import type { Story, SyncOutboxOp } from '$lib/types';
 
+export class TerminalRequestError extends Error {
+	status: number;
+	code: string | null;
+
+	constructor(message: string, status: number, code: string | null = null) {
+		super(message);
+		this.name = 'TerminalRequestError';
+		this.status = status;
+		this.code = code;
+	}
+}
+
+export function isTerminalReachabilityError(error: unknown): boolean {
+	if (error instanceof TerminalRequestError) {
+		return error.code === 'BACKEND_NOT_CONFIGURED' || error.status === 502 || error.status === 504;
+	}
+	return error instanceof TypeError;
+}
+
 async function postJson(url: string, payload: unknown): Promise<unknown> {
 	const response = await fetch(url, {
 		method: 'POST',
@@ -27,10 +49,37 @@ async function postJson(url: string, payload: unknown): Promise<unknown> {
 		body: JSON.stringify(payload),
 	});
 	if (!response.ok) {
-		const body = await response.json().catch(() => ({}));
-		throw new Error(typeof body.error === 'string' ? body.error : `Backend request failed: ${response.status}`);
+		const body = await response.json().catch(() => ({})) as { error?: unknown; code?: unknown };
+		throw new TerminalRequestError(
+			typeof body.error === 'string' ? body.error : `Terminal request failed: ${response.status}`,
+			response.status,
+			typeof body.code === 'string' ? body.code : null,
+		);
 	}
 	return response.json();
+}
+
+async function postEngineCommand(
+	storyId: string,
+	command: string,
+	args: Record<string, unknown>,
+	clientCommandId?: string,
+): Promise<unknown> {
+	const raw = await postJson('/api/engine/command', {
+		storyId,
+		command,
+		...(clientCommandId ? { clientCommandId } : {}),
+		args,
+	});
+	const response = engineCommandResponseSchema.parse(raw);
+	if (response.status !== 'succeeded') {
+		throw new TerminalRequestError(
+			response.error ?? `Engine command failed: ${response.command}`,
+			502,
+			'ENGINE_COMMAND_FAILED',
+		);
+	}
+	return response.result;
 }
 
 export async function retrieveBackendMemory(
@@ -38,7 +87,7 @@ export async function retrieveBackendMemory(
 ): Promise<RetrievedMemoryPacket | null> {
 	const parsed = memoryRetrieveRequestSchema.parse(request);
 	try {
-		const raw = await postJson('/api/memory/retrieve', parsed);
+		const raw = await postEngineCommand(parsed.storyId, 'memory.retrieve', parsed);
 		return retrievedMemoryPacketSchema.parse(raw);
 	} catch (error) {
 		console.warn('[BackendMemory] Retrieval fell back to local memory:', error);
@@ -47,8 +96,20 @@ export async function retrieveBackendMemory(
 }
 
 export async function processBackendTurn(request: TurnRequest): Promise<TurnResponse> {
-	const raw = await postJson('/api/turn', request);
-	return turnResponseSchema.parse(raw);
+	return turnResponseSchema.parse(await postEngineCommand(
+		request.storyId,
+		'turn.submit',
+		request,
+		request.clientTurnId,
+	));
+}
+
+export async function runBackendWorldSimTick(story: Story): Promise<Record<string, unknown> | null> {
+	if (!story.serverStoryId) return null;
+	return postEngineCommand(story.serverStoryId, 'jobs.worldSim', {
+		localVersion: story.serverVersion ?? 0,
+		force: true,
+	}) as Promise<Record<string, unknown>>;
 }
 
 export async function importLocalStoryToBackend(storyId: string): Promise<{
@@ -57,21 +118,7 @@ export async function importLocalStoryToBackend(storyId: string): Promise<{
 	counts: Record<string, number>;
 }> {
 	const bundle = await exportStory(storyId);
-	const raw = await postJson('/api/import/indexeddb', {
-		bundle,
-		options: { preserveIds: true, rebuildMemoryNodes: true },
-	});
-	const imported = indexedDbImportResponseSchema.parse(raw);
-	await updateStory(storyId, {
-		serverStoryId: imported.storyId,
-		serverVersion: imported.serverVersion,
-		syncStatus: 'synced',
-	});
-	return {
-		serverStoryId: imported.storyId,
-		serverVersion: imported.serverVersion,
-		counts: imported.counts,
-	};
+	return importStoryBundleToBackend(bundle, storyId);
 }
 
 export async function queueBackendSyncOp(
@@ -105,7 +152,20 @@ function toServerOp(op: SyncOutboxOp): SyncOperation {
 	};
 }
 
-export async function pushPendingBackendOps(story: Story): Promise<{ serverVersion: number; syncStatus: Story['syncStatus'] } | null> {
+export async function pullBackendChanges(story: Story): Promise<{ serverVersion: number; changes: SyncChange[] } | null> {
+	const serverStoryId = story.serverStoryId;
+	if (!serverStoryId) return null;
+	const raw = await postEngineCommand(serverStoryId, 'sync.pull', {
+		since: story.serverVersion ?? 0,
+	});
+	const response = syncPullResponseSchema.parse(raw);
+	return {
+		serverVersion: response.serverVersion,
+		changes: response.changes,
+	};
+}
+
+export async function pushPendingBackendOps(story: Story): Promise<{ serverVersion: number; syncStatus: Story['syncStatus']; changes: SyncChange[] } | null> {
 	const serverStoryId = story.serverStoryId;
 	if (!serverStoryId) return null;
 	const pending = await getPendingSyncOps(story.id);
@@ -114,15 +174,22 @@ export async function pushPendingBackendOps(story: Story): Promise<{ serverVersi
 	for (const op of pending) await updateSyncOp(op.id, { status: 'pushing', error: null });
 
 	try {
-		const raw = await postJson('/api/sync/push', {
-			storyId: serverStoryId,
+		const raw = await postEngineCommand(serverStoryId, 'sync.push', {
 			localVersion: story.serverVersion ?? 0,
 			ops: pending.map(toServerOp),
 		});
 		const response = syncPushResponseSchema.parse(raw);
 		for (const opId of response.appliedOpIds) await updateSyncOp(opId, { status: 'applied', error: null });
+		const repairByOpId = new Map(response.repairItems.map((item) => [item.opId, item]));
 		for (const rejected of response.rejected) {
-			await updateSyncOp(rejected.opId, { status: 'rejected', error: rejected.reason });
+			const repair = repairByOpId.get(rejected.opId);
+			await updateSyncOp(rejected.opId, {
+				status: repair ? 'needs_repair' : 'rejected',
+				error: rejected.reason,
+				repairPayload: repair?.payload ?? null,
+				repairReason: repair?.reason ?? rejected.reason,
+				repairCreatedAt: Date.now(),
+			});
 		}
 		await updateStory(story.id, {
 			serverVersion: response.serverVersion,
@@ -131,11 +198,12 @@ export async function pushPendingBackendOps(story: Story): Promise<{ serverVersi
 		return {
 			serverVersion: response.serverVersion,
 			syncStatus: response.rejected.length > 0 ? 'conflict' : 'synced',
+			changes: response.changes,
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Backend sync failed.';
 		for (const op of pending) await updateSyncOp(op.id, { status: 'pending', error: message });
 		await updateStory(story.id, { syncStatus: 'offline' });
-		return { serverVersion: story.serverVersion ?? 0, syncStatus: 'offline' };
+		return { serverVersion: story.serverVersion ?? 0, syncStatus: 'offline', changes: [] };
 	}
 }

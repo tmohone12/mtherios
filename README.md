@@ -1,6 +1,6 @@
-# Mtherios
+# Mtherios (Work in progess no real stable version)
 
-A browser-based interactive fiction engine with a full AI-driven living world simulation. Built with SvelteKit, IndexedDB, and OpenAI-compatible APIs.
+A terminal-run interactive fiction engine with a SvelteKit frontend and a full AI-driven living world simulation. The local Node process owns the app runtime, backend canon, Qdrant wiki search, and the syncable data root; the browser is the client.
 
 ## What It Does
 
@@ -38,6 +38,9 @@ Mtherios is an AI-powered narrative engine where every action updates a living w
 - Mutable entity state (faction resources, character relationships, location connections)
 - SillyTavern lorebook import support
 - Relationship graph tracking connections between entities
+- Agent-maintained Obsidian wiki export with immutable raw transcript sources, a maintainer schema, source trails, index/log pages, arcs, synthesis, relationships, rumors, meters, and agreements
+- Terminal wiki-core scripts and server APIs for materializing backend story canon into versioned Obsidian vaults, indexing vaults into Qdrant, semantic searching, and following Obsidian links/backlinks
+- Server-owned story catalog: the frontend refreshes stories from the terminal process, deletes backend-bound stories and their generated vault/index artifacts through `/api/stories/:id`, and binds new/imported stories into backend canon by default
 
 ### Player Experience
 - Action types: Do, Say, Think, Story, Free-form
@@ -53,8 +56,11 @@ Mtherios is an AI-powered narrative engine where every action updates a living w
 
 ## Tech Stack
 
+- **App process:** Node/SvelteKit adapter started by `server.js`
 - **Frontend:** SvelteKit, Svelte 5, TailwindCSS
-- **Storage:** IndexedDB via Dexie.js (no server required)
+- **Local canon:** Postgres/pgvector via Docker for backend-bound stories
+- **Browser cache:** IndexedDB via Dexie.js for local/offline compatibility
+- **Lore search:** Obsidian markdown vaults indexed into Qdrant
 - **AI:** OpenAI-compatible chat completions API with Zod schema validation
 - **Architecture:** Singleton service registry, reactive stores ($state/$derived/$effect), per-service model/temperature/token configuration
 
@@ -88,15 +94,35 @@ OpenRouter, NanoGPT, Chutes, Pollinations, Ollama, LM Studio, llama.cpp, NVIDIA 
 # Install dependencies
 npm install
 
-# Start development server
-npm run dev
+# Start the terminal-owned app process in development
+npm run app:dev
+
+# Or on Windows
+Start.bat
 
 # Build for production
 npm run build
+
+# Run the built terminal-owned app
+npm run app:start
 ```
 
-Runs entirely in the browser. No backend server required -- just configure an API provider and start writing.
+`npm run app:dev` starts Postgres and Qdrant, runs database migrations, initializes `data/`, launches the frontend as a child process, and drains server-side background jobs from the terminal process. Those jobs now create deterministic chapter checkpoints and arc rollups from backend canon, update faction pressure from canonical events, convert high-pressure factions into terminal-owned world tick events, materialize backend stories into generated Obsidian vaults, then project the results into memory nodes for retrieval. `npm run dev` still exists for quick frontend work, but it is no longer the preferred way to run the whole system.
+
+Runtime defaults live in [mtherios.config.example.json](mtherios.config.example.json). Copy it to `mtherios.config.json` when you want to change ports, the syncable data root, Qdrant URL, the default Obsidian vault path, wiki embedding model, story-vault auto-indexing, terminal memory cadence (`chapterThreshold`, `postChapterBuffer`, `chaptersPerArc`), or backend memory embeddings. Backend memory embeddings are disabled until `memoryEmbeddingProvider` and `memoryEmbeddingModel` are set, and the model must produce the configured `memoryEmbeddingDimensions` for the Postgres `memory_nodes.embedding` column.
+
+## Generation Benchmark
+
+With the app server running, benchmark terminal-owned generation jobs:
+
+```sh
+npm run bench:generation -- --story-id <server-story-id> --mode jobs --limit 10
+```
+
+Use `--mode world-sim` to force a manual terminal world tick, or `--mode turn --player-text "..."` to time a representative `/api/turn` request. The benchmark prints total duration, per-phase job timings when the endpoint returns them, model/API call count when API-call logs are available, and job completion counts. Structured phase logs are emitted as JSON unless `MTHERIOS_GENERATION_TIMING=off`; bounded backend generation concurrency defaults to 4 and can be changed with `MTHERIOS_GENERATION_CONCURRENCY`.
 
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full codebase documentation including data flows, type definitions, service internals, and design decisions.
+
+See [docs/local-wiki-core.md](docs/local-wiki-core.md) for the terminal-first Obsidian + Qdrant wiki workflow.

@@ -1,24 +1,14 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import {
-	GOOGLE_AGENT_PLATFORM_MODELS,
-	getGoogleAgentPlatformAccessToken,
-	getGoogleAgentPlatformBaseUrl,
-	googleAgentPlatformJsonError,
-} from '$lib/server/ai/googleAgentPlatform';
+import { executeLegacyEngineCommand } from '$lib/server/engine/routeCompatibility';
+import { googleAgentPlatformJsonError } from '$lib/server/engine/googleAgentProxy';
 
 export const GET: RequestHandler = async () => {
 	try {
-		// Verify project resolution and ADC even though model discovery is static.
-		await getGoogleAgentPlatformBaseUrl();
-		await getGoogleAgentPlatformAccessToken();
-		return json({
-			object: 'list',
-			data: GOOGLE_AGENT_PLATFORM_MODELS.map((id) => ({
-				id,
-				object: 'model',
-				owned_by: 'google',
-			})),
-		});
+		return json(await executeLegacyEngineCommand({
+			storyId: '__app__',
+			command: 'googleAgent.models',
+			args: {},
+		}));
 	} catch (error) {
 		return googleAgentPlatformJsonError(error, 503);
 	}

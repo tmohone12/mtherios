@@ -10,7 +10,11 @@
 	import { GM_TOOLS, worldStateUpdateSchema, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
 	import { declarePlayerScheme } from '$lib/services/ai/scheme/SchemeService';
 	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
+	import { isTerminalReachabilityError } from '$lib/services/backendMemory';
+	import { normalizeBackendContextBudget } from '$lib/services/backendTurnContext';
+	import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET } from '$lib/services/memorySettings';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
+	import { shouldUseTerminalEngineTurn } from './engineTurnRouting';
 
 	type ActionType = 'do' | 'say' | 'think' | 'story' | 'free';
 
@@ -62,14 +66,26 @@
 	}
 
 	function shouldUseBackendTurn(): boolean {
-		const profile = settings.getServiceProfile('narrative');
-		const provider = settings.getServiceProvider('narrative');
-		const configured = Boolean(profile && provider && (!provider.requiresApiKey || profile.apiKey));
-		return Boolean(
-			settings.uiSettings.serverAuthoritativeTurns &&
-			story.currentStory?.serverStoryId &&
-			configured,
-		);
+		return shouldUseTerminalEngineTurn(story.currentStory);
+	}
+
+	const terminalRuntimeUnavailable = $derived(Boolean(
+		story.currentStory?.serverStoryId &&
+		story.currentStory.syncStatus === 'offline',
+	));
+
+	function buildBackendClientContext() {
+		return {
+			sceneEntityIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
+			presentNpcIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
+			locationId: story.locations.find((location) => location.current)?.id ?? null,
+			threadIds: [],
+			memoryTokenBudget: settings.uiSettings.backendMemoryTokenBudget || DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET,
+			contextBudget: normalizeBackendContextBudget(settings.contextBudget),
+			chapterThreshold: settings.uiSettings.chapterThreshold || 20,
+			postChapterBuffer: settings.uiSettings.postChapterBuffer ?? 10,
+			chaptersPerArc: settings.uiSettings.chaptersPerArc || 5,
+		};
 	}
 
 	const actionConfig: Record<ActionType, {
@@ -282,7 +298,7 @@
 	}
 
 	async function handleSubmit() {
-		if (!inputValue.trim() || isGenerating || !story.currentStory || story.hydratingWorld) return;
+		if (!inputValue.trim() || isGenerating || !story.currentStory || story.hydratingWorld || terminalRuntimeUnavailable) return;
 
 		const rawInput = inputValue.trim();
 
@@ -370,8 +386,7 @@
 						story.pov,
 						story.tense,
 						recentFactionActions,
-						[],
-						stateSnapshot.strategicWorldFrame,
+						[], // relationChangeLog — computed in service or passed if available
 					);
 					// Store in lastWorldSimResult as a partial update so #sectionPlotMomentum picks it up
 					story.lastWorldSimResult = {
@@ -404,9 +419,9 @@
 			const promptUsage = story.lastPromptSectionUsage ?? {};
 			story.lastTierUsage = {
 				snapshot: estimateTokens(snapshotText),
-				scene: (promptUsage.characters ?? 0) + (promptUsage.playerReputation ?? 0) + (promptUsage.playerLedger ?? 0),
-				recent: (promptUsage.storyMemory ?? 0) + (promptUsage.arcs ?? 0) + (promptUsage.chapters ?? 0) + (promptUsage.chapterIntro ?? 0),
-				world: (promptUsage.factions ?? 0) + (promptUsage.livingWorld ?? 0) + (promptUsage.strategicPressure ?? 0) + (promptUsage.schemes ?? 0) + (promptUsage.plotMomentum ?? 0) + (promptUsage.plotLedger ?? 0),
+				scene: (promptUsage.characters ?? 0) + (promptUsage.playerReputation ?? 0),
+				recent: (promptUsage.arcs ?? 0) + (promptUsage.chapters ?? 0) + (promptUsage.chapterIntro ?? 0),
+				world: (promptUsage.factions ?? 0) + (promptUsage.livingWorld ?? 0) + (promptUsage.schemes ?? 0) + (promptUsage.plotMomentum ?? 0) + (promptUsage.plotLedger ?? 0),
 				procedural: promptUsage.proceduralMemory ?? 0,
 				retrieved: (promptUsage.lore ?? 0) + (promptUsage.episodicMemory ?? 0) + (promptUsage.conversationMemory ?? 0) + (promptUsage.backendMemory ?? 0),
 			};
@@ -623,53 +638,37 @@
 	}
 
 	async function submitBackendAuthoritativeTurn(content: string): Promise<boolean> {
-		const currentStory = story.currentStory;
-		if (!currentStory?.serverStoryId) return false;
-		const narrativeConfig = getNarrativeRequestConfig();
-		const profile = settings.getServiceProfile('narrative');
-		const provider = settings.getServiceProvider('narrative');
-		if (!profile || !provider || (provider.requiresApiKey && !profile.apiKey)) return false;
+		if (!story.currentStory?.serverStoryId) return false;
+		const clientContext = buildBackendClientContext();
+		const clientTurnId = crypto.randomUUID();
 
 		isGenerating = true;
 		abortController = new AbortController();
 		onStreamStart?.();
 		try {
 			const response = await story.submitBackendTurn({
-				clientTurnId: crypto.randomUUID(),
+				clientTurnId,
 				playerText: content,
-				providerProfile: profile,
-				generation: {
-					model: narrativeConfig.model,
-					temperature: narrativeConfig.temperature,
-					maxTokens: narrativeConfig.maxTokens,
-				},
-				clientContext: {
-					sceneEntityIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
-					presentNpcIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
-					locationId: story.locations.find((location) => location.current)?.id ?? null,
-					threadIds: [],
-					playerReputation: currentStory.playerReputation ?? null,
-					playerLedger: currentStory.playerLedger ?? null,
-				},
+				clientContext,
 			});
 			if (response.narration.trim()) {
 				onStreamChunk?.(response.narration);
 			}
 			onStreamClear?.();
-			try {
-				const backgroundErrors = await runBackgroundJobs();
-				if (backgroundErrors.length > 0) {
-					console.warn('[BackendTurn] Background job errors:', backgroundErrors);
-				}
-			} catch (e) {
-				console.warn('[BackendTurn] Background jobs failed:', e);
-			}
 			onStreamEnd?.(response.narration);
 			return true;
 		} catch (error) {
-			console.warn('[BackendTurn] Falling back to local narrator path:', error);
+			const message = error instanceof Error ? error.message : String(error);
+			const runtimeUnavailable = isTerminalReachabilityError(error);
+			console.warn(runtimeUnavailable
+				? '[BackendTurn] Terminal runtime unavailable; refusing local turn queue:'
+				: '[BackendTurn] Terminal turn failed; refusing local turn queue:', error);
+			await story.addEntry('system', runtimeUnavailable
+				? `Terminal agent runtime required: ${message}`
+				: `Terminal turn failed: ${message}`);
 			onStreamClear?.();
-			return false;
+			onStreamEnd?.('');
+			return true;
 		} finally {
 			isGenerating = false;
 			abortController = null;
@@ -847,7 +846,11 @@
 		</div>
 	{:else if story.worldHydrationError}
 		<div class="px-1 text-[11px] text-amber-300">
-			Memory load had trouble; transcript is available, but context may be thin.
+			{#if terminalRuntimeUnavailable}
+				Terminal agent runtime required. Start the terminal process to use this campaign.
+			{:else}
+				Memory load had trouble; context may be thin.
+			{/if}
 		</div>
 	{/if}
 
@@ -874,12 +877,12 @@
 		{:else}
 			<button
 				onclick={handleSubmit}
-				disabled={!inputValue.trim() || story.hydratingWorld}
+				disabled={!inputValue.trim() || story.hydratingWorld || terminalRuntimeUnavailable}
 				class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all active:scale-95 disabled:opacity-30
 					{isCreativeMode
 						? 'text-[var(--text-accent)] hover:bg-[rgba(212,168,83,0.1)]'
 						: actionConfig[actionType].buttonStyle}"
-				title={story.hydratingWorld ? 'Memory is still loading' : 'Send'}
+				title={terminalRuntimeUnavailable ? 'Terminal agent runtime required' : story.hydratingWorld ? 'Memory is still loading' : 'Send'}
 			>
 				<Send class="h-5 w-5" />
 			</button>

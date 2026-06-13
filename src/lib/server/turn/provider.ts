@@ -5,6 +5,7 @@ import {
 	getGoogleAgentPlatformBaseUrl,
 	getGoogleAgentPlatformHeaders,
 } from '$lib/server/ai/googleAgentPlatform';
+import { toWellFormedText } from './wellFormedText';
 
 type ProviderProfile = NonNullable<TurnRequest['providerProfile']>;
 
@@ -13,18 +14,63 @@ export interface ServerGenerationOptions {
 	model?: string;
 	temperature?: number;
 	maxTokens?: number;
+	timeoutMs?: number;
 	system: string;
+	systemDynamic?: string;
 	messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
 	prompt: string;
 	responseFormat?: 'json_object';
+}
+
+export interface ServerGenerationUsage {
+	requestTokens: number | null;
+	responseTokens: number | null;
+	totalTokens: number | null;
+}
+
+export interface ServerGenerationResult {
+	text: string;
+	model: string;
+	endpoint: string;
+	durationMs: number;
+	promptChars: number;
+	responseChars: number;
+	usage: ServerGenerationUsage;
+}
+
+export class ServerGenerationError extends Error {
+	result: Omit<ServerGenerationResult, 'text' | 'responseChars' | 'usage'> & {
+		responseChars?: number;
+		usage?: ServerGenerationUsage;
+		statusCode?: number;
+	};
+
+	constructor(
+		message: string,
+		result: Omit<ServerGenerationResult, 'text' | 'responseChars' | 'usage'> & {
+			responseChars?: number;
+			usage?: ServerGenerationUsage;
+			statusCode?: number;
+		},
+	) {
+		super(message);
+		this.name = 'ServerGenerationError';
+		this.result = result;
+	}
 }
 
 function isAnthropicProvider(profile: ProviderProfile): boolean {
 	return profile.providerType === 'anthropic' || profile.providerType === 'anthropic-proxy';
 }
 
+const DEFAULT_SERVER_GENERATION_TIMEOUT_MS = 120_000;
+
 function isGoogleAgentPlatformProvider(profile: ProviderProfile): boolean {
 	return profile.providerType === 'google-agent-platform';
+}
+
+function supportsOpenRouterStyleCaching(profile: ProviderProfile): boolean {
+	return profile.providerType === 'openrouter';
 }
 
 function requiresApiKey(profile: ProviderProfile): boolean {
@@ -65,11 +111,94 @@ function openAiHeaders(profile: ProviderProfile): Record<string, string> {
 	return headers;
 }
 
-export async function generateServerText(options: ServerGenerationOptions): Promise<string> {
+function promptChars(options: ServerGenerationOptions): number {
+	return options.system.length
+		+ (options.systemDynamic?.length ?? 0)
+		+ options.prompt.length
+		+ (options.messages ?? []).reduce((total, message) => total + message.content.length, 0);
+}
+
+function combinedSystem(system: string, systemDynamic?: string): string {
+	return systemDynamic ? `${system}\n\n${systemDynamic}` : system;
+}
+
+function wellFormedMessages(messages: Array<{ role: 'user' | 'assistant'; content: string }>): Array<{ role: 'user' | 'assistant'; content: string }> {
+	return messages.map((message) => ({
+		...message,
+		content: toWellFormedText(message.content),
+	}));
+}
+
+function buildAnthropicSystem(system: string, systemDynamic?: string): string | Array<Record<string, unknown>> {
+	if (systemDynamic && systemDynamic.length > 0 && system.length > 0) {
+		return [
+			{ type: 'text', text: system, cache_control: { type: 'ephemeral' } },
+			{ type: 'text', text: systemDynamic },
+		];
+	}
+	return combinedSystem(system, systemDynamic);
+}
+
+function buildOpenAiSystemMessage(profile: ProviderProfile, system: string, systemDynamic?: string): { role: 'system'; content: unknown } {
+	if (systemDynamic && systemDynamic.length > 0 && system.length > 0 && supportsOpenRouterStyleCaching(profile)) {
+		return {
+			role: 'system',
+			content: [
+				{ type: 'text', text: system, cache_control: { type: 'ephemeral' } },
+				{ type: 'text', text: systemDynamic },
+			],
+		};
+	}
+	return { role: 'system', content: combinedSystem(system, systemDynamic) };
+}
+
+function usageFromResponse(data: unknown, useAnthropic: boolean): ServerGenerationUsage {
+	const record = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+	const usage = record.usage && typeof record.usage === 'object' ? record.usage as Record<string, unknown> : {};
+	const requestTokens = useAnthropic ? usage.input_tokens : usage.prompt_tokens;
+	const responseTokens = useAnthropic ? usage.output_tokens : usage.completion_tokens;
+	const totalTokens = typeof usage.total_tokens === 'number'
+		? usage.total_tokens
+		: typeof requestTokens === 'number' && typeof responseTokens === 'number'
+			? requestTokens + responseTokens
+			: null;
+	return {
+		requestTokens: typeof requestTokens === 'number' ? requestTokens : null,
+		responseTokens: typeof responseTokens === 'number' ? responseTokens : null,
+		totalTokens: typeof totalTokens === 'number' ? totalTokens : null,
+	};
+}
+
+function generationTimeoutMs(value: unknown): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_SERVER_GENERATION_TIMEOUT_MS;
+	return Math.max(1, Math.trunc(value));
+}
+
+function makeGenerationAbortSignal(timeoutMs: number): { signal: AbortSignal; cleanup: () => void } {
+	const controller = new AbortController();
+	const timer = setTimeout(() => {
+		controller.abort(new Error(`Server LLM request timed out after ${timeoutMs}ms`));
+	}, timeoutMs);
+	return {
+		signal: controller.signal,
+		cleanup: () => clearTimeout(timer),
+	};
+}
+
+function generationErrorMessage(error: unknown, timeoutMs: number): string {
+	if (error instanceof Error && error.message) return error.message;
+	if (error && typeof error === 'object' && 'name' in error && (error as { name?: unknown }).name === 'AbortError') {
+		return `Server LLM request timed out after ${timeoutMs}ms`;
+	}
+	return String(error);
+}
+
+export async function generateServerTextWithMetrics(options: ServerGenerationOptions): Promise<ServerGenerationResult> {
 	if (requiresApiKey(options.profile) && !options.profile.apiKey?.trim()) {
 		throw new Error('Server turn generation requires an API profile with an API key.');
 	}
 
+	const startTime = Date.now();
 	const model = fallbackModelFor(options.profile, options.model);
 	const temperature = options.temperature ?? 1;
 	const maxTokens = options.maxTokens ?? 4096;
@@ -78,21 +207,26 @@ export async function generateServerText(options: ServerGenerationOptions): Prom
 	const baseUrl = useGoogleAgentPlatform
 		? await getGoogleAgentPlatformBaseUrl()
 		: baseUrlFor(options.profile);
-	const messages = options.messages ?? [];
+	const messages = wellFormedMessages(options.messages ?? []);
+	const system = toWellFormedText(options.system);
+	const systemDynamic = options.systemDynamic == null ? undefined : toWellFormedText(options.systemDynamic);
+	const prompt = toWellFormedText(options.prompt);
+	const timeoutMs = generationTimeoutMs(options.timeoutMs);
 
 	const endpoint = useAnthropic
 		? `${baseUrl || 'https://api.anthropic.com'}/v1/messages`
 		: `${baseUrl}/chat/completions`;
+	const inputChars = promptChars(options);
 
 	const body = useAnthropic
 		? {
 			model,
 			max_tokens: maxTokens,
 			temperature,
-			system: options.system,
+			system: buildAnthropicSystem(system, systemDynamic),
 			messages: [
 				...messages,
-				{ role: 'user', content: options.prompt },
+				{ role: 'user', content: prompt },
 			],
 		}
 		: {
@@ -100,33 +234,65 @@ export async function generateServerText(options: ServerGenerationOptions): Prom
 			temperature,
 			max_tokens: maxTokens,
 			messages: [
-				{ role: 'system', content: options.system },
+				buildOpenAiSystemMessage(options.profile, system, systemDynamic),
 				...messages,
-				{ role: 'user', content: options.prompt },
+				{ role: 'user', content: prompt },
 			],
 			...(options.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}),
 		};
 
-	const response = await fetch(endpoint, {
-		method: 'POST',
-		headers: useAnthropic
-			? anthropicHeaders(options.profile)
-			: useGoogleAgentPlatform
-				? { 'Content-Type': 'application/json', ...await getGoogleAgentPlatformHeaders() }
-				: openAiHeaders(options.profile),
-		body: JSON.stringify(body),
-	});
+	const abort = makeGenerationAbortSignal(timeoutMs);
+	try {
+		const response = await fetch(endpoint, {
+			method: 'POST',
+			headers: useAnthropic
+				? anthropicHeaders(options.profile)
+				: useGoogleAgentPlatform
+					? { 'Content-Type': 'application/json', ...await getGoogleAgentPlatformHeaders() }
+					: openAiHeaders(options.profile),
+			body: JSON.stringify(body),
+			signal: abort.signal,
+		});
 
-	if (!response.ok) {
-		const text = await response.text().catch(() => '');
-		throw new Error(`Server LLM request failed (${response.status}): ${text || response.statusText}`);
-	}
+		if (!response.ok) {
+			const text = await response.text().catch(() => '');
+			throw new ServerGenerationError(`Server LLM request failed (${response.status}): ${text || response.statusText}`, {
+				model,
+				endpoint,
+				durationMs: Date.now() - startTime,
+				promptChars: inputChars,
+				statusCode: response.status,
+			});
+		}
 
-	const data = await response.json();
-	if (useAnthropic) {
-		return (data.content ?? []).map((block: { text?: string }) => block.text ?? '').join('').trim();
+		const data = await response.json();
+		const text = useAnthropic
+			? (data.content ?? []).map((block: { text?: string }) => block.text ?? '').join('').trim()
+			: String(data.choices?.[0]?.message?.content ?? '').trim();
+		return {
+			text,
+			model,
+			endpoint,
+			durationMs: Date.now() - startTime,
+			promptChars: inputChars,
+			responseChars: text.length,
+			usage: usageFromResponse(data, useAnthropic),
+		};
+	} catch (error) {
+		if (error instanceof ServerGenerationError) throw error;
+		throw new ServerGenerationError(generationErrorMessage(error, timeoutMs), {
+			model,
+			endpoint,
+			durationMs: Date.now() - startTime,
+			promptChars: inputChars,
+		});
+	} finally {
+		abort.cleanup();
 	}
-	return String(data.choices?.[0]?.message?.content ?? '').trim();
+}
+
+export async function generateServerText(options: ServerGenerationOptions): Promise<string> {
+	return (await generateServerTextWithMetrics(options)).text;
 }
 
 export function parseJsonFromGeneratedText(raw: string): unknown {

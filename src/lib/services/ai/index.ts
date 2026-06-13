@@ -22,6 +22,7 @@ export { ImageGenerationService } from './image/ImageGenerationService';
 export { WorldSimulationService } from './generation/WorldSimulationService';
 export { StrategicWorldBrainService } from './generation/StrategicWorldBrainService';
 export { ArcCondensationService } from './generation/ArcCondensationService';
+export { SagaCondensationService } from './generation/SagaCondensationService';
 export { ProceduralMemoryService } from './memory/ProceduralMemoryService';
 export { EmbeddingService } from './embeddings/EmbeddingService';
 export { WikiLintService } from './wiki/WikiLintService';
@@ -39,6 +40,7 @@ import { ImageGenerationService } from './image/ImageGenerationService';
 import { WorldSimulationService } from './generation/WorldSimulationService';
 import { StrategicWorldBrainService } from './generation/StrategicWorldBrainService';
 import { ArcCondensationService } from './generation/ArcCondensationService';
+import { SagaCondensationService } from './generation/SagaCondensationService';
 import { ProceduralMemoryService } from './memory/ProceduralMemoryService';
 import { EmbeddingService } from './embeddings/EmbeddingService';
 import { WikiLintService } from './wiki/WikiLintService';
@@ -55,6 +57,7 @@ let _imageGen: ImageGenerationService;
 let _worldSim: WorldSimulationService;
 let _strategicWorldBrain: StrategicWorldBrainService;
 let _arcCondensation: ArcCondensationService;
+let _sagaCondensation: SagaCondensationService;
 let _proceduralMemory: ProceduralMemoryService;
 let _embeddings: EmbeddingService;
 let _wikiLint: WikiLintService;
@@ -72,6 +75,7 @@ export const ai = {
 	get worldSim() { return _worldSim ??= new WorldSimulationService(); },
 	get strategicWorldBrain() { return _strategicWorldBrain ??= new StrategicWorldBrainService(); },
 	get arcCondensation() { return _arcCondensation ??= new ArcCondensationService(); },
+	get sagaCondensation() { return _sagaCondensation ??= new SagaCondensationService(); },
 	get proceduralMemory() { return _proceduralMemory ??= new ProceduralMemoryService(); },
 	get embeddings() { return _embeddings ??= new EmbeddingService(); },
 	get wikiLint() { return _wikiLint ??= new WikiLintService(); },

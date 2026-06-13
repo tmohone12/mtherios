@@ -2,13 +2,21 @@
 	import { story } from '$lib/stores/story.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { getModelContextWindow } from '$lib/services/ai/context/modelWindows';
+	import { MAX_BACKEND_CONTEXT_BUDGET, normalizeBackendContextBudget } from '$lib/services/backendTurnContext';
+	import {
+		CONTEXT_BUDGET_STEPS,
+		contextBudgetSliderIndexToValue,
+		contextBudgetValueToSliderIndex,
+		formatTokenBudgetCompact,
+	} from '$lib/services/memorySettings';
+	import { syncTerminalLlmSettingsFromBrowser } from '$lib/services/terminalSettings';
 	import { Gauge } from 'lucide-svelte';
 
 	/** Effective budget: user-set value or auto (90% of model context) */
 	const effectiveBudget = $derived(
-		settings.contextBudget > 0
+		normalizeBackendContextBudget(settings.contextBudget > 0
 			? settings.contextBudget
-			: Math.floor(getModelContextWindow(settings.narrativeSettings?.model || '') * 0.90)
+			: Math.floor(getModelContextWindow(settings.narrativeSettings?.model || '') * 0.90)) || MAX_BACKEND_CONTEXT_BUDGET
 	);
 
 	let selectedBudget = $state(0);
@@ -16,14 +24,21 @@
 	// Sync from settings on mount / when effectiveBudget changes
 	$effect(() => { selectedBudget = effectiveBudget; });
 
-	function onBudgetChange() {
-		settings.contextBudget = selectedBudget;
-		settings.saveContextBudget();
+	function onBudgetSliderInput(index: number) {
+		selectedBudget = contextBudgetSliderIndexToValue(index);
+	}
+
+	async function onBudgetChange() {
+		settings.contextBudget = normalizeBackendContextBudget(selectedBudget);
+		selectedBudget = settings.contextBudget || MAX_BACKEND_CONTEXT_BUDGET;
+		await settings.saveContextBudget();
+		await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
+			console.warn('[ContextWindow] Terminal context budget sync failed:', error);
+		});
 	}
 
 	function formatBudget(val: number): string {
-		if (val >= 1000000) return `${(val / 1000000).toFixed(1)}M`;
-		return `${Math.round(val / 1000)}K`;
+		return formatTokenBudgetCompact(val);
 	}
 
 	const estimateTokens = (text: string) => Math.ceil(text.length / 4);
@@ -103,15 +118,16 @@
 	<div class="mb-3">
 		<input
 			type="range"
-			min="1000"
-			max="2000000"
-			step="1000"
-			bind:value={selectedBudget}
+			min="1"
+			max={CONTEXT_BUDGET_STEPS.length - 1}
+			step="1"
+			value={contextBudgetValueToSliderIndex(selectedBudget)}
+			oninput={(event) => onBudgetSliderInput(Number((event.target as HTMLInputElement).value))}
 			onchange={onBudgetChange}
 			class="w-full accent-[var(--color-gold-400)] h-1.5"
 		/>
 		<div class="flex justify-between text-[9px] text-[var(--text-muted)] mt-0.5">
-			<span>1K</span><span>2M</span>
+			<span>{formatBudget(CONTEXT_BUDGET_STEPS[1])}</span><span>{formatBudget(MAX_BACKEND_CONTEXT_BUDGET)}</span>
 		</div>
 	</div>
 

@@ -1,213 +1,40 @@
 # MTHERIOS ARCHITECTURE & CODEBASE DOCUMENTATION
 
-This document explains the current Mtherios architecture and then keeps the
-older file-by-file reference below for deeper orientation. When the summary and
-the older reference disagree, prefer the summary and then verify against the
-source code.
-
-Mtherios is a SvelteKit interactive fiction engine that turns player actions
-and AI narration into durable simulated world state. It can run local-first in
-the browser through IndexedDB, and it also has an optional backend-backed canon
-path using Postgres and Drizzle.
+This is a comprehensive reference document for the entire Mtherios interactive fiction engine. Mtherios is being refactored into a terminal-process-owned local app: a Node/SvelteKit process owns runtime config, backend canon, the syncable data root, Qdrant-backed wiki search, and API routes, while the browser frontend becomes the client.
 
 ---
 
-## Current Architecture Summary
+## TERMINAL APP PROCESS
 
-The project has four main layers:
+**Entry points:** `server.js`, `Start.bat`, `start.ps1`, `scripts/mtheriosd.mjs`
 
-1. UI layer: Svelte components for story play, lorebook editing, settings,
-   onboarding, world inspection, and import/export.
-2. Local state layer: Svelte stores and IndexedDB records for active story
-   state, settings, transcript entries, lorebook entries, world records, and
-   generated assets.
-3. AI orchestration layer: prompt assembly, prompt budgeting, retrieval,
-   narrative generation, structured tool schemas, world-state extraction, and
-   background AI services.
-4. Backend canon layer: optional server-side story state, memory retrieval,
-   turn processing, validation, state patches, sync operations, and canonical
-   records.
+**What it does:** Starts the real local app process. In development, `npm run app:dev` brings up Postgres and Qdrant, runs migrations, initializes `data/`, sets runtime environment, then launches Vite as a child. In production, `npm run app:start` serves the built SvelteKit adapter output.
 
-The core canon model is:
+**Runtime config:** `mtherios.config.json` if present, otherwise defaults from `mtherios.config.example.json` and environment variables.
 
-```text
-transcript evidence -> AI proposes structured changes -> code validates and merges -> durable canon
-```
+**Data root:** `MTHERIOS_DATA_ROOT` defaults to `./data`. It contains vaults, exports, uploads, and logs. This folder is the practical sync boundary for multi-device use.
 
-For local-only stories, IndexedDB is the working source of truth. For
-backend-backed stories, the backend database is the source of truth and
-IndexedDB is a local/offline cache.
+**Wiki APIs:** `/api/wiki/status`, `/api/wiki/story-vault`, `/api/wiki/story-vault/status`, `/api/wiki/index`, `/api/wiki/search`, and `/api/wiki/follow` wrap the terminal `scripts/wiki-core` tools. `/api/wiki/story-vault` materializes backend story canon into an Obsidian-style vault under `data/vaults/stories/<storyId>` and writes `.mtherios/story-vault.json` with the source server version. Backend-bound wiki search, follow, and index requests ensure that generated vault exists and is fresh before reading it. `/api/wiki/index` can rebuild a story-specific Qdrant collection from that markdown and updates the same manifest when the index is fresh. Qdrant is treated as a rebuildable index over Obsidian markdown, not canon. The GM `search_wiki` tool now prefers this terminal API with wikilink/backlink neighborhoods and falls back to the browser lorebook cache only when the terminal wiki is unavailable or empty.
 
-## Local Turn Flow
+**Story APIs:** `/api/stories` lists and creates server-owned stories; `/api/stories/:id` deletes backend canon, removes the generated story vault, and best-effort deletes the story-specific Qdrant collection; `/api/stories/:id/bootstrap` returns canonical story state for frontend hydration.
 
-The local browser-first path is centered on `ActionInput.svelte` and
-`story.svelte.ts`.
+**Job APIs:** `/api/app/jobs/run` drains due backend jobs from the server-side `backend_jobs` outbox, `/api/app/jobs/world-sim` enqueues and immediately runs a manual backend world tick for a backend-bound story, and `/api/app/jobs/wiki` enqueues the same story-vault sync job the daemon uses after canon changes. `scripts/mtheriosd.mjs` polls the run endpoint by default, so memory-node projection, story-vault materialization, and retryable background work are owned by the terminal process rather than the browser. The current processor materializes event memory nodes, deterministic chapter checkpoints, chapter-scoped faction pressure, chapter-scoped world-tick events, arc rollups, saga rollups, generated Obsidian story vaults, and optional memory-node embeddings from canonical Postgres rows. Turn projection no longer queues world/faction simulation jobs every turn; those updates are tied to chapter creation. Turn projection, IndexedDB import, sync operations, and direct backend-canon edits all queue story-vault sync jobs so `.mtherios/story-vault.json` tracks the latest server version once the worker drains. Qdrant auto-indexing for story vault jobs is controlled by `MTHERIOS_WIKI_AUTO_INDEX` / `wikiAutoIndexStoryVaults`; richer AI summarization remains a follow-up worker.
 
-1. The player submits an action.
-2. `story.buildStateSnapshot()` gathers typed state for the current scene.
-3. `story.buildOrchestratorSystemBlocks()` assembles stable and dynamic prompt
-   sections.
-4. `ContextBudgetService` caps dynamic prompt sections by token budget.
-5. The narrative model streams the response.
-6. Inline tool calls or the post-stream extractor produce `update_world_state`
-   payloads.
-7. `src/lib/services/ai/tools/executor.ts` applies validated changes to
-   IndexedDB.
-8. Background work can update summaries, procedural memory, plot momentum,
-   world simulation, embeddings, and lorebook state.
+**Current migration state:** The old browser/IndexedDB path still exists for compatibility, but the frontend story catalog now refreshes from the terminal process, new/imported stories are backend-bound by default when the server is reachable, and backend-bound turns use `/api/turn`, `/api/sync/*`, and `/api/memory/retrieve`. For backend-bound stories, Dexie is being narrowed into cache plus offline command queue: queued `turn_command`/entry repair ops are pushed before projection pulls or new backend turns, and server `sync_ops` IDs make retries idempotent. Future work should keep moving large-story ownership toward the terminal process and backend canon.
 
-Important local records include stories, entries, characters, locations, items,
-lorebook entries, relationships, conversations, agreements, rumors, faction
-actions, schemes, story threads, chapters, arcs, procedural rules, images, and
-the player ledger.
+### Canon Schema Lock (DB-first projection boundary)
 
-## Backend Turn Flow
-
-The backend-backed path is centered on `/api/turn` and the server turn
-orchestrator.
-
-1. The browser calls `story.submitBackendTurn()`.
-2. `/api/turn` routes to `src/lib/server/turn/orchestrator.ts`.
-3. The backend writes the player entry and updates client-supplied metadata
-   such as player reputation and player ledger.
-4. `src/lib/server/memory/retrieval.ts` builds a compact memory packet.
-5. `src/lib/server/turn/context.ts` loads entities, factions, memberships,
-   resources, goals, agreements, threads, events, beliefs, chapters, and arcs.
-6. `src/lib/server/turn/promptPacket.ts` builds a budgeted server prompt.
-7. The model generates narration.
-8. `buildStateExtractionPrompt()` asks for structured changes.
-9. `src/lib/server/turn/patchValidator.ts` validates, merges, and persists
-   canonical changes.
-10. The response sends entries, patch IDs, memory IDs, sync changes, and
-    warnings back to the browser.
-
-Backend writes favor canonical tables over prose-only memory. Examples include
-entities, entity aliases, faction memberships, faction resources, faction goals,
-relationships, agreements, story threads, story events, NPC beliefs, memory
-nodes, and state patches.
-
-## Prompt And Memory Architecture
-
-Prompt cost is managed by ranked sections instead of dumping everything.
-
-Major prompt inputs:
-
-- Current scene: protagonist, present characters, current location, equipped
-  items, time, visible meters.
-- Player reputation and player ledger.
-- Relevant factions and faction pressure.
-- Wiki/lorebook context.
-- Actor belief limits.
-- Agreements and obligations.
-- Open plot ledger, schemes, threads, and recent events.
-- Selected chapter and arc memory.
-- Backend memory packets.
-- Procedural narrative rules.
-- Final narration constraints.
-
-Important files:
-
-- `src/lib/services/ai/context/ContextBudgetService.ts`
-- `src/lib/services/ai/context/storyMemorySelector.ts`
-- `src/lib/services/ai/context/narratorOverview.ts`
-- `src/lib/stores/story.svelte.ts`
-- `src/lib/server/turn/promptPacket.ts`
-- `src/lib/server/memory/ranking.ts`
-- `src/lib/server/memory/retrieval.ts`
-
-## Living World State
-
-The living world is represented as queryable records rather than only narration
-text.
-
-Key systems:
-
-- Factions: resources, goals, territory, disposition, player standing,
-  membership, aliases, and inter-faction relations.
-- Agreements: promises, debts, oaths, treaties, marriages, bargains,
-  fulfillment, breakage, expiry, and player removal/archive.
-- Player ledger: coin, income, assets, holdings, payroll, claims, debts, stores,
-  ships, paid troops, and recurring expenses.
-- Actor beliefs: what specific NPCs know or believe, with perception limits.
-- Story threads and schemes: long-running open problems or plans.
-- Events and memory nodes: source-linked consequences that can be retrieved
-  later.
-- Chapters and arcs: long-term memory summaries selected by relevance,
-  recency, resurfacing, and pins.
-
-## Important Architectural Boundaries
-
-- Do not treat the transcript as final truth. It is evidence that can produce
-  structured records.
-- Do not let AI output write directly to state without schema validation and
-  merge logic.
-- Keep prompt additions budgeted. Always-on prose is recurring cost.
-- Keep local and backend canon paths aligned, but remember that backend-backed
-  stories should resolve toward backend truth.
-- Avoid committing local story artifacts, prompt scratch files, provider
-  secrets, API keys, or generated personal media.
-
-## Practical File Map
-
-- `src/lib/components/story/ActionInput.svelte`: player input and generation
-  orchestration.
-- `src/lib/components/story/StoryView.svelte`: main story surface and story
-  controls.
-- `src/lib/components/story/WorldDrawer.svelte`: visible world-state drawer.
-- `src/lib/stores/story.svelte.ts`: central local story store and prompt
-  assembly.
-- `src/lib/stores/settings.svelte.ts`: provider, model, service, and UI
-  settings.
-- `src/lib/services/database.ts`: IndexedDB schema and local CRUD.
-- `src/lib/services/ai/tools/schemas.ts`: structured AI tool schemas.
-- `src/lib/services/ai/tools/executor.ts`: local application of tool output.
-- `src/lib/services/ai/generation/WorldSimulationService.ts`: off-screen world
-  movement and plot momentum support.
-- `src/lib/server/db/schema.ts`: backend Postgres schema.
-- `src/lib/server/turn/orchestrator.ts`: backend turn pipeline.
-- `src/lib/server/turn/promptPacket.ts`: backend prompt assembly.
-- `src/lib/server/turn/patchValidator.ts`: backend structured update merge
-  logic.
-- `src/lib/server/memory/canonical.ts`: backend import, sync, and canonical
-  story operations.
-
-## How To Validate
-
-Use these commands before publishing meaningful architecture or behavior
-changes:
-
-```sh
-npm run check
-npm run test
-npm run build
-```
-
-For backend work:
-
-```sh
-npm run backend:up
-npm run backend:migrate
-npm run backend:health
-npm run dev:backend
-```
-
----
-
-## Older File-By-File Reference
-
-The following reference is still useful for orientation, but it began as a
-local-first snapshot. Some names and responsibilities have shifted toward the
-tool/orchestrator/backend-canon architecture described above.
+- `Postgres` is the canonical source of truth for character/location/faction/world records. `stories`, `story_entries`, `entities`, `entity_aliases`, `relationships`, `factions`, `state_patches`, `facts`, `source_refs`, `patch_proposals`, and `continuity_warnings` are persistent, durable records owned by the terminal process.
+- Stable IDs live in row IDs (`id`, `story_id`, record IDs in related tables). Frontmatter/markdown pages are generated projections, not identity boundaries.
+- Durable updates flow as: write/update a canonical row with `source_ids`/`source_refs` provenance, then project the story vault and optional search indexes.
+- Entity and record changes are expected to include explicit evidence links (`source_entry_ids`, `source_event_ids`, `source_patch_ids`, `source_refs`) rather than implicit narrative inference.
+- Import/export (`worldDatabase`) must preserve or map IDs and row payloads so identity is stable across bundles.
 
 ---
 
 ### FILE 1: `src/lib/stores/story.svelte.ts`
 
-**What it does:** Central reactive store managing the active local story state
-including transcript entries, characters, locations, items, lorebook entries,
-relationships, agreements, rumors, schemes, story threads, chapters, arcs,
-player reputation, player ledger, prompt construction, context statistics, and
-backend sync/mirroring.
+**What it does:** Central reactive store managing the active story state including entries, characters, locations, items, lorebook entries, and world state. Handles conversation history building, system prompt construction, and context statistics.
 
 **Exports:**
 - `story` (singleton StoryStore instance)
@@ -222,45 +49,20 @@ backend sync/mirroring.
 - `clearPresenceForCharacters(characterNames)` - Removes lastSeenLocation (departed/dead)
 - `addOrUpdateLocation(name, description, current)` - Creates or updates a location; ensures only one location is current
 - `addOrUpdateItem(name, description, quantity, equipped, location)` - Creates or updates an item
-- `buildStateSnapshot(currentActionText)` - Builds typed scene/world state for
-  prompt assembly, retrieval, world simulation, and classifier/extractor context
-- `buildSystemPrompt(snapshot)` - Constructs the full system prompt for
-  narrative generation from budgeted sections
-- `buildOrchestratorSystemBlocks(snapshot, opts)` - Splits prompt material into
-  stable and dynamic blocks for provider-aware generation
+- `buildSystemPrompt(contextBlock)` - Constructs the full system prompt for narrative generation with role rules, genre instructions, and assembled context
 - `buildConversationMessages()` - Builds alternating user/assistant messages from entries, scaled to 60% of model context window
 - `buildUserPrompt(currentAction)` - Wraps user action for generation
 - `getContextStats(tierUsage)` - Reports system, context, history, and total token estimates
-- `submitBackendTurn(request)` - Sends a turn to backend canon and mirrors
-  returned entries/sync metadata locally
-- `applyAgreementChanges(changes)` - Applies structured agreement lifecycle
-  updates
-- `removeAgreement(id)` - Removes a local agreement and queues backend archive
-  correction when applicable
-- `updatePlayerLedger(playerLedger)` - Updates durable player material-state
-  prompt context
 
-**Reads:** Database (getStory, getStoryEntries, getCharacters, getLocations,
-getItems, getLorebookEntries, getAgreements, getRumors, getSchemes,
-getStoryThreads, etc.), settings (service configs, UI settings, context budget),
-prompt budget helpers, retrieval helpers, and backend memory helpers.
+**Reads:** Database (getStory, getStoryEntries, getCharacters, getLocations, getItems, getLorebookEntries, etc.), settings (narrativeSettings, contextBudget), ContextAssembler (getModelContextWindow)
 
-**Writes:** Database records for entries, characters, locations, items, story
-metadata, meters, agreements, world events, images, and local cache state. It
-also queues backend sync operations for backend-backed stories.
+**Writes:** Database (createStoryEntry, createCharacter, updateCharacter, createLocation, updateLocation, createItem, updateItem, updateStory), story entries added to this.entries array, characters/locations/items updates merged into reactive state
 
-**Connections:** Called by `ActionInput.svelte` during local and backend turn
-submission. Used by `StoryView.svelte` and `WorldDrawer.svelte` for story
-controls and world inspection. Provides snapshots to narrative generation,
-world simulation, retrieval, and structured update extraction.
+**Connections:** Called by StoryView component during generation pipeline; called by ActionInput for action submission. Reads from settings store. Provides entries/characters/locations to ClassifierService, MemoryService, WorldSimulationService, other AI services.
 
 **Notable patterns:**
 - POV/tense/mode-adaptive system prompts with role tags ({{user}}, {{char}}, {{world}})
-- Budgeted dynamic prompt sections with `ContextBudgetService`
-- Backend memory packet support when a story has `serverStoryId`
-- Character and lorebook updates merge aliases, faction tags, pressures, and
-  relationships instead of relying only on exact names
-- Player reputation and player ledger are separate durable prompt sections
+- Character classification merges (trait deduplication with Set)
 - Location current-exclusivity logic (only one location can be current at a time)
 - Conversation history token budget: 60% of model context window, 2/3 of user budget
 - Inherited entries logic: entries on null branchId are "main branch" (legacy stories)
@@ -466,7 +268,7 @@ world simulation, retrieval, and structured update extraction.
 **Connections:** Called by story store, AI services, StoryView component. Settings values read by settings store on init.
 
 **Notable patterns:**
-- Cascading delete: deleteStory removes all entries, characters, locations, items, beats, chapters, lore, images, arcs, rules, relationships, conversation memory, world events in a single transaction
+- Cascading delete: deleteStory removes all entries, characters, locations, items, beats, chapters, lore, images, arcs, sagas, rules, relationships, conversation memory, world events in a single transaction
 - Compound indices for common queries (storyId+position, storyId+name, etc.)
 - Version 4→5→6→7 migrations with upgrade hook (v4 clears lorebookEntries on upgrade to fix schema issues)
 - Circular ref protection in createLorebookEntry: JSON.parse(JSON.stringify(entry)) sanitizes before insert
@@ -478,7 +280,7 @@ world simulation, retrieval, and structured update extraction.
 **What it does:** Singleton registry for all AI services. Lazy-initializes services on first access.
 
 **Exports:**
-- All AI service classes (ClassifierService, MemoryService, SuggestionsService, ActionChoicesService, StyleReviewerService, EntryRetrievalService, AgenticRetrievalService, LoreManagementService, InteractiveVaultService, ImageGenerationService, WorldSimulationService, ArcCondensationService, ProceduralMemoryService, EmbeddingService, ContextAssembler)
+- All AI service classes (MemoryService, SuggestionsService, ActionChoicesService, StyleReviewerService, EntryRetrievalService, LoreManagementService, EntryRefinementService, ImageGenerationService, WorldSimulationService, ArcCondensationService, SagaCondensationService, ProceduralMemoryService, EmbeddingService, WikiLintService)
 - `ai` object with getters for each service (lazy-initializes on first access)
 
 **Key structure:**
@@ -644,21 +446,22 @@ export const ai = {
 
 ### FILE 12: `src/lib/services/ai/generation/WorldSimulationService.ts`
 
-**What it does:** Unified living-world engine: plot injection + faction simulation. Runs every WORLD_SIM_CHAPTER_INTERVAL (2) chapters.
+**What it does:** Unified living-world engine: chapter-scoped faction/world reaction plus the retained full/manual simulation path. Automatic simulation now runs once when a new chapter is created, using only the newly closed chapter, the last dozen transcript entries, and directly relevant factions.
 
 **Exports:**
 - `WorldSimulationService` (extends BaseAIService)
-- `WORLD_SIM_CHAPTER_INTERVAL` = 2
+- `WORLD_SIM_CHAPTER_INTERVAL` = 1 (legacy/full-sim constant; automatic cadence is chapter-triggered)
 - `SeasonEffect` interface (currentSeason, militaryModifier, travelModifier, foodPressure, narrativeNote)
 - `calculateSeason(timeTracker)` - Deterministic season lookup based on day of year
 
 **Key methods:**
-- `simulate(chapters, arcs, recentEntries, factionEntries, timeTracker, mode, pov, tense)` - Returns WorldSimulationResult with plotInjection, worldNarrative, factionActions, rumors, worldTension, plotSeeds
+- `simulateForNewChapter({ storyId, latestChapter, recentEntries, factionEntries })` - Lightweight LLM call for the new chapter trigger. Returns WorldSimulationResult with factionActions, rumors, worldNarrative/world-state delta, worldTension, plotSeeds, and threadUpdates.
+- `simulate(chapters, arcs, recentEntries, factionEntries, timeTracker, mode, pov, tense)` - Full/manual WorldSimulationResult path retained for explicit world drawer ticks.
+- `buildChapterWorldSimulationPrompt(...)` - Pure helper that builds the recent-only chapter prompt and filters relevant factions.
 
 **Context sources:**
-- Strategic: arc summaries (long-term) + uncovered chapter summaries (medium-term)
-- Tactical: last N raw story entries (MAX_RECENT_ENTRIES = 6)
-- Faction dossiers: lorebook entries of type 'faction' with goals/resources/disposition
+- Chapter automatic path: latest chapter summary + last 12 transcript entries + relevant faction lore entries only
+- Manual/full path: arcs, uncovered chapters, tactical transcript, faction dossiers, schemes, agreements, events, and season context
 
 **Faction reasoning:**
 - Reads FactionEntryState.goals (priority, progress, deadline, type)
@@ -671,11 +474,11 @@ export const ai = {
 - Military/travel modifiers (e.g., Winter: 0.6 military, 0.5 travel)
 - Food pressure (abundant/normal/scarce/famine)
 
-**Reads:** Chapters, arcs, story entries, faction lorebook entries, time tracker (from params)
+**Reads:** Chapter automatic path reads the latest Chapter, recent StoryEntry rows, and faction lore entries. Full/manual path reads chapters, arcs, story entries, faction lorebook entries, agreements, threads, events, schemes, and time tracker.
 
-**Writes:** Nothing directly (results stored in story.lastWorldSimResult)
+**Writes:** The service returns structured results only. `background/runner.ts` persists chapter-triggered faction actions, rumors, and a compact world event; the manual executor path persists its own result.
 
-**Connections:** Called by StoryView.runWorldSimulation triggered by chapter count check. Output provides plot injection and faction actions for world state toast and next generation's context.
+**Connections:** Called by `runChapterCheck()` after `saveCanonicalChapter(chapter, 'create')`. The executor no longer calls world simulation from the time tick loop; the World drawer can still request a manual tick.
 
 **Notable patterns:**
 - Prompt adapts based on whether factions exist (faction section omitted if empty)
@@ -683,6 +486,7 @@ export const ai = {
 - Arc block built once, shared between faction and plot reasoning
 - Faction dossiers capped at MAX_FACTIONS_PER_TICK = 12 to prevent token explosion
 - Output collected for SeasonEffect, stored in story.lastWorldSimResult for UI display
+- Chapter prompts are intentionally recent-only to avoid fast character drift and overactive faction churn
 
 ---
 
@@ -790,6 +594,26 @@ export const ai = {
 **Writes:** Nothing directly (results stored in DB as Arc records)
 
 **Connections:** Called by StoryView during chapter check when chapters.length >= (arcCount + 1) * chaptersPerArc. Arcs used by ContextAssembler for world tier context.
+
+---
+
+### FILE 16b: `src/lib/services/ai/generation/SagaCondensationService.ts`
+
+**What it does:** Condenses every 10 arcs into a saga summary, the highest compact memory layer above arcs. Sagas preserve durable faction shifts, major power changes, lingering threads, and the overall political/emotional tone.
+
+**Exports:**
+- `SagaCondensationService` (extends BaseAIService)
+- `SAGA_DEFAULTS` (arcsPerSaga: 10, maxSagaSummaryTokens: 600)
+
+**Key methods:**
+- `getCondensableArcs(arcs, existingSagaCount)` - Returns the next 10 uncovered arcs for saga condensation
+- `condense(arcs, sagaNumber, mode, pov, tense)` - Uses `generateStructured(sagaSummarySchema, ...)` and returns SagaSummary
+
+**Storage:** Local IndexedDB has a `sagas` table. Backend canon has a `sagas` table and `/api/stories/:id/sagas` upsert routes. Saga summaries are also projected into `memory_nodes` as plot-ledger memory.
+
+**Hierarchy:** Entries -> Chapters -> Arcs -> Sagas.
+
+**Connections:** Called immediately after a new arc is created in `background/runner.ts`. It does not run as an independent per-turn check.
 
 ---
 
@@ -1132,16 +956,23 @@ buildSystemPrompt() function (private):
    - **StyleReviewer** checks narrative quality
    - **ImageGeneration** creates scene images
    - **ChapterCheck** detects chapter boundaries
-   - **ArcCondensation** creates arcs when chapters hit threshold
-   - **LoreManagement** discovers/curates lore entries
-   - **WorldSimulation** injects plot and faction actions
+   - **WorldSimulation** runs once if ChapterCheck creates a new chapter
+   - **ArcCondensation** creates arcs when chapter threshold is met
+   - **SagaCondensation** creates sagas when 10 arcs are ready
+   - **LoreManagement** discovers/curates lore entries on chapter cadence
 
 ### Context Assembly (Pre-Generation)
 1. **Scene Tier** - Current location + present characters + equipped items
 2. **Recent Tier** - Uncovered chapter summaries (recent chapters not yet in an arc)
-3. **World Tier** - Arc summaries + unresolved threads + world sim plot injection
+3. **World Tier** - Arc summaries, saga summaries, unresolved threads, and world sim signals
 4. **Procedural Tier** - Retrieved narrative rules (CASS-inspired, decay-scored)
 5. **Retrieved Tier** - AgenticRetrievalService loops with AI queries until satisfied or max iterations
+
+### Memory Condensation Hierarchy
+1. **Entries** - Raw transcript evidence and canonical turn records
+2. **Chapters** - Scene/checkpoint summaries created only when enough post-buffer entries accumulate
+3. **Arcs** - Multi-chapter condensation, usually 5 chapters per arc
+4. **Sagas** - Multi-arc condensation, 10 arcs per saga
 
 ### World State Tracking
 1. **Classifier** extracts characters, locations, items, story beats, relationships, conversations
@@ -1186,7 +1017,7 @@ buildSystemPrompt() function (private):
 - Procedural rules with decay scoring
 
 **World State:**
-- Living world simulation every 2 chapters
+- Living world simulation once per newly created chapter, plus manual world drawer ticks
 - Faction dynamics with goals/resources/disposition
 - Season-based modifiers (deterministic)
 - Rumors and plot injection
@@ -1205,6 +1036,8 @@ buildSystemPrompt() function (private):
 8. **Dice integration:** Full D&D support with advantage/disadvantage, critical hits, DC checks
 9. **Time tracking:** Deterministic in-story time progression enables season/holiday effects
 10. **Relationship graph:** Tier 2 system tracks connections between entities for query optimization
+11. **Agent-maintained wiki export:** Obsidian exports are structured as a three-layer knowledge base: immutable `raw/` transcript sources, compiled wiki/synthesis pages, and an `AGENTS.md` maintainer schema that tells future LLM sessions how to ingest, query, lint, cite, and update the vault.
+12. **Terminal wiki core:** `scripts/wiki-core/` provides the first terminal-first lore layer: materialize backend-bound stories into generated Obsidian vaults, index exported or generated vaults into Qdrant, use local embeddings for semantic search, and traverse Obsidian links/backlinks outside the browser sandbox.
 
 ---
 
