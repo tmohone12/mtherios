@@ -20,7 +20,11 @@ import {
 	storyEvents,
 	storyThreads,
 	continuityWarnings,
+	entityAliases,
 } from '$lib/server/db/schema';
+
+const PATCH_PROPOSAL_CONTEXT_LIMIT = 80;
+const CONTINUITY_WARNING_CONTEXT_LIMIT = 80;
 
 export interface TurnContext {
 	story: typeof stories.$inferSelect;
@@ -44,6 +48,50 @@ export interface TurnContext {
 	gmBrief: GmTimelineBrief | null;
 }
 
+function mergePriorityRows<T extends { id: string }>(priorityRows: T[], fallbackRows: T[], limit: number): T[] {
+	const merged: T[] = [];
+	const seen = new Set<string>();
+	for (const row of [...priorityRows, ...fallbackRows]) {
+		if (seen.has(row.id)) continue;
+		seen.add(row.id);
+		merged.push(row);
+		if (merged.length >= limit) break;
+	}
+	return merged;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asStringArray(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
+function attachEntityAliases(
+	entityRows: Array<typeof entities.$inferSelect>,
+	aliasRows: Array<typeof entityAliases.$inferSelect>,
+): Array<typeof entities.$inferSelect> {
+	const aliasesByEntity = new Map<string, string[]>();
+	for (const row of aliasRows) {
+		const list = aliasesByEntity.get(row.entityId) ?? [];
+		list.push(row.alias);
+		aliasesByEntity.set(row.entityId, list);
+	}
+	return entityRows.map((entity) => {
+		const aliases = aliasesByEntity.get(entity.id);
+		if (!aliases?.length) return entity;
+		const state = asRecord(entity.state);
+		return {
+			...entity,
+			state: {
+				...state,
+				aliases: [...new Set([...asStringArray(state.aliases), ...aliases])],
+			},
+		};
+	});
+}
+
 export async function loadTurnContext(storyId: string, presentNpcIds: string[] = [], sceneEntityIds: string[] = []): Promise<TurnContext> {
 	const db = getDb();
 	const [story] = await db.select().from(stories).where(eq(stories.id, storyId)).limit(1);
@@ -65,10 +113,13 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		beliefRows,
 		factRows,
 		patchProposalRows,
+		reviewablePatchProposalRows,
 		continuityWarningRows,
+		openContinuityWarningRows,
 		chapterRows,
 		arcRows,
 		sagaRows,
+		aliasRows,
 	] = await Promise.all([
 		db.select().from(storyEntries).where(eq(storyEntries.storyId, storyId)).orderBy(desc(storyEntries.position)).limit(60),
 		db.select().from(entities).where(eq(entities.storyId, storyId)).limit(160),
@@ -87,11 +138,20 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 			? db.select().from(npcBeliefs).where(and(eq(npcBeliefs.storyId, storyId), inArray(npcBeliefs.believerEntityId, requestedEntityIds))).limit(120)
 			: db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).limit(40),
 		db.select().from(facts).where(eq(facts.storyId, storyId)).orderBy(desc(facts.updatedAt)).limit(80),
-		db.select().from(patchProposals).where(eq(patchProposals.storyId, storyId)).orderBy(desc(patchProposals.updatedAt)).limit(80),
-		db.select().from(continuityWarnings).where(eq(continuityWarnings.storyId, storyId)).orderBy(desc(continuityWarnings.updatedAt)).limit(80),
+		db.select().from(patchProposals).where(eq(patchProposals.storyId, storyId)).orderBy(desc(patchProposals.updatedAt)).limit(PATCH_PROPOSAL_CONTEXT_LIMIT),
+		db.select().from(patchProposals)
+			.where(and(eq(patchProposals.storyId, storyId), inArray(patchProposals.status, ['pending', 'needs_review'])))
+			.orderBy(desc(patchProposals.updatedAt))
+			.limit(PATCH_PROPOSAL_CONTEXT_LIMIT),
+		db.select().from(continuityWarnings).where(eq(continuityWarnings.storyId, storyId)).orderBy(desc(continuityWarnings.updatedAt)).limit(CONTINUITY_WARNING_CONTEXT_LIMIT),
+		db.select().from(continuityWarnings)
+			.where(and(eq(continuityWarnings.storyId, storyId), inArray(continuityWarnings.status, ['open'])))
+			.orderBy(desc(continuityWarnings.updatedAt))
+			.limit(CONTINUITY_WARNING_CONTEXT_LIMIT),
 		db.select().from(chapters).where(eq(chapters.storyId, storyId)).orderBy(asc(chapters.number)),
 		db.select().from(arcs).where(eq(arcs.storyId, storyId)).orderBy(asc(arcs.number)),
 		db.select().from(sagas).where(eq(sagas.storyId, storyId)).orderBy(asc(sagas.number)),
+		db.select().from(entityAliases).where(eq(entityAliases.storyId, storyId)).limit(500),
 	]);
 
 	const mergedEntityRows = [...entityRows];
@@ -102,10 +162,12 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		mergedEntityRows.push(entity);
 	}
 	const requestedSet = new Set(requestedEntityIds);
+	const mergedPatchProposalRows = mergePriorityRows(reviewablePatchProposalRows, patchProposalRows, PATCH_PROPOSAL_CONTEXT_LIMIT);
+	const mergedContinuityWarningRows = mergePriorityRows(openContinuityWarningRows, continuityWarningRows, CONTINUITY_WARNING_CONTEXT_LIMIT);
 	return {
 		story,
 		recentEntries: [...recentEntriesDesc].reverse(),
-		entities: mergedEntityRows,
+		entities: attachEntityAliases(mergedEntityRows, aliasRows),
 		factions: factionRows,
 		factionMemberships: factionMembershipRows,
 		factionResources: factionResourceRows,
@@ -118,8 +180,8 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 			? beliefRows.filter((belief) => requestedSet.has(belief.believerEntityId))
 			: beliefRows,
 		facts: factRows,
-		patchProposals: patchProposalRows,
-		continuityWarnings: continuityWarningRows,
+		patchProposals: mergedPatchProposalRows,
+		continuityWarnings: mergedContinuityWarningRows,
 		chapters: chapterRows,
 		arcs: arcRows,
 		sagas: sagaRows,

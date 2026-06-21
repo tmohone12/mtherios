@@ -68,6 +68,35 @@ export function normalizeEntityName(value: string): string {
 		.trim();
 }
 
+const CHARACTER_TITLE_ONLY_NAMES = new Set([
+	'archon',
+	'consort',
+	'dragon',
+	'emperor',
+	'empress',
+	'governor',
+	'heir',
+	'king',
+	'lord',
+	'minister',
+	'phoenix',
+	'prince',
+	'princess',
+	'queen',
+	'regent',
+	'servant',
+	'slave',
+	'triarch',
+	'warrior',
+]);
+
+export function isCharacterTitleOnlyName(value: string): boolean {
+	const normalized = normalizeEntityName(value);
+	if (!normalized) return false;
+	if (CHARACTER_TITLE_ONLY_NAMES.has(normalized)) return true;
+	return /^(?:golden|vermillion|black|white|red)\s+(?:dragon|phoenix|empress|emperor|prince|princess|queen|king|consort)$/.test(normalized);
+}
+
 function tokens(value: string): string[] {
 	return normalizeEntityName(value).split(/\s+/).filter(Boolean);
 }

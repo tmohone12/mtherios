@@ -9,7 +9,7 @@ import type {
 	StoryEventType,
 } from '$lib/contracts/memory';
 import { getDb } from '$lib/server/db/client';
-import { npcEventLinks, stories, storyEvents } from '$lib/server/db/schema';
+import { entities, entityAliases, npcEventLinks, stories, storyEvents } from '$lib/server/db/schema';
 
 export type StoryEventRow = typeof storyEvents.$inferSelect;
 export type StoryEventInsert = typeof storyEvents.$inferInsert;
@@ -24,6 +24,8 @@ export const DEFAULT_NPC_EVENT_LIMIT = 4;
 
 const NPC_EVENT_QUERY_MULTIPLIER = 4;
 const NPC_EVENT_SUMMARY_CHAR_LIMIT = 280;
+const NPC_TEXT_MATCH_EVIDENCE = 0.45;
+const NPC_TEXT_MATCH_TERM_LIMIT = 8;
 
 const PUBLIC_VISIBILITY_VALUES = ['public', 'player_known'] as const;
 const PUBLIC_VISIBILITIES = new Set<string>(PUBLIC_VISIBILITY_VALUES);
@@ -358,6 +360,23 @@ export async function loadGmTimelineBrief(input: {
 			: Promise.resolve([]),
 	]);
 	const linkRows = linkRowsByNpc.flat();
+	const textMatchNpcIds = npcEntityIds.filter((npcEntityId) =>
+		unique(linkRows.filter(link => link.npcEntityId === npcEntityId).map(link => link.eventId)).length < npcEventLimit);
+	const textMatchEventRowsByNpc = textMatchNpcIds.length > 0 && npcLinkLimit > 0
+		? await loadTextMatchedNpcEventRows({
+			storyId: input.storyId,
+			npcEntityIds: textMatchNpcIds,
+			currentTurn,
+			limit: npcLinkLimit,
+			includeSecret,
+		})
+		: [];
+	const textMatchEventRows = textMatchEventRowsByNpc.flatMap(item => item.events);
+	const textMatchLinks = buildTextMatchedNpcEventLinks({
+		storyId: input.storyId,
+		rowsByNpc: textMatchEventRowsByNpc,
+		existingLinks: linkRows,
+	});
 	const linkedEventIds = unique(linkRows.map(link => link.eventId));
 	const linkedEventRows = linkedEventIds.length > 0
 		? await db.select().from(storyEvents)
@@ -379,8 +398,8 @@ export async function loadGmTimelineBrief(input: {
 		...input,
 		currentTurn,
 		currentWorldTime: story.currentWorldTime,
-		events: uniqueStoryEventRows([...dueRows, ...recentRows, ...scheduledRows, ...linkedEventRows]),
-		npcLinks: linkRows,
+		events: uniqueStoryEventRows([...dueRows, ...recentRows, ...scheduledRows, ...linkedEventRows, ...textMatchEventRows]),
+		npcLinks: [...linkRows, ...textMatchLinks],
 		dueLimit,
 		recentLimit,
 		scheduledLimit,
@@ -473,6 +492,113 @@ function toBriefEvent(
 		locationIds: unique([...(event.locationIds ?? []), ...(event.locationId ? [event.locationId] : [])]),
 		visibility: event.visibility as MemoryVisibility,
 	};
+}
+
+async function loadTextMatchedNpcEventRows(input: {
+	storyId: string;
+	npcEntityIds: string[];
+	currentTurn: number;
+	limit: number;
+	includeSecret: boolean;
+}): Promise<Array<{ npcEntityId: string; events: StoryEventRow[] }>> {
+	const db = getDb();
+	const candidates = await loadNpcTextMatchCandidates(input.storyId, input.npcEntityIds);
+	if (candidates.length === 0) return [];
+
+	const eventVisibilityCondition = storyEventVisibilityCondition(input.includeSecret);
+	const recentTurnExpression = storyEventRecentTurnExpression();
+	const rows = await Promise.all(candidates.map((candidate) => {
+		if (candidate.terms.length === 0) return Promise.resolve([] as StoryEventRow[]);
+		return db.select().from(storyEvents)
+			.where(and(
+				eq(storyEvents.storyId, input.storyId),
+				eventVisibilityCondition,
+				storyEventTextMatchCondition(candidate.terms),
+			))
+			.orderBy(
+				npcLinkedEventUrgencyRankExpression(input.currentTurn),
+				sql`CASE WHEN ${storyEvents.status} = 'due' AND ${storyEvents.scheduledTurn} IS NULL THEN 0 ELSE 1 END`,
+				asc(storyEvents.scheduledTurn),
+				desc(recentTurnExpression),
+				desc(storyEvents.updatedAt),
+				desc(storyEvents.createdAt),
+				asc(storyEvents.id),
+			)
+			.limit(input.limit);
+	}));
+
+	return candidates.map((candidate, index) => ({
+		npcEntityId: candidate.npcEntityId,
+		events: rows[index] ?? [],
+	}));
+}
+
+async function loadNpcTextMatchCandidates(
+	storyId: string,
+	npcEntityIds: string[],
+): Promise<Array<{ npcEntityId: string; terms: string[] }>> {
+	if (npcEntityIds.length === 0) return [];
+	const db = getDb();
+	const [entityRows, aliasRows] = await Promise.all([
+		db.select({ id: entities.id, name: entities.name })
+			.from(entities)
+			.where(and(
+				eq(entities.storyId, storyId),
+				eq(entities.type, 'character'),
+				inArray(entities.id, npcEntityIds),
+			))
+			.limit(npcEntityIds.length),
+		db.select({ entityId: entityAliases.entityId, alias: entityAliases.alias })
+			.from(entityAliases)
+			.where(and(
+				eq(entityAliases.storyId, storyId),
+				inArray(entityAliases.entityId, npcEntityIds),
+			))
+			.limit(npcEntityIds.length * NPC_TEXT_MATCH_TERM_LIMIT),
+	]);
+
+	const aliasesByEntity = new Map<string, string[]>();
+	for (const row of aliasRows) {
+		const list = aliasesByEntity.get(row.entityId) ?? [];
+		list.push(row.alias);
+		aliasesByEntity.set(row.entityId, list);
+	}
+
+	return entityRows.map(row => ({
+		npcEntityId: row.id,
+		terms: buildNpcTextSearchTerms(row.name, aliasesByEntity.get(row.id) ?? []),
+	}));
+}
+
+function buildTextMatchedNpcEventLinks(input: {
+	storyId: string;
+	rowsByNpc: Array<{ npcEntityId: string; events: StoryEventRow[] }>;
+	existingLinks: NpcEventLinkRow[];
+}): NpcEventLinkRow[] {
+	const existing = new Set(input.existingLinks.map(link => `${link.npcEntityId}:${link.eventId}`));
+	const links: NpcEventLinkRow[] = [];
+	for (const { npcEntityId, events } of input.rowsByNpc) {
+		for (const event of events) {
+			const key = `${npcEntityId}:${event.id}`;
+			if (existing.has(key)) continue;
+			existing.add(key);
+			links.push({
+				id: `npc_event_text_${event.id}_${npcEntityId}`,
+				storyId: input.storyId,
+				eventId: event.id,
+				npcEntityId,
+				role: 'affected',
+				visibility: event.visibility,
+				evidenceStrength: NPC_TEXT_MATCH_EVIDENCE,
+				sourceEntryIds: event.sourceEntryIds ?? [],
+				sourcePatchIds: event.sourcePatchIds ?? [],
+				serverVersion: event.serverVersion,
+				createdAt: event.createdAt,
+				updatedAt: event.updatedAt,
+			});
+		}
+	}
+	return links;
 }
 
 function buildNpcTimelineEvents(input: {
@@ -633,6 +759,10 @@ function npcEventLinkVisibilityCondition(includeSecret: boolean) {
 	return includeSecret ? undefined : inArray(npcEventLinks.visibility, PUBLIC_VISIBILITY_VALUES);
 }
 
+function storyEventTextMatchCondition(terms: string[]) {
+	return sql`concat_ws(' ', ${storyEvents.title}, ${storyEvents.body}) ~* ${npcTextMatchRegex(terms)}`;
+}
+
 function storyEventRecentTurnExpression() {
 	return sql`coalesce(${storyEvents.occurredTurn}, ${storyEvents.createdTurn})`;
 }
@@ -652,6 +782,63 @@ function uniqueStoryEventRows(rows: StoryEventRow[]): StoryEventRow[] {
 		if (!byId.has(row.id)) byId.set(row.id, row);
 	}
 	return Array.from(byId.values());
+}
+
+const NPC_TEXT_STOP_TERMS = new Set([
+	'boy',
+	'captain',
+	'commander',
+	'consort',
+	'emperor',
+	'empress',
+	'guard',
+	'guide',
+	'king',
+	'lady',
+	'lord',
+	'minister',
+	'prince',
+	'princess',
+	'queen',
+	'ser',
+	'sir',
+]);
+
+function buildNpcTextSearchTerms(name: string, aliases: string[]): string[] {
+	const rawTerms = unique([name, ...aliases])
+		.flatMap((term) => {
+			const clean = compactText(term);
+			const parts = clean.split(/[\s,'".:;()[\]{}!?-]+/).map(part => part.trim()).filter(Boolean);
+			return [
+				clean,
+				...parts.filter(part => part.length >= 4),
+			];
+		})
+		.map(term => compactText(term))
+		.filter((term) => {
+			const normalized = term.toLowerCase();
+			return term.length >= 3
+				&& !NPC_TEXT_STOP_TERMS.has(normalized)
+				&& /[a-z]/i.test(term);
+		});
+
+	return unique(rawTerms)
+		.sort((left, right) => right.length - left.length || left.localeCompare(right))
+		.slice(0, NPC_TEXT_MATCH_TERM_LIMIT);
+}
+
+function npcTextMatchRegex(terms: string[]): string {
+	const escapedTerms = terms
+		.map(term => regexEscapeTerm(term))
+		.filter(Boolean);
+	return `(^|[^[:alnum:]_])(${escapedTerms.join('|')})([^[:alnum:]_]|$)`;
+}
+
+function regexEscapeTerm(term: string): string {
+	return compactText(term)
+		.split(/\s+/)
+		.map(part => part.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&'))
+		.join('[[:space:]]+');
 }
 
 function isVisible(visibility: string, includeSecret: boolean): boolean {

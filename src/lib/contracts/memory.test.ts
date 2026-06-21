@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+	chapterDeleteResponseSchema,
 	continuityWarningSchema,
+	entityCommandResponseSchema,
 	factSchema,
 	gmTimelineBriefSchema,
+	memoryNodeSchema,
 	patchProposalSchema,
 	sourceRefSchema,
 	npcEventLinkSchema,
@@ -11,6 +14,28 @@ import {
 } from './memory';
 
 describe('timeline contracts', () => {
+	it('accepts legacy memory nodes whose metadata is JSON but not an object', () => {
+		const node = memoryNodeSchema.parse({
+			id: 'mem_legacy_array_metadata',
+			storyId: 'story_1',
+			type: 'episodic',
+			title: 'Legacy node',
+			content: 'A legacy memory node imported with array metadata.',
+			keywords: [],
+			entityIds: [],
+			factionIds: [],
+			threadIds: [],
+			sourceEntryIds: [],
+			sourceEventIds: [],
+			sourcePatchIds: [],
+			metadata: [],
+			createdAt: '2026-06-14T00:00:00.000Z',
+			updatedAt: '2026-06-14T00:00:00.000Z',
+		});
+
+		expect(node.metadata).toEqual([]);
+	});
+
 	it('parses legacy story events with Task 2 defaults', () => {
 		const event = storyEventSchema.parse({
 			id: 'event_legacy_raven',
@@ -387,5 +412,211 @@ describe('timeline contracts', () => {
 				{ operation: 'turn.context_assembly', durationMs: 410 },
 			],
 		});
+	});
+
+	it('keeps continuity and unresolved-reference counts in backend context receipts', () => {
+		const parsed = turnResponseSchema.parse({
+			narration: 'The court falls silent.',
+			entries: [],
+			statePatchIds: [],
+			eventIds: [],
+			retrievedMemoryIds: [],
+			serverVersion: 7,
+			syncChanges: [],
+			contextReceipt: {
+				turnId: 'turn_1',
+				storyId: 'story_alpha',
+				truncated: true,
+				included: {
+					recentEntries: 12,
+					memoryNodes: 4,
+					wikiChunks: 2,
+					timelineEvents: 3,
+					chapters: 4,
+					arcs: 2,
+					chaptersSuppressedByArcs: 9,
+					chaptersSent: 4,
+					arcsSent: 2,
+					chaptersSuppressedByArc: 9,
+					memoryNodesSent: 4,
+					totalChars: 4800,
+					totalTokens: 1120,
+					facts: 5,
+					patchProposals: 7,
+					unresolvedCharacterReferences: 2,
+					continuityWarnings: 1,
+					factionSheets: ['faction_watch'],
+				},
+				skipped: [
+					{ source: 'dynamic_context', reason: 'truncated_by_context_budget' },
+				],
+				unresolvedCharacterReferences: [
+					{
+						proposalId: 'proposal_hooded_envoy',
+						name: 'Hooded Envoy',
+						contextLabel: 'faction_member/Red Sails',
+						reason: 'Faction member named in "Red Sails".',
+						sourceEntryIds: ['entry_12'],
+					},
+				],
+				continuityLedger: {
+					facts: [
+						{
+							id: 'fact_red_sails_oath',
+							statement: 'The Red Sails swore to blockade the harbor.',
+							sourceEntryIds: ['entry_10'],
+							sourcePatchIds: ['patch_fact_1'],
+						},
+					],
+					patchProposals: [
+						{
+							id: 'proposal_harbor_blockade',
+							status: 'pending',
+							proposalType: 'turn_event',
+							targetTable: 'events',
+							targetRecordId: 'event_harbor_blockade',
+							reason: 'Narration introduced a delayed blockade consequence.',
+							sourceEntryIds: ['entry_11'],
+							sourcePatchIds: ['patch_event_1'],
+						},
+					],
+					warnings: [
+						{
+							id: 'warning_timeline_overlap',
+							level: 'warning',
+							status: 'open',
+							title: 'Timeline overlap',
+							sourceEntryIds: ['entry_12'],
+							sourcePatchIds: ['patch_warning_1'],
+						},
+					],
+				},
+				cacheSegments: [
+					{
+						kind: 'prompt_system',
+						cacheKey: 'engine-cache:story-alpha:prompt_system:stable',
+						contentHash: 'hash-system',
+						hit: true,
+						invalidated: false,
+						tokenEstimate: 640,
+						dependencyCount: 2,
+					},
+				],
+				budgets: {
+					memoryTokensUsed: 1800,
+					memoryTokensMax: 2400,
+					wikiCharsUsed: 1200,
+					wikiCharsMax: 6000,
+				},
+			},
+		});
+
+		expect(parsed.contextReceipt?.included).toMatchObject({
+			facts: 5,
+			chapters: 4,
+			arcs: 2,
+			chaptersSuppressedByArcs: 9,
+			chaptersSent: 4,
+			arcsSent: 2,
+			chaptersSuppressedByArc: 9,
+			memoryNodesSent: 4,
+			totalChars: 4800,
+			totalTokens: 1120,
+			patchProposals: 7,
+			unresolvedCharacterReferences: 2,
+			continuityWarnings: 1,
+		});
+		expect(parsed.contextReceipt?.skipped).toEqual([
+			{ source: 'dynamic_context', reason: 'truncated_by_context_budget' },
+		]);
+		expect(parsed.contextReceipt?.unresolvedCharacterReferences).toEqual([
+			{
+				proposalId: 'proposal_hooded_envoy',
+				name: 'Hooded Envoy',
+				contextLabel: 'faction_member/Red Sails',
+				reason: 'Faction member named in "Red Sails".',
+				sourceEntryIds: ['entry_12'],
+			},
+		]);
+		expect(parsed.contextReceipt?.continuityLedger).toEqual({
+			facts: [
+				{
+					id: 'fact_red_sails_oath',
+					statement: 'The Red Sails swore to blockade the harbor.',
+					sourceEntryIds: ['entry_10'],
+					sourcePatchIds: ['patch_fact_1'],
+				},
+			],
+			patchProposals: [
+				{
+					id: 'proposal_harbor_blockade',
+					status: 'pending',
+					proposalType: 'turn_event',
+					targetTable: 'events',
+					targetRecordId: 'event_harbor_blockade',
+					reason: 'Narration introduced a delayed blockade consequence.',
+					sourceEntryIds: ['entry_11'],
+					sourcePatchIds: ['patch_event_1'],
+				},
+			],
+			warnings: [
+				{
+					id: 'warning_timeline_overlap',
+					level: 'warning',
+					status: 'open',
+					title: 'Timeline overlap',
+					sourceEntryIds: ['entry_12'],
+					sourcePatchIds: ['patch_warning_1'],
+				},
+			],
+		});
+		expect(parsed.contextReceipt?.cacheSegments).toEqual([
+			{
+				kind: 'prompt_system',
+				cacheKey: 'engine-cache:story-alpha:prompt_system:stable',
+				contentHash: 'hash-system',
+				hit: true,
+				invalidated: false,
+				tokenEstimate: 640,
+				dependencyCount: 2,
+			},
+		]);
+	});
+});
+
+describe('entity command contracts', () => {
+	it('preserves resolved character reference diagnostics when explicit character writes close review proposals', () => {
+		const parsed = entityCommandResponseSchema.parse({
+			storyId: 'story_1',
+			serverVersion: 12,
+			entity: { id: 'entity_ser_olyvar', type: 'character', name: 'Ser Olyvar' },
+			resolvedCharacterReferences: [
+				{ proposalId: 'proposal_ser_olyvar', name: 'Ser Olyvar', entityId: 'entity_ser_olyvar' },
+			],
+		});
+
+		expect(parsed.resolvedCharacterReferences).toEqual([
+			{ proposalId: 'proposal_ser_olyvar', name: 'Ser Olyvar', entityId: 'entity_ser_olyvar' },
+		]);
+	});
+});
+
+describe('chapter delete contracts', () => {
+	it('preserves the arcs unwrapped by terminal chapter deletion', () => {
+		const parsed = chapterDeleteResponseSchema.parse({
+			storyId: 'story_1',
+			serverVersion: 12,
+			chapterId: 'chapter_1',
+			deleted: true,
+			unwrappedArcIds: ['arc_1'],
+			unwrappedArcs: [
+				{ id: 'arc_1', chapterIds: ['chapter_2'] },
+			],
+		});
+
+		expect(parsed.unwrappedArcIds).toEqual(['arc_1']);
+		expect(parsed.unwrappedArcs).toEqual([
+			{ id: 'arc_1', chapterIds: ['chapter_2'] },
+		]);
 	});
 });

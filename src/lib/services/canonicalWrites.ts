@@ -1,6 +1,9 @@
 import {
 	deleteLorebookEntry,
+	deleteArc,
+	deleteChapter,
 	createConversationMemory,
+	getArcs,
 	getLorebookEntry,
 	getStory,
 	bulkPutFactionActions,
@@ -22,6 +25,8 @@ import {
 	createBackendChapter,
 	createBackendLorebookEntry,
 	createBackendSaga,
+	deleteBackendArc,
+	deleteBackendChapter,
 	deleteBackendLorebookEntry,
 	upsertBackendArc,
 	upsertBackendChapter,
@@ -33,6 +38,19 @@ import type { Arc, Chapter, Character, CharacterEntryState, ConversationMemoryEn
 import type { LivingMemoryKind } from '$lib/services/serverStories';
 
 export type CanonicalWriteMode = 'create' | 'update';
+
+export interface ResolvedCharacterReference {
+	proposalId: string;
+	name: string;
+	entityId: string;
+}
+
+interface CanonicalLorebookWriteResult {
+	serverVersion: number | null;
+	entry: Entry;
+	entity?: Record<string, unknown>;
+	resolvedCharacterReferences?: ResolvedCharacterReference[];
+}
 
 async function applyBackendVersion(story: Story, serverVersion: number): Promise<void> {
 	await updateStory(story.id, {
@@ -77,6 +95,29 @@ function stringFrom(value: unknown): string | null {
 	return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+function entryWithResolvedEntity(entry: Entry, entity: Record<string, unknown> | undefined): Entry {
+	if (!entity) return entry;
+	const resolvedId = stringFrom(entity.id);
+	const resolvedName = stringFrom(entity.name);
+	const resolvedDescription = stringFrom(entity.description);
+	if (!resolvedId && !resolvedName && !resolvedDescription) return entry;
+	return {
+		...entry,
+		id: resolvedId ?? entry.id,
+		name: resolvedName ?? entry.name,
+		description: resolvedDescription ?? entry.description,
+	};
+}
+
+function characterWithResolvedEntry(character: Character, entry: Entry): Character {
+	return {
+		...character,
+		id: entry.id,
+		name: entry.name,
+		description: entry.description || null,
+	};
+}
+
 function characterToEntry(character: Character, existing?: Entry | null): Entry {
 	const now = Date.now();
 	const metadata = record(character.metadata);
@@ -105,6 +146,7 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 		: Array.isArray(previousStateRecord?.personalityDescriptors)
 			? (previousStateRecord.personalityDescriptors as unknown[]).filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
 			: [];
+	const visibilityNote = stringFrom(metadata.visibilityNote) ?? stringFrom(previousStateRecord?.visibilityNote);
 	const state = {
 		...(previousState ?? {}),
 		type: 'character',
@@ -131,6 +173,7 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 		factionName: stringFrom(metadata.factionName) ?? stringFrom(previousStateRecord?.factionName),
 		rank: stringFrom(metadata.rank) ?? stringFrom(previousStateRecord?.rank),
 		role: stringFrom(metadata.role) ?? stringFrom(previousStateRecord?.role),
+		visibilityNote,
 	} as CharacterEntryState;
 	return {
 		id: character.id,
@@ -244,18 +287,34 @@ function itemToEntry(item: Item, existing?: Entry | null): Entry {
 	};
 }
 
-export async function saveCanonicalLorebookEntry(entry: Entry, mode: CanonicalWriteMode = 'update'): Promise<number | null> {
+async function writeCanonicalLorebookEntry(entry: Entry, mode: CanonicalWriteMode = 'update'): Promise<CanonicalLorebookWriteResult> {
 	const owner = await getStory(entry.storyId);
-	let serverVersion: number | null = null;
+	let result: {
+		serverVersion: number;
+		entity?: Record<string, unknown>;
+		resolvedCharacterReferences?: ResolvedCharacterReference[];
+	} | null = null;
 	if (owner?.serverStoryId) {
-		const result = mode === 'create'
+		result = mode === 'create'
 			? await createBackendLorebookEntry(owner.serverStoryId, entry)
 			: await upsertBackendLorebookEntry(owner.serverStoryId, entry);
-		serverVersion = result.serverVersion;
 		await applyBackendVersion(owner, result.serverVersion);
 	}
-	await putLorebookEntry(entry);
-	return serverVersion;
+	const canonicalEntry = entryWithResolvedEntity(entry, result?.entity);
+	await putLorebookEntry(canonicalEntry);
+	return {
+		serverVersion: result?.serverVersion ?? null,
+		entry: canonicalEntry,
+		...(result?.entity ? { entity: result.entity } : {}),
+		...(result?.resolvedCharacterReferences?.length
+			? { resolvedCharacterReferences: result.resolvedCharacterReferences }
+			: {}),
+	};
+}
+
+export async function saveCanonicalLorebookEntry(entry: Entry, mode: CanonicalWriteMode = 'update'): Promise<number | null> {
+	const result = await writeCanonicalLorebookEntry(entry, mode);
+	return result.serverVersion;
 }
 
 export async function patchCanonicalLorebookEntry(id: string, updates: Partial<Entry>): Promise<{ entry: Entry | null; serverVersion: number | null }> {
@@ -269,8 +328,8 @@ export async function patchCanonicalLorebookEntry(id: string, updates: Partial<E
 		...updates,
 		updatedAt: updates.updatedAt ?? Date.now(),
 	};
-	const serverVersion = await saveCanonicalLorebookEntry(entry, 'update');
-	return { entry, serverVersion };
+	const result = await writeCanonicalLorebookEntry(entry, 'update');
+	return { entry: result.entry, serverVersion: result.serverVersion };
 }
 
 export async function deleteCanonicalLorebookEntry(storyId: string, entryId: string): Promise<number | null> {
@@ -285,12 +344,20 @@ export async function deleteCanonicalLorebookEntry(storyId: string, entryId: str
 	return serverVersion;
 }
 
-export async function saveCanonicalCharacter(character: Character, mode: CanonicalWriteMode = 'update'): Promise<{ serverVersion: number | null; entry: Entry }> {
+export async function saveCanonicalCharacter(character: Character, mode: CanonicalWriteMode = 'update'): Promise<{ serverVersion: number | null; entry: Entry; character: Character; resolvedCharacterReferences?: ResolvedCharacterReference[] }> {
 	const existing = await getLorebookEntry(character.id);
 	const entry = characterToEntry(character, existing);
-	const serverVersion = await saveCanonicalLorebookEntry(entry, mode);
-	await putCharacter(character);
-	return { serverVersion, entry };
+	const result = await writeCanonicalLorebookEntry(entry, mode);
+	const canonicalCharacter = characterWithResolvedEntry(character, result.entry);
+	await putCharacter(canonicalCharacter);
+	return {
+		serverVersion: result.serverVersion,
+		entry: result.entry,
+		character: canonicalCharacter,
+		...(result.resolvedCharacterReferences?.length
+			? { resolvedCharacterReferences: result.resolvedCharacterReferences }
+			: {}),
+	};
 }
 
 export async function saveCanonicalLocation(location: Location, mode: CanonicalWriteMode = 'update'): Promise<{ serverVersion: number | null; entry: Entry }> {
@@ -323,6 +390,30 @@ export async function saveCanonicalChapter(chapter: Chapter, mode: CanonicalWrit
 	return serverVersion;
 }
 
+async function unwrapLocalChapterFromArcs(storyId: string, chapterId: string): Promise<void> {
+	const arcs = await getArcs(storyId);
+	const updates = arcs
+		.filter((arc) => arc.chapterIds.includes(chapterId))
+		.map((arc) => putArc({
+			...arc,
+			chapterIds: arc.chapterIds.filter((id) => id !== chapterId),
+		}));
+	await Promise.all(updates);
+}
+
+export async function deleteCanonicalChapter(storyId: string, chapterId: string): Promise<number | null> {
+	const owner = await getStory(storyId);
+	let serverVersion: number | null = null;
+	if (owner?.serverStoryId) {
+		const result = await deleteBackendChapter(owner.serverStoryId, chapterId);
+		serverVersion = result.serverVersion;
+		await applyBackendVersion(owner, result.serverVersion);
+	}
+	await deleteChapter(chapterId);
+	await unwrapLocalChapterFromArcs(storyId, chapterId);
+	return serverVersion;
+}
+
 export async function saveCanonicalArc(arc: Arc, mode: CanonicalWriteMode = 'update'): Promise<number | null> {
 	const owner = await getStory(arc.storyId);
 	let serverVersion: number | null = null;
@@ -334,6 +425,18 @@ export async function saveCanonicalArc(arc: Arc, mode: CanonicalWriteMode = 'upd
 		await applyBackendVersion(owner, result.serverVersion);
 	}
 	await putArc(arc);
+	return serverVersion;
+}
+
+export async function deleteCanonicalArc(storyId: string, arcId: string): Promise<number | null> {
+	const owner = await getStory(storyId);
+	let serverVersion: number | null = null;
+	if (owner?.serverStoryId) {
+		const result = await deleteBackendArc(owner.serverStoryId, arcId);
+		serverVersion = result.serverVersion;
+		await applyBackendVersion(owner, result.serverVersion);
+	}
+	await deleteArc(arcId);
 	return serverVersion;
 }
 

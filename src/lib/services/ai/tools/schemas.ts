@@ -13,13 +13,30 @@ import { z } from 'zod';
 export const worldStateCharacterSchema = z.object({
 	name: z.string(),
 	aliases: z.array(z.string()).optional().default([]),
-	status: z.enum(['active', 'departed', 'deceased', 'inactive']).optional().default('active'),
+	status: z.enum(['active', 'departed', 'deceased', 'inactive']).optional(),
 	description: z.string().nullable().optional().default(null),
 	relationship: z.string().nullable().optional().default(null),
 	traits: z.array(z.string()).optional().default([]),
-	present: z.boolean().optional().default(true),
+	present: z.boolean().optional(),
 	pressures: z.array(z.string()).optional().default([]),
 	faction_tags: z.array(z.string()).optional().default([]),
+	currentLocation: z.string().nullable().optional(),
+	current_location: z.string().nullable().optional(),
+	currentAction: z.string().nullable().optional(),
+	current_action: z.string().nullable().optional(),
+	emotionalState: z.string().nullable().optional(),
+	emotional_state: z.string().nullable().optional(),
+	appearance: z.string().nullable().optional(),
+	background: z.string().nullable().optional(),
+	goals: z.array(z.string()).optional().default([]),
+	speechStyle: z.string().nullable().optional(),
+	speech_style: z.string().nullable().optional(),
+	eventMemory: z.object({
+		did: z.array(z.string()).optional().default([]),
+		saw: z.array(z.string()).optional().default([]),
+		knew: z.array(z.string()).optional().default([]),
+		knows: z.array(z.string()).optional().default([]),
+	}).optional(),
 });
 
 export const worldStateLocationConnectionSchema = z.object({
@@ -69,6 +86,41 @@ export const worldStateStoryBeatSchema = z.object({
 	title: z.string(),
 	description: z.string().optional().default(''),
 	significance: z.enum(['minor', 'moderate', 'major', 'critical']).optional().default('minor'),
+});
+
+export const worldStateTimelineEventSchema = z.object({
+	title: z.string(),
+	description: z.string().optional().default(''),
+	type: z.enum([
+		'promise',
+		'betrayal',
+		'reveal',
+		'faction_move',
+		'injury',
+		'death',
+		'relationship_shift',
+		'agreement',
+		'scene_transition',
+		'clue_discovery',
+		'correction',
+		'imported_memory',
+		'world_tick',
+		'scheme',
+		'rumor',
+		'marriage',
+		'alliance',
+	]).optional().default('scheme'),
+	status: z.enum(['proposed', 'scheduled', 'due', 'committed', 'cancelled']).optional().default('scheduled'),
+	delay_turns: z.number().int().nonnegative().nullable().optional().default(null),
+	due_turn: z.number().int().nonnegative().nullable().optional().default(null),
+	world_time: z.string().nullable().optional().default(null),
+	visibility: z.enum(['public', 'player_known', 'secret']).optional().default('player_known'),
+	actor_names: z.array(z.string()).optional().default([]),
+	target_names: z.array(z.string()).optional().default([]),
+	faction_names: z.array(z.string()).optional().default([]),
+	location_name: z.string().nullable().optional().default(null),
+	memory_impact: z.record(z.string(), z.unknown()).optional().default({}),
+	reason: z.string().nullable().optional().default(null),
 });
 
 export const worldStateMeterChangeSchema = z.object({
@@ -154,6 +206,7 @@ export const worldStateUpdateSchema = z.object({
 	conversations: z.array(worldStateConversationSchema).optional().default([]),
 	relationships: z.array(worldStateRelationshipSchema).optional().default([]),
 	story_beats: z.array(worldStateStoryBeatSchema).optional().default([]),
+	timeline_events: z.array(worldStateTimelineEventSchema).optional().default([]),
 	meter_changes: z.array(worldStateMeterChangeSchema).optional().default([]),
 	agreements: z.array(worldStateAgreementChangeSchema).optional().default([]),
 	lorebook_entries: z.array(worldStateLorebookEntrySchema).optional().default([]),
@@ -179,6 +232,7 @@ export const briefWikiSchema = z.object({
 
 export type WorldStateUpdate = z.infer<typeof worldStateUpdateSchema>;
 export type WorldStateLorebookEntry = z.infer<typeof worldStateLorebookEntrySchema>;
+export type WorldStateTimelineEvent = z.infer<typeof worldStateTimelineEventSchema>;
 export type SearchWikiArgs = z.infer<typeof searchWikiSchema>;
 export type BriefWikiArgs = z.infer<typeof briefWikiSchema>;
 
@@ -271,6 +325,7 @@ export const GM_TOOLS = [
 				properties: {
 					characters: {
 						type: 'array',
+						description: 'Update only established canonical characters that are already present in context or clearly resolved by name/alias. Do not use this to invent new character canon; unknown names become reviewable references until approved.',
 						items: {
 							type: 'object',
 							properties: {
@@ -285,6 +340,9 @@ export const GM_TOOLS = [
 								relationship: { type: 'string' },
 								traits: { type: 'array', items: { type: 'string' } },
 								present: { type: 'boolean' },
+								currentLocation: { type: 'string', description: 'Where this established character currently is or was last clearly seen. Omit when unchanged.' },
+								currentAction: { type: 'string', description: 'What this established character is actively doing or trying to do now. Omit when unchanged.' },
+								emotionalState: { type: 'string', description: 'Current visible emotional posture, not private omniscient thoughts. Omit when unchanged.' },
 								pressures: {
 									type: 'array',
 									items: { type: 'string' },
@@ -294,6 +352,20 @@ export const GM_TOOLS = [
 									type: 'array',
 									items: { type: 'string' },
 									description: 'Faction names or ids this character belongs to, serves, leads, commands, publicly represents, or is sworn to. Use only when established by the scene or existing context.',
+								},
+								appearance: { type: 'string', description: 'Durable visual portrayal details that changed or became clear this turn. Omit when unchanged.' },
+								background: { type: 'string', description: 'Durable backstory/context that became clear this turn. Omit when unchanged.' },
+								goals: { type: 'array', items: { type: 'string' }, description: 'Current concrete goals this established character is pursuing. Omit when unchanged.' },
+								speechStyle: { type: 'string', description: 'Durable voice, diction, or speaking manner. Omit when unchanged.' },
+								eventMemory: {
+									type: 'object',
+									description: 'Compact NPC memory from this turn only. Use did/saw/knew/knows arrays. Omit when unchanged.',
+									properties: {
+										did: { type: 'array', items: { type: 'string' } },
+										saw: { type: 'array', items: { type: 'string' } },
+										knew: { type: 'array', items: { type: 'string' } },
+										knows: { type: 'array', items: { type: 'string' } },
+									},
 								},
 							},
 							required: ['name'],
@@ -391,6 +463,37 @@ export const GM_TOOLS = [
 							required: ['title'],
 						},
 					},
+					timeline_events: {
+						type: 'array',
+						description: 'Delayed, scheduled, hidden, public, or faction-linked events that should enter the backend timeline. Use this for plans, rumors, deadlines, schemes, expected consequences, and events that become due on a future turn. Do not duplicate ordinary immediate scene beats already captured by story_beats.',
+						items: {
+							type: 'object',
+							properties: {
+								title: { type: 'string' },
+								description: { type: 'string' },
+								type: {
+									type: 'string',
+									enum: ['promise', 'betrayal', 'reveal', 'faction_move', 'injury', 'death', 'relationship_shift', 'agreement', 'scene_transition', 'clue_discovery', 'correction', 'imported_memory', 'world_tick', 'scheme', 'rumor', 'marriage', 'alliance'],
+								},
+								status: {
+									type: 'string',
+									enum: ['proposed', 'scheduled', 'due', 'committed', 'cancelled'],
+									description: 'Use scheduled for delayed events; proposed for uncertain plans; committed only for events that already happened but need explicit timeline metadata.',
+								},
+								delay_turns: { type: 'number', description: 'Turns from the current turn until this becomes due. Prefer this for relative deadlines.' },
+								due_turn: { type: 'number', description: 'Absolute turn when this becomes due, if known.' },
+								world_time: { type: 'string', description: 'In-world due time or occurred time, if known.' },
+								visibility: { type: 'string', enum: ['public', 'player_known', 'secret'] },
+								actor_names: { type: 'array', items: { type: 'string' }, description: 'Known actors or planners by canonical name.' },
+								target_names: { type: 'array', items: { type: 'string' }, description: 'Known targets or affected NPCs by canonical name.' },
+								faction_names: { type: 'array', items: { type: 'string' }, description: 'Known factions attached to this timeline event.' },
+								location_name: { type: 'string' },
+								memory_impact: { type: 'object', description: 'Compact notes about who knows, rumors, stakes, or future impact.' },
+								reason: { type: 'string', description: 'Why this timeline record was created from the turn.' },
+							},
+							required: ['title'],
+						},
+					},
 					meter_changes: {
 						type: 'array',
 						description: 'Adjust persistent meters (sanity, morality, reputation, hunger, suspicion, fatigue, etc.). The current values are included in the state snapshot so you can reason about them.',
@@ -427,12 +530,12 @@ export const GM_TOOLS = [
 					},
 					lorebook_entries: {
 						type: 'array',
-						description: 'Create rich lorebook entries for significant world elements introduced or deepened this turn. This is the ONLY way new lorebook entries are created — they are no longer auto-generated from characters/locations/items. Write full descriptions (2–5 sentences), include aliases and keywords for retrieval, and hidden_info for secrets the player does not know.',
+						description: 'Create rich lorebook entries for significant non-character world elements introduced or deepened this turn. Do not create character entries from narration extraction; character canon is created through human approval or explicit character controls. Write full descriptions (2-5 sentences), include aliases and keywords for retrieval, and hidden_info for secrets the player does not know.',
 						items: {
 							type: 'object',
 							properties: {
 								name: { type: 'string', description: 'Canonical name of the entity' },
-								type: { type: 'string', enum: ['character', 'location', 'item', 'faction', 'concept', 'event'], description: 'Entry type' },
+								type: { type: 'string', enum: ['character', 'location', 'item', 'faction', 'concept', 'event'], description: 'Entry type; character is review-only unless the character already exists in backend canon.' },
 								description: { type: 'string', description: 'Rich description based ONLY on what was established in the scene. 2–5 sentences.' },
 								hidden_info: { type: 'string', description: 'Information the protagonist does NOT know yet. Null if nothing is hidden.' },
 								aliases: { type: 'array', items: { type: 'string' }, description: 'Alternate names, titles, or epithets' },

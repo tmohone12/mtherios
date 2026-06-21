@@ -75,7 +75,40 @@ export function frameChapterRange(input: StrategicWorldBrainInput): { from: numb
 	return { from: Math.min(...numbers), to: Math.max(...numbers) };
 }
 
-function formatFaction(entry: Entry): string {
+function uniqueCleanStrings(values: string[]): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const value of values) {
+		const clean = value.trim();
+		const key = clean.toLowerCase();
+		if (!clean || seen.has(key)) continue;
+		seen.add(key);
+		out.push(clean);
+	}
+	return out;
+}
+
+function resolveFactionMemberNames(memberRefs: string[], characters: Entry[]): string[] {
+	return uniqueCleanStrings(memberRefs.map((memberRef) => {
+		const clean = memberRef.trim();
+		const lower = clean.toLowerCase();
+		const character = characters.find(entry =>
+			entry.id === clean ||
+			entry.name.toLowerCase() === lower ||
+			(entry.aliases ?? []).some(alias => alias.toLowerCase() === lower)
+		);
+		return character?.name ?? clean;
+	}));
+}
+
+function formatUnresolvedFactionMemberNames(names: string[]): string {
+	return uniqueCleanStrings(names)
+		.slice(0, 8)
+		.map(name => `${name} (review context; not character canon)`)
+		.join(', ');
+}
+
+function formatFaction(entry: Entry, characters: Entry[] = []): string {
 	const state = entry.state as FactionEntryState | undefined;
 	const goals = formatFactionGoals(state?.goals ?? []);
 	const resources = formatFactionResources(state?.resources);
@@ -91,12 +124,16 @@ function formatFaction(entry: Entry): string {
 		: '';
 	const territory = state?.territory?.length ? `territory: ${state.territory.join(', ')}` : '';
 	const disposition = state?.disposition ? `disposition: ${state.disposition}` : '';
+	const memberNames = resolveFactionMemberNames(state?.knownMembers ?? [], characters).slice(0, 8);
+	const unresolvedMemberNames = formatUnresolvedFactionMemberNames(state?.unresolvedKnownMembers ?? []);
 	return [
 		`- ${entry.name} [id:${entry.id.slice(0, 8)}]`,
 		`  Description: ${compact(entry.description, 260)}`,
 		`  Status: ${state?.status ?? 'unknown'}, player standing ${state?.playerStanding ?? 0}`,
 		disposition ? `  ${disposition}` : '',
 		territory ? `  ${territory}` : '',
+		memberNames.length ? `  Members: ${memberNames.join(', ')}` : '',
+		unresolvedMemberNames ? `  Unresolved member references: ${unresolvedMemberNames}` : '',
 		goals ? `  Goals: ${goals}` : '',
 		resources ? `  Resources: ${resources}` : '',
 		relations ? `  Relations: ${relations}` : '',
@@ -272,7 +309,7 @@ export function buildStrategicWorldBrainUserPrompt(input: StrategicWorldBrainInp
 		lineList(input.recentEntries.slice(-16).map(entry => `- [${entry.type}] ${compact(entry.content, 220)}`)),
 		'',
 		'FACTION DOSSIERS AND VERBOSE GOALS',
-		lineList(input.factions.map(formatFaction)),
+		lineList(input.factions.map(faction => formatFaction(faction, input.characters))),
 		'',
 		'CHARACTER STATE DOSSIERS',
 		lineList(input.characters.slice(0, 32).map(formatCharacter)),

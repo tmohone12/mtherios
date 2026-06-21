@@ -1,6 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { turnRequestSchema } from '$lib/contracts/memory';
 import { executeTurnSubmitCommand } from '$lib/server/engine/turnFacade';
+import { processServerTurn } from '$lib/server/turn/orchestrator';
 
 const encoder = new TextEncoder();
 
@@ -16,7 +17,17 @@ export const POST: RequestHandler = async ({ request }) => {
 				const parsed = turnRequestSchema.parse(body);
 				controller.enqueue(sse('start', { storyId: parsed.storyId, clientTurnId: parsed.clientTurnId }));
 				controller.enqueue(sse('status', { stage: 'processing' }));
-				const result = await executeTurnSubmitCommand(parsed);
+				const result = await executeTurnSubmitCommand(parsed, {
+					submitTurn: (input) => processServerTurn(input, {
+						onNarrationChunk: (text) => {
+							controller.enqueue(sse('narration.chunk', {
+								storyId: parsed.storyId,
+								clientTurnId: parsed.clientTurnId,
+								text,
+							}));
+						},
+					}),
+				});
 				controller.enqueue(sse('narration', { text: result.narration }));
 				controller.enqueue(sse('done', result));
 			} catch (error) {

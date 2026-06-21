@@ -1,6 +1,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
 import { patchProposals, sourceRefs, statePatches, storyEntries, storyEvents } from '$lib/server/db/schema';
+import { enqueueBackendJob, enqueueStoryVaultSyncJob } from '$lib/server/jobs/outbox';
 import { bumpStoryVersion } from '$lib/server/memory/canonical';
 import type { RecordPatchRequest } from '$lib/contracts/engine';
 
@@ -411,7 +412,7 @@ export const WORLD_RECORD_TYPES: Record<string, RecordSpec> = {
 			sourcePatchIds: 'source_patch_ids',
 			metadata: 'metadata',
 		},
-		jsonColumns: jsonColumns('operations', 'affected_entity_ids', 'source_entry_ids', 'source_patch_ids', 'metadata'),
+		jsonColumns: jsonColumns('operations', 'affected_entity_ids', 'source_entry_ids', 'source_event_ids', 'source_patch_ids', 'metadata'),
 	},
 	continuityWarnings: {
 		table: 'continuity_warnings',
@@ -600,6 +601,34 @@ function inferAffectedEntityIds(type: string, record: JsonRecord): string[] {
 	return [...ids];
 }
 
+async function queueManualRecordPatchJobs(input: { storyId: string; serverVersion: number; type: string; recordId: string }) {
+	if (['jobs', 'searchIndex', 'apiCallLogs'].includes(input.type)) return;
+	const indexType = ['characters', 'locations', 'items'].includes(input.type) ? 'entities' : input.type;
+	try {
+		await Promise.all([
+			enqueueStoryVaultSyncJob({
+				storyId: input.storyId,
+				serverVersion: input.serverVersion,
+				reason: 'manual-record-edit',
+				payload: { recordType: input.type, recordId: input.recordId },
+			}),
+			enqueueBackendJob({
+				storyId: input.storyId,
+				type: 'index_canonical_records',
+				dedupeKey: `manual-record-edit-index-${input.storyId}-${input.type}-${input.recordId}`,
+				payload: {
+					recordTypes: [indexType],
+					recordId: input.recordId,
+					reason: 'manual_record_edit',
+				},
+				maxAttempts: 3,
+			}),
+		]);
+	} catch (error) {
+		console.warn('[WorldRecords] Failed to queue manual record patch jobs:', error);
+	}
+}
+
 function valueExpression(spec: RecordSpec, column: string, value: unknown) {
 	if (spec.jsonColumns?.has(column)) return sql`${JSON.stringify(value ?? null)}::jsonb`;
 	return sql`${value}`;
@@ -628,6 +657,10 @@ export async function listWorldRecords(
 		filters.push(sql`${sql.raw(q(column))} = ${value}`);
 	}
 	const query = options.q?.trim() ?? '';
+	if (type === 'patchProposals' && !query) {
+		filters.push(sql`${sql.raw(q('status'))} in ('pending', 'needs_review')`);
+		filters.push(sql`${sql.raw(q('proposal_type'))} in ('character_reference_review', 'entity_reference_review', 'character_context_update', 'faction_project_due_resolution', 'faction_project_blocked_resolution')`);
+	}
 	if (query) {
 		const like = `%${query}%`;
 		filters.push(sql`(${sql.join(spec.searchColumns.map((column) => sql`${sql.raw(q(column))}::text ilike ${like}`), sql` or `)})`);
@@ -798,6 +831,7 @@ export async function patchWorldRecord(type: string, recordId: string, request: 
 		where ${sql.raw(q(spec.idColumn))} = ${recordId}
 		returning *
 	`);
+	await queueManualRecordPatchJobs({ storyId, serverVersion, type, recordId });
 	return {
 		storyId,
 		type,

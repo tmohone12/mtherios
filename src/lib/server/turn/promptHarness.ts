@@ -54,6 +54,7 @@ export function emptyRetrievedMemoryPacket(storyId: string, query: string): Retr
 		nodes: [],
 		tokenEstimate: 0,
 		retrievalDebug: ['harness=empty'],
+		retrievalTrace: [],
 	};
 }
 

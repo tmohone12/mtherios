@@ -17,10 +17,10 @@ const jsonObject = sql`'{}'::jsonb`;
 export const pgVector = customType<{
 	data: number[];
 	driverData: string;
-	config: { dimensions: number };
+	config: { dimensions?: number };
 }>({
 	dataType(config) {
-		return `vector(${config?.dimensions ?? 1536})`;
+		return config?.dimensions ? `vector(${config.dimensions})` : 'vector';
 	},
 	toDriver(value) {
 		return `[${value.join(',')}]`;
@@ -450,7 +450,7 @@ export const memoryNodes = pgTable('memory_nodes', {
 	sourceEntryIds: jsonb('source_entry_ids').$type<string[]>().notNull().default(jsonArray),
 	sourceEventIds: jsonb('source_event_ids').$type<string[]>().notNull().default(jsonArray),
 	sourcePatchIds: jsonb('source_patch_ids').$type<string[]>().notNull().default(jsonArray),
-	embedding: pgVector('embedding', { dimensions: 1536 }),
+	embedding: pgVector('embedding'),
 	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
 	...syncColumns,
 }, (table) => ({
@@ -523,6 +523,21 @@ export const syncOps = pgTable('sync_ops', {
 	error: text('error'),
 	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+export const contextCheckpoints = pgTable('context_checkpoints', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	label: text('label').notNull(),
+	reason: text('reason'),
+	entryPosition: integer('entry_position').notNull().default(-1),
+	currentTurn: integer('current_turn').notNull().default(0),
+	snapshot: jsonb('snapshot').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	...syncColumns,
+}, (table) => ({
+	storyUpdatedIdx: index('context_checkpoints_story_updated_idx').on(table.storyId, table.updatedAt),
+	storyEntryIdx: index('context_checkpoints_story_entry_idx').on(table.storyId, table.entryPosition),
+}));
 
 export const backendJobs = pgTable('backend_jobs', {
 	id: text('id').primaryKey(),
@@ -679,6 +694,7 @@ export const schema = {
 	arcs,
 	sagas,
 	syncOps,
+	contextCheckpoints,
 	backendJobs,
 	llmServiceSettings,
 	searchIndexRecords,

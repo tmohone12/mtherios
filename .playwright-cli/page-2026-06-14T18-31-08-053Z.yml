@@ -1,0 +1,44 @@
+- generic [ref=e117]:
+  - generic [ref=e118]:
+    - button [ref=e119]:
+      - img [ref=e120]
+    - generic [ref=e121]:
+      - 'heading "Volantis: Black Walls Intrigue" [level=1] [ref=e122]'
+      - text: · Adventure
+    - generic [ref=e123]:
+      - button "Play" [ref=e124]
+      - button "Lore" [ref=e125]:
+        - img [ref=e126]
+        - text: Lore
+    - button "World State" [ref=e127]:
+      - img [ref=e128]
+  - generic [ref=e130]:
+    - img [ref=e132]
+    - generic [ref=e133]:
+      - paragraph [ref=e134]: Your story begins here
+      - paragraph [ref=e135]: Type what you want to do and the AI will narrate the world around you.
+  - generic [ref=e140]:
+    - generic [ref=e141]:
+      - button "Do" [ref=e142]:
+        - img [ref=e143]
+        - generic [ref=e144]: Do
+      - button "Say" [ref=e145]:
+        - img [ref=e146]
+        - generic [ref=e147]: Say
+      - button "Think" [ref=e148]:
+        - img [ref=e149]
+        - generic [ref=e150]: Think
+      - button "Story" [ref=e151]:
+        - img [ref=e152]
+        - generic [ref=e153]: Story
+      - button "Free" [ref=e154]:
+        - img [ref=e155]
+        - generic [ref=e156]: Free
+      - button "Plan" [ref=e157]:
+        - img [ref=e158]
+        - generic [ref=e159]: Plan
+    - generic [ref=e160]: Terminal agent runtime required. Start the terminal process to use this campaign.
+    - generic [ref=e161]:
+      - textbox "What do you do?" [ref=e162]
+      - button "Terminal agent runtime required" [disabled] [ref=e163]:
+        - img [ref=e164]

@@ -636,6 +636,20 @@ export interface CharacterEntryState extends BaseEntryState {
   pressures?: string[]
   /** Faction names/ids this character belongs to, serves, leads, represents, or is sworn to. */
   factionTags?: string[]
+  /** Player-character prompt guidance, when this character is the protagonist. */
+  playerPrompt?: string | null
+  /** Durable assets, contacts, claims, or resources tied to the protagonist. */
+  assets?: string[]
+  /** Explicit character-control details from the World Drawer. */
+  appearance?: string | null
+  voice?: string | null
+  mannerisms?: string[]
+  personalityDescriptors?: string[]
+  factionName?: string | null
+  rank?: string | null
+  role?: string | null
+  /** Knowledge boundary note, for example public, player-known, or secret context. */
+  visibilityNote?: string | null
 }
 
 export interface RelationshipChange {
@@ -698,6 +712,7 @@ export interface FactionEntryState extends BaseEntryState {
   playerStanding: number // -100 to 100
   status: 'allied' | 'neutral' | 'hostile' | 'unknown'
   knownMembers: string[] // Entry IDs of known members
+  unresolvedKnownMembers?: string[] // Mentioned member names not yet approved as character canon
   // Extended faction simulation fields (optional for backward compatibility)
   goals?: FactionGoal[]
   resources?: FactionResources

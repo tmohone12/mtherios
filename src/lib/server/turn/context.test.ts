@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { entities, npcBeliefs, stories } from '$lib/server/db/schema';
+import { continuityWarnings, entities, entityAliases, npcBeliefs, patchProposals, stories } from '$lib/server/db/schema';
 import { loadTurnContext } from './context';
 
 const dbMocks = vi.hoisted(() => ({
@@ -39,6 +39,8 @@ function conditionIncludesInArray(value: unknown, left: unknown, expectedValues:
 function createDbMock() {
 	const requestedIds = ['npc_present', 'npc_scene'];
 	const beliefConditions: unknown[] = [];
+	const patchProposalConditions: unknown[] = [];
+	const continuityWarningConditions: unknown[] = [];
 	const storyRow = {
 		id: 'story_1',
 		headerPrompt: null,
@@ -50,6 +52,16 @@ function createDbMock() {
 	];
 	const requestedEntities = [
 		{ id: 'npc_scene', storyId: 'story_1', type: 'character', name: 'Scene NPC', state: {} },
+	];
+	const aliasRows = [
+		{
+			id: 'alias_scene',
+			storyId: 'story_1',
+			entityId: 'npc_scene',
+			alias: 'The Scene Witness',
+			normalizedAlias: 'the scene witness',
+			sourceEntryIds: ['entry_alias'],
+		},
 	];
 	const requestedBeliefs = [
 		{ id: 'belief_present', storyId: 'story_1', believerEntityId: 'npc_present', subjectEntityId: null, belief: 'Present NPC trusts the hall gossip.', confidence: 0.7 },
@@ -63,6 +75,94 @@ function createDbMock() {
 		belief: `Unrelated belief ${index + 1}`,
 		confidence: 0.5,
 	}));
+	const recentAppliedProposals = Array.from({ length: 80 }, (_, index) => ({
+		id: `proposal_applied_${index + 1}`,
+		storyId: 'story_1',
+		proposalType: 'story_event_upsert',
+		targetTable: 'story_events',
+		targetRecordId: `event_applied_${index + 1}`,
+		proposedBy: 'narration',
+		operations: [],
+		reason: `Already applied proposal ${index + 1}`,
+		suggestion: 'No action needed.',
+		status: 'applied',
+		decision: 'approved',
+		validatedBy: 'human',
+		affectedEntityIds: [],
+		confidence: 0.9,
+		sourceEntryIds: [],
+		sourceEventIds: [],
+		sourcePatchIds: [],
+		metadata: {},
+		updatedAt: `2026-06-13T18:${String(index).padStart(2, '0')}:00.000Z`,
+	}));
+	const pendingCharacterReference = {
+		id: 'proposal_pending_ser_olyvar',
+		storyId: 'story_1',
+		proposalType: 'character_reference_review',
+		targetTable: 'entities',
+		targetRecordId: 'unresolved_character_ser_olyvar',
+		proposedBy: 'narration',
+		operations: [{
+			op: 'review',
+			path: '/entities/character',
+			value: { name: 'Ser Olyvar', description: 'A name still waiting for review.' },
+		}],
+		reason: 'Turn referenced unresolved character Ser Olyvar.',
+		suggestion: 'Review this character reference before creating a new canonical record.',
+		status: 'needs_review',
+		decision: null,
+		validatedBy: null,
+		affectedEntityIds: [],
+		confidence: 0.52,
+		sourceEntryIds: ['entry_old'],
+		sourceEventIds: [],
+		sourcePatchIds: [],
+		metadata: { sourceName: 'Ser Olyvar' },
+		updatedAt: '2026-06-01T00:00:00.000Z',
+	};
+	const resolvedContinuityWarnings = Array.from({ length: 80 }, (_, index) => ({
+		id: `warning_resolved_${index + 1}`,
+		storyId: 'story_1',
+		warningType: 'continuity',
+		level: 'warning',
+		title: `Resolved warning ${index + 1}`,
+		status: 'resolved',
+		details: `Already resolved warning ${index + 1}`,
+		entityIds: [],
+		factionIds: [],
+		threadIds: [],
+		actorIds: [],
+		sourceEntryIds: [],
+		sourceEventIds: [],
+		sourcePatchIds: [],
+		resolutionNotes: 'Done.',
+		resolvedBy: 'human',
+		resolvedAt: '2026-06-13T00:00:00.000Z',
+		metadata: {},
+		updatedAt: `2026-06-13T19:${String(index).padStart(2, '0')}:00.000Z`,
+	}));
+	const openContinuityWarning = {
+		id: 'warning_open_ser_olyvar',
+		storyId: 'story_1',
+		warningType: 'unresolved_reference',
+		level: 'warning',
+		title: 'Unreviewed character reference',
+		status: 'open',
+		details: 'Ser Olyvar is still present only as reviewable evidence.',
+		entityIds: [],
+		factionIds: [],
+		threadIds: [],
+		actorIds: [],
+		sourceEntryIds: ['entry_old'],
+		sourceEventIds: [],
+		sourcePatchIds: [],
+		resolutionNotes: null,
+		resolvedBy: null,
+		resolvedAt: null,
+		metadata: { sourceName: 'Ser Olyvar' },
+		updatedAt: '2026-06-01T00:00:00.000Z',
+	};
 
 	const select = vi.fn(() => {
 		let selectedTable: unknown;
@@ -83,10 +183,25 @@ function createDbMock() {
 					if (conditionIncludesInArray(selectedCondition, entities.id, requestedIds)) return Promise.resolve(requestedEntities);
 					return Promise.resolve(baseEntities);
 				}
+				if (selectedTable === entityAliases) return Promise.resolve(aliasRows);
 				if (selectedTable === npcBeliefs) {
 					beliefConditions.push(selectedCondition);
 					if (conditionIncludesInArray(selectedCondition, npcBeliefs.believerEntityId, requestedIds)) return Promise.resolve(requestedBeliefs);
 					return Promise.resolve(unrelatedBeliefs);
+				}
+				if (selectedTable === patchProposals) {
+					patchProposalConditions.push(selectedCondition);
+					if (conditionIncludesInArray(selectedCondition, patchProposals.status, ['pending', 'needs_review'])) {
+						return Promise.resolve([pendingCharacterReference]);
+					}
+					return Promise.resolve(recentAppliedProposals);
+				}
+				if (selectedTable === continuityWarnings) {
+					continuityWarningConditions.push(selectedCondition);
+					if (conditionIncludesInArray(selectedCondition, continuityWarnings.status, ['open'])) {
+						return Promise.resolve([openContinuityWarning]);
+					}
+					return Promise.resolve(resolvedContinuityWarnings);
 				}
 				return Promise.resolve([]);
 			}),
@@ -97,6 +212,8 @@ function createDbMock() {
 	return {
 		db: { select },
 		beliefConditions,
+		patchProposalConditions,
+		continuityWarningConditions,
 		requestedIds,
 	};
 }
@@ -118,7 +235,47 @@ describe('loadTurnContext', () => {
 		const ctx = await loadTurnContext('story_1', ['npc_present'], ['npc_scene']);
 
 		expect(ctx.entities.map((entity) => entity.id)).toEqual(['loc_hall', 'npc_present', 'npc_scene']);
+		expect(ctx.entities.find((entity) => entity.id === 'npc_scene')?.state).toMatchObject({
+			aliases: ['The Scene Witness'],
+		});
 		expect(ctx.beliefs.map((belief) => belief.believerEntityId)).toEqual(['npc_present', 'npc_scene']);
 		expect(beliefConditions.some((condition) => conditionIncludesInArray(condition, npcBeliefs.believerEntityId, requestedIds))).toBe(true);
+	});
+
+	it('keeps pending character reference proposals visible outside the broad proposal recency window', async () => {
+		const { db, patchProposalConditions } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+
+		const ctx = await loadTurnContext('story_1');
+
+		expect(ctx.patchProposals[0]).toMatchObject({
+			id: 'proposal_pending_ser_olyvar',
+			proposalType: 'character_reference_review',
+			status: 'needs_review',
+			targetRecordId: 'unresolved_character_ser_olyvar',
+		});
+		expect(ctx.patchProposals).toHaveLength(80);
+		expect(new Set(ctx.patchProposals.map((proposal) => proposal.id)).size).toBe(ctx.patchProposals.length);
+		expect(patchProposalConditions.some((condition) =>
+			conditionIncludesInArray(condition, patchProposals.status, ['pending', 'needs_review'])
+		)).toBe(true);
+	});
+
+	it('keeps open continuity warnings visible outside the broad warning recency window', async () => {
+		const { db, continuityWarningConditions } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+
+		const ctx = await loadTurnContext('story_1');
+
+		expect(ctx.continuityWarnings[0]).toMatchObject({
+			id: 'warning_open_ser_olyvar',
+			status: 'open',
+			title: 'Unreviewed character reference',
+		});
+		expect(ctx.continuityWarnings).toHaveLength(80);
+		expect(new Set(ctx.continuityWarnings.map((warning) => warning.id)).size).toBe(ctx.continuityWarnings.length);
+		expect(continuityWarningConditions.some((condition) =>
+			conditionIncludesInArray(condition, continuityWarnings.status, ['open'])
+		)).toBe(true);
 	});
 });

@@ -20,6 +20,7 @@ export interface ServerGenerationOptions {
 	messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
 	prompt: string;
 	responseFormat?: 'json_object';
+	onTextDelta?: (chunk: string) => void | Promise<void>;
 }
 
 export interface ServerGenerationUsage {
@@ -169,6 +170,83 @@ function usageFromResponse(data: unknown, useAnthropic: boolean): ServerGenerati
 	};
 }
 
+function emptyUsage(): ServerGenerationUsage {
+	return {
+		requestTokens: null,
+		responseTokens: null,
+		totalTokens: null,
+	};
+}
+
+async function readStreamingText(
+	response: Response,
+	useAnthropic: boolean,
+	onTextDelta: (chunk: string) => void | Promise<void>,
+): Promise<{ text: string; usage: ServerGenerationUsage }> {
+	if (!response.body) throw new Error('Provider streaming response had no body.');
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = '';
+	let text = '';
+	let usage = emptyUsage();
+
+	const consumeData = async (dataText: string) => {
+		if (!dataText || dataText === '[DONE]') return;
+		let data: unknown;
+		try {
+			data = JSON.parse(dataText);
+		} catch {
+			return;
+		}
+		const record = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+		let chunk = '';
+		if (useAnthropic) {
+			const delta = record.delta && typeof record.delta === 'object' ? record.delta as Record<string, unknown> : {};
+			if (typeof delta.text === 'string') chunk = delta.text;
+			if (record.type === 'message_delta') {
+				usage = usageFromResponse(record, true);
+			}
+		} else {
+			const choices = Array.isArray(record.choices) ? record.choices : [];
+			const firstChoice = choices[0] && typeof choices[0] === 'object' ? choices[0] as Record<string, unknown> : {};
+			const delta = firstChoice.delta && typeof firstChoice.delta === 'object' ? firstChoice.delta as Record<string, unknown> : {};
+			if (typeof delta.content === 'string') chunk = delta.content;
+			if (record.usage) usage = usageFromResponse(record, false);
+		}
+		if (chunk) {
+			text += chunk;
+			await onTextDelta(chunk);
+		}
+	};
+
+	const consumeEvent = async (eventText: string) => {
+		const dataLines = eventText
+			.split(/\r?\n/)
+			.filter((line) => line.startsWith('data:'))
+			.map((line) => line.slice(5).trimStart());
+		for (const dataLine of dataLines) {
+			await consumeData(dataLine);
+		}
+	};
+
+	while (true) {
+		const { value, done } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		let boundaryMatch = /\r?\n\r?\n/.exec(buffer);
+		while (boundaryMatch) {
+			const boundary = boundaryMatch.index;
+			const eventText = buffer.slice(0, boundary);
+			buffer = buffer.slice(boundary + boundaryMatch[0].length);
+			await consumeEvent(eventText);
+			boundaryMatch = /\r?\n\r?\n/.exec(buffer);
+		}
+	}
+	buffer += decoder.decode();
+	if (buffer.trim()) await consumeEvent(buffer);
+	return { text, usage };
+}
+
 function generationTimeoutMs(value: unknown): number {
 	if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_SERVER_GENERATION_TIMEOUT_MS;
 	return Math.max(1, Math.trunc(value));
@@ -217,12 +295,14 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 		? `${baseUrl || 'https://api.anthropic.com'}/v1/messages`
 		: `${baseUrl}/chat/completions`;
 	const inputChars = promptChars(options);
+	const shouldStream = Boolean(options.onTextDelta) && options.responseFormat !== 'json_object';
 
 	const body = useAnthropic
 		? {
 			model,
 			max_tokens: maxTokens,
 			temperature,
+			...(shouldStream ? { stream: true } : {}),
 			system: buildAnthropicSystem(system, systemDynamic),
 			messages: [
 				...messages,
@@ -238,6 +318,7 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 				...messages,
 				{ role: 'user', content: prompt },
 			],
+			...(shouldStream ? { stream: true, stream_options: { include_usage: true } } : {}),
 			...(options.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}),
 		};
 
@@ -265,10 +346,15 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			});
 		}
 
-		const data = await response.json();
-		const text = useAnthropic
-			? (data.content ?? []).map((block: { text?: string }) => block.text ?? '').join('').trim()
-			: String(data.choices?.[0]?.message?.content ?? '').trim();
+		const streamed = shouldStream && options.onTextDelta
+			? await readStreamingText(response, useAnthropic, options.onTextDelta)
+			: null;
+		const data = streamed ? null : await response.json();
+		const text = streamed
+			? streamed.text.trim()
+			: useAnthropic
+				? (data.content ?? []).map((block: { text?: string }) => block.text ?? '').join('').trim()
+				: String(data.choices?.[0]?.message?.content ?? '').trim();
 		return {
 			text,
 			model,
@@ -276,7 +362,7 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			durationMs: Date.now() - startTime,
 			promptChars: inputChars,
 			responseChars: text.length,
-			usage: usageFromResponse(data, useAnthropic),
+			usage: streamed ? streamed.usage : usageFromResponse(data, useAnthropic),
 		};
 	} catch (error) {
 		if (error instanceof ServerGenerationError) throw error;

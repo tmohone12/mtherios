@@ -5,7 +5,9 @@ import {
 	type EngineCacheStatus,
 } from '$lib/contracts/engine';
 import {
+	turnContextReceiptSchema,
 	turnPerformanceSummarySchema,
+	type TurnContextReceipt,
 	type TurnPerformanceSummary,
 } from '$lib/contracts/memory';
 
@@ -39,6 +41,7 @@ export interface OpenEngineEventStreamOptions {
 	onProjection?: (projection: CampaignProjection, event: EngineStreamEvent) => void;
 	onCacheStatus?: (cache: EngineCacheStatus, event: EngineStreamEvent) => void;
 	onTurnPerformance?: (performance: TurnPerformanceSummary, event: EngineStreamEvent) => void;
+	onTurnContextReceipt?: (receipt: TurnContextReceipt, event: EngineStreamEvent) => void;
 	onRefreshRequested?: (event: EngineStreamEvent) => void;
 	onError?: (error: unknown) => void;
 }
@@ -155,6 +158,21 @@ export function extractTurnPerformance(event: EngineStreamEvent | null | undefin
 	return null;
 }
 
+export function extractTurnContextReceipt(event: EngineStreamEvent | null | undefined): TurnContextReceipt | null {
+	if (!event) return null;
+	const candidates = [
+		event.data.contextReceipt,
+		asRecord(event.data.projectionChanges).contextReceipt,
+		asRecord(event.data.result).contextReceipt,
+		asRecord(asRecord(event.data.result).projectionChanges).contextReceipt,
+	];
+	for (const candidate of candidates) {
+		const parsed = turnContextReceiptSchema.safeParse(candidate);
+		if (parsed.success) return parsed.data;
+	}
+	return null;
+}
+
 export function shouldRefreshCampaignProjection(event: EngineStreamEvent | null | undefined): boolean {
 	if (!event) return false;
 	if (extractCampaignProjection(event)) return false;
@@ -182,6 +200,8 @@ export function openEngineEventStream(options: OpenEngineEventStreamOptions): En
 		if (cache) options.onCacheStatus?.(cache, event);
 		const performance = extractTurnPerformance(event);
 		if (performance) options.onTurnPerformance?.(performance, event);
+		const contextReceipt = extractTurnContextReceipt(event);
+		if (contextReceipt) options.onTurnContextReceipt?.(contextReceipt, event);
 		if (shouldRefreshCampaignProjection(event)) options.onRefreshRequested?.(event);
 	};
 

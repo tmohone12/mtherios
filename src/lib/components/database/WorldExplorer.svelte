@@ -10,7 +10,11 @@
 		Braces,
 		History,
 		Play,
+		Sparkles,
+		Check,
+		X,
 	} from 'lucide-svelte';
+	import { formatProposalDescription, formatProposalSummary } from '$lib/services/canonProposalDisplay';
 
 	type JsonRecord = Record<string, unknown>;
 	type SectionEntry = {
@@ -46,7 +50,9 @@
 		{ id: 'chapters', label: 'Chapters' },
 		{ id: 'arcs', label: 'Arcs' },
 		{ id: 'memoryNodes', label: 'Memory' },
-		{ id: 'patches', label: 'Patches', isAdvanced: true },
+		{ id: 'npcCandidates', label: 'NPC Candidates' },
+		{ id: 'patchProposals', label: 'Reviews' },
+		{ id: 'patches', label: 'Patch Log', isAdvanced: true },
 		{ id: 'searchIndex', label: 'Index', isAdvanced: true },
 		{ id: 'jobs', label: 'Jobs', isAdvanced: true },
 		{ id: 'apiCallLogs', label: 'API Calls', isAdvanced: true },
@@ -69,6 +75,10 @@
 	let searchResults = $state<JsonRecord[]>([]);
 	let showDiagnostics = $state(false);
 	let isMobile = $state(false);
+	let draftingCharacter = $state(false);
+	let reviewingProposal = $state(false);
+	let characterDraftInstructions = $state('Update this NPC from recent story context.');
+	const MAX_CHARACTER_PHOTO_BYTES = 2 * 1024 * 1024;
 
 	const visibleSections = $derived.by(() => {
 		return sections.filter((section) => !section.isAdvanced || showDiagnostics);
@@ -88,6 +98,8 @@
 		return asRecord(metadata?.debugSnapshot);
 	});
 	const columns = $derived.by(() => {
+		if (isNpcCandidateSection()) return ['candidate', 'confidence', 'status', 'reason', 'source'];
+		if (isReviewSection()) return ['summary', 'status', 'proposalType', 'targetRecordId', 'reason'];
 		const keys = new Set<string>();
 		for (const row of records.slice(0, 8)) {
 			for (const key of Object.keys(row)) {
@@ -98,6 +110,19 @@
 		return [...keys];
 	});
 	const visibleColumns = $derived.by(() => isMobile ? columns.slice(0, 4) : columns);
+	const editorRecord = $derived.by(() => {
+		try {
+			return asRecord(JSON.parse(editorText));
+		} catch {
+			return null;
+		}
+	});
+	const characterState = $derived.by(() => asRecord(editorRecord?.state) ?? {});
+	const characterEventMemory = $derived.by(() => asRecord(characterState.eventMemory) ?? {});
+	const characterPhotoUrl = $derived.by(() => typeof characterState.photoUrl === 'string' ? characterState.photoUrl : '');
+	const isReviewablePatch = $derived(isReviewSection()
+		&& Boolean(selectedRecord?.id)
+		&& ['pending', 'needs_review'].includes(String((editorRecord?.status ?? selectedRecord?.status) ?? '')));
 
 	function asRecord(value: unknown): JsonRecord | null {
 		return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : null;
@@ -113,6 +138,51 @@
 		return JSON.stringify(value, null, 2);
 	}
 
+	function stringArrayValue(value: unknown): string[] {
+		return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+	}
+
+	function textValue(event: Event): string {
+		return (event.currentTarget as HTMLInputElement | HTMLTextAreaElement).value;
+	}
+
+	function linesValue(value: unknown): string {
+		return Array.isArray(value) ? value.filter((item) => typeof item === 'string').join('\n') : stringValue(value);
+	}
+
+	function lineArray(value: string): string[] {
+		return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+	}
+
+	function nullableTextValue(value: string): string | null {
+		const clean = value.trim();
+		return clean ? clean : null;
+	}
+
+	function numberInputValue(event: Event, fallback: number, min: number, max: number, integer = false): number {
+		const parsed = Number(textValue(event));
+		const bounded = Math.min(max, Math.max(min, Number.isFinite(parsed) ? parsed : fallback));
+		return integer ? Math.round(bounded) : bounded;
+	}
+
+	function nullableNumberInputValue(event: Event, min: number, max: number, integer = false): number | null {
+		const text = textValue(event).trim();
+		if (!text) return null;
+		const parsed = Number(text);
+		if (!Number.isFinite(parsed)) return null;
+		const bounded = Math.min(max, Math.max(min, parsed));
+		return integer ? Math.round(bounded) : bounded;
+	}
+
+	function updateLlmSetting(index: number, key: string, value: unknown) {
+		const next = llmSettings.map((setting, itemIndex) => itemIndex === index ? { ...setting, [key]: value } : setting);
+		llmSettings = next;
+		records = next;
+		selectedRecord = next[index] ?? selectedRecord;
+		detail = selectedRecord;
+		editorText = JSON.stringify(next, null, 2);
+	}
+
 	function preview(value: unknown): string {
 		if (value == null) return '';
 		if (typeof value === 'string') return value.length > 140 ? `${value.slice(0, 137)}...` : value;
@@ -125,12 +195,125 @@
 		return value === true ? 'text-emerald-400' : 'text-amber-400';
 	}
 
+	function recordCommandType(sectionId = activeSection): string {
+		return sectionId === 'npcCandidates' ? 'patchProposals' : sectionId;
+	}
+
+	function isNpcCandidateSection(sectionId = activeSection): boolean {
+		return sectionId === 'npcCandidates';
+	}
+
+	function isReviewSection(sectionId = activeSection): boolean {
+		return sectionId === 'patchProposals' || isNpcCandidateSection(sectionId);
+	}
+
+	function proposalOperationValue(row: JsonRecord): JsonRecord | null {
+		for (const rawOperation of Array.isArray(row.operations) ? row.operations : []) {
+			const operation = asRecord(rawOperation);
+			const value = asRecord(operation?.value);
+			if (value) return value;
+		}
+		return null;
+	}
+
+	function npcCandidateName(row: JsonRecord | null): string {
+		if (!row) return '';
+		const metadata = asRecord(row.metadata);
+		const value = proposalOperationValue(row);
+		return stringValue(metadata?.sourceName || value?.name || row.targetRecordId);
+	}
+
+	function npcCandidateSource(row: JsonRecord): string {
+		const metadata = asRecord(row.metadata);
+		const chapterNumber = metadata?.chapterNumber;
+		if (typeof chapterNumber === 'number' || typeof chapterNumber === 'string') return `Chapter ${chapterNumber}`;
+		return stringValue(metadata?.sourceType || row.proposedBy);
+	}
+
+	function isNpcCandidateProposal(row: JsonRecord): boolean {
+		const status = String(row.status ?? '');
+		return row.proposalType === 'character_reference_review' && ['pending', 'needs_review'].includes(status);
+	}
+
+	function cellValue(row: JsonRecord, column: string): unknown {
+		if (isNpcCandidateSection()) {
+			if (column === 'candidate') return npcCandidateName(row);
+			if (column === 'source') return npcCandidateSource(row);
+		}
+		if (isReviewSection()) {
+			if (column === 'summary') return formatProposalSummary(row);
+			if (column === 'reason') return formatProposalDescription(row);
+		}
+		return row[column];
+	}
+
+	function recordSubtitle(row: JsonRecord): string {
+		if (isNpcCandidateSection()) return formatProposalDescription(row);
+		return isReviewSection() ? formatProposalDescription(row) : preview(row.id);
+	}
+
 	function recordTitle(row: JsonRecord): string {
+		if (isNpcCandidateSection()) return npcCandidateName(row) || formatProposalSummary(row);
+		if (isReviewSection() || row.proposalType) return formatProposalSummary(row);
 		for (const key of ['title', 'name', 'goal', 'terms', 'description', 'type', 'id']) {
 			const value = row[key];
 			if (typeof value === 'string' && value.trim()) return value.trim();
 		}
 		return 'Record';
+	}
+
+	function updateEditor(mutator: (record: JsonRecord) => void) {
+		const record = editorRecord ? { ...editorRecord } : {};
+		const state = asRecord(record.state) ?? {};
+		record.state = { ...state };
+		mutator(record);
+		editorText = JSON.stringify(record, null, 2);
+	}
+
+	function updateCharacterState(key: string, value: unknown) {
+		updateEditor((record) => {
+			const state = asRecord(record.state) ?? {};
+			record.state = { ...state, [key]: value };
+		});
+	}
+
+	function updateCharacterEventMemory(key: string, value: string) {
+		updateEditor((record) => {
+			const state = asRecord(record.state) ?? {};
+			const eventMemory = asRecord(state.eventMemory) ?? {};
+			record.state = {
+				...state,
+				eventMemory: {
+					...eventMemory,
+					[key]: lineArray(value),
+				},
+			};
+		});
+	}
+
+	async function handleCharacterPhotoUpload(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		if (!file.type.startsWith('image/')) {
+			status = 'Choose an image file.';
+			input.value = '';
+			return;
+		}
+		if (file.size > MAX_CHARACTER_PHOTO_BYTES) {
+			status = 'Photo must be under 2 MB.';
+			input.value = '';
+			return;
+		}
+		const photoUrl = await new Promise<string>((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Could not read photo.'));
+			reader.onerror = () => reject(reader.error ?? new Error('Could not read photo.'));
+			reader.readAsDataURL(file);
+		});
+		updateCharacterState('photoUrl', photoUrl);
+		status = 'Photo loaded. Save the record to persist it.';
+		input.value = '';
 	}
 
 	function setActiveSection(sectionId: string) {
@@ -195,9 +378,26 @@
 				detail = selectedRecord;
 				editorText = selectedRecord ? JSON.stringify(selectedRecord, null, 2) : '';
 				nextCursor = null;
+			} else if (activeSection === 'npcCandidates') {
+				const args: JsonRecord = {
+					type: 'patchProposals',
+					q: query,
+					limit: 100,
+				};
+				if (cursor) args.cursor = cursor;
+				const body = await runEngineCommand(selectedStoryId, 'world.records', args);
+				const pageRecords = (Array.isArray(body.records) ? body.records as JsonRecord[] : []).filter(isNpcCandidateProposal);
+				records = cursor ? [...records, ...pageRecords] : pageRecords;
+				nextCursor = typeof body.nextCursor === 'string' ? body.nextCursor : null;
+				selectedRecord = records[0] ?? null;
+				if (selectedRecord) await selectRecord(selectedRecord);
+				else {
+					detail = null;
+					editorText = '';
+				}
 			} else {
 				const args: JsonRecord = {
-					type: activeSection,
+					type: recordCommandType(),
 					q: query,
 					limit: 60,
 				};
@@ -222,6 +422,11 @@
 
 	async function selectRecord(row: JsonRecord) {
 		selectedRecord = row;
+		if (activeSection === 'llmSettings') {
+			detail = row;
+			editorText = JSON.stringify(llmSettings, null, 2);
+			return;
+		}
 		if (!isRecordSection || !row.id) {
 			detail = row;
 			editorText = JSON.stringify(row, null, 2);
@@ -229,7 +434,7 @@
 		}
 		try {
 			const body = await runEngineCommand(selectedStoryId || '__app__', 'world.record.get', {
-				type: activeSection,
+				type: recordCommandType(),
 				recordId: String(row.id),
 			});
 			detail = body;
@@ -240,6 +445,36 @@
 		}
 	}
 
+	async function openRecord(sectionId: string, recordId: string, fallback: JsonRecord = {}) {
+		activeSection = sectionId;
+		searchResults = [];
+		query = '';
+		const body = await runEngineCommand(selectedStoryId || '__app__', 'world.record.get', {
+			type: recordCommandType(sectionId),
+			recordId,
+		});
+		const record = asRecord(body.record) ?? { ...fallback, id: recordId };
+		records = [record];
+		selectedRecord = record;
+		detail = body;
+		editorText = JSON.stringify(record, null, 2);
+		nextCursor = null;
+	}
+
+	async function openSearchResult(result: JsonRecord) {
+		const sectionId = String(result.recordType ?? activeSection);
+		const recordId = String(result.recordId ?? '');
+		if (!recordId) {
+			setActiveSection(sectionId);
+			return;
+		}
+		try {
+			await openRecord(sectionId, recordId, { id: recordId, title: result.title });
+		} catch (error) {
+			status = error instanceof Error ? error.message : String(error);
+		}
+	}
+
 	async function saveRecord() {
 		if (!selectedRecord?.id || !isRecordSection) return;
 		saving = true;
@@ -247,7 +482,7 @@
 		try {
 			const parsed = JSON.parse(editorText) as JsonRecord;
 			const body = await runEngineCommand(selectedStoryId || '__app__', 'world.record.patch', {
-				type: activeSection,
+				type: recordCommandType(),
 				recordId: String(selectedRecord.id),
 				updates: parsed,
 				reason: 'Manual explorer edit.',
@@ -261,6 +496,56 @@
 		}
 	}
 
+	async function draftCharacterUpdate() {
+		if (!selectedStoryId || !selectedRecord?.id) return;
+		draftingCharacter = true;
+		status = '';
+		try {
+			const body = await runEngineCommand(selectedStoryId, 'world.character.draftUpdate', {
+				recordId: String(selectedRecord.id),
+				instructions: characterDraftInstructions,
+				recentLimit: 30,
+			});
+			if (body.status === 'skipped') {
+				status = stringValue(body.reason) || 'No supported character changes found.';
+				return;
+			}
+			if (typeof body.proposalId === 'string') {
+				status = `Draft proposal ${body.proposalId} created.`;
+				await openRecord('patchProposals', body.proposalId);
+			} else {
+				status = 'No draft proposal was returned.';
+			}
+		} catch (error) {
+			status = error instanceof Error ? error.message : String(error);
+		} finally {
+			draftingCharacter = false;
+		}
+	}
+
+	async function reviewPatchProposal(decision: 'approved' | 'rejected') {
+		if (!selectedStoryId || !selectedRecord?.id) return;
+		reviewingProposal = true;
+		status = '';
+		try {
+			const body = await runEngineCommand(selectedStoryId, 'patchProposal.review', {
+				proposalId: String(selectedRecord.id),
+				decision,
+				reviewer: 'human',
+			});
+			status = `Proposal ${decision}.`;
+			const application = asRecord(body.application);
+			const affectedEntityIds = Array.isArray(application?.affectedEntityIds) ? application.affectedEntityIds : [];
+			const firstEntityId = affectedEntityIds.find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+			if (decision === 'approved' && firstEntityId) await openRecord('characters', firstEntityId);
+			else await loadSection();
+		} catch (error) {
+			status = error instanceof Error ? error.message : String(error);
+		} finally {
+			reviewingProposal = false;
+		}
+	}
+
 	async function saveLlmSettings() {
 		saving = true;
 		status = '';
@@ -270,6 +555,9 @@
 			const body = await runEngineCommand('__app__', 'settings.llm.save', { settings });
 			llmSettings = Array.isArray(body.settings) ? body.settings as JsonRecord[] : [];
 			records = llmSettings;
+			selectedRecord = llmSettings.find((setting) => setting.serviceId === selectedRecord?.serviceId) ?? llmSettings[0] ?? null;
+			detail = selectedRecord;
+			editorText = JSON.stringify(llmSettings, null, 2);
 			status = 'LLM settings saved.';
 		} catch (error) {
 			status = error instanceof Error ? error.message : String(error);
@@ -298,7 +586,7 @@
 		status = '';
 		try {
 			const args: JsonRecord = { q: query, limit: 12 };
-			if (isRecordSection && activeSection !== 'apiCallLogs') args.type = activeSection;
+			if (isRecordSection && activeSection !== 'apiCallLogs') args.type = recordCommandType();
 			const body = await runEngineCommand(selectedStoryId, 'world.search', args);
 			searchResults = Array.isArray(body.results) ? body.results as JsonRecord[] : [];
 		} catch (error) {
@@ -442,10 +730,7 @@
 								{#each searchResults as result}
 									<button
 										class="block w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-left text-xs hover:border-[var(--color-gold-600)]"
-										onclick={() => {
-											setActiveSection(String(result.recordType ?? activeSection));
-											query = '';
-										}}
+										onclick={() => openSearchResult(result)}
 									>
 										<span class="text-[var(--text-accent)]">{result.title ?? result.recordId}</span>
 										<span class="ml-2 text-[var(--text-muted)]">{result.source} {Number(result.score ?? 0).toFixed(2)}</span>
@@ -468,7 +753,7 @@
 										<div class="flex items-start justify-between gap-2">
 											<div class="min-w-0">
 												<div class="text-xs uppercase tracking-wide text-[var(--text-accent)]">{recordTitle(row)}</div>
-												<div class="mt-1 text-xs text-[var(--text-muted)]">{preview(row.id)}</div>
+												<div class="mt-1 text-xs text-[var(--text-muted)]">{recordSubtitle(row)}</div>
 											</div>
 											<div class="font-mono text-[9px] uppercase tracking-wide text-[var(--text-muted)]">{preview(row.type)}</div>
 										</div>
@@ -476,7 +761,7 @@
 											{#each visibleColumns as column}
 												<div class="text-[10px]">
 													<div class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">{column}</div>
-													<div class="truncate text-[var(--text-secondary)]">{preview(row[column])}</div>
+													<div class="truncate text-[var(--text-secondary)]">{preview(cellValue(row, column))}</div>
 												</div>
 											{/each}
 										</div>
@@ -498,7 +783,7 @@
 									onclick={() => selectRecord(row)}
 								>
 									{#each visibleColumns as column}
-										<div class="truncate px-3 py-2 text-[var(--text-secondary)]" title={preview(row[column])}>{preview(row[column])}</div>
+										<div class="truncate px-3 py-2 text-[var(--text-secondary)]" title={preview(cellValue(row, column))}>{preview(cellValue(row, column))}</div>
 									{/each}
 								</button>
 							{/each}
@@ -632,6 +917,61 @@
 												{/each}
 											</div>
 										{/if}
+										{#if asRecordArray(retrievedMemory?.retrievalTrace).length > 0}
+											<div class="space-y-1">
+												<div class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">Retrieval Trace</div>
+												<div class="max-h-72 space-y-2 overflow-auto rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2">
+													{#each asRecordArray(retrievedMemory?.retrievalTrace) as trace}
+														{@const entityIds = stringArrayValue(trace.entityIds)}
+														{@const factionIds = stringArrayValue(trace.factionIds)}
+														{@const threadIds = stringArrayValue(trace.threadIds)}
+														{@const signals = stringArrayValue(trace.signals)}
+														{@const included = Boolean(trace.included)}
+														{@const sourceRefs = [
+															...stringArrayValue(trace.sourceEventIds).map((id) => `event:${id}`),
+															...stringArrayValue(trace.sourceEntryIds).map((id) => `entry:${id}`),
+															...stringArrayValue(trace.sourcePatchIds).map((id) => `patch:${id}`),
+														]}
+														<div class="rounded border border-[var(--border-secondary)] bg-[var(--bg-primary)] p-2 text-[11px]">
+															<div class="flex items-start justify-between gap-2">
+																<div class="min-w-0">
+																	<div class="truncate text-[var(--text-accent)]">#{stringValue(trace.rank)} {stringValue(trace.title)}</div>
+																	<div class="truncate text-[var(--text-muted)]">{stringValue(trace.id)}</div>
+																</div>
+																<div class="shrink-0 text-right">
+																	<div class={included ? 'text-emerald-400' : 'text-amber-300'}>{included ? 'included' : 'dropped'} / {stringValue(trace.reason)}</div>
+																	<div class="text-[var(--text-muted)]">score {stringValue(trace.score)} / {stringValue(trace.tokenEstimate)} tokens</div>
+																</div>
+															</div>
+															<div class="mt-1 flex flex-wrap gap-1">
+																<span class="rounded border border-[var(--border-secondary)] px-1.5 py-0.5 text-[var(--text-muted)]">{stringValue(trace.type)}</span>
+																<span class="rounded border border-[var(--border-secondary)] px-1.5 py-0.5 text-[var(--text-muted)]">age {stringValue(trace.ageDays)}d</span>
+																<span class="rounded border border-[var(--border-secondary)] px-1.5 py-0.5 text-[var(--text-muted)]">importance {stringValue(trace.importance)}</span>
+																{#each entityIds as id}
+																	<span class="rounded border border-cyan-700/50 px-1.5 py-0.5 text-cyan-300">entity:{id}</span>
+																{/each}
+																{#each factionIds as id}
+																	<span class="rounded border border-violet-700/50 px-1.5 py-0.5 text-violet-300">faction:{id}</span>
+																{/each}
+																{#each threadIds as id}
+																	<span class="rounded border border-amber-700/50 px-1.5 py-0.5 text-amber-200">thread:{id}</span>
+																{/each}
+															</div>
+															{#if signals.length > 0}
+																<div class="mt-1 flex flex-wrap gap-1">
+																	{#each signals as signal}
+																		<span class="rounded bg-[var(--bg-secondary)] px-1.5 py-0.5 text-[var(--text-secondary)]">{signal}</span>
+																	{/each}
+																</div>
+															{/if}
+															{#if sourceRefs.length > 0}
+																<div class="mt-1 truncate text-[var(--text-muted)]">{sourceRefs.join(' ')}</div>
+															{/if}
+														</div>
+													{/each}
+												</div>
+											</div>
+										{/if}
 										<pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] leading-relaxed text-[var(--text-secondary)]">{stringValue(retrievedMemory?.packet)}</pre>
 									</div>
 								{/if}
@@ -660,6 +1000,220 @@
 										<pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs leading-relaxed text-[var(--text-secondary)]">{stringValue(apiDebugSnapshot.output)}</pre>
 									</div>
 								{/if}
+							</div>
+						{/if}
+
+						{#if activeSection === 'llmSettings'}
+							<div class="space-y-3">
+								<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">LLM Service Settings</div>
+								{#if llmSettings.length === 0}
+									<div class="rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3 text-xs text-[var(--text-muted)]">No LLM settings</div>
+								{:else}
+									{#each llmSettings as setting, index (setting.serviceId ?? index)}
+										<div class="space-y-3 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
+											<div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+													<span>serviceId</span>
+													<input value={stringValue(setting.serviceId)} readonly class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 font-mono text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+												</label>
+												<label class="flex h-9 items-center gap-2 rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-3 text-xs text-[var(--text-secondary)]">
+													<input type="checkbox" checked={setting.enabled !== false} onchange={(event) => updateLlmSetting(index, 'enabled', (event.currentTarget as HTMLInputElement).checked)} />
+													<span>Enabled</span>
+												</label>
+											</div>
+
+											<div class="grid gap-2 sm:grid-cols-2">
+												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+													<span>providerType</span>
+													<input value={stringValue(setting.providerType)} oninput={(event) => updateLlmSetting(index, 'providerType', textValue(event).trim())} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+												</label>
+												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+													<span>model</span>
+													<input value={stringValue(setting.model)} oninput={(event) => updateLlmSetting(index, 'model', nullableTextValue(textValue(event)))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+												</label>
+												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+													<span>baseUrl</span>
+													<input value={stringValue(setting.baseUrl)} oninput={(event) => updateLlmSetting(index, 'baseUrl', nullableTextValue(textValue(event)))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+												</label>
+												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+													<span>apiKeyRef</span>
+													<input value={stringValue(setting.apiKeyRef)} oninput={(event) => updateLlmSetting(index, 'apiKeyRef', nullableTextValue(textValue(event)))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+												</label>
+											</div>
+
+											<div class="grid gap-2 sm:grid-cols-4">
+												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+													<span>temperature</span>
+													<input type="number" min="0" max="2" step="0.1" value={Number(setting.temperature ?? 1)} oninput={(event) => updateLlmSetting(index, 'temperature', numberInputValue(event, Number(setting.temperature ?? 1), 0, 2))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+												</label>
+												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+													<span>maxTokens</span>
+													<input type="number" min="128" max="65536" step="256" value={Number(setting.maxTokens ?? 4096)} oninput={(event) => updateLlmSetting(index, 'maxTokens', numberInputValue(event, Number(setting.maxTokens ?? 4096), 128, 65536, true))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+												</label>
+												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+													<span>topP</span>
+													<input type="number" min="0" max="1" step="0.05" value={stringValue(setting.topP)} oninput={(event) => updateLlmSetting(index, 'topP', nullableNumberInputValue(event, 0, 1))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+												</label>
+												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+													<span>contextBudget</span>
+													<input type="number" min="1" step="1024" value={stringValue(setting.contextBudget)} oninput={(event) => updateLlmSetting(index, 'contextBudget', nullableNumberInputValue(event, 1, 1_000_000, true))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+												</label>
+											</div>
+
+											<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+												<span>reasoningEffort</span>
+												<input value={stringValue(setting.reasoningEffort)} oninput={(event) => updateLlmSetting(index, 'reasoningEffort', nullableTextValue(textValue(event)))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+											</label>
+
+											<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+												<span>systemPromptOverride</span>
+												<textarea value={stringValue(setting.systemPromptOverride)} oninput={(event) => updateLlmSetting(index, 'systemPromptOverride', nullableTextValue(textValue(event)))} class="h-32 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+											</label>
+										</div>
+									{/each}
+								{/if}
+							</div>
+						{/if}
+
+						{#if activeSection === 'npcCandidates'}
+							<div class="space-y-3 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
+								<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Important NPC Candidates</div>
+								{#if selectedRecord}
+									<div class="grid gap-2 sm:grid-cols-3">
+										<div class="rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-2 py-1.5">
+											<div class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Candidate</div>
+											<div class="truncate text-xs text-[var(--text-accent)]">{npcCandidateName(selectedRecord)}</div>
+										</div>
+										<div class="rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-2 py-1.5">
+											<div class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Confidence</div>
+											<div class="text-xs tabular-nums text-[var(--text-secondary)]">{stringValue(selectedRecord.confidence)}</div>
+										</div>
+										<div class="rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-2 py-1.5">
+											<div class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Source</div>
+											<div class="truncate text-xs text-[var(--text-secondary)]">{npcCandidateSource(selectedRecord)}</div>
+										</div>
+									</div>
+									<div class="text-xs leading-relaxed text-[var(--text-secondary)]">{formatProposalDescription(selectedRecord)}</div>
+								{:else}
+									<div class="text-xs text-[var(--text-muted)]">No pending NPC candidates</div>
+								{/if}
+							</div>
+						{/if}
+
+						{#if isReviewablePatch}
+							<div class="space-y-3 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
+								<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Review Proposal</div>
+								<div class="flex gap-2">
+									<button class="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 hover:bg-emerald-500/15 disabled:opacity-50" onclick={() => reviewPatchProposal('approved')} disabled={reviewingProposal}>
+										<Check class="h-4 w-4" />
+										Approve
+									</button>
+									<button class="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200 hover:bg-rose-500/15 disabled:opacity-50" onclick={() => reviewPatchProposal('rejected')} disabled={reviewingProposal}>
+										<X class="h-4 w-4" />
+										Reject
+									</button>
+								</div>
+							</div>
+						{/if}
+
+						{#if editorRecord?.type === 'character' || selectedRecord?.type === 'character'}
+							<div class="space-y-3 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
+								<div class="flex items-center justify-between gap-3">
+									<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Character Canon</div>
+									<button
+										class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-50"
+										onclick={draftCharacterUpdate}
+										disabled={draftingCharacter}
+										title="Draft From Context"
+									>
+										<Sparkles class="h-4 w-4" />
+									</button>
+								</div>
+
+								<div class="grid gap-3 sm:grid-cols-[96px_minmax(0,1fr)]">
+									<div class="h-24 w-24 overflow-hidden rounded-md border border-[var(--border-secondary)] bg-[var(--bg-secondary)]">
+										{#if characterPhotoUrl}
+											<img src={characterPhotoUrl} alt="Character portrait" class="h-full w-full object-cover" />
+										{:else}
+											<div class="flex h-full w-full items-center justify-center text-[10px] uppercase tracking-wide text-[var(--text-muted)]">No Photo</div>
+										{/if}
+									</div>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Photo</span>
+										<input type="file" accept="image/*" onchange={handleCharacterPhotoUpload} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+									</label>
+								</div>
+
+								<div class="grid gap-2 sm:grid-cols-2">
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Appearance</span>
+										<textarea value={stringValue(characterState.appearance)} oninput={(event) => updateCharacterState('appearance', textValue(event))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Background</span>
+										<textarea value={stringValue(characterState.background)} oninput={(event) => updateCharacterState('background', textValue(event))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Goals</span>
+										<textarea value={linesValue(characterState.goals)} oninput={(event) => updateCharacterState('goals', lineArray(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Speech Style</span>
+										<textarea value={stringValue(characterState.speechStyle)} oninput={(event) => updateCharacterState('speechStyle', textValue(event))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+								</div>
+
+								<div class="grid gap-2 sm:grid-cols-3">
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Current Location</span>
+										<input value={stringValue(characterState.currentLocation)} oninput={(event) => updateCharacterState('currentLocation', textValue(event))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Current Action</span>
+										<input value={stringValue(characterState.currentAction)} oninput={(event) => updateCharacterState('currentAction', textValue(event))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Emotional State</span>
+										<input value={stringValue(characterState.emotionalState)} oninput={(event) => updateCharacterState('emotionalState', textValue(event))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Relationship</span>
+										<input value={stringValue(characterState.relationship)} oninput={(event) => updateCharacterState('relationship', textValue(event))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)] sm:col-span-2">
+										<span>Faction Tags</span>
+										<input value={linesValue(characterState.factionTags)} oninput={(event) => updateCharacterState('factionTags', lineArray(textValue(event)))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+									</label>
+								</div>
+
+								<div class="grid gap-2 sm:grid-cols-4">
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Did</span>
+										<textarea value={linesValue(characterEventMemory.did)} oninput={(event) => updateCharacterEventMemory('did', textValue(event))} class="h-20 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Saw</span>
+										<textarea value={linesValue(characterEventMemory.saw)} oninput={(event) => updateCharacterEventMemory('saw', textValue(event))} class="h-20 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Knew</span>
+										<textarea value={linesValue(characterEventMemory.knew)} oninput={(event) => updateCharacterEventMemory('knew', textValue(event))} class="h-20 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Knows</span>
+										<textarea value={linesValue(characterEventMemory.knows)} oninput={(event) => updateCharacterEventMemory('knows', textValue(event))} class="h-20 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+								</div>
+
+								<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+									<span>promptTemplate</span>
+									<textarea value={stringValue(characterState.promptTemplate)} oninput={(event) => updateCharacterState('promptTemplate', textValue(event))} class="h-28 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+								</label>
+
+								<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+									<span>Draft From Context</span>
+									<textarea bind:value={characterDraftInstructions} class="h-16 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+								</label>
 							</div>
 						{/if}
 

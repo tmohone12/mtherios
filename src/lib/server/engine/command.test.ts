@@ -212,7 +212,7 @@ describe('engine command envelope', () => {
 		}, {
 			saveLlmSettings: async (input) => {
 				calls.push({ kind: 'save', input });
-				return input.settings;
+				return [setting];
 			},
 		});
 
@@ -241,6 +241,45 @@ describe('engine command envelope', () => {
 				},
 			},
 		]);
+	});
+
+	it('accepts partial LLM setting patches from API control surfaces', async () => {
+		const calls: unknown[] = [];
+		const saved = await executeEngineCommand({
+			command: 'settings.llm.save',
+			storyId: '__app__',
+			clientCommandId: 'cmd_llm_patch',
+			args: {
+				settings: [{ serviceId: 'narrative', model: 'deepseek/deepseek-v3.2' }],
+			},
+		}, {
+			saveLlmSettings: async (input) => {
+				calls.push(input);
+				return [{
+					serviceId: 'narrative',
+					providerType: 'openrouter',
+					baseUrl: 'https://openrouter.ai/api/v1',
+					model: 'deepseek/deepseek-v3.2',
+					temperature: 1,
+					maxTokens: 4096,
+					topP: null,
+					frequencyPenalty: null,
+					presencePenalty: null,
+					reasoningEffort: null,
+					contextBudget: null,
+					enabled: true,
+					systemPromptOverride: null,
+					apiKeyRef: 'env:OPENROUTER_API_KEY',
+					metadata: {},
+				}];
+			},
+		});
+
+		expect(saved.status).toBe('succeeded');
+		expect(calls).toEqual([{
+			settings: [{ serviceId: 'narrative', model: 'deepseek/deepseek-v3.2' }],
+			secrets: [],
+		}]);
 	});
 
 	it('routes prompt packet diagnostics through the shared backend command surface', async () => {
@@ -319,7 +358,10 @@ describe('engine command envelope', () => {
 				mode: 'control_surface',
 				story: { id: storyId, title: 'Long Campaign', serverVersion: 3 },
 				entries: [],
-				counts: { entries: 0, entities: 0, events: 0, memoryNodes: 0 },
+				chapters: [],
+				arcs: [],
+				sagas: [],
+				counts: { entries: 0, entities: 0, events: 0, memoryNodes: 0, chapters: 0, arcs: 0, sagas: 0 },
 				vault: { vaultPath: 'data/vaults/campaigns/story_alpha', fileCount: 0, lastIndexedVersion: 3 },
 				cache: { storyId, entryCount: 0, hitCount: 0, missCount: 0, tokenEstimate: 0, byKind: [], segments: [] },
 			};
@@ -378,7 +420,10 @@ describe('engine command envelope', () => {
 						mode: 'control_surface',
 						story: { id: storyId, title: 'Long Campaign', serverVersion: 7 },
 						entries: [],
-						counts: { entries: 10000, entities: 0, events: 0, memoryNodes: 0 },
+						chapters: [],
+						arcs: [],
+						sagas: [],
+						counts: { entries: 10000, entities: 0, events: 0, memoryNodes: 0, chapters: 0, arcs: 0, sagas: 0 },
 						vault: { vaultPath: 'data/vaults/campaigns/story_alpha', fileCount: 4, lastIndexedVersion: 7 },
 						cache: { storyId, entryCount: 2, hitCount: 1, missCount: 1, tokenEstimate: 120, byKind: [], segments: [] },
 					},
@@ -393,7 +438,7 @@ describe('engine command envelope', () => {
 		}));
 		expect(result.projectionChanges).toEqual(expect.objectContaining({
 			mode: 'control_surface',
-			counts: { entries: 10000, entities: 0, events: 0, memoryNodes: 0 },
+			counts: { entries: 10000, entities: 0, events: 0, memoryNodes: 0, chapters: 0, arcs: 0, sagas: 0 },
 			entryLimit: 40,
 		}));
 		expect(bootstrapCalls).toEqual([{
@@ -682,6 +727,52 @@ describe('engine command envelope', () => {
 		]);
 	});
 
+	it('routes draft character updates through pending patch proposals', async () => {
+		const calls: unknown[] = [];
+		const result = await executeEngineCommand({
+			command: 'world.character.draftUpdate',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_character_draft',
+			args: {
+				recordId: 'npc_mira',
+				instructions: 'Refresh what Mira knows after the harbor scene.',
+			},
+		}, {
+			draftCharacterUpdate: async (storyId, args) => {
+				calls.push({ storyId, args });
+				return {
+					storyId,
+					recordId: args.recordId,
+					proposalId: 'proposal_npc_mira_context',
+					status: 'pending',
+				};
+			},
+		});
+
+		expect(result.status).toBe('succeeded');
+		expect(result.result).toEqual({
+			storyId: 'story_alpha',
+			recordId: 'npc_mira',
+			proposalId: 'proposal_npc_mira_context',
+			status: 'pending',
+		});
+		expect(result.projectionChanges).toEqual({
+			characterDraftUpdate: {
+				recordId: 'npc_mira',
+				proposalId: 'proposal_npc_mira_context',
+				status: 'pending',
+			},
+		});
+		expect(calls).toEqual([{
+			storyId: 'story_alpha',
+			args: {
+				recordId: 'npc_mira',
+				instructions: 'Refresh what Mira knows after the harbor scene.',
+				recentLimit: 30,
+			},
+		}]);
+	});
+
 	it('routes orchestrator runs through the shared backend command surface', async () => {
 		const orchestratorCalls: unknown[] = [];
 		const result = await executeEngineCommand({
@@ -900,6 +991,68 @@ describe('engine command envelope', () => {
 				return { storyId, serverVersion: 12, arc: row };
 			},
 		});
+		const deletedChapter = await executeEngineCommand({
+			command: 'chapter.delete',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_chapter_delete',
+			args: { chapterId: 'chapter_old' },
+		}, {
+			deleteChapter: async (storyId, chapterId) => {
+				calls.push(`chapter-delete:${storyId}:${chapterId}`);
+				return {
+					storyId,
+					serverVersion: 15,
+					chapterId,
+					deleted: true,
+					unwrappedArcIds: ['arc_1'],
+					unwrappedArcs: [{ id: 'arc_1', chapterIds: ['chapter_2'] }],
+				};
+			},
+		});
+		const deletedArc = await executeEngineCommand({
+			command: 'arc.delete',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_arc_delete',
+			args: { arcId: 'arc_old' },
+		}, {
+			deleteArc: async (storyId, arcId) => {
+				calls.push(`arc-delete:${storyId}:${arcId}`);
+				return { storyId, serverVersion: 16, arcId, deleted: true };
+			},
+		});
+		const checkpoint = await executeEngineCommand({
+			command: 'context.checkpoint.create',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_checkpoint',
+			args: { label: 'Before the bad turn' },
+		}, {
+			createContextCheckpoint: async (storyId, input) => {
+				calls.push(`checkpoint:${storyId}:${input.label}`);
+				return { storyId, serverVersion: 17, checkpoint: { id: 'checkpoint_1', label: input.label } };
+			},
+		});
+		const checkpointList = await executeEngineCommand({
+			command: 'context.checkpoint.list',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_checkpoint_list',
+			args: { limit: 5 },
+		}, {
+			listContextCheckpoints: async (storyId, limit) => {
+				calls.push(`checkpoint-list:${storyId}:${limit}`);
+				return { storyId, checkpoints: [{ id: 'checkpoint_1' }] };
+			},
+		});
+		const checkpointRevert = await executeEngineCommand({
+			command: 'context.checkpoint.revert',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_checkpoint_revert',
+			args: { checkpointId: 'checkpoint_1' },
+		}, {
+			revertToContextCheckpoint: async (storyId, input) => {
+				calls.push(`checkpoint-revert:${storyId}:${input.checkpointId}`);
+				return { storyId, serverVersion: 18, checkpoint: { id: input.checkpointId }, restoredCounts: { storyEntries: 2 } };
+			},
+		});
 		const saga = await executeEngineCommand({
 			command: 'saga.upsert',
 			storyId: 'story_alpha',
@@ -937,6 +1090,11 @@ describe('engine command envelope', () => {
 			'delete:story_alpha:npc_old',
 			'chapter:story_alpha:chapter_1',
 			'arc:story_alpha:arc_1',
+			'chapter-delete:story_alpha:chapter_old',
+			'arc-delete:story_alpha:arc_old',
+			'checkpoint:story_alpha:Before the bad turn',
+			'checkpoint-list:story_alpha:5',
+			'checkpoint-revert:story_alpha:checkpoint_1',
 			'saga:story_alpha:saga_1',
 			'living:story_alpha:worldEvent:1',
 		]);
@@ -956,6 +1114,28 @@ describe('engine command envelope', () => {
 		expect(arc.projectionChanges).toEqual({
 			arc: { id: 'arc_1', title: 'Silver Gates' },
 			serverVersion: 12,
+		});
+		expect(deletedChapter.projectionChanges).toEqual({
+			chapter: { id: 'chapter_old', deleted: true },
+			unwrappedArcIds: ['arc_1'],
+			unwrappedArcs: [{ id: 'arc_1', chapterIds: ['chapter_2'] }],
+			serverVersion: 15,
+		});
+		expect(deletedArc.projectionChanges).toEqual({
+			arc: { id: 'arc_old', deleted: true },
+			serverVersion: 16,
+		});
+		expect(checkpoint.projectionChanges).toEqual({
+			contextCheckpoint: { id: 'checkpoint_1', label: 'Before the bad turn' },
+			serverVersion: 17,
+		});
+		expect(checkpointList.projectionChanges).toEqual({
+			contextCheckpoints: [{ id: 'checkpoint_1' }],
+		});
+		expect(checkpointRevert.projectionChanges).toEqual({
+			contextCheckpoint: { id: 'checkpoint_1' },
+			restoredCounts: { storyEntries: 2 },
+			serverVersion: 18,
 		});
 		expect(saga.projectionChanges).toEqual({
 			saga: { id: 'saga_1', title: 'The Long Road' },
@@ -1072,10 +1252,37 @@ describe('engine command envelope', () => {
 				return {
 					storyId: input.storyId,
 					generatedAt: '2026-06-09T00:00:00.000Z',
-					summary: { openWarnings: 2, pendingProposals: 1, inactiveEntities: 3 },
+					summary: {
+						openWarnings: 2,
+						pendingProposals: 1,
+						inactiveEntities: 3,
+						dueFactionProjects: 4,
+						factionProjectProposals: 2,
+						factionProjectWarnings: 1,
+					},
 					openWarnings: [],
 					pendingProposals: [],
 					inactiveEntities: [],
+				};
+			},
+		});
+		const cleanup = await executeEngineCommand({
+			command: 'canon.cleanupDrift',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_cleanup',
+			args: { dryRun: false },
+		}, {
+			cleanupCanonDrift: async (input) => {
+				calls.push(`cleanup:${input.storyId}:${input.dryRun === true}`);
+				return {
+					storyId: input.storyId,
+					dryRun: input.dryRun === true,
+					deleted: true,
+					invalidSourceRefs: 6,
+					duplicateSourceRefs: 2,
+					unsafeMemoryNodes: 543,
+					deleteCount: 551,
+					serverVersion: 33,
 				};
 			},
 		});
@@ -1118,6 +1325,22 @@ describe('engine command envelope', () => {
 				openWarnings: 2,
 				pendingProposals: 1,
 				inactiveEntities: 3,
+				dueFactionProjects: 4,
+				factionProjectProposals: 2,
+				factionProjectWarnings: 1,
+			},
+		});
+		expect(cleanup.status).toBe('succeeded');
+		expect(cleanup.projectionChanges).toEqual({
+			canonCleanup: {
+				storyId: 'story_alpha',
+				dryRun: false,
+				deleted: true,
+				invalidSourceRefs: 6,
+				duplicateSourceRefs: 2,
+				unsafeMemoryNodes: 543,
+				deleteCount: 551,
+				serverVersion: 33,
 			},
 		});
 		expect(calls).toEqual([
@@ -1126,6 +1349,7 @@ describe('engine command envelope', () => {
 			'merge:story_alpha:entity_keep:entity_dup',
 			'review:story_alpha:proposal_1:approved',
 			'audit:story_alpha:12',
+			'cleanup:story_alpha:false',
 		]);
 	});
 
@@ -1143,6 +1367,58 @@ describe('engine command envelope', () => {
 
 		expect(result.status).toBe('failed');
 		expect(result.error).toContain('Unknown engine command');
+	});
+
+	it('publishes continuity audit projection changes to the control-surface stream', async () => {
+		resetEngineEventsForTest();
+		const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+		const unsubscribe = subscribeEngineEvents('story_alpha', (event) => events.push({
+			type: event.type,
+			data: event.data,
+		}));
+
+		const result = await executeEngineCommand({
+			command: 'continuity.audit',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_continuity_audit',
+			args: { limit: 9 },
+		}, {
+			continuityAudit: async (input) => ({
+				storyId: input.storyId,
+				generatedAt: '2026-06-13T00:00:00.000Z',
+				summary: {
+					openWarnings: 2,
+					pendingProposals: 3,
+					inactiveEntities: 1,
+					dueFactionProjects: 4,
+					factionProjectProposals: 2,
+					factionProjectWarnings: 1,
+				},
+				openWarnings: [],
+				pendingProposals: [],
+				inactiveEntities: [],
+			}),
+		});
+		unsubscribe();
+
+		expect(result.status).toBe('succeeded');
+		expect(events.map((event) => event.type)).toEqual([
+			'command.received',
+			'command.running',
+			'state.changed',
+			'command.succeeded',
+		]);
+		expect(events[2]?.data).toEqual({
+			continuityAudit: {
+				storyId: 'story_alpha',
+				openWarnings: 2,
+				pendingProposals: 3,
+				inactiveEntities: 1,
+				dueFactionProjects: 4,
+				factionProjectProposals: 2,
+				factionProjectWarnings: 1,
+			},
+		});
 	});
 
 	it('publishes command lifecycle events for the control-surface stream', async () => {
@@ -1651,6 +1927,9 @@ describe('engine command envelope', () => {
 						entities: 312,
 						events: 44,
 						memoryNodes: 91,
+						chapters: 22,
+						arcs: 4,
+						sagas: 0,
 					},
 					cache: {
 						hitCount: 4,
@@ -1684,6 +1963,9 @@ describe('engine command envelope', () => {
 					entities: 312,
 					events: 44,
 					memoryNodes: 91,
+					chapters: 22,
+					arcs: 4,
+					sagas: 0,
 				},
 			},
 			vault: {
@@ -1741,6 +2023,7 @@ describe('engine command envelope', () => {
 				nodes: [],
 				tokenEstimate: input.tokenBudget,
 				retrievalDebug: ['engine-command'],
+				retrievalTrace: [],
 			}),
 		});
 
@@ -2092,6 +2375,31 @@ describe('engine command envelope', () => {
 				};
 			},
 		});
+		const rollup = await executeEngineCommand({
+			command: 'jobs.rollupArc',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_rollup_arc',
+			args: {
+				workerId: 'manual_arc',
+				runNow: true,
+				chaptersPerArc: 5,
+			},
+		}, {
+			runRollupArcJob: async (input) => {
+				calls.push({ kind: 'rollupArc', input });
+				return {
+					ok: true,
+					storyId: input.storyId,
+					workerId: input.workerId,
+					jobId: 'job_rollup_arc',
+					job: {
+						jobId: 'job_rollup_arc',
+						completed: true,
+						result: { arcCount: 2 },
+					},
+				};
+			},
+		});
 
 		expect(reindex.status).toBe('succeeded');
 		expect(reindex.result).toEqual({
@@ -2142,6 +2450,20 @@ describe('engine command envelope', () => {
 				},
 			},
 		});
+		expect(rollup.status).toBe('succeeded');
+		expect(rollup.projectionChanges).toEqual({
+			jobs: {
+				rollupArc: {
+					ok: true,
+					storyId: 'story_alpha',
+					workerId: 'manual_arc',
+					jobId: 'job_rollup_arc',
+					runNow: true,
+					completed: true,
+					arcCount: 2,
+				},
+			},
+		});
 		expect(calls).toEqual([
 			{
 				kind: 'reindex',
@@ -2169,6 +2491,15 @@ describe('engine command envelope', () => {
 					workerId: 'manual_worker',
 					limit: 7,
 					allStories: false,
+				},
+			},
+			{
+				kind: 'rollupArc',
+				input: {
+					storyId: 'story_alpha',
+					workerId: 'manual_arc',
+					runNow: true,
+					chaptersPerArc: 5,
 				},
 			},
 		]);

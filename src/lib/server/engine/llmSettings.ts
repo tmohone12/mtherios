@@ -4,7 +4,12 @@ import path from 'node:path';
 import { env } from '$env/dynamic/private';
 import { getDb } from '$lib/server/db/client';
 import { llmServiceSettings } from '$lib/server/db/schema';
-import { llmServiceSettingSchema, type LlmServiceSetting } from '$lib/contracts/engine';
+import {
+	llmServiceSettingPatchSchema,
+	llmServiceSettingSchema,
+	type LlmServiceSetting,
+	type LlmServiceSettingPatch,
+} from '$lib/contracts/engine';
 import type { TurnRequest } from '$lib/contracts/memory';
 import { PROVIDERS, type ProviderServices } from '$lib/services/ai/sdk/providers/config';
 import type { ProviderType } from '$lib/types';
@@ -161,6 +166,11 @@ function serviceDefaultKey(serviceId: string): keyof ProviderServices {
 	return 'narrative';
 }
 
+function providerServiceDefaults(providerType: ProviderType, serviceId: string) {
+	const provider = PROVIDERS[providerType];
+	return provider.services?.[serviceDefaultKey(serviceId)] ?? provider.services?.narrative;
+}
+
 function serviceConfigFromFile(serviceId: string): {
 	global: Record<string, unknown>;
 	service: Record<string, unknown>;
@@ -190,7 +200,7 @@ function defaultServiceSetting(serviceId: string): LlmServiceSetting | null {
 	if (!providerType) return null;
 
 	const provider = PROVIDERS[providerType];
-	const serviceDefaults = provider.services?.[serviceDefaultKey(serviceId)] ?? provider.services?.narrative;
+	const defaults = providerServiceDefaults(providerType, serviceId);
 	const explicitApiKeyRef = configString(
 		service.apiKeyRef,
 		envFirst(`MTHERIOS_${prefix}_LLM_API_KEY_REF`, `MTHERIOS_${prefix}_API_KEY_REF`),
@@ -203,7 +213,7 @@ function defaultServiceSetting(serviceId: string): LlmServiceSetting | null {
 		envFirst(`MTHERIOS_${prefix}_LLM_MODEL`, `MTHERIOS_${prefix}_MODEL`),
 		global.model,
 		envFirst('MTHERIOS_LLM_MODEL'),
-		serviceDefaults?.model,
+		defaults?.model,
 		provider.fallbackModels[0],
 	);
 	const temperature = configNumber(
@@ -211,7 +221,7 @@ function defaultServiceSetting(serviceId: string): LlmServiceSetting | null {
 		envFirst(`MTHERIOS_${prefix}_LLM_TEMPERATURE`, `MTHERIOS_${prefix}_TEMPERATURE`),
 		global.temperature,
 		envFirst('MTHERIOS_LLM_TEMPERATURE'),
-		serviceDefaults?.temperature,
+		defaults?.temperature,
 		serviceId === 'classifier' ? 0.2 : 1,
 	);
 	const maxTokens = configNumber(
@@ -221,7 +231,7 @@ function defaultServiceSetting(serviceId: string): LlmServiceSetting | null {
 		global.maxTokens,
 		global.max_tokens,
 		envFirst('MTHERIOS_LLM_MAX_TOKENS'),
-		serviceDefaults?.maxTokens,
+		defaults?.maxTokens,
 		4096,
 	);
 
@@ -243,7 +253,7 @@ function defaultServiceSetting(serviceId: string): LlmServiceSetting | null {
 		topP: configNumber(service.topP, service.top_p, global.topP, global.top_p),
 		frequencyPenalty: configNumber(service.frequencyPenalty, service.frequency_penalty, global.frequencyPenalty, global.frequency_penalty),
 		presencePenalty: configNumber(service.presencePenalty, service.presence_penalty, global.presencePenalty, global.presence_penalty),
-		reasoningEffort: configString(service.reasoningEffort, service.reasoning_effort, global.reasoningEffort, global.reasoning_effort, serviceDefaults?.reasoningEffort),
+		reasoningEffort: configString(service.reasoningEffort, service.reasoning_effort, global.reasoningEffort, global.reasoning_effort, defaults?.reasoningEffort),
 		contextBudget: configNumber(service.contextBudget, service.context_budget, global.contextBudget, global.context_budget),
 		enabled: service.enabled !== false,
 		systemPromptOverride: configString(service.systemPromptOverride, service.system_prompt_override),
@@ -253,6 +263,43 @@ function defaultServiceSetting(serviceId: string): LlmServiceSetting | null {
 			configPath: configPath(),
 		},
 	});
+}
+
+function baseSettingFromProvider(patch: LlmServiceSettingPatch): LlmServiceSetting {
+	const providerType = providerTypeOrNull(patch.providerType);
+	if (!providerType) {
+		throw new Error(`LLM setting "${patch.serviceId}" needs providerType before it can be created.`);
+	}
+	const provider = PROVIDERS[providerType];
+	const defaults = providerServiceDefaults(providerType, patch.serviceId);
+	return llmServiceSettingSchema.parse({
+		serviceId: patch.serviceId,
+		providerType,
+		baseUrl: provider.baseUrl || null,
+		model: defaults?.model ?? provider.fallbackModels[0] ?? null,
+		temperature: defaults?.temperature ?? (patch.serviceId === 'classifier' ? 0.2 : 1),
+		maxTokens: Math.trunc(defaults?.maxTokens ?? 4096),
+		topP: null,
+		frequencyPenalty: null,
+		presencePenalty: null,
+		reasoningEffort: defaults?.reasoningEffort ?? null,
+		contextBudget: null,
+		enabled: true,
+		systemPromptOverride: null,
+		apiKeyRef: defaultApiKeyRef(providerType, null),
+		metadata: { source: 'api_patch', configPath: configPath() },
+	});
+}
+
+export function mergeLlmServiceSettingPatch(
+	base: LlmServiceSetting,
+	patch: LlmServiceSettingPatch,
+): LlmServiceSetting {
+	const next: Record<string, unknown> = { ...base };
+	for (const [key, value] of Object.entries(patch)) {
+		if (value !== undefined) next[key] = value;
+	}
+	return llmServiceSettingSchema.parse(next);
 }
 
 async function findOrCreateLlmServiceSetting(serviceId: string): Promise<LlmServiceSetting | null> {
@@ -281,11 +328,17 @@ export async function listLlmServiceSettings(): Promise<LlmServiceSetting[]> {
 	return rows.map((row) => llmServiceSettingSchema.parse(row));
 }
 
-export async function upsertLlmServiceSettings(settings: LlmServiceSetting[]) {
+export async function upsertLlmServiceSettings(settings: LlmServiceSettingPatch[]) {
 	const updatedAt = nowIso();
 	const saved: LlmServiceSetting[] = [];
 	for (const raw of settings) {
-		const setting = llmServiceSettingSchema.parse(raw);
+		const patch = llmServiceSettingPatchSchema.parse(raw);
+		const existing = await findOrCreateLlmServiceSetting(patch.serviceId);
+		const providerChanged = patch.providerType && existing?.providerType !== patch.providerType;
+		const base = providerChanged || !existing
+			? baseSettingFromProvider(patch)
+			: existing;
+		const setting = mergeLlmServiceSettingPatch(base, patch);
 		const [row] = await getDb().insert(llmServiceSettings).values({
 			serviceId: setting.serviceId,
 			providerType: setting.providerType,

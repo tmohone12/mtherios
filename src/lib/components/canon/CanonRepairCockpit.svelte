@@ -26,6 +26,11 @@
 		searchCanonPages,
 		type CanonRepairCandidate,
 	} from '$lib/services/canonRepair';
+	import {
+		formatProposalDescription,
+		formatProposalSubline,
+		formatProposalSummary,
+	} from '$lib/services/canonProposalDisplay';
 
 	type JsonRecord = Record<string, unknown>;
 	type Mode = 'pages' | 'resolver' | 'proposals' | 'merge' | 'audit';
@@ -596,8 +601,8 @@
 						{:else}
 							{#each pendingProposalRows as proposal}
 								<button class="block w-full rounded-md border border-[var(--border-primary)] px-3 py-2 text-left text-xs hover:border-[var(--color-gold-600)] {selectedProposal?.id === proposal.id ? 'bg-[rgba(212,168,83,0.08)]' : ''}" onclick={() => selectProposal(proposal)}>
-									<div class="truncate text-[var(--text-accent)]">{preview(proposal.proposalType ?? proposal.id)}</div>
-									<div class="truncate text-[var(--text-muted)]">{preview(proposal.targetTable ?? proposal.target_record_id)} / {preview(proposal.status)}</div>
+									<div class="truncate text-[var(--text-accent)]">{formatProposalSummary(proposal)}</div>
+									<div class="truncate text-[var(--text-muted)]">{formatProposalSubline(proposal)}</div>
 								</button>
 							{/each}
 						{/if}
@@ -716,7 +721,14 @@
 					<div class="rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-4">
 						<div class="mb-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Selected proposal</div>
 						{#if selectedProposal}
-							<div class="flex flex-wrap gap-2 text-xs text-[var(--text-muted)]">
+							<div class="space-y-1">
+								<div class="text-sm text-[var(--text-accent)]">{formatProposalSummary(selectedProposal)}</div>
+								<div class="text-xs text-[var(--text-muted)]">{formatProposalSubline(selectedProposal)}</div>
+								{#if formatProposalDescription(selectedProposal)}
+									<div class="text-xs leading-relaxed text-[var(--text-secondary)]">{formatProposalDescription(selectedProposal)}</div>
+								{/if}
+							</div>
+							<div class="mt-3 flex flex-wrap gap-2 text-xs text-[var(--text-muted)]">
 								<span class="rounded border border-[var(--border-secondary)] px-2 py-1">{preview(selectedProposal.status)}</span>
 								<span class="rounded border border-[var(--border-secondary)] px-2 py-1">{preview(selectedProposal.decision)}</span>
 								<span class="rounded border border-[var(--border-secondary)] px-2 py-1">{preview(selectedProposal.proposalType)}</span>

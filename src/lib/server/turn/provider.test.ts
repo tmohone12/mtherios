@@ -17,6 +17,28 @@ function stubFetch(responseBody: Record<string, any>) {
 	}));
 }
 
+function stubStreamingFetch(chunks: string[]) {
+	vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+		requests.push({
+			url,
+			body: JSON.parse(String(init.body ?? '{}')),
+			headers: init.headers as Record<string, string>,
+		});
+		const encoder = new TextEncoder();
+		return new Response(new ReadableStream({
+			start(controller) {
+				for (const chunk of chunks) {
+					controller.enqueue(encoder.encode(chunk));
+				}
+				controller.close();
+			},
+		}), {
+			status: 200,
+			headers: { 'Content-Type': 'text/event-stream' },
+		});
+	}));
+}
+
 describe('server generation provider cache hints', () => {
 	beforeEach(() => {
 		requests.length = 0;
@@ -162,5 +184,63 @@ describe('server generation provider cache hints', () => {
 		});
 		await vi.advanceTimersByTimeAsync(30);
 		await assertion;
+	});
+
+	it('streams OpenAI-compatible text deltas while preserving final metrics', async () => {
+		stubStreamingFetch([
+			'data: {"choices":[{"delta":{"content":"The hall"}}]}\n\n',
+			'data: {"choices":[{"delta":{"content":" wakes."}}]}\n\n',
+			'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}\n\n',
+			'data: [DONE]\n\n',
+		]);
+		const deltas: string[] = [];
+
+		const result = await generateServerTextWithMetrics({
+			profile: {
+				providerType: 'openrouter',
+				apiKey: 'test-key',
+				baseUrl: 'https://openrouter.ai/api/v1',
+			} as any,
+			model: 'openai/gpt-5-mini',
+			system: 'Stable narrator rules.',
+			prompt: 'Player action:\nListen.',
+			onTextDelta: (chunk) => {
+				deltas.push(chunk);
+			},
+		});
+
+		expect(requests[0].body.stream).toBe(true);
+		expect(requests[0].body.stream_options).toEqual({ include_usage: true });
+		expect(deltas).toEqual(['The hall', ' wakes.']);
+		expect(result.text).toBe('The hall wakes.');
+		expect(result.usage).toEqual({ requestTokens: 12, responseTokens: 3, totalTokens: 15 });
+	});
+
+	it('streams Anthropic text deltas through the terminal provider path', async () => {
+		stubStreamingFetch([
+			'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"The court"}}\n\n',
+			'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":" listens."}}\n\n',
+			'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":5}}\n\n',
+		]);
+		const deltas: string[] = [];
+
+		const result = await generateServerTextWithMetrics({
+			profile: {
+				providerType: 'anthropic',
+				apiKey: 'test-key',
+				baseUrl: 'https://api.anthropic.com',
+			} as any,
+			model: 'claude-sonnet-4-5',
+			system: 'Stable narrator rules.',
+			prompt: 'Player action:\nListen.',
+			onTextDelta: (chunk) => {
+				deltas.push(chunk);
+			},
+		});
+
+		expect(requests[0].body.stream).toBe(true);
+		expect(deltas).toEqual(['The court', ' listens.']);
+		expect(result.text).toBe('The court listens.');
+		expect(result.usage.responseTokens).toBe(5);
 	});
 });

@@ -1,0 +1,59 @@
+- generic [ref=e53]:
+  - banner [ref=e54]:
+    - generic [ref=e55]:
+      - img [ref=e56]
+      - generic [ref=e59]: Mtherios
+    - navigation [ref=e60]:
+      - button "Shelves" [ref=e61]:
+        - generic [ref=e64]:
+          - img [ref=e65]
+          - generic [ref=e66]: Shelves
+      - button "Chapters" [ref=e67]:
+        - generic [ref=e68]:
+          - img [ref=e69]
+          - generic [ref=e70]: Chapters
+    - button "System" [ref=e72]:
+      - img [ref=e73]
+      - generic [ref=e74]: System
+      - img [ref=e75]
+  - main [ref=e76]:
+    - generic [ref=e78]:
+      - generic [ref=e79]:
+        - generic [ref=e80]:
+          - generic [ref=e81]:
+            - img [ref=e82]
+            - heading "Shelves" [level=2] [ref=e83]
+          - paragraph [ref=e84]: Stories in this shelf use the same terminal world database and lore workspace. Open a story to play, or use its Lore screen to search and edit canon.
+        - generic [ref=e85]:
+          - button "Import" [ref=e86]:
+            - img [ref=e87]
+            - text: Import
+          - button "Import Wiki" [ref=e88]:
+            - img [ref=e89]
+            - text: Import Wiki
+          - button "New" [ref=e90]:
+            - img [ref=e91]
+            - text: New
+      - generic [ref=e93]:
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - heading "Mtherios Lore Shelf" [level=3] [ref=e97]
+          - paragraph [ref=e98]: 1 story linked to the shared canon workspace.
+        - button "New Story" [ref=e99]:
+          - img [ref=e100]
+          - text: New Story
+      - generic [ref=e102]:
+        - 'button "Volantis: Black Walls Intrigue No genre · Today" [ref=e103]':
+          - img [ref=e105]
+          - generic [ref=e106]:
+            - generic [ref=e107]: "Volantis: Black Walls Intrigue"
+            - generic [ref=e108]:
+              - generic [ref=e109]: No genre
+              - generic [ref=e110]: ·
+              - generic [ref=e111]: Today
+        - generic [ref=e112]:
+          - button "Export story" [ref=e113]:
+            - img [ref=e114]
+          - button "Delete story" [ref=e115]:
+            - img [ref=e116]

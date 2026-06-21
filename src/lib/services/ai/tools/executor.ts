@@ -496,32 +496,19 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 	if (!story.currentStory) return;
 
 	const protagonistName = story.protagonist?.name?.toLowerCase();
+	const knownCharacterNames = new Set(story.characters.map(c => c.name.toLowerCase()));
 
 	// ── Characters ──
 	for (const char of args.characters) {
 		if (!char.name) continue;
 
-		const exists = story.characters.some(c => c.name.toLowerCase() === char.name.toLowerCase());
-		if (exists) {
+		if (knownCharacterNames.has(char.name.toLowerCase())) {
 			await story.updateCharacterFromClassification(char.name, {
 				description: char.description,
 				relationship: char.relationship,
 				status: char.status,
 				traits: char.traits,
 			});
-		} else {
-			await story.addCharacter(char.name, char.description ?? undefined, char.relationship ?? undefined);
-			// Brand-new characters skip the status/traits processing in addCharacter,
-			// so a "newly-introduced and departed in the same turn" mention would
-			// otherwise be saved as status='active' regardless of args. Run them
-			// through the classification updater so 'departed' → 'inactive'
-			// normalization fires and traits get merged.
-			if ((char.status && char.status !== 'active') || (char.traits && char.traits.length > 0)) {
-				await story.updateCharacterFromClassification(char.name, {
-					status: char.status,
-					traits: char.traits,
-				});
-			}
 		}
 
 		// Merge pressures onto an existing lorebook entry (canonical or alias match).
@@ -595,6 +582,7 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 		const presentNames = args.characters
 			.filter(c =>
 				c.name
+				&& knownCharacterNames.has(c.name.toLowerCase())
 				&& c.present !== false
 				&& c.status !== 'deceased'
 				&& c.status !== 'departed'
@@ -693,6 +681,9 @@ async function handleLorebookCreations(
 	for (const incoming of entries) {
 		if (!incoming.name) continue;
 		const existing = findExistingLoreEntry(incoming);
+		if (incoming.type === 'character' && !existing) {
+			continue;
+		}
 		if (existing) {
 			const updated = mergeLorebookEntry(existing, incoming);
 			applyCurrentStoryServerVersion((await patchCanonicalLorebookEntry(existing.id, updated)).serverVersion);
@@ -768,9 +759,9 @@ function buildIncomingLoreState(incoming: WorldStateLorebookEntry): Record<strin
 		if (incoming.faction_disposition) state.disposition = incoming.faction_disposition;
 		if (incoming.territory?.length) state.territory = incoming.territory.map(t => t.trim()).filter(Boolean);
 		if (incoming.known_members?.length) {
-			state.knownMembers = incoming.known_members
-				.map(memberNameToEntryId)
-				.filter((id): id is string => !!id);
+			const members = resolveFactionKnownMembers(incoming.known_members);
+			if (members.knownMemberIds.length > 0) state.knownMembers = members.knownMemberIds;
+			if (members.unresolvedMemberNames.length > 0) state.unresolvedKnownMembers = members.unresolvedMemberNames;
 		}
 	}
 	return Object.keys(state).length > 0 ? state : undefined;
@@ -784,6 +775,9 @@ function mergeEntryState(existing: Entry, incomingState: Record<string, any>): a
 	const next: FactionEntryState = { ...prev, ...(incomingState as Partial<FactionEntryState>) };
 	if (incomingState.knownMembers) {
 		next.knownMembers = mergeStrings(prev.knownMembers ?? [], incomingState.knownMembers);
+	}
+	if (incomingState.unresolvedKnownMembers) {
+		next.unresolvedKnownMembers = mergeStrings(prev.unresolvedKnownMembers ?? [], incomingState.unresolvedKnownMembers);
 	}
 	if (incomingState.goals) {
 		next.goals = mergeFactionGoals(prev.goals ?? [], incomingState.goals as FactionGoal[]);
@@ -859,6 +853,25 @@ function memberNameToEntryId(name: string): string | null {
 		aliases: [],
 	});
 	return entry?.id ?? null;
+}
+
+function resolveFactionKnownMembers(names: string[]): { knownMemberIds: string[]; unresolvedMemberNames: string[] } {
+	const knownMemberIds: string[] = [];
+	const unresolvedMemberNames: string[] = [];
+	for (const name of names) {
+		const clean = name.trim();
+		if (!clean) continue;
+		const entryId = memberNameToEntryId(clean);
+		if (entryId) {
+			knownMemberIds.push(entryId);
+		} else {
+			unresolvedMemberNames.push(clean);
+		}
+	}
+	return {
+		knownMemberIds: mergeStrings([], knownMemberIds),
+		unresolvedMemberNames: mergeStrings([], unresolvedMemberNames),
+	};
 }
 
 function mergeStrings(existing: string[], incoming: string[]): string[] {

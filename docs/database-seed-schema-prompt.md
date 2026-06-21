@@ -302,7 +302,7 @@ For Codex or another MCP client, prefer the MCP route once the terminal process 
 ```toml
 [mcp_servers.mtherios]
 command = 'C:\Program Files\nodejs\node.exe'
-args = ['E:\DEV\Projects\mtherios-factions\scripts\mtherios-mcp.mjs']
+args = ['E:\DEV\Projects\mtherios-factions-work\scripts\mtherios-mcp.mjs']
 startup_timeout_sec = 120
 
 [mcp_servers.mtherios.env]

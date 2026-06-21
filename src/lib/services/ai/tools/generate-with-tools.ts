@@ -63,15 +63,14 @@ CHARACTERS:
 - Include descriptions/traits/relationships only when they changed or were newly revealed.
 - Include \`aliases\` when the scene uses titles, epithets, house styles, or alternate names for an existing person.
 - Include \`faction_tags\` when a character visibly belongs to, serves, leads, commands, publicly represents, or is sworn to a faction. Use faction names or ids already present in context where possible.
-- NOTE: Characters listed here update RUNTIME tracking only. They do NOT automatically create lorebook entries anymore. If a character is significant enough to track long-term, you must ALSO emit them in \`lorebook_entries\` below.
+- NOTE: Characters listed here update established runtime character context only. Do not invent new character canon here. Unknown names should remain evidence in conversations, relationships, story beats, or timeline events until a human creates or approves the character.
 
-LOREBOOK ENTRIES (new — explicit creation):
-- This is the ONLY way new lorebook entries are created. There is no automatic creation from characters/locations/items.
-- Emit an entry for every significant world element introduced or deepened this turn: major NPCs, important locations, key items, factions, concepts (magic systems, customs, laws, religions), and notable events.
+LOREBOOK ENTRIES (explicit non-character creation):
+- This creates non-character lorebook entries. Character canon is created through human approval or explicit character controls, not narration extraction.
+- Emit an entry for every significant non-character world element introduced or deepened this turn: important locations, key items, factions, concepts (magic systems, customs, laws, religions), and notable events.
 - Write rich descriptions: 2–5 sentences based ONLY on what was established in the scene.
 - Include \`aliases\` (alternate names, titles, epithets) and \`keywords\` (3–5 terms for context retrieval).
 - Use \`hidden_info\` for secrets the protagonist does NOT know yet.
-- For character lorebook entries, put durable faction ties in \`state_overrides.factionTags\` when established.
 - Set \`injection_mode\` to \`always\` for entries that should be injected every turn (e.g., the protagonist themselves, core factions). Use \`keyword\` for everything else.
 - Do not create a new lorebook entry for a known entity under a slightly different title. Use aliases/keywords and relationships instead.
 - Skip unnamed, generic elements ("a guard", "the tavern", "some coins").

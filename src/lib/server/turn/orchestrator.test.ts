@@ -1,8 +1,69 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createMemoryEngineCacheRepository } from '$lib/server/engine/cache';
-import { applyPromptContextBudget, buildTurnContextReceipt, buildTurnPerformanceSummary, loadServerWikiContextWithCache, logSlowTurn, withBudget } from './orchestrator';
+import { applyPromptContextBudget, buildCampaignContinuityCachePayload, buildTurnContextReceipt, buildTurnPerformanceSummary, chaptersForPromptContinuity, loadServerWikiContextWithCache, logSlowTurn, withBudget } from './orchestrator';
 
 describe('turn orchestrator prompt budgeting', () => {
+	it('counts only chapters not already rolled into arcs for prompt continuity', () => {
+		const chapters = [
+			{ id: 'chapter_1', title: 'Covered' },
+			{ id: 'chapter_2', title: 'Covered Too' },
+			{ id: 'chapter_3', title: 'Current Loose Chapter' },
+		];
+
+		expect(chaptersForPromptContinuity(chapters, [
+			{ chapterIds: ['chapter_1', 'chapter_2'] },
+		])).toEqual([
+			{ id: 'chapter_3', title: 'Current Loose Chapter' },
+		]);
+	});
+
+	it('builds a compact continuity cache payload from uncovered chapters and bounded arcs', () => {
+		const payload = buildCampaignContinuityCachePayload({
+			chapters: [
+				{
+					id: 'chapter_1',
+					number: 1,
+					title: 'Covered',
+					sceneOutcome: 'Covered chapter details should not be serialized.',
+					openThreads: [],
+					updatedAt: '2026-05-23T12:00:00.000Z',
+				},
+				{
+					id: 'chapter_2',
+					number: 2,
+					title: 'Loose',
+					sceneOutcome: 'Loose chapter fact survives.',
+					openThreads: ['Loose thread survives.'],
+					updatedAt: '2026-05-23T12:00:00.000Z',
+				},
+			],
+			arcs: [
+				{
+					id: 'arc_1',
+					number: 1,
+					title: 'Covered Arc',
+					summary: `Arc cache opening survives. ${'raw chapter wall '.repeat(5000)} Arc cache tail sentinel.`,
+					chapterIds: ['chapter_1'],
+					openThreadIds: [`thread opening ${'thread filler '.repeat(2000)} thread cache tail sentinel`],
+					metadata: { giant: 'metadata should not enter cache payload'.repeat(1000) },
+					updatedAt: '2026-05-23T12:00:00.000Z',
+				},
+			],
+			sagas: [],
+		} as any);
+		const serialized = JSON.stringify(payload);
+
+		expect(payload.chapters).toEqual([
+			expect.objectContaining({ id: 'chapter_2', sceneOutcome: 'Loose chapter fact survives.' }),
+		]);
+		expect(serialized).toContain('Arc cache opening survives.');
+		expect(serialized).not.toContain('Covered chapter details should not be serialized.');
+		expect(serialized).not.toContain('Arc cache tail sentinel');
+		expect(serialized).not.toContain('thread cache tail sentinel');
+		expect(serialized).not.toContain('metadata should not enter cache payload');
+		expect(serialized.length).toBeLessThan(5000);
+	});
+
 	it('keeps unbounded dynamic prompt text unchanged', () => {
 		const prompt = 'A'.repeat(5000);
 
@@ -253,10 +314,71 @@ describe('turn orchestrator prompt budgeting', () => {
 			memoryNodeCount: 8,
 			wikiChunkCount: 3,
 			timelineEventCount: 5,
+			chapterCount: 4,
+			arcCount: 2,
+			chaptersSuppressedByArcs: 9,
+			promptChars: 62000,
+			promptTokens: 15500,
+			factCount: 4,
+			patchProposalCount: 7,
+			unresolvedCharacterReferenceCount: 2,
+			continuityWarningCount: 1,
 			factionIds: ['faction_red_sails'],
 			skipped: [
 				{ source: 'wiki', reason: 'budget_exceeded' },
 				{ source: 'recent_transcript', reason: 'entry_limit' },
+			],
+			unresolvedCharacterReferences: [
+				{
+					proposalId: 'proposal_hooded_envoy',
+					name: 'Hooded Envoy',
+					contextLabel: 'faction_member/Red Sails',
+					reason: 'Faction member named in "Red Sails".',
+					sourceEntryIds: ['entry_12'],
+				},
+			],
+			continuityLedger: {
+				facts: [
+					{
+						id: 'fact_red_sails_oath',
+						statement: 'The Red Sails swore to blockade the harbor.',
+						sourceEntryIds: ['entry_10'],
+						sourcePatchIds: ['patch_fact_1'],
+					},
+				],
+				patchProposals: [
+					{
+						id: 'proposal_harbor_blockade',
+						status: 'pending',
+						proposalType: 'turn_event',
+						targetTable: 'events',
+						targetRecordId: 'event_harbor_blockade',
+						reason: 'Narration introduced a delayed blockade consequence.',
+						sourceEntryIds: ['entry_11'],
+						sourcePatchIds: ['patch_event_1'],
+					},
+				],
+				warnings: [
+					{
+						id: 'warning_timeline_overlap',
+						level: 'warning',
+						status: 'open',
+						title: 'Timeline overlap',
+						sourceEntryIds: ['entry_12'],
+						sourcePatchIds: ['patch_warning_1'],
+					},
+				],
+			},
+			cacheSegments: [
+				{
+					kind: 'prompt_system',
+					cacheKey: 'engine-cache:story-alpha:prompt_system:stable',
+					contentHash: 'hash-system',
+					hit: true,
+					invalidated: false,
+					tokenEstimate: 640,
+					dependencyCount: 2,
+				},
 			],
 			budgets: {
 				memoryTokensUsed: 780,
@@ -275,11 +397,76 @@ describe('turn orchestrator prompt budgeting', () => {
 				memoryNodes: 8,
 				wikiChunks: 3,
 				timelineEvents: 5,
+				chapters: 4,
+				arcs: 2,
+				chaptersSuppressedByArcs: 9,
+				chaptersSent: 4,
+				arcsSent: 2,
+				chaptersSuppressedByArc: 9,
+				memoryNodesSent: 8,
+				totalChars: 62000,
+				totalTokens: 15500,
+				facts: 4,
+				patchProposals: 7,
+				unresolvedCharacterReferences: 2,
+				continuityWarnings: 1,
 				factionSheets: ['faction_red_sails'],
 			},
 			skipped: [
 				{ source: 'wiki', reason: 'budget_exceeded' },
 				{ source: 'recent_transcript', reason: 'entry_limit' },
+			],
+			unresolvedCharacterReferences: [
+				{
+					proposalId: 'proposal_hooded_envoy',
+					name: 'Hooded Envoy',
+					contextLabel: 'faction_member/Red Sails',
+					reason: 'Faction member named in "Red Sails".',
+					sourceEntryIds: ['entry_12'],
+				},
+			],
+			continuityLedger: {
+				facts: [
+					{
+						id: 'fact_red_sails_oath',
+						statement: 'The Red Sails swore to blockade the harbor.',
+						sourceEntryIds: ['entry_10'],
+						sourcePatchIds: ['patch_fact_1'],
+					},
+				],
+				patchProposals: [
+					{
+						id: 'proposal_harbor_blockade',
+						status: 'pending',
+						proposalType: 'turn_event',
+						targetTable: 'events',
+						targetRecordId: 'event_harbor_blockade',
+						reason: 'Narration introduced a delayed blockade consequence.',
+						sourceEntryIds: ['entry_11'],
+						sourcePatchIds: ['patch_event_1'],
+					},
+				],
+				warnings: [
+					{
+						id: 'warning_timeline_overlap',
+						level: 'warning',
+						status: 'open',
+						title: 'Timeline overlap',
+						sourceEntryIds: ['entry_12'],
+						sourcePatchIds: ['patch_warning_1'],
+					},
+				],
+			},
+			cacheSegments: [
+				{
+					kind: 'prompt_system',
+					cacheKey: 'engine-cache:story-alpha:prompt_system:stable',
+					contentHash: 'hash-system',
+					hit: true,
+					invalidated: false,
+					tokenEstimate: 640,
+					dependencyCount: 2,
+				},
 			],
 			budgets: {
 				memoryTokensUsed: 780,

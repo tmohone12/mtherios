@@ -17,6 +17,27 @@ type MemoryDebugNode = {
 	sourcePatchIds?: string[];
 };
 
+type MemoryDebugTraceItem = {
+	id: string;
+	title: string;
+	type: string;
+	rank: number;
+	score: number;
+	included: boolean;
+	reason: string;
+	tokenEstimate: number;
+	ageDays: number | null;
+	importance: number;
+	visibility: string;
+	entityIds: string[];
+	factionIds: string[];
+	threadIds: string[];
+	sourceEntryIds: string[];
+	sourceEventIds: string[];
+	sourcePatchIds: string[];
+	signals: string[];
+};
+
 type WikiDebugContext = {
 	markdown: string;
 	citations: string[];
@@ -75,6 +96,7 @@ export type TurnDebugSnapshot = {
 		packet: string;
 		retrievalDebug: string[];
 		nodes: MemoryDebugNode[];
+		retrievalTrace: MemoryDebugTraceItem[];
 	};
 	wikiContext?: WikiDebugContext | null;
 	contextCounts?: Record<string, number>;
@@ -112,6 +134,31 @@ function memoryNodes(packet: Partial<RetrievedMemoryPacket>): MemoryDebugNode[] 
 			sourceEntryIds: stringArray(node.sourceEntryIds),
 			sourceEventIds: stringArray(node.sourceEventIds),
 			sourcePatchIds: stringArray(node.sourcePatchIds),
+		}))
+		: [];
+}
+
+function memoryRetrievalTrace(packet: Partial<RetrievedMemoryPacket>): MemoryDebugTraceItem[] {
+	return Array.isArray(packet.retrievalTrace)
+		? packet.retrievalTrace.slice(0, 32).map((item) => ({
+			id: item.id,
+			title: item.title,
+			type: item.type,
+			rank: nonnegativeInteger(item.rank),
+			score: typeof item.score === 'number' && Number.isFinite(item.score) ? item.score : 0,
+			included: Boolean(item.included),
+			reason: item.reason,
+			tokenEstimate: nonnegativeInteger(item.tokenEstimate),
+			ageDays: item.ageDays == null ? null : nonnegativeInteger(item.ageDays),
+			importance: typeof item.importance === 'number' && Number.isFinite(item.importance) ? item.importance : 0,
+			visibility: item.visibility,
+			entityIds: stringArray(item.entityIds),
+			factionIds: stringArray(item.factionIds),
+			threadIds: stringArray(item.threadIds),
+			sourceEntryIds: stringArray(item.sourceEntryIds),
+			sourceEventIds: stringArray(item.sourceEventIds),
+			sourcePatchIds: stringArray(item.sourcePatchIds),
+			signals: stringArray(item.signals),
 		}))
 		: [];
 }
@@ -180,6 +227,7 @@ export function buildTurnDebugSnapshot(input: BuildTurnDebugSnapshotInput): Turn
 				packet: clip(input.retrievedMemory.packet, SOURCE_TEXT_LIMIT),
 				retrievalDebug: stringArray(input.retrievedMemory.retrievalDebug),
 				nodes: memoryNodes(input.retrievedMemory),
+				retrievalTrace: memoryRetrievalTrace(input.retrievedMemory),
 			}
 			: undefined,
 		wikiContext: input.wikiContext

@@ -270,19 +270,28 @@ async function importStory(url, flags) {
 	const raw = await fs.readFile(path.resolve(filePath), 'utf8');
 	const parsed = JSON.parse(raw);
 	const bundle = parsed && typeof parsed === 'object' && 'bundle' in parsed ? parsed.bundle : parsed;
-	const preserveIds = flags.preserveIds === undefined ? true : flags.preserveIds === true;
+	const fullDatabase = isFullDatabaseBundle(bundle);
+	const preserveIds = flags.preserveIds === undefined ? !fullDatabase : flags.preserveIds === true;
+	const syncWiki = flags.syncWiki === undefined ? true : flags.syncWiki === true;
 	const rebuildMemoryNodes = flags.rebuildMemoryNodes === undefined ? true : flags.rebuildMemoryNodes === true;
-	return requestJson(url, '/api/import/indexeddb', {
+	return requestJson(url, fullDatabase ? '/api/database/import' : '/api/import/indexeddb', {
 		method: 'POST',
 		body: JSON.stringify({
 			bundle,
 			options: {
 				preserveIds,
-				rebuildMemoryNodes,
+				...(fullDatabase
+					? { replaceExisting: false, syncWiki }
+					: { rebuildMemoryNodes }),
 			},
 		}),
 		timeoutMs: 180_000,
 	});
+}
+
+function isFullDatabaseBundle(bundle) {
+	return Boolean(bundle && typeof bundle === 'object' && !Array.isArray(bundle)
+		&& ('worldDatabase' in bundle || 'backendCanon' in bundle));
 }
 
 async function retrieveMemory(url, flags, positional) {

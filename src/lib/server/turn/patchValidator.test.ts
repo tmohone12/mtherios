@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+	agreements,
 	continuityWarnings,
 	entities,
+	factions,
+	factionMemberships,
 	facts,
 	memoryNodes,
 	npcEventLinks,
@@ -38,13 +41,23 @@ type TestStoryRow = Omit<typeof storyRow, 'currentWorldTime'> & { currentWorldTi
 const entityRows = [
 	{ id: 'entity_valen', storyId: 'story_1', type: 'character', name: 'Valen' },
 	{ id: 'entity_mira', storyId: 'story_1', type: 'character', name: 'Mira' },
+	{ id: 'entity_bridge', storyId: 'story_1', type: 'location', name: 'Ash Bridge' },
 	{ id: 'entity_watch', storyId: 'story_1', type: 'faction', name: 'The Watch' },
 ];
 
-function createDbMock(options: { story?: TestStoryRow | null } = {}) {
+const factionRows = [
+	{ id: 'faction_watch', storyId: 'story_1', entityId: 'entity_watch', name: 'The Watch' },
+];
+
+function createDbMock(options: {
+	story?: TestStoryRow | null;
+	patchProposalRows?: Array<typeof patchProposals.$inferSelect>;
+	entityRows?: Array<Record<string, unknown>>;
+} = {}) {
 	type DbSource = 'root' | 'tx';
 	const insertCalls: Array<{ source: DbSource; table: unknown; value: unknown }> = [];
 	const updateCalls: Array<{ source: DbSource; table: unknown; value: Record<string, unknown> }> = [];
+	const deleteCalls: Array<{ source: DbSource; table: unknown }> = [];
 	const selectLocks: Array<{ source: DbSource; table: unknown; strength: string }> = [];
 	const storyUpdates: Array<Record<string, unknown>> = [];
 	const selectedStory = options.story === undefined ? storyRow : options.story;
@@ -64,7 +77,9 @@ function createDbMock(options: { story?: TestStoryRow | null } = {}) {
 			}),
 			limit: vi.fn(() => {
 				if (selectedTable === stories) return Promise.resolve(selectedStory ? [selectedStory] : []);
-				if (selectedTable === entities) return Promise.resolve(entityRows);
+				if (selectedTable === entities) return Promise.resolve(options.entityRows ?? entityRows);
+				if (selectedTable === factions) return Promise.resolve(factionRows);
+				if (selectedTable === patchProposals) return Promise.resolve(options.patchProposalRows ?? []);
 				return Promise.resolve([]);
 			}),
 		};
@@ -90,7 +105,14 @@ function createDbMock(options: { story?: TestStoryRow | null } = {}) {
 			})),
 		}));
 
-		return { insert, select, update };
+		const deleteFn = vi.fn((table: unknown) => ({
+			where: vi.fn(() => {
+				deleteCalls.push({ source, table });
+				return Promise.resolve(undefined);
+			}),
+		}));
+
+		return { delete: deleteFn, insert, select, update };
 	}
 
 	const tx = createConnection('tx');
@@ -104,6 +126,7 @@ function createDbMock(options: { story?: TestStoryRow | null } = {}) {
 		tx,
 		insertCalls,
 		updateCalls,
+		deleteCalls,
 		selectLocks,
 		storyUpdates,
 	};
@@ -213,7 +236,6 @@ describe('applyValidatedTurnUpdate', () => {
 				scheduledTurn: null,
 				worldTime: 'Twilight of Ashes; one hour after the oath',
 				locationIds: [],
-				factionIds: [],
 				memoryImpact: {},
 				serverVersion: 12,
 			});
@@ -226,6 +248,9 @@ describe('applyValidatedTurnUpdate', () => {
 		});
 		expect(agreementEvent).toMatchObject({
 			visibility: 'player_known',
+			actorEntityIds: ['entity_valen'],
+			targetEntityIds: ['entity_mira'],
+			factionIds: ['faction_watch'],
 			sourceEntryIds: ['entry_assistant'],
 			sourcePatchIds: [patchInsert.id],
 			metadata: { agreement: update.agreements[0] },
@@ -246,7 +271,8 @@ describe('applyValidatedTurnUpdate', () => {
 		});
 		expect(sourceRefInserts.some(ref => ref.targetTable === 'facts' && ref.targetRecordId === factInsert.id)).toBe(true);
 		expect(sourceRefInserts.some(ref => ref.targetTable === 'patch_proposals' && ref.targetRecordId === proposalInsert!.id)).toBe(true);
-		expect(warningInserts).toHaveLength(0);
+		expect(warningInserts).toHaveLength(1);
+		expect(result.warnings).toContain('Character reference "Unknown Envoy" was not created as canon; review the proposal if this should become a character.');
 		expect(linkInsert).toEqual([
 			expect.objectContaining({
 				storyId: 'story_1',
@@ -294,6 +320,150 @@ describe('applyValidatedTurnUpdate', () => {
 		}));
 	});
 
+	it('links resolved character updates to the base turn event memory', async () => {
+		const { db, insertCalls, updateCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			characters: [
+				{
+					name: 'Valen',
+					description: 'Valen refuses to yield the ash bridge.',
+					traits: ['defiant'],
+					present: true,
+				},
+				{
+					name: 'Mira',
+					description: 'Mira watches Valen with new caution.',
+					traits: ['wary'],
+					present: true,
+				},
+			],
+		});
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Valen and Mira face each other at the bridge.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 18,
+		});
+
+		const turnEvent = insertCalls
+			.filter(call => call.table === storyEvents)
+			.map(call => call.value as Record<string, unknown>)
+			.find(event => event.title === 'Turn resolved');
+		const turnEventUpdate = updateCalls
+			.filter(call => call.table === storyEvents)
+			.map(call => call.value)
+			.find(value => Array.isArray(value.actorEntityIds));
+		const linkInserts = insertCalls
+			.filter(call => call.table === npcEventLinks)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+
+		expect(turnEventUpdate).toMatchObject({
+			actorEntityIds: ['entity_valen', 'entity_mira'],
+			serverVersion: 18,
+		});
+		expect(linkInserts).toEqual([
+			expect.objectContaining({
+				storyId: 'story_1',
+				eventId: turnEvent?.id,
+				npcEntityId: 'entity_valen',
+				role: 'actor',
+				visibility: 'player_known',
+				sourceEntryIds: ['entry_player', 'entry_assistant'],
+				serverVersion: 18,
+			}),
+			expect.objectContaining({
+				storyId: 'story_1',
+				eventId: turnEvent?.id,
+				npcEntityId: 'entity_mira',
+				role: 'actor',
+				visibility: 'player_known',
+				sourceEntryIds: ['entry_player', 'entry_assistant'],
+				serverVersion: 18,
+			}),
+		]);
+	});
+
+	it('persists rich state for established characters without dropping old event memory', async () => {
+		const { db, insertCalls } = createDbMock({
+			entityRows: [
+				{
+					id: 'entity_mira',
+					storyId: 'story_1',
+					type: 'character',
+					name: 'Mira',
+					description: 'A harbor negotiator.',
+					status: 'active',
+					state: {
+						eventMemory: {
+							did: ['Mira hid the old map.'],
+							saw: ['Mira saw Valen hesitate at the bridge.'],
+						},
+					},
+					metadata: {},
+					sourceEntryIds: [],
+					sourceEventIds: [],
+					sourcePatchIds: [],
+					createdAt: 'earlier',
+				},
+				...entityRows.filter((entity) => entity.id !== 'entity_mira'),
+			],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			characters: [{
+				name: 'Mira',
+				appearance: 'salt-stained blue cloak and ink-dark fingertips',
+				background: 'raised around harbor ledgers and old smuggling routes',
+				currentLocation: 'Ash Bridge counting room',
+				currentAction: 'holding the bridge bargain together while watching Valen',
+				emotionalState: 'controlled fear under professional calm',
+				goals: ['keep the bridge bargain alive'],
+				speechStyle: 'quiet, exact, with clipped harbor idioms',
+				eventMemory: {
+					did: ['Mira swore not to sell Valen out.'],
+					knew: ['Mira knows the bridge bargain has a hidden witness.'],
+				},
+			}],
+		});
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Mira steadies herself and answers in the old harbor cant.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 19,
+		});
+
+		const entityInsert = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>)
+			.find(value => value.id === 'entity_mira');
+		const state = entityInsert?.state as Record<string, unknown>;
+		const memory = state.eventMemory as Record<string, string[]>;
+
+		expect(state).toMatchObject({
+			appearance: 'salt-stained blue cloak and ink-dark fingertips',
+			background: 'raised around harbor ledgers and old smuggling routes',
+			currentLocation: 'Ash Bridge counting room',
+			currentAction: 'holding the bridge bargain together while watching Valen',
+			emotionalState: 'controlled fear under professional calm',
+			goals: ['keep the bridge bargain alive'],
+			speechStyle: 'quiet, exact, with clipped harbor idioms',
+		});
+		expect(memory.did).toEqual(['Mira hid the old map.', 'Mira swore not to sell Valen out.']);
+		expect(memory.saw).toEqual(['Mira saw Valen hesitate at the bridge.']);
+		expect(memory.knew).toEqual(['Mira knows the bridge bargain has a hidden witness.']);
+	});
+
 	it('uses time_delta as the event and story clock when the story has no current world time', async () => {
 		const { db, insertCalls, storyUpdates } = createDbMock({
 			story: { ...storyRow, currentWorldTime: null },
@@ -331,6 +501,693 @@ describe('applyValidatedTurnUpdate', () => {
 			currentTurn: 8,
 			currentWorldTime: 'Dawn after the fire',
 		});
+	});
+
+	it('keeps unknown agreement parties as reviewable context references', async () => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			agreements: [
+				{
+					action: 'create',
+					parties: ['Valen', 'The Watch', 'Unknown Envoy'],
+					category: 'oath',
+					terms: 'Hold the ash road until dawn.',
+					secrecy: 'known',
+					consequences: ['The bridge remains closed'],
+				},
+			],
+		});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Valen binds The Watch and an unknown envoy to hold the road.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 20,
+		});
+
+		const entityInserts = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>);
+		const eventInserts = insertCalls
+			.filter(call => call.table === storyEvents)
+			.map(call => call.value as Record<string, unknown>);
+		const agreementEvent = eventInserts.find(event => event.type === 'agreement');
+		const agreementRecord = insertCalls.find(call => call.table === agreements)?.value as Record<string, unknown>;
+		const proposals = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
+			.filter((proposal) => proposal.proposalType === 'character_reference_review');
+		const sourceRefInserts = insertCalls
+			.filter(call => call.table === sourceRefs)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+
+		expect(entityInserts).toEqual([]);
+		expect(agreementEvent).toMatchObject({
+			actorEntityIds: ['entity_valen'],
+			targetEntityIds: [],
+			factionIds: ['faction_watch'],
+			metadata: {
+				agreement: expect.objectContaining({
+					parties: ['Valen', 'The Watch', 'Unknown Envoy'],
+				}),
+			},
+		});
+		expect(agreementRecord).toMatchObject({
+			parties: ['Valen', 'The Watch', 'Unknown Envoy'],
+		});
+		expect(proposals).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				targetRecordId: 'unresolved_character_unknown_envoy',
+				status: 'needs_review',
+				metadata: expect.objectContaining({
+					sourceName: 'Unknown Envoy',
+					sourceType: 'unresolved_character_reference',
+					referenceContext: 'agreement_party',
+					agreementCategory: 'oath',
+				}),
+			}),
+		]));
+		expect(sourceRefInserts.some(ref =>
+			ref.targetTable === 'patch_proposals'
+			&& ref.targetRecordId === proposals[0]?.id
+			&& ref.sourceField === 'agreements'
+			&& ref.targetRecordField === 'parties'
+		)).toBe(true);
+		expect(result.warnings).toContain('Character reference "Unknown Envoy" was not created as canon; review the proposal if this should become a character.');
+	});
+
+	it('persists delayed timeline events with source refs, npc links, and review proposals', async () => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			timeline_events: [
+				{
+					title: 'Watch blockade matures',
+					description: 'The Watch will close the ash road unless the oath is honored.',
+					type: 'faction_move',
+					status: 'scheduled',
+					delay_turns: 2,
+					visibility: 'secret',
+					actor_names: ['Valen'],
+					target_names: ['Mira'],
+					faction_names: ['The Watch'],
+					location_name: 'Ash Bridge',
+					memory_impact: { rumor: 'road closure whispers' },
+					reason: 'The oath created a delayed faction consequence.',
+				},
+			],
+		});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'The oath buys time, not peace.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 14,
+		});
+
+		const patchInsert = insertCalls.find(call => call.table === statePatches)?.value as { id: string };
+		const eventInserts = insertCalls
+			.filter(call => call.table === storyEvents)
+			.map(call => call.value as Record<string, unknown>);
+		const scheduled = eventInserts.find(event => event.title === 'Watch blockade matures');
+		const proposalInsert = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
+			.find((proposal) => proposal.targetRecordId === scheduled?.id);
+		const sourceRefInserts = insertCalls
+			.filter(call => call.table === sourceRefs)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const linkInsert = insertCalls
+			.filter(call => call.table === npcEventLinks)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+
+		expect(result.eventIds).toContain(scheduled?.id);
+		expect(scheduled).toMatchObject({
+			type: 'faction_move',
+			status: 'scheduled',
+			title: 'Watch blockade matures',
+			body: 'The Watch will close the ash road unless the oath is honored.',
+			actorEntityIds: ['entity_valen'],
+			targetEntityIds: ['entity_mira'],
+			locationId: 'entity_bridge',
+			locationIds: ['entity_bridge'],
+			factionIds: ['faction_watch'],
+			visibility: 'secret',
+			createdTurn: 7,
+			occurredTurn: null,
+			scheduledTurn: 9,
+			worldTime: 'Twilight of Ashes',
+			memoryImpact: { rumor: 'road closure whispers' },
+			sourceEntryIds: ['entry_assistant'],
+			sourcePatchIds: [patchInsert.id],
+			serverVersion: 14,
+		});
+		expect(proposalInsert).toMatchObject({
+			proposalType: 'scheduled_event_upsert',
+			targetTable: 'story_events',
+			targetRecordId: scheduled?.id,
+			status: 'pending',
+			affectedEntityIds: ['entity_valen', 'entity_mira'],
+			confidence: 0.86,
+		});
+		expect(sourceRefInserts.some(ref =>
+			ref.targetTable === 'story_events'
+			&& ref.targetRecordId === scheduled?.id
+			&& ref.sourceField === 'timeline_events'
+		)).toBe(true);
+		expect(sourceRefInserts.some(ref =>
+			ref.targetTable === 'patch_proposals'
+			&& ref.targetRecordId === proposalInsert?.id
+			&& ref.sourceField === 'timeline_events'
+		)).toBe(true);
+		expect(linkInsert).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				eventId: scheduled?.id,
+				npcEntityId: 'entity_valen',
+				role: 'actor',
+				visibility: 'secret',
+			}),
+			expect.objectContaining({
+				eventId: scheduled?.id,
+				npcEntityId: 'entity_mira',
+				role: 'target',
+				visibility: 'secret',
+			}),
+		]));
+	});
+
+	it('keeps unknown timeline event character names as reviewable context references', async () => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			timeline_events: [
+				{
+					title: 'Oath witness hunted',
+					description: 'A hooded envoy will search for the unknown oath witness before the road closes.',
+					type: 'faction_move',
+					status: 'scheduled',
+					delay_turns: 1,
+					visibility: 'secret',
+					actor_names: ['Hooded Envoy'],
+					target_names: ['Valen', 'Oath Witness'],
+					faction_names: ['The Watch'],
+					location_name: 'Ash Bridge',
+					reason: 'The Watch needs leverage before enforcing the blockade.',
+				},
+			],
+		});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'A hooded envoy moves quietly to find the oath witness before the blockade matures.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 18,
+		});
+
+		const entityInserts = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>);
+		const eventInserts = insertCalls
+			.filter(call => call.table === storyEvents)
+			.map(call => call.value as Record<string, unknown>);
+		const scheduled = eventInserts.find(event => event.title === 'Oath witness hunted');
+		const proposals = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
+			.filter((proposal) => proposal.proposalType === 'character_reference_review');
+		const sourceRefInserts = insertCalls
+			.filter(call => call.table === sourceRefs)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+
+		expect(entityInserts).toEqual([]);
+		expect(scheduled).toMatchObject({
+			actorEntityIds: [],
+			targetEntityIds: ['entity_valen'],
+			factionIds: ['faction_watch'],
+			metadata: expect.objectContaining({
+				actorNames: ['Hooded Envoy'],
+				targetNames: ['Valen', 'Oath Witness'],
+			}),
+		});
+		expect(proposals).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				targetRecordId: 'unresolved_character_hooded_envoy',
+				status: 'needs_review',
+				metadata: expect.objectContaining({
+					sourceName: 'Hooded Envoy',
+					sourceType: 'unresolved_character_reference',
+					referenceContext: 'timeline_actor',
+				}),
+			}),
+			expect.objectContaining({
+				targetRecordId: 'unresolved_character_oath_witness',
+				status: 'needs_review',
+				metadata: expect.objectContaining({
+					sourceName: 'Oath Witness',
+					sourceType: 'unresolved_character_reference',
+					referenceContext: 'timeline_target',
+				}),
+			}),
+		]));
+		for (const proposal of proposals) {
+			expect(sourceRefInserts.some(ref =>
+				ref.targetTable === 'patch_proposals'
+				&& ref.targetRecordId === proposal.id
+				&& ref.sourceField === 'timeline_events'
+			)).toBe(true);
+		}
+		expect(result.warnings).toEqual(expect.arrayContaining([
+			'Character reference "Hooded Envoy" was not created as canon; review the proposal if this should become a character.',
+			'Character reference "Oath Witness" was not created as canon; review the proposal if this should become a character.',
+		]));
+	});
+
+	it('keeps unknown faction members as reviewable context references', async () => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			lorebook_entries: [
+				{
+					name: 'The Watch',
+					type: 'faction',
+					description: 'A disciplined faction guarding the ash roads.',
+					known_members: ['Valen', 'Oath Witness'],
+					faction_goals: [{ description: 'Hold the Ash Bridge', priority: 8 }],
+				},
+			],
+		});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'The Watch leans on Valen and an oath witness to keep the bridge closed.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 19,
+		});
+
+		const entityInserts = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>);
+		const membershipInserts = insertCalls
+			.filter(call => call.table === factionMemberships)
+			.map(call => call.value as Record<string, unknown>);
+		const proposals = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
+			.filter((proposal) => proposal.proposalType === 'character_reference_review');
+		const sourceRefInserts = insertCalls
+			.filter(call => call.table === sourceRefs)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+
+		expect(entityInserts.every(entity => entity.type !== 'character')).toBe(true);
+		expect(membershipInserts).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				factionId: 'faction_entity_watch',
+				entityId: 'entity_valen',
+				role: 'leader-or-member',
+			}),
+			expect.objectContaining({
+				factionId: 'faction_entity_watch',
+				entityId: null,
+				role: 'member',
+				metadata: expect.objectContaining({ memberNameOrId: 'Oath Witness' }),
+			}),
+		]));
+		expect(proposals).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				targetRecordId: 'unresolved_character_oath_witness',
+				status: 'needs_review',
+				metadata: expect.objectContaining({
+					sourceName: 'Oath Witness',
+					sourceType: 'unresolved_character_reference',
+					referenceContext: 'faction_member',
+					factionName: 'The Watch',
+				}),
+			}),
+		]));
+		expect(sourceRefInserts.some(ref =>
+			ref.targetTable === 'patch_proposals'
+			&& ref.targetRecordId === proposals[0]?.id
+			&& ref.sourceField === 'lorebook_entries'
+			&& ref.targetRecordField === 'known_members'
+		)).toBe(true);
+		expect(result.warnings).toContain('Character reference "Oath Witness" was not created as canon; review the proposal if this should become a character.');
+	});
+
+	it('keeps unknown model-extracted characters out of canon and leaves a review proposal', async () => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			characters: [
+				{
+					name: 'Ser Olyvar',
+					description: 'A knight mentioned only in passing by the crowd.',
+					traits: ['unverified'],
+					present: false,
+				},
+			],
+		});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Someone in the crowd mutters the name Ser Olyvar, but nobody steps forward.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 15,
+		});
+
+		const entityInserts = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>);
+		const proposalInsert = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
+			.find((proposal) => proposal.proposalType === 'character_reference_review');
+		const sourceRefInserts = insertCalls
+			.filter(call => call.table === sourceRefs)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+
+		expect(entityInserts).toEqual([]);
+		expect(proposalInsert).toMatchObject({
+			targetTable: 'entities',
+			targetRecordId: 'unresolved_character_ser_olyvar',
+			status: 'needs_review',
+			operations: [
+				expect.objectContaining({
+					op: 'review',
+					path: '/entities/character',
+					value: expect.objectContaining({
+						name: 'Ser Olyvar',
+						description: 'A knight mentioned only in passing by the crowd.',
+					}),
+				}),
+			],
+			affectedEntityIds: [],
+			confidence: 0.52,
+			metadata: expect.objectContaining({
+				sourceType: 'unresolved_character_reference',
+				sourceName: 'Ser Olyvar',
+			}),
+		});
+		expect(sourceRefInserts.some(ref =>
+			ref.targetTable === 'patch_proposals'
+			&& ref.targetRecordId === proposalInsert?.id
+			&& ref.sourceField === 'characters'
+		)).toBe(true);
+		expect(result.warnings).toContain('Character reference "Ser Olyvar" was not created as canon; review the proposal if this should become a character.');
+	});
+
+	it('keeps unknown relationship and conversation characters as reviewable context references', async () => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			relationships: [
+				{
+					sourceName: 'Ser Olyvar',
+					targetName: 'Valen',
+					type: 'serves',
+					label: 'sworn blade',
+					strength: 35,
+				},
+			],
+			conversations: [
+				{
+					npcName: 'Lady Nym',
+					topicSummary: 'She heard the player name the hidden patron.',
+					playerRevealed: ['The hidden patron sent the raven.'],
+					npcLearned: ['The patron may be nearby.'],
+				},
+			],
+		});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Ser Olyvar is named as Valen\'s sworn blade, and Lady Nym is said to have overheard the patron rumor.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 16,
+		});
+
+		const entityInserts = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>);
+		const proposals = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
+			.filter((proposal) => proposal.proposalType === 'character_reference_review');
+		const sourceRefInserts = insertCalls
+			.filter(call => call.table === sourceRefs)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+
+		expect(entityInserts).toEqual([]);
+		expect(proposals).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				targetRecordId: 'unresolved_character_ser_olyvar',
+				status: 'needs_review',
+				operations: [
+					expect.objectContaining({
+						value: expect.objectContaining({
+							name: 'Ser Olyvar',
+							description: 'Relationship source in serves link to Valen.',
+						}),
+					}),
+				],
+				metadata: expect.objectContaining({
+					sourceName: 'Ser Olyvar',
+					sourceType: 'unresolved_character_reference',
+				}),
+			}),
+			expect.objectContaining({
+				targetRecordId: 'unresolved_character_lady_nym',
+				status: 'needs_review',
+				operations: [
+					expect.objectContaining({
+						value: expect.objectContaining({
+							name: 'Lady Nym',
+							description: 'NPC belief/conversation subject: She heard the player name the hidden patron.',
+						}),
+					}),
+				],
+				metadata: expect.objectContaining({
+					sourceName: 'Lady Nym',
+					sourceType: 'unresolved_character_reference',
+				}),
+			}),
+		]));
+		for (const proposal of proposals) {
+			expect(sourceRefInserts.some(ref =>
+				ref.targetTable === 'patch_proposals'
+				&& ref.targetRecordId === proposal.id
+				&& ['relationships', 'conversations'].includes(String(ref.sourceField))
+			)).toBe(true);
+		}
+		expect(result.warnings).toEqual(expect.arrayContaining([
+			'Character reference "Ser Olyvar" was not created as canon; review the proposal if this should become a character.',
+			'Character reference "Lady Nym" was not created as canon; review the proposal if this should become a character.',
+		]));
+	});
+
+	it('merges repeated unresolved character references into one review proposal with all sources', async () => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			characters: [
+				{
+					name: 'Ser Olyvar',
+					description: 'A knight mentioned only in passing by the crowd.',
+					traits: ['unverified'],
+					present: false,
+				},
+			],
+			relationships: [
+				{
+					sourceName: 'Ser Olyvar',
+					targetName: 'Valen',
+					type: 'serves',
+					label: 'sworn blade',
+					strength: 35,
+				},
+			],
+			conversations: [
+				{
+					npcName: 'Ser Olyvar',
+					topicSummary: 'He may know why the bridge oath matters.',
+					playerRevealed: ['The bridge oath still binds Valen.'],
+					npcLearned: ['Valen may be under pressure.'],
+				},
+			],
+		});
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Ser Olyvar is mentioned as a sworn blade and possible witness, but he is not established in canon.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 17,
+		});
+
+		const proposals = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
+			.filter((proposal) => proposal.proposalType === 'character_reference_review'
+				&& proposal.targetRecordId === 'unresolved_character_ser_olyvar');
+		const sourceRefInserts = insertCalls
+			.filter(call => call.table === sourceRefs)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+
+		expect(proposals).toHaveLength(1);
+		expect(proposals[0]).toMatchObject({
+			status: 'needs_review',
+			metadata: expect.objectContaining({
+				sourceName: 'Ser Olyvar',
+				sourceType: 'unresolved_character_reference',
+				sourceFields: ['characters', 'relationships', 'conversations'],
+			}),
+		});
+		const proposalSourceFields = [...new Set(sourceRefInserts
+			.filter(ref => ref.targetTable === 'patch_proposals' && ref.targetRecordId === proposals[0].id)
+			.map(ref => ref.sourceField))]
+			.sort();
+		expect(proposalSourceFields).toEqual(['characters', 'conversations', 'relationships']);
+	});
+
+	it('skips title-only character names instead of creating review debt', async () => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			characters: [{
+				name: 'Consort',
+				description: 'A court title attached to Aurion.',
+				present: true,
+			}],
+		});
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'The court calls Aurion the Consort, but it is only a title.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 17,
+		});
+
+		const entityInserts = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>);
+		const proposals = insertCalls
+			.filter(call => call.table === patchProposals)
+			.flatMap(call => call.value as Array<Record<string, unknown>>)
+			.filter((proposal) => proposal.proposalType === 'character_reference_review');
+
+		expect(entityInserts.some((entity) => entity.name === 'Consort')).toBe(false);
+		expect(proposals.some((proposal) => proposal.targetRecordId === 'unresolved_character_consort')).toBe(false);
+	});
+
+	it('adds new unresolved character evidence to the existing review proposal across turns', async () => {
+		const existingProposal: typeof patchProposals.$inferSelect = {
+			id: 'proposal_existing_olyvar',
+			storyId: 'story_1',
+			proposalType: 'character_reference_review',
+			targetTable: 'entities',
+			targetRecordId: 'unresolved_character_ser_olyvar',
+			proposedBy: 'narration',
+			operations: [{
+				op: 'review',
+				path: '/entities/character',
+				value: {
+					storyId: 'story_1',
+					type: 'character',
+					name: 'Ser Olyvar',
+					description: 'First unresolved mention.',
+					status: 'active',
+					visibility: 'player_known',
+					state: {},
+				},
+			}],
+			reason: 'Turn referenced unresolved character Ser Olyvar.',
+			suggestion: 'Review this character reference before creating a new canonical record.',
+			status: 'needs_review',
+			decision: null,
+			validatedBy: null,
+			affectedEntityIds: [],
+			confidence: 0.52,
+			sourceEntryIds: ['entry_old_assistant'],
+			sourceEventIds: [],
+			sourcePatchIds: ['patch_old'],
+			metadata: {
+				sourceType: 'unresolved_character_reference',
+				sourceName: 'Ser Olyvar',
+				sourceFields: ['characters'],
+			},
+			serverVersion: 16,
+			createdAt: '2026-06-13T18:00:00.000Z',
+			updatedAt: '2026-06-13T18:00:00.000Z',
+		};
+		const { db, insertCalls, updateCalls } = createDbMock({ patchProposalRows: [existingProposal] });
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			conversations: [
+				{
+					npcName: 'Ser Olyvar',
+					topicSummary: 'The player asks whether he witnessed the bridge oath.',
+					playerRevealed: ['The oath may still matter.'],
+					npcLearned: ['The player is looking for oath witnesses.'],
+				},
+			],
+		});
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'The name Ser Olyvar comes up again as a possible oath witness.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 17,
+		});
+
+		const patchInsert = insertCalls.find(call => call.table === statePatches)?.value as { id: string };
+		const proposalInserts = insertCalls
+			.filter(call => call.table === patchProposals)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const proposalUpdate = updateCalls.find(call => call.table === patchProposals)?.value;
+		const sourceRefInserts = insertCalls
+			.filter(call => call.table === sourceRefs)
+			.flatMap(call => call.value as Array<Record<string, unknown>>);
+
+		expect(proposalInserts.some(proposal =>
+			proposal.proposalType === 'character_reference_review'
+			&& proposal.targetRecordId === 'unresolved_character_ser_olyvar'
+		)).toBe(false);
+		expect(proposalUpdate).toMatchObject({
+			sourceEntryIds: ['entry_old_assistant', 'entry_assistant'],
+			sourcePatchIds: ['patch_old', patchInsert.id],
+			metadata: expect.objectContaining({
+				sourceName: 'Ser Olyvar',
+				sourceType: 'unresolved_character_reference',
+				sourceFields: ['characters', 'conversations'],
+			}),
+		});
+		expect(sourceRefInserts.some(ref =>
+			ref.targetTable === 'patch_proposals'
+			&& ref.targetRecordId === 'proposal_existing_olyvar'
+			&& ref.sourceField === 'conversations'
+			&& ref.sourceId === 'entry_assistant'
+		)).toBe(true);
 	});
 
 	it('keeps persisted transaction results and reports projection enqueue warnings', async () => {

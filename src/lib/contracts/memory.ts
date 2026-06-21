@@ -1,6 +1,14 @@
 import { z } from 'zod';
 
 export const jsonObjectSchema = z.record(z.string(), z.unknown());
+export const jsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
+	z.string(),
+	z.number(),
+	z.boolean(),
+	z.null(),
+	z.array(jsonValueSchema),
+	z.record(z.string(), jsonValueSchema),
+]));
 
 export const sourceRefsSchema = z.object({
 	sourceEntryIds: z.array(z.string()).default([]),
@@ -258,10 +266,31 @@ export const memoryNodeSchema = z.object({
 	sourceEntryIds: z.array(z.string()).default([]),
 	sourceEventIds: z.array(z.string()).default([]),
 	sourcePatchIds: z.array(z.string()).default([]),
-	metadata: jsonObjectSchema.optional(),
+	metadata: jsonValueSchema.optional(),
 	score: z.number().optional(),
 	createdAt: z.string(),
 	updatedAt: z.string(),
+});
+
+export const memoryRetrievalTraceItemSchema = z.object({
+	id: z.string(),
+	title: z.string(),
+	type: memoryNodeTypeSchema,
+	rank: z.number().int().nonnegative(),
+	score: z.number(),
+	included: z.boolean(),
+	reason: z.string(),
+	tokenEstimate: z.number().int().nonnegative(),
+	ageDays: z.number().int().nonnegative().nullable().default(null),
+	importance: z.number().min(0).max(1),
+	visibility: memoryVisibilitySchema.default('player_known'),
+	entityIds: z.array(z.string()).default([]),
+	factionIds: z.array(z.string()).default([]),
+	threadIds: z.array(z.string()).default([]),
+	sourceEntryIds: z.array(z.string()).default([]),
+	sourceEventIds: z.array(z.string()).default([]),
+	sourcePatchIds: z.array(z.string()).default([]),
+	signals: z.array(z.string()).default([]),
 });
 
 export const retrievedMemoryPacketSchema = z.object({
@@ -271,6 +300,7 @@ export const retrievedMemoryPacketSchema = z.object({
 	nodes: z.array(memoryNodeSchema),
 	tokenEstimate: z.number().int().nonnegative(),
 	retrievalDebug: z.array(z.string()).default([]),
+	retrievalTrace: z.array(memoryRetrievalTraceItemSchema).default([]),
 });
 
 export const createStoryRequestSchema = z.object({
@@ -315,11 +345,17 @@ export const bootstrapResponseSchema = z.object({
 		mode: z.literal('control_surface'),
 		story: jsonObjectSchema,
 		entries: z.array(jsonObjectSchema).default([]),
+		chapters: z.array(jsonObjectSchema).default([]),
+		arcs: z.array(jsonObjectSchema).default([]),
+		sagas: z.array(jsonObjectSchema).default([]),
 		counts: z.object({
 			entries: z.number().int().nonnegative().default(0),
 			entities: z.number().int().nonnegative().default(0),
 			events: z.number().int().nonnegative().default(0),
 			memoryNodes: z.number().int().nonnegative().default(0),
+			chapters: z.number().int().nonnegative().default(0),
+			arcs: z.number().int().nonnegative().default(0),
+			sagas: z.number().int().nonnegative().default(0),
 		}),
 		vault: z.object({
 			vaultPath: z.string(),
@@ -377,6 +413,11 @@ export const entityCommandResponseSchema = z.object({
 	storyId: z.string(),
 	serverVersion: z.number().int().nonnegative(),
 	entity: jsonObjectSchema,
+	resolvedCharacterReferences: z.array(z.object({
+		proposalId: z.string(),
+		name: z.string(),
+		entityId: z.string(),
+	})).optional(),
 });
 
 export const entityDeleteResponseSchema = z.object({
@@ -396,6 +437,19 @@ export const chapterCommandResponseSchema = z.object({
 	chapter: jsonObjectSchema,
 });
 
+export const chapterDeleteRequestSchema = z.object({
+	chapterId: z.string().min(1),
+});
+
+export const chapterDeleteResponseSchema = z.object({
+	storyId: z.string(),
+	serverVersion: z.number().int().nonnegative(),
+	chapterId: z.string(),
+	deleted: z.boolean(),
+	unwrappedArcIds: z.array(z.string()).default([]),
+	unwrappedArcs: z.array(jsonObjectSchema).default([]),
+});
+
 export const arcUpsertRequestSchema = z.object({
 	arc: jsonObjectSchema,
 });
@@ -404,6 +458,45 @@ export const arcCommandResponseSchema = z.object({
 	storyId: z.string(),
 	serverVersion: z.number().int().nonnegative(),
 	arc: jsonObjectSchema,
+});
+
+export const arcDeleteRequestSchema = z.object({
+	arcId: z.string().min(1),
+});
+
+export const arcDeleteResponseSchema = z.object({
+	storyId: z.string(),
+	serverVersion: z.number().int().nonnegative(),
+	arcId: z.string(),
+	deleted: z.boolean(),
+});
+
+export const contextCheckpointCreateRequestSchema = z.object({
+	label: z.string().trim().min(1).max(120).optional(),
+	reason: z.string().trim().max(2000).nullable().optional(),
+});
+
+export const contextCheckpointRevertRequestSchema = z.object({
+	checkpointId: z.string().min(1),
+	reason: z.string().trim().max(2000).nullable().optional(),
+});
+
+export const contextCheckpointCommandResponseSchema = z.object({
+	storyId: z.string(),
+	serverVersion: z.number().int().nonnegative(),
+	checkpoint: jsonObjectSchema,
+});
+
+export const contextCheckpointListResponseSchema = z.object({
+	storyId: z.string(),
+	checkpoints: z.array(jsonObjectSchema),
+});
+
+export const contextCheckpointRevertResponseSchema = z.object({
+	storyId: z.string(),
+	serverVersion: z.number().int().nonnegative(),
+	checkpoint: jsonObjectSchema,
+	restoredCounts: jsonObjectSchema.default({}),
 });
 
 export const sagaUpsertRequestSchema = z.object({
@@ -631,11 +724,66 @@ export const turnContextReceiptSchema = z.object({
 		memoryNodes: z.number().int().nonnegative().default(0),
 		wikiChunks: z.number().int().nonnegative().default(0),
 		timelineEvents: z.number().int().nonnegative().default(0),
+		chapters: z.number().int().nonnegative().default(0),
+		arcs: z.number().int().nonnegative().default(0),
+		chaptersSuppressedByArcs: z.number().int().nonnegative().default(0),
+		chaptersSent: z.number().int().nonnegative().default(0),
+		arcsSent: z.number().int().nonnegative().default(0),
+		chaptersSuppressedByArc: z.number().int().nonnegative().default(0),
+		memoryNodesSent: z.number().int().nonnegative().default(0),
+		totalChars: z.number().int().nonnegative().default(0),
+		totalTokens: z.number().int().nonnegative().nullable().default(null),
+		facts: z.number().int().nonnegative().default(0),
+		patchProposals: z.number().int().nonnegative().default(0),
+		unresolvedCharacterReferences: z.number().int().nonnegative().default(0),
+		continuityWarnings: z.number().int().nonnegative().default(0),
 		factionSheets: z.array(z.string()).default([]),
 	}),
 	skipped: z.array(z.object({
 		source: z.string(),
 		reason: z.string(),
+	})).default([]),
+	unresolvedCharacterReferences: z.array(z.object({
+		proposalId: z.string(),
+		name: z.string(),
+		contextLabel: z.string().default(''),
+		reason: z.string().default(''),
+		sourceEntryIds: z.array(z.string()).default([]),
+	})).default([]),
+	continuityLedger: z.object({
+		facts: z.array(z.object({
+			id: z.string(),
+			statement: z.string(),
+			sourceEntryIds: z.array(z.string()).default([]),
+			sourcePatchIds: z.array(z.string()).default([]),
+		})).default([]),
+		patchProposals: z.array(z.object({
+			id: z.string(),
+			status: z.string(),
+			proposalType: z.string(),
+			targetTable: z.string(),
+			targetRecordId: z.string(),
+			reason: z.string().default(''),
+			sourceEntryIds: z.array(z.string()).default([]),
+			sourcePatchIds: z.array(z.string()).default([]),
+		})).default([]),
+		warnings: z.array(z.object({
+			id: z.string(),
+			level: z.string(),
+			status: z.string(),
+			title: z.string(),
+			sourceEntryIds: z.array(z.string()).default([]),
+			sourcePatchIds: z.array(z.string()).default([]),
+		})).default([]),
+	}).default({ facts: [], patchProposals: [], warnings: [] }),
+	cacheSegments: z.array(z.object({
+		kind: z.string(),
+		cacheKey: z.string(),
+		contentHash: z.string(),
+		hit: z.boolean().default(false),
+		invalidated: z.boolean().default(false),
+		tokenEstimate: z.number().int().nonnegative().default(0),
+		dependencyCount: z.number().int().nonnegative().default(0),
 	})).default([]),
 	budgets: z.object({
 		memoryTokensUsed: z.number().int().nonnegative().default(0),
@@ -673,6 +821,9 @@ export const turnResponseSchema = z.object({
 			entities: z.number().int().nonnegative().default(0),
 			events: z.number().int().nonnegative().default(0),
 			memoryNodes: z.number().int().nonnegative().default(0),
+			chapters: z.number().int().nonnegative().default(0),
+			arcs: z.number().int().nonnegative().default(0),
+			sagas: z.number().int().nonnegative().default(0),
 		}),
 		cache: z.object({
 			hitCount: z.number().int().nonnegative().default(0),
@@ -712,6 +863,7 @@ export type GmTimelineBriefEvent = z.infer<typeof gmTimelineBriefEventSchema>;
 export type GmTimelineNpcEvent = z.infer<typeof gmTimelineNpcEventSchema>;
 export type GmTimelineBrief = z.infer<typeof gmTimelineBriefSchema>;
 export type MemoryNode = z.infer<typeof memoryNodeSchema>;
+export type MemoryRetrievalTraceItem = z.infer<typeof memoryRetrievalTraceItemSchema>;
 export type RetrievedMemoryPacket = z.infer<typeof retrievedMemoryPacketSchema>;
 export type TurnContextReceipt = z.infer<typeof turnContextReceiptSchema>;
 export type BootstrapResponse = z.infer<typeof bootstrapResponseSchema>;
@@ -719,7 +871,12 @@ export type StoryEntriesPageResponse = z.infer<typeof storyEntriesPageResponseSc
 export type EntityCommandResponse = z.infer<typeof entityCommandResponseSchema>;
 export type EntityDeleteResponse = z.infer<typeof entityDeleteResponseSchema>;
 export type ChapterCommandResponse = z.infer<typeof chapterCommandResponseSchema>;
+export type ChapterDeleteResponse = z.infer<typeof chapterDeleteResponseSchema>;
 export type ArcCommandResponse = z.infer<typeof arcCommandResponseSchema>;
+export type ArcDeleteResponse = z.infer<typeof arcDeleteResponseSchema>;
+export type ContextCheckpointCommandResponse = z.infer<typeof contextCheckpointCommandResponseSchema>;
+export type ContextCheckpointListResponse = z.infer<typeof contextCheckpointListResponseSchema>;
+export type ContextCheckpointRevertResponse = z.infer<typeof contextCheckpointRevertResponseSchema>;
 export type SagaCommandResponse = z.infer<typeof sagaCommandResponseSchema>;
 export type LivingMemoryCommandResponse = z.infer<typeof livingMemoryCommandResponseSchema>;
 export type MemoryRetrieveRequest = z.infer<typeof memoryRetrieveRequestSchema>;

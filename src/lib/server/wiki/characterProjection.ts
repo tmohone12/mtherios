@@ -15,7 +15,9 @@ export interface CharacterProjectionInput {
 	sourceRefs: string[];
 	confidence: number | null;
 	description: string;
+	currentStateLines?: string[];
 	profileLines: string[];
+	eventMemoryLines?: string[];
 	relatedFactions: string[];
 	relationships: string[];
 	beliefsHeld: string[];
@@ -99,7 +101,9 @@ export function buildCharacterProjectionMarkdown(
 		'## Description',
 		input.description || '_No description yet._',
 		'',
+		input.currentStateLines?.length ? `## Current State\n${input.currentStateLines.join('\n')}` : '',
 		input.profileLines.length ? `## Profile\n${input.profileLines.join('\n')}` : '',
+		input.eventMemoryLines?.length ? `## NPC Event Memory\n${input.eventMemoryLines.join('\n')}` : '',
 		input.relatedFactions.length ? `## Factions\n${input.relatedFactions.join('\n')}` : '',
 		input.relationships.length ? `## Relationships\n${input.relationships.join('\n')}` : '',
 		input.beliefsHeld.length ? `## Beliefs Held\n${input.beliefsHeld.join('\n')}` : '',

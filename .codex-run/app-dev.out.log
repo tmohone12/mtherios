@@ -1,0 +1,155 @@
+
+> mtherios@0.0.1 app:dev
+> npm run backend:up && npm run backend:migrate && node server.js --dev
+
+
+> mtherios@0.0.1 backend:up
+> docker compose -p mtherios-factions up -d mtherios-db qdrant
+
+
+> mtherios@0.0.1 backend:migrate
+> node scripts/db-migrate.mjs
+
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "_mtherios_migrations" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '207',
+  routine: 'transformCreateStmt'
+}
+skip 0001_backend_memory.sql
+skip 0002_faction_canon.sql
+skip 0003_backend_jobs.sql
+skip 0004_strategic_world_frames.sql
+skip 0004_terminal_engine_explorer.sql
+skip 0005_api_call_logs.sql
+skip 0006_sagas.sql
+skip 0007_event_timeline.sql
+skip 0008_campaign_storage_cache.sql
+skip 0009_faction_projects.sql
+skip 0010_core_canon_reference_tables.sql
+skip 0011_patch_proposals_continuity_fields.sql
+skip 0012_context_checkpoints.sql
+database migrations complete
+
+Mtherios terminal app process
+  app:      http://127.0.0.1:5173
+  data:     E:\DEV\Projects\mtherios-factions\data
+  vaults:   E:\DEV\Projects\mtherios-factions\data\vaults
+  default:  E:\DEV\Projects\mtherios-factions\data\vaults\default
+  qdrant:   http://127.0.0.1:6333 / mtherios_wiki
+  database: postgres://mtherios:***@127.0.0.1:5432/mtherios
+  jobs:     enabled every 5000ms, limit 1, timeout 600000ms
+  wiki:     ollama / nomic-embed-text, auto-index off, auto-lint off
+  memory:   chapters every 20 entries (+10 buffer), arcs every 5 chapters
+  vectors:  ollama / nomic-embed-text (768d)
+
+
+> mtherios@0.0.1 dev
+> vite dev --host 127.0.0.1 --port 5173 --strictPort
+
+
+  [32m[1mVITE[22m v7.3.1[39m  [2mready in [0m[1m1057[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5173[22m/[39m
+7:52:12 PM [vite-plugin-svelte] src/lib/components/wizard/OnboardingWizard.svelte:353:3 Buttons and links should either contain text or have an `aria-label`, `aria-labelledby` or `title` attribute
+https://svelte.dev/e/a11y_consider_explicit_label
+7:52:12 PM [vite-plugin-svelte] src/lib/components/wizard/OnboardingWizard.svelte:394:4 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:12 PM [vite-plugin-svelte] src/lib/components/wizard/OnboardingWizard.svelte:468:4 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:12 PM [vite-plugin-svelte] src/lib/components/wizard/OnboardingWizard.svelte:474:4 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:12 PM [vite-plugin-svelte] src/lib/components/wizard/OnboardingWizard.svelte:488:4 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:12 PM [vite-plugin-svelte] src/lib/components/wizard/OnboardingWizard.svelte:507:4 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:12 PM [vite-plugin-svelte] src/lib/components/wizard/OnboardingWizard.svelte:513:4 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:12 PM [vite-plugin-svelte] src/lib/components/wizard/OnboardingWizard.svelte:71:5 `storyFileInput` is updated, but is not declared with `$state(...)`. Changing its value will not correctly trigger updates
+https://svelte.dev/e/non_reactive_update
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:613:6 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:670:7 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:678:7 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:747:10 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:788:9 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:797:8 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:1090:6 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:1125:8 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:1139:9 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:1156:9 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:1182:6 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:1197:6 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:1221:6 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:1253:6 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:1269:6 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+7:52:13 PM [vite-plugin-svelte] src/lib/components/settings/SettingsModal.svelte:1287:6 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+{"event":"mtherios.generation.timing","pipeline":"backend.turn.prepare","timestamp":"2026-06-17T23:52:42.835Z","phase":"turn.service_config.narrative","durationMs":7,"metadata":{"storyId":"story_volantis_black_walls","clientTurnId":"cli_cmd_8b5092f6-8c6e-490e-bc98-48863abedd48"}}
+{"event":"mtherios.generation.timing","pipeline":"backend.turn.prepare","timestamp":"2026-06-17T23:52:42.883Z","phase":"turn.context_load","durationMs":45,"metadata":{"storyId":"story_volantis_black_walls","clientTurnId":"cli_cmd_8b5092f6-8c6e-490e-bc98-48863abedd48","presentNpcIds":0,"sceneEntityIds":0}}
+{"event":"mtherios.generation.timing","pipeline":"backend.turn.prepare","timestamp":"2026-06-17T23:52:42.885Z","phase":"turn.gm_timeline_brief","durationMs":47,"metadata":{"storyId":"story_volantis_black_walls","clientTurnId":"cli_cmd_8b5092f6-8c6e-490e-bc98-48863abedd48","sceneEntityIds":0,"presentNpcIds":0,"budgetMs":300}}
+{"event":"mtherios.generation.timing","pipeline":"backend.turn.prepare","timestamp":"2026-06-17T23:52:43.537Z","phase":"turn.wiki_context","durationMs":700,"metadata":{"storyId":"story_volantis_black_walls","clientTurnId":"cli_cmd_8b5092f6-8c6e-490e-bc98-48863abedd48","limit":4,"pageLimit":6,"maxChars":4000,"budgetMs":700}}
+{"event":"mtherios.generation.timing","pipeline":"backend.turn.prepare","timestamp":"2026-06-17T23:52:44.973Z","phase":"turn.memory_retrieval","durationMs":2137,"metadata":{"storyId":"story_volantis_black_walls","clientTurnId":"cli_cmd_8b5092f6-8c6e-490e-bc98-48863abedd48","tokenBudget":800,"sceneEntityIds":0,"presentNpcIds":0,"threadIds":0}}
+{"event":"mtherios.generation.timing","pipeline":"backend.turn.prepare","timestamp":"2026-06-17T23:52:44.974Z","phase":"turn.context_assembly","durationMs":2137,"metadata":{"storyId":"story_volantis_black_walls","clientTurnId":"cli_cmd_8b5092f6-8c6e-490e-bc98-48863abedd48","parallel":true,"memoryTokenBudget":800}}
+{"event":"mtherios.generation.timing","pipeline":"backend.turn.prepare","timestamp":"2026-06-17T23:52:45.063Z","phase":"turn.prompt_assembly","durationMs":88,"metadata":{"storyId":"story_volantis_black_walls","clientTurnId":"cli_cmd_8b5092f6-8c6e-490e-bc98-48863abedd48","retrievedMemoryNodes":3,"wikiContextChars":0,"recentEntries":60,"entities":119,"factions":80,"factionMemberships":70,"factionResources":83,"factionGoals":6,"factionProjects":2,"agreements":2,"threads":6,"events":80,"beliefs":1,"facts":80,"patchProposals":80,"unresolvedCharacterReferences":0,"continuityWarnings":32,"chapters":0,"arcs":3,"sagas":0,"gmDueEvents":0,"gmRecentEvents":12,"gmScheduledEvents":0,"gmNpcEvents":0,"gmTimelineEvents":12}}
+{"event":"mtherios.generation.timing","pipeline":"backend.turn.prepare","timestamp":"2026-06-17T23:52:45.066Z","phase":"turn.prompt_payload","durationMs":0,"metadata":{"storyId":"story_volantis_black_walls","clientTurnId":"cli_cmd_8b5092f6-8c6e-490e-bc98-48863abedd48","systemChars":9369,"systemDynamicChars":"[redacted]","promptChars":44,"messageCount":52,"messageChars":155932}}
+{"event":"mtherios.generation.timing","pipeline":"backend.turn.prepare","timestamp":"2026-06-17T23:52:45.130Z","phase":"turn.engine_cache.prompt_segments","durationMs":65,"metadata":{"storyId":"story_volantis_black_walls","clientTurnId":"cli_cmd_8b5092f6-8c6e-490e-bc98-48863abedd48","retrievedMemoryNodes":3,"wikiContextChars":0}}
+[2m7:57:15 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2msrc/lib/server/turn/promptPacket.ts[22m
+[2m7:57:33 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2msrc/lib/server/turn/orchestrator.ts[22m
+[2m7:57:38 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2msrc/lib/server/turn/orchestrator.ts[22m
+[2m7:58:01 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2msrc/lib/server/memory/ranking.ts[22m
+[2m7:58:28 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2msrc/lib/server/jobs/processor.ts[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.svelte[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
+[2m7:59:35 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.svelte[22m
+[2m7:59:49 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2msrc/lib/server/jobs/processor.ts[22m
+[2m8:00:00 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
+[2m8:00:00 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
+[2m8:00:00 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
+[2m8:00:00 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
+[2m8:00:00 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
+[2m8:00:00 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
+[2m8:00:00 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
+[2m8:00:00 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
+[2m8:00:00 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.svelte[22m
+[2m8:00:09 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/0.js[22m
+[2m8:00:09 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/1.js[22m
+[2m8:00:09 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/app.js[22m
+[2m8:00:09 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/nodes/2.js[22m
+[2m8:00:09 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/server/internal.js[22m
+[2m8:00:09 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/client/matchers.js[22m
+[2m8:00:09 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
+[2m8:00:09 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.js[22m
+[2m8:00:09 PM[22m [36m[1m[vite][22m[39m [34m[2m(ssr)[22m[39m [32mpage reload [39m[2m.svelte-kit/generated/root.svelte[22m

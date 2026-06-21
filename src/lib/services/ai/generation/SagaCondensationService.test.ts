@@ -78,7 +78,7 @@ describe('SagaCondensationService', () => {
 		expect(result).toEqual(expected);
 		expect(service.call?.system).toContain('SAGA SUMMARY');
 		expect(service.call?.system).toContain('MTHERIOS SAGA SUMMARY FORMAT');
-		expect(service.call?.system).toContain('[CURRENTLY — day, date | time | location | weather, temp°C]');
+		expect(service.call?.system).toContain('[CURRENT SCENE = date/time | place | weather/conditions, if established.]');
 		expect(service.call?.prompt).toContain('Arc 1');
 		expect(service.call?.prompt).toContain('Arc 10');
 	});

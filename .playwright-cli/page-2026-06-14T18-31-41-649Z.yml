@@ -1,0 +1,294 @@
+- generic [ref=e117]:
+  - generic [ref=e118]:
+    - button [ref=e119]:
+      - img [ref=e120]
+    - generic [ref=e121]:
+      - 'heading "Volantis: Black Walls Intrigue" [level=1] [ref=e122]'
+      - text: · Adventure
+    - generic [ref=e123]:
+      - button "Play" [ref=e124]
+      - button "Lore" [ref=e125]:
+        - img [ref=e126]
+        - text: Lore
+    - button "World State" [ref=e127]:
+      - img [ref=e128]
+  - generic [ref=e166]:
+    - banner [ref=e167]:
+      - generic [ref=e168]:
+        - img [ref=e169]
+        - generic [ref=e170]:
+          - generic [ref=e171]: Story Lore
+          - generic [ref=e172]: "Volantis: Black Walls Intrigue"
+      - generic [ref=e173]:
+        - generic [ref=e174]:
+          - img
+          - textbox "Search" [ref=e175]
+        - generic [ref=e176]:
+          - button "Refresh" [ref=e177]:
+            - img [ref=e178]
+          - button "Hybrid search" [ref=e179]:
+            - img [ref=e180]
+          - button "Queue reindex" [ref=e181]:
+            - img [ref=e182]
+          - button "Run reindex now" [ref=e183]:
+            - img [ref=e184]
+        - button "Show Debug" [ref=e185]
+    - generic [ref=e186]:
+      - complementary [ref=e187]:
+        - button "Transcript" [ref=e188]:
+          - generic [ref=e189]: Transcript
+        - button "Characters" [ref=e190]:
+          - generic [ref=e191]: Characters
+        - button "Locations" [ref=e192]:
+          - generic [ref=e193]: Locations
+        - button "Items" [ref=e194]:
+          - generic [ref=e195]: Items
+        - button "Entities" [ref=e196]:
+          - generic [ref=e197]: Entities
+        - button "Factions" [ref=e198]:
+          - generic [ref=e199]: Factions
+        - button "Goals" [ref=e200]:
+          - generic [ref=e201]: Goals
+        - button "Resources" [ref=e202]:
+          - generic [ref=e203]: Resources
+        - button "Members" [ref=e204]:
+          - generic [ref=e205]: Members
+        - button "Agreements" [ref=e206]:
+          - generic [ref=e207]: Agreements
+        - button "Threads" [ref=e208]:
+          - generic [ref=e209]: Threads
+        - button "Events" [ref=e210]:
+          - generic [ref=e211]: Events
+        - button "Chapters" [active] [ref=e212]:
+          - generic [ref=e213]: Chapters
+        - button "Arcs" [ref=e214]:
+          - generic [ref=e215]: Arcs
+        - button "Memory" [ref=e216]:
+          - generic [ref=e217]: Memory
+      - generic [ref=e219]:
+        - generic [ref=e220]:
+          - generic [ref=e222]:
+            - img [ref=e223]
+            - generic [ref=e224]: 22 rows
+          - generic [ref=e226]:
+            - generic [ref=e227]:
+              - generic [ref=e228]: id
+              - generic [ref=e229]: story_id
+              - generic [ref=e230]: number
+              - generic [ref=e231]: title
+              - generic [ref=e232]: scene_outcome
+              - generic [ref=e233]: irreversible_changes
+              - generic [ref=e234]: npc_knowledge_changes
+              - generic [ref=e235]: promises_debts_oaths
+            - 'button "chapter_opening_black_walls story_volantis_black_walls 1 Opening: The Crimson Spire [] [] []" [ref=e791]':
+              - generic "chapter_opening_black_walls" [ref=e792]
+              - generic "story_volantis_black_walls" [ref=e238]
+              - generic "1" [ref=e793]
+              - 'generic "Opening: The Crimson Spire" [ref=e794]'
+              - generic "[]" [ref=e796]
+              - generic "[]" [ref=e797]
+              - generic "[]" [ref=e798]
+            - 'button "chapter_entry_79bd01a1_0fc6_40d5_9ea2_b73eb82c21c8_narration_f1f2521f_fd20_4efa_9c7a_c43dc24f6813 story_volantis_black_walls 7 Chapter 7: Narrate till the next day [CHECKPOINT = Chapter checkpoint covering transcript positions 151-180.] [SOURCE COVERAGE = - Transcript positions 151-180. - 30 entries... [] [] []" [ref=e799]':
+              - generic "chapter_entry_79bd01a1_0fc6_40d5_9ea2_b73eb82c21c8_narration_f1f2521f_fd20_4efa_9c7a_c43dc24f6813" [ref=e800]
+              - generic "story_volantis_black_walls" [ref=e247]
+              - generic "7" [ref=e801]
+              - 'generic "Chapter 7: Narrate till the next day" [ref=e802]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 151-180.] [SOURCE COVERAGE = - Transcript positions 151-180. - 30 entries..." [ref=e803]
+              - generic "[]" [ref=e804]
+              - generic "[]" [ref=e805]
+              - generic "[]" [ref=e806]
+            - 'button "chapter_narration_a36f822f_e0da_4cd7_a0e9_c5aae260d71e_entry_31b54ade_e534_486f_8327_ddc41066c36d story_volantis_black_walls 5 Chapter 5: Narrate the pov of aurions mother in the black walls keep up wi [CHECKPOINT = Chapter checkpoint covering transcript positions 91-120.] [SOURCE COVERAGE = - Transcript positions 91-120. - 30 entries c... [] [] []" [ref=e807]':
+              - generic "chapter_narration_a36f822f_e0da_4cd7_a0e9_c5aae260d71e_entry_31b54ade_e534_486f_8327_ddc41066c36d" [ref=e808]
+              - generic "story_volantis_black_walls" [ref=e256]
+              - generic "5" [ref=e809]
+              - 'generic "Chapter 5: Narrate the pov of aurions mother in the black walls keep up wi" [ref=e810]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 91-120.] [SOURCE COVERAGE = - Transcript positions 91-120. - 30 entries c..." [ref=e811]
+              - generic "[]" [ref=e812]
+              - generic "[]" [ref=e813]
+              - generic "[]" [ref=e814]
+            - 'button "chapter_narration_a4732da6_760e_4df1_83f5_3a4c7976e7e8_entry_f48e613b_e43e_4368_a44f_e52e54afeba1 story_volantis_black_walls 11 Chapter 11: acts: Watch [CHECKPOINT = Chapter checkpoint covering transcript positions 261-280.] [SOURCE COVERAGE = - Transcript positions 261-280. - 20 entries... [] [] []" [ref=e815]':
+              - generic "chapter_narration_a4732da6_760e_4df1_83f5_3a4c7976e7e8_entry_f48e613b_e43e_4368_a44f_e52e54afeba1" [ref=e816]
+              - generic "story_volantis_black_walls" [ref=e265]
+              - generic "11" [ref=e817]
+              - 'generic "Chapter 11: acts: Watch" [ref=e818]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 261-280.] [SOURCE COVERAGE = - Transcript positions 261-280. - 20 entries..." [ref=e819]
+              - generic "[]" [ref=e820]
+              - generic "[]" [ref=e821]
+              - generic "[]" [ref=e822]
+            - 'button "chapter_narration_64f9ce29_1f4e_4b0d_8468_68e4008691a2_entry_2ded19fb_adb3_4a1f_8979_8572706ae82d story_volantis_black_walls 16 Chapter 16: acts: appear in zhens dream that night. She is crying. I ask wh [CHECKPOINT = Chapter checkpoint covering transcript positions 361-380.] [SOURCE COVERAGE = - Transcript positions 361-380. - 20 entries... [] [] []" [ref=e823]':
+              - generic "chapter_narration_64f9ce29_1f4e_4b0d_8468_68e4008691a2_entry_2ded19fb_adb3_4a1f_8979_8572706ae82d" [ref=e824]
+              - generic "story_volantis_black_walls" [ref=e274]
+              - generic "16" [ref=e825]
+              - 'generic "Chapter 16: acts: appear in zhens dream that night. She is crying. I ask wh" [ref=e826]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 361-380.] [SOURCE COVERAGE = - Transcript positions 361-380. - 20 entries..." [ref=e827]
+              - generic "[]" [ref=e828]
+              - generic "[]" [ref=e829]
+              - generic "[]" [ref=e830]
+            - 'button "chapter_narration_1f15aace_e3ce_4c39_846a_d8f8cd3d3441_entry_64f9ce29_1f4e_4b0d_8468_68e4008691a2 story_volantis_black_walls 15 Chapter 15: says, \"Well I tried , I didn’t break or bend. My mistake was fa [CHECKPOINT = Chapter checkpoint covering transcript positions 341-360.] [SOURCE COVERAGE = - Transcript positions 341-360. - 20 entries... [] [] []" [ref=e831]':
+              - generic "chapter_narration_1f15aace_e3ce_4c39_846a_d8f8cd3d3441_entry_64f9ce29_1f4e_4b0d_8468_68e4008691a2" [ref=e832]
+              - generic "story_volantis_black_walls" [ref=e283]
+              - generic "15" [ref=e833]
+              - 'generic "Chapter 15: says, \"Well I tried , I didn’t break or bend. My mistake was fa" [ref=e834]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 341-360.] [SOURCE COVERAGE = - Transcript positions 341-360. - 20 entries..." [ref=e835]
+              - generic "[]" [ref=e836]
+              - generic "[]" [ref=e837]
+              - generic "[]" [ref=e838]
+            - 'button "chapter_entry_4cb7efda_2747_4221_b59f_c0e0cba22c43_narration_360978d1_ede3_4eab_b7f2_ddb8f804b212 story_volantis_black_walls 19 Chapter 19: acts: Continue the narration [CHECKPOINT = Chapter checkpoint covering transcript positions 441-460.] [SOURCE COVERAGE = - Transcript positions 441-460. - 20 entries... [] [] []" [ref=e839]':
+              - generic "chapter_entry_4cb7efda_2747_4221_b59f_c0e0cba22c43_narration_360978d1_ede3_4eab_b7f2_ddb8f804b212" [ref=e840]
+              - generic "story_volantis_black_walls" [ref=e292]
+              - generic "19" [ref=e841]
+              - 'generic "Chapter 19: acts: Continue the narration" [ref=e842]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 441-460.] [SOURCE COVERAGE = - Transcript positions 441-460. - 20 entries..." [ref=e843]
+              - generic "[]" [ref=e844]
+              - generic "[]" [ref=e845]
+              - generic "[]" [ref=e846]
+            - 'button "chapter_entry_source_008_narration_ef5e0eb4_fae6_4fa4_9263_826e04c75afd story_volantis_black_walls 2 Chapter 2: ooc make an opening scene with our protaganist waking in his bed [CHECKPOINT = Chapter checkpoint covering transcript positions 7-31.] [SOURCE COVERAGE = - Transcript positions 7-31. - 25 entries cover... [] [] []" [ref=e847]':
+              - generic "chapter_entry_source_008_narration_ef5e0eb4_fae6_4fa4_9263_826e04c75afd" [ref=e848]
+              - generic "story_volantis_black_walls" [ref=e301]
+              - generic "2" [ref=e849]
+              - 'generic "Chapter 2: ooc make an opening scene with our protaganist waking in his bed" [ref=e850]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 7-31.] [SOURCE COVERAGE = - Transcript positions 7-31. - 25 entries cover..." [ref=e851]
+              - generic "[]" [ref=e852]
+              - generic "[]" [ref=e853]
+              - generic "[]" [ref=e854]
+            - 'button "chapter_entry_126ce418_0d80_4197_af2a_8625d44d9617_narration_e65487b0_306b_4fd8_a9ec_14728b21bdc6 story_volantis_black_walls 8 Chapter 8: says, \"A gambit but I think it will work , and after you sit th [CHECKPOINT = Chapter checkpoint covering transcript positions 181-210.] [SOURCE COVERAGE = - Transcript positions 181-210. - 30 entries... [] [] []" [ref=e855]':
+              - generic "chapter_entry_126ce418_0d80_4197_af2a_8625d44d9617_narration_e65487b0_306b_4fd8_a9ec_14728b21bdc6" [ref=e856]
+              - generic "story_volantis_black_walls" [ref=e310]
+              - generic "8" [ref=e857]
+              - 'generic "Chapter 8: says, \"A gambit but I think it will work , and after you sit th" [ref=e858]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 181-210.] [SOURCE COVERAGE = - Transcript positions 181-210. - 30 entries..." [ref=e859]
+              - generic "[]" [ref=e860]
+              - generic "[]" [ref=e861]
+              - generic "[]" [ref=e862]
+            - 'button "chapter_narration_fe2fc5cb_e402_4c2f_be8f_6b0774a3c649_narration_e0c44aec_4fb8_4e55_b3b6_79b6d894541f story_volantis_black_walls 18 Chapter 18: says, \"I hold no claim to power, the only power , I will have w [CHECKPOINT = Chapter checkpoint covering transcript positions 411-440.] [SOURCE COVERAGE = - Transcript positions 411-440. - 30 entries... [] [] []" [ref=e863]':
+              - generic "chapter_narration_fe2fc5cb_e402_4c2f_be8f_6b0774a3c649_narration_e0c44aec_4fb8_4e55_b3b6_79b6d894541f" [ref=e864]
+              - generic "story_volantis_black_walls" [ref=e319]
+              - generic "18" [ref=e865]
+              - 'generic "Chapter 18: says, \"I hold no claim to power, the only power , I will have w" [ref=e866]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 411-440.] [SOURCE COVERAGE = - Transcript positions 411-440. - 30 entries..." [ref=e867]
+              - generic "[]" [ref=e868]
+              - generic "[]" [ref=e869]
+              - generic "[]" [ref=e870]
+            - 'button "chapter_entry_72de46a9_906e_498a_94b6_8c8d9ace85b6_entry_a4732da6_760e_4df1_83f5_3a4c7976e7e8 story_volantis_black_walls 10 Chapter 10: acts: Wrap my arms around her , and kiss her [CHECKPOINT = Chapter checkpoint covering transcript positions 241-260.] [SOURCE COVERAGE = - Transcript positions 241-260. - 20 entries... [] [] []" [ref=e871]':
+              - generic "chapter_entry_72de46a9_906e_498a_94b6_8c8d9ace85b6_entry_a4732da6_760e_4df1_83f5_3a4c7976e7e8" [ref=e872]
+              - generic "story_volantis_black_walls" [ref=e328]
+              - generic "10" [ref=e873]
+              - 'generic "Chapter 10: acts: Wrap my arms around her , and kiss her" [ref=e874]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 241-260.] [SOURCE COVERAGE = - Transcript positions 241-260. - 20 entries..." [ref=e875]
+              - generic "[]" [ref=e876]
+              - generic "[]" [ref=e877]
+              - generic "[]" [ref=e878]
+            - 'button "chapter_41653789_b873_47e9_b458_3153707f3b98_narration_d7b125ff_17e1_4884_a546_8682336221a6 story_volantis_black_walls 9 Chapter 9: says, \"Walk to meet the empress\" [CHECKPOINT = Chapter checkpoint covering transcript positions 211-240.] [SOURCE COVERAGE = - Transcript positions 211-240. - 30 entries... [] [] []" [ref=e879]':
+              - generic "chapter_41653789_b873_47e9_b458_3153707f3b98_narration_d7b125ff_17e1_4884_a546_8682336221a6" [ref=e880]
+              - generic "story_volantis_black_walls" [ref=e337]
+              - generic "9" [ref=e881]
+              - 'generic "Chapter 9: says, \"Walk to meet the empress\"" [ref=e882]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 211-240.] [SOURCE COVERAGE = - Transcript positions 211-240. - 30 entries..." [ref=e883]
+              - generic "[]" [ref=e884]
+              - generic "[]" [ref=e885]
+              - generic "[]" [ref=e886]
+            - 'button "chapter_narration_f48e613b_e43e_4368_a44f_e52e54afeba1_entry_a8de8892_e5cc_4839_9359_b3b5fe28c940 story_volantis_black_walls 12 Chapter 12: Sleep and then get dressed eat and head to court [CHECKPOINT = Chapter checkpoint covering transcript positions 281-300.] [SOURCE COVERAGE = - Transcript positions 281-300. - 20 entries... [] [] []" [ref=e887]':
+              - generic "chapter_narration_f48e613b_e43e_4368_a44f_e52e54afeba1_entry_a8de8892_e5cc_4839_9359_b3b5fe28c940" [ref=e888]
+              - generic "story_volantis_black_walls" [ref=e346]
+              - generic "12" [ref=e889]
+              - 'generic "Chapter 12: Sleep and then get dressed eat and head to court" [ref=e890]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 281-300.] [SOURCE COVERAGE = - Transcript positions 281-300. - 20 entries..." [ref=e891]
+              - generic "[]" [ref=e892]
+              - generic "[]" [ref=e893]
+              - generic "[]" [ref=e894]
+            - 'button "chapter_narration_a8de8892_e5cc_4839_9359_b3b5fe28c940_entry_f946194b_076e_4f44_892f_6690547474fe story_volantis_black_walls 13 Chapter 13: Return to my chambers and take a nap [CHECKPOINT = Chapter checkpoint covering transcript positions 301-320.] [SOURCE COVERAGE = - Transcript positions 301-320. - 20 entries... [] [] []" [ref=e895]':
+              - generic "chapter_narration_a8de8892_e5cc_4839_9359_b3b5fe28c940_entry_f946194b_076e_4f44_892f_6690547474fe" [ref=e896]
+              - generic "story_volantis_black_walls" [ref=e355]
+              - generic "13" [ref=e897]
+              - 'generic "Chapter 13: Return to my chambers and take a nap" [ref=e898]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 301-320.] [SOURCE COVERAGE = - Transcript positions 301-320. - 20 entries..." [ref=e899]
+              - generic "[]" [ref=e900]
+              - generic "[]" [ref=e901]
+              - generic "[]" [ref=e902]
+            - 'button "chapter_entry_1ec7d14a_8d4a_413c_8c45_24ba223a117c_entry_a36f822f_e0da_4cd7_a0e9_c5aae260d71e story_volantis_black_walls 4 Chapter 4: says, \"Yes Aelyx’s younger better looking brother\" [CHECKPOINT = Chapter checkpoint covering transcript positions 62-90.] [SOURCE COVERAGE = - Transcript positions 62-90. - 30 entries cov... [] [] []" [ref=e903]':
+              - generic "chapter_entry_1ec7d14a_8d4a_413c_8c45_24ba223a117c_entry_a36f822f_e0da_4cd7_a0e9_c5aae260d71e" [ref=e904]
+              - generic "story_volantis_black_walls" [ref=e364]
+              - generic "4" [ref=e905]
+              - 'generic "Chapter 4: says, \"Yes Aelyx’s younger better looking brother\"" [ref=e906]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 62-90.] [SOURCE COVERAGE = - Transcript positions 62-90. - 30 entries cov..." [ref=e907]
+              - generic "[]" [ref=e908]
+              - generic "[]" [ref=e909]
+              - generic "[]" [ref=e910]
+            - 'button "chapter_narration_31b54ade_e534_486f_8327_ddc41066c36d_narration_943784d1_98a8_4cde_a3e2_e32e040bbf96 story_volantis_black_walls 6 Chapter 6: says, \"You didn’t fuck me did you. Didn’t no fondle me? Good [CHECKPOINT = Chapter checkpoint covering transcript positions 121-150.] [SOURCE COVERAGE = - Transcript positions 121-150. - 30 entries... [] [] []" [ref=e911]':
+              - generic "chapter_narration_31b54ade_e534_486f_8327_ddc41066c36d_narration_943784d1_98a8_4cde_a3e2_e32e040bbf96" [ref=e912]
+              - generic "story_volantis_black_walls" [ref=e373]
+              - generic "6" [ref=e913]
+              - 'generic "Chapter 6: says, \"You didn’t fuck me did you. Didn’t no fondle me? Good" [ref=e914]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 121-150.] [SOURCE COVERAGE = - Transcript positions 121-150. - 30 entries..." [ref=e915]
+              - generic "[]" [ref=e916]
+              - generic "[]" [ref=e917]
+              - generic "[]" [ref=e918]
+            - 'button "chapter_narration_f946194b_076e_4f44_892f_6690547474fe_entry_1f15aace_e3ce_4c39_846a_d8f8cd3d3441 story_volantis_black_walls 14 Chapter 14: says, \"No they won’t , **my eyes went alight **\" [CHECKPOINT = Chapter checkpoint covering transcript positions 321-340.] [SOURCE COVERAGE = - Transcript positions 321-340. - 20 entries... [] [] []" [ref=e919]':
+              - generic "chapter_narration_f946194b_076e_4f44_892f_6690547474fe_entry_1f15aace_e3ce_4c39_846a_d8f8cd3d3441" [ref=e920]
+              - generic "story_volantis_black_walls" [ref=e382]
+              - generic "14" [ref=e921]
+              - 'generic "Chapter 14: says, \"No they won’t , **my eyes went alight **\"" [ref=e922]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 321-340.] [SOURCE COVERAGE = - Transcript positions 321-340. - 20 entries..." [ref=e923]
+              - generic "[]" [ref=e924]
+              - generic "[]" [ref=e925]
+              - generic "[]" [ref=e926]
+            - 'button "chapter_narration_2ded19fb_adb3_4a1f_8979_8572706ae82d_entry_fe2fc5cb_e402_4c2f_be8f_6b0774a3c649 story_volantis_black_walls 17 Chapter 17: says, \"Well I will serve that purpose\" [CHECKPOINT = Chapter checkpoint covering transcript positions 381-410.] [SOURCE COVERAGE = - Transcript positions 381-410. - 30 entries... [] [] []" [ref=e927]':
+              - generic "chapter_narration_2ded19fb_adb3_4a1f_8979_8572706ae82d_entry_fe2fc5cb_e402_4c2f_be8f_6b0774a3c649" [ref=e928]
+              - generic "story_volantis_black_walls" [ref=e391]
+              - generic "17" [ref=e929]
+              - 'generic "Chapter 17: says, \"Well I will serve that purpose\"" [ref=e930]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 381-410.] [SOURCE COVERAGE = - Transcript positions 381-410. - 30 entries..." [ref=e931]
+              - generic "[]" [ref=e932]
+              - generic "[]" [ref=e933]
+              - generic "[]" [ref=e934]
+            - 'button "chapter_entry_b48caaa1_b99b_4bff_a627_4c39624fc759_entry_187f524c_6207_4262_9931_183adc8deedd story_volantis_black_walls 20 Chapter 20: Move her to the bed and eat her pussy, [CHECKPOINT = Chapter checkpoint covering transcript positions 461-491.] [SOURCE COVERAGE = - Transcript positions 461-491. - 30 entries... [] [] []" [ref=e935]':
+              - generic "chapter_entry_b48caaa1_b99b_4bff_a627_4c39624fc759_entry_187f524c_6207_4262_9931_183adc8deedd" [ref=e936]
+              - generic "story_volantis_black_walls" [ref=e400]
+              - generic "20" [ref=e937]
+              - 'generic "Chapter 20: Move her to the bed and eat her pussy," [ref=e938]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 461-491.] [SOURCE COVERAGE = - Transcript positions 461-491. - 30 entries..." [ref=e939]
+              - generic "[]" [ref=e940]
+              - generic "[]" [ref=e941]
+              - generic "[]" [ref=e942]
+            - 'button "chapter_narration_187f524c_6207_4262_9931_183adc8deedd_entry_7aae5889_00fe_4284_8b5f_87fd41ae793d story_volantis_black_walls 21 Chapter 21: rises and bow , and say “I will perform them , most dutifully, [CHECKPOINT = Chapter checkpoint covering transcript positions 492-521.] [SOURCE COVERAGE = - Transcript positions 492-521. - 30 entries... [] [] []" [ref=e943]':
+              - generic "chapter_narration_187f524c_6207_4262_9931_183adc8deedd_entry_7aae5889_00fe_4284_8b5f_87fd41ae793d" [ref=e944]
+              - generic "story_volantis_black_walls" [ref=e409]
+              - generic "21" [ref=e945]
+              - 'generic "Chapter 21: rises and bow , and say “I will perform them , most dutifully," [ref=e946]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 492-521.] [SOURCE COVERAGE = - Transcript positions 492-521. - 30 entries..." [ref=e947]
+              - generic "[]" [ref=e948]
+              - generic "[]" [ref=e949]
+              - generic "[]" [ref=e950]
+            - 'button "chapter_narration_7aae5889_00fe_4284_8b5f_87fd41ae793d_entry_89450f12_c475_4410_ae64_9ef76b734444 story_volantis_black_walls 22 Chapter 22: says, \"I tell the same argument to myself, in night alone. She [CHECKPOINT = Chapter checkpoint covering transcript positions 522-551.] [SOURCE COVERAGE = - Transcript positions 522-551. - 30 entries... [] [] []" [ref=e951]':
+              - generic "chapter_narration_7aae5889_00fe_4284_8b5f_87fd41ae793d_entry_89450f12_c475_4410_ae64_9ef76b734444" [ref=e952]
+              - generic "story_volantis_black_walls" [ref=e418]
+              - generic "22" [ref=e953]
+              - 'generic "Chapter 22: says, \"I tell the same argument to myself, in night alone. She" [ref=e954]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 522-551.] [SOURCE COVERAGE = - Transcript positions 522-551. - 30 entries..." [ref=e955]
+              - generic "[]" [ref=e956]
+              - generic "[]" [ref=e957]
+              - generic "[]" [ref=e958]
+            - 'button "chapter_narration_89450f12_c475_4410_ae64_9ef76b734444_narration_14a54ed5_cda9_40d1_8499_e0876144d3ae story_volantis_black_walls 23 Chapter 23: says, \"That is so auspicious, who is the girl i am to find , dr [CHECKPOINT = Chapter checkpoint covering transcript positions 552-581.] [SOURCE COVERAGE = - Transcript positions 552-581. - 30 entries... [] [] []" [ref=e959]':
+              - generic "chapter_narration_89450f12_c475_4410_ae64_9ef76b734444_narration_14a54ed5_cda9_40d1_8499_e0876144d3ae" [ref=e960]
+              - generic "story_volantis_black_walls" [ref=e427]
+              - generic "23" [ref=e961]
+              - 'generic "Chapter 23: says, \"That is so auspicious, who is the girl i am to find , dr" [ref=e962]'
+              - generic "[CHECKPOINT = Chapter checkpoint covering transcript positions 552-581.] [SOURCE COVERAGE = - Transcript positions 552-581. - 30 entries..." [ref=e963]
+              - generic "[]" [ref=e964]
+              - generic "[]" [ref=e965]
+              - generic "[]" [ref=e966]
+        - complementary [ref=e776]:
+          - generic [ref=e777]:
+            - generic [ref=e778]:
+              - generic [ref=e779]: "Opening: The Crimson Spire"
+              - generic [ref=e780]: chapters
+            - button "Save record" [ref=e781]:
+              - img [ref=e782]
+          - generic [ref=e783]:
+            - generic [ref=e784]:
+              - img [ref=e785]
+              - generic [ref=e786]: JSON
+            - textbox [ref=e787]: "{ \"id\": \"chapter_opening_black_walls\", \"story_id\": \"story_volantis_black_walls\", \"number\": 1, \"title\": \"Opening: The Crimson Spire\", \"scene_outcome\": \"\", \"irreversible_changes\": [], \"npc_knowledge_changes\": [], \"promises_debts_oaths\": [], \"discovered_clues\": [], \"relationship_changes\": [], \"faction_changes\": [], \"open_threads\": [], \"source_entry_ids\": [ \"entry_source_007\" ], \"source_event_ids\": [], \"metadata\": { \"source\": \"llm_seed_proposal\", \"confidence\": 0.82, \"needsReview\": false, \"backfilledAt\": \"2026-06-14T18:28:53.689Z\", \"emotionalTone\": \"unresolved pressure\", \"summarySource\": \"deterministic_backfill\", \"legacyKeywords\": [ \"chapter\", \"continuity memory\" ], \"legacyLocations\": [], \"legacyCharacters\": [], \"trackedEntityIds\": [], \"backfilledCharactersAt\": \"2026-06-14T18:29:48.951Z\" }, \"server_version\": 1182, \"created_at\": \"2026-06-11 21:18:12+00\", \"updated_at\": \"2026-06-14 18:29:48.951173+00\" }"
+            - generic [ref=e788]:
+              - generic [ref=e789]: Sources
+              - generic [ref=e790]: "{ \"entries\": [ { \"id\": \"entry_source_007\", \"storyId\": \"story_volantis_black_walls\", \"type\": \"system\", \"content\": \"The player begins as an unnamed scion of House Balaerys with access to the Crimson Spire; exact name, temperament, and succession position are open.\", \"position\": 6, \"parentId\": null, \"branchId\": null, \"metadata\": { \"source\": \"provided_source_excerpt\", \"needsReview\": false }, \"serverVersion\": 1, \"createdAt\": \"2026-06-11 21:18:12+00\", \"updatedAt\": \"2026-06-11 22:28:31.915+00\" } ], \"events\": [], \"patches\": [] }"

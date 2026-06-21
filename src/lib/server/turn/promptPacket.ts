@@ -1,6 +1,7 @@
 import type { TurnContext } from './context';
 import type { GmTimelineBrief, GmTimelineBriefEvent, RetrievedMemoryPacket } from '$lib/contracts/memory';
 import { buildEconomyScaleBlock, buildWorldScaleBlock } from '$lib/services/ai/context/economyScale';
+import { summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
 import { sliceWellFormedText, toWellFormedText } from './wellFormedText';
 
 export interface ServerTurnPromptOptions {
@@ -26,9 +27,18 @@ const AGREEMENT_LIMIT = 8;
 const EVENT_LIMIT = 8;
 const CONTINUITY_FACT_LIMIT = 8;
 const CONTINUITY_PROPOSAL_LIMIT = 8;
+const UNRESOLVED_CHARACTER_REFERENCE_LIMIT = 6;
 const CONTINUITY_WARNING_LIMIT = 6;
 const GM_EVENT_SECTION_LIMIT = 4;
 const GM_NPC_EVENT_LIMIT = 4;
+const CHAPTER_MEMORY_OUTCOME_CHAR_LIMIT = 1800;
+const CHAPTER_MEMORY_CHAR_BUDGET = 6500;
+const ARC_MEMORY_SUMMARY_CHAR_LIMIT = 2600;
+const ARC_MEMORY_OPEN_THREADS_CHAR_LIMIT = 900;
+const ARC_MEMORY_CHAR_BUDGET = 7000;
+const SAGA_MEMORY_SUMMARY_CHAR_LIMIT = 2600;
+const SAGA_MEMORY_LIST_CHAR_LIMIT = 900;
+const SAGA_MEMORY_LIMIT = 4;
 const PLAYER_DESCRIPTION_CHAR_LIMIT = 2200;
 const PLAYER_REPUTATION_CHAR_LIMIT = 900;
 const PLAYER_CHARACTER_PROMPT_CHAR_LIMIT = 2400;
@@ -40,6 +50,7 @@ const PORTRAYAL_PERSONALITY_CHAR_LIMIT = 360;
 const PORTRAYAL_VOICE_CHAR_LIMIT = 220;
 const PORTRAYAL_MANNERISMS_CHAR_LIMIT = 220;
 const PORTRAYAL_SUFFIX_CHAR_LIMIT = 1400;
+const CHARACTER_BLOCK_LIMIT = 2;
 const SECRET_TIMELINE_LABEL = '[secret narrator-only]';
 const SECRET_TIMELINE_INSTRUCTION = 'Secret timeline items are narrator-only context; present NPCs must not speak or act on them unless actor beliefs or scene evidence supports it.';
 const STATE_EXTRACTION_NARRATION_LIMIT = 6000;
@@ -56,6 +67,22 @@ const LIVING_FEUDAL_DOCTRINE_BLOCK = [
 	'Magic is rare, costly, symbolic, and frightening. Dragons alter legitimacy, warfare, economy, religion, and psychology. Prophecy is symbolic and misreadable. News travels imperfectly; major events create favorable, hostile, exaggerated, partially true, and false-but-believable rumors.',
 	'Aegon/Aurion Targaryen-Belaerys is a dynastic weapon shaped by survival, blood magic, Volantene power, Targaryen inheritance, Martell loss, and Tywin Lannister\'s shadow. He is brilliant, not omniscient; feared as foreign, worshipped as dragon reborn, hated as invader, preferred to chaos, and supported when useful.',
 	'When he chooses mercy, show who reads weakness. When he chooses cruelty, show who learns from it. When he wins, show who pays. When he acts like Tywin, make Elia matter. When he acts like a dragonlord, make Westeros recoil. When he acts like a king, make ruling harder than conquest.',
+].join('\n');
+const DEFAULT_CHARACTER_TEMPLATE = [
+	'Character {{id}} / {{name}}',
+	'Aliases:',
+	'{{aliases}}',
+	'Appearance: {{appearance}}',
+	'Background: {{background}}',
+	'Current state:',
+	'{{currentState}}',
+	'Goals:',
+	'{{goals}}',
+	'Speech style: {{speechStyle}}',
+	'Factions:',
+	'{{factions}}',
+	'NPC event memory:',
+	'{{eventMemory}}',
 ].join('\n');
 
 function asStringArray(value: unknown): string[] {
@@ -78,28 +105,70 @@ function compactBlock(value: string | null | undefined, max = 7500): string {
 	return `${sliceWellFormedText(text, max - 3).trimEnd()}...`;
 }
 
+function compactNarrationBlock(value: string | null | undefined, max = NARRATION_MESSAGE_CHAR_LIMIT): string {
+	const text = toWellFormedText(value ?? '').trim();
+	if (text.length <= max) return text;
+	const marker = '\n\n[... earlier narration omitted ...]\n\n';
+	const headMax = Math.min(1200, Math.floor(max * 0.25));
+	const tailMax = Math.max(0, max - marker.length - headMax);
+	const tail = Array.from(text).slice(-tailMax).join('').trimStart();
+	return `${sliceWellFormedText(text, headMax).trimEnd()}${marker}${tail}`;
+}
+
 function metadataWithOriginal(entity: { metadata?: unknown }): Record<string, unknown> {
 	const metadata = asRecord(entity.metadata);
 	const originalMetadata = asRecord(metadata.originalMetadata);
 	return { ...originalMetadata, ...metadata };
 }
 
+function isUsableEntity(entity: TurnContext['entities'][number]): boolean {
+	const metadata = metadataWithOriginal(entity);
+	return entity.status !== 'inactive'
+		&& entity.status !== 'archived'
+		&& typeof metadata.mergedInto !== 'string';
+}
+
 function selectProtagonistEntity(entities: TurnContext['entities']): TurnContext['entities'][number] | null {
 	return entities.find((entity) => {
+		if (!isUsableEntity(entity)) return false;
 		if (entity.type !== 'character') return false;
 		const state = asRecord(entity.state);
 		const relationship = asRecord(state.relationship);
 		const metadata = metadataWithOriginal(entity);
 		return state.relationship === 'self'
 			|| relationship.status === 'self'
+			|| relationship.status === 'player_character'
 			|| state.isProtagonist === true
+			|| state.currentDisposition === 'self'
 			|| metadata.relationship === 'self'
+			|| metadata.relationship === 'player_character'
 			|| typeof state.playerPrompt === 'string'
 			|| typeof metadata.playerPrompt === 'string';
 	}) ?? null;
 }
 
-function renderPlayerCharacter(entity: TurnContext['entities'][number] | null, reputation: string): string {
+function characterFactionLines(ctx: TurnContext, entity: TurnContext['entities'][number], state: Record<string, unknown>, metadata: Record<string, unknown>): string[] {
+	const factionById = new Map(ctx.factions.map((faction) => [faction.id, faction.name]));
+	const memberships = ctx.factionMemberships
+		.filter((membership) => membership.entityId === entity.id && membership.status !== 'archived')
+		.map((membership) => {
+			const details = [
+				membership.role ? `role=${membership.role}` : '',
+				membership.rank ? `rank=${membership.rank}` : '',
+				membership.status ? `status=${membership.status}` : '',
+			].filter(Boolean).join('; ');
+			return `${factionById.get(membership.factionId) ?? membership.factionId}${details ? ` (${details})` : ''}`;
+		});
+	const factionTags = [
+		...asStringArray(state.factionTags),
+		...asStringArray(state.faction_tags),
+		...asStringArray(metadata.factionTags),
+		...asStringArray(metadata.faction_tags),
+	].map((tag) => tag.trim()).filter(Boolean);
+	return Array.from(new Set([...memberships, ...factionTags]));
+}
+
+function renderPlayerCharacter(ctx: TurnContext, entity: TurnContext['entities'][number] | null, reputation: string): string {
 	if (!entity) return '';
 	const state = entity ? asRecord(entity.state) : {};
 	const metadata = entity ? metadataWithOriginal(entity) : {};
@@ -111,11 +180,27 @@ function renderPlayerCharacter(entity: TurnContext['entities'][number] | null, r
 	const assetsValue = Array.isArray(state.assets) ? state.assets : metadata.assets;
 	const assets = asStringArray(assetsValue).map((item) => item.trim()).filter(Boolean).slice(0, 20);
 	const traits = asStringArray(state.traits).map((item) => item.trim()).filter(Boolean).slice(0, 12);
+	const aliases = Array.from(new Set([...asStringArray(state.aliases), ...asStringArray(metadata.aliases)].map((item) => item.trim()).filter(Boolean))).slice(0, 12);
+	const appearance = characterStringValue(state, metadata, ['appearance'], PORTRAYAL_APPEARANCE_CHAR_LIMIT);
+	const background = characterStringValue(state, metadata, ['background', 'bio'], 520);
+	const speechStyle = characterStringValue(state, metadata, ['speechStyle', 'voice'], PORTRAYAL_VOICE_CHAR_LIMIT);
+	const currentState = entity ? characterCurrentState(entity, state, metadata) : [];
+	const goals = characterGoals(state, metadata);
+	const eventMemory = entity ? eventMemoryLines(state, metadata, null, entity.id) : [];
+	const factions = entity ? characterFactionLines(ctx, entity, state, metadata) : [];
 	const lines: string[] = ['Player character:'];
 	if (entity) {
 		lines.push(`- Name: ${entity.name}`);
+		if (aliases.length > 0) lines.push(`- Aliases: ${aliases.join(', ')}`);
 		if (entity.description) lines.push(`- Description: ${compact(entity.description, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
+		if (appearance) lines.push(`- Appearance: ${appearance}`);
+		if (background) lines.push(`- Background: ${background}`);
+		if (speechStyle) lines.push(`- Speech style: ${speechStyle}`);
+		if (factions.length > 0) lines.push('- Factions:', ...factions.map((item) => `  - ${compact(item, 220)}`));
 		if (traits.length > 0) lines.push(`- Traits: ${traits.join(', ')}`);
+		if (currentState.length > 0) lines.push('- Current state:', ...currentState.map((item) => `  - ${compact(item, 220)}`));
+		if (goals.length > 0) lines.push('- Goals:', ...goals.map((item) => `  - ${compact(item, 220)}`));
+		if (eventMemory.length > 0) lines.push('- Event memory:', ...eventMemory.map((item) => `  - ${compact(item, 220)}`));
 	}
 	if (assets.length > 0) lines.push(`- Assets: ${assets.join(', ')}`);
 	if (reputation.trim()) lines.push(`- Public reputation: ${compact(reputation, PLAYER_REPUTATION_CHAR_LIMIT)}`);
@@ -126,6 +211,26 @@ function renderPlayerCharacter(entity: TurnContext['entities'][number] | null, r
 function stringStateValue(state: Record<string, unknown>, key: string, max = 120): string {
 	const value = state[key];
 	return typeof value === 'string' ? compact(value, max) : '';
+}
+
+function characterStringValue(state: Record<string, unknown>, metadata: Record<string, unknown>, keys: string[], max = 120): string {
+	for (const key of keys) {
+		const value = stringStateValue(state, key, max);
+		if (value) return value;
+	}
+	for (const key of keys) {
+		const value = stringStateValue(metadata, key, max);
+		if (value) return value;
+	}
+	return '';
+}
+
+function relationshipText(value: unknown): string {
+	if (typeof value === 'string') return compact(value, 160);
+	const relationship = asRecord(value);
+	const status = typeof relationship.status === 'string' ? relationship.status.trim() : '';
+	const level = typeof relationship.level === 'number' ? `level ${relationship.level}` : '';
+	return compact([status, level].filter(Boolean).join(', '), 160);
 }
 
 function stringStateList(state: Record<string, unknown>, key: string, max = 90): string {
@@ -156,8 +261,245 @@ function renderEntityPortrayal(stateValue: unknown, mode: 'rich' | 'compact' = '
 	return parts.length ? ` (${compact(parts.join('; '), compactMode ? 420 : PORTRAYAL_SUFFIX_CHAR_LIMIT)})` : '';
 }
 
+function templateText(entity: TurnContext['entities'][number]): string {
+	const state = asRecord(entity.state);
+	const metadata = metadataWithOriginal(entity);
+	return typeof state.promptTemplate === 'string' && state.promptTemplate.trim()
+		? state.promptTemplate
+		: typeof metadata.promptTemplate === 'string' && metadata.promptTemplate.trim()
+			? metadata.promptTemplate
+			: DEFAULT_CHARACTER_TEMPLATE;
+}
+
+function blockList(values: string[], fallback = '- none recorded'): string {
+	return values.length ? values.map((value) => `- ${compact(value, 220)}`).join('\n') : fallback;
+}
+
+function characterGoals(state: Record<string, unknown>, metadata: Record<string, unknown>): string[] {
+	return Array.from(new Set([
+		...asStringArray(state.goals),
+		...asStringArray(metadata.goals),
+		typeof state.goal === 'string' ? state.goal : '',
+		typeof metadata.goal === 'string' ? metadata.goal : '',
+	].map((item) => item.trim()).filter(Boolean))).slice(0, 6);
+}
+
+function characterCurrentState(entity: TurnContext['entities'][number], state: Record<string, unknown>, metadata: Record<string, unknown>): string[] {
+	const status = characterStringValue(state, metadata, ['status'], 160) || String(entity.status ?? '').trim();
+	const location = characterStringValue(state, metadata, ['currentLocation', 'location'], 160);
+	const action = characterStringValue(state, metadata, ['currentAction'], 180);
+	const emotion = characterStringValue(state, metadata, ['emotionalState'], 160);
+	const relationship = relationshipText(state.relationship) || relationshipText(metadata.relationship);
+	return [
+		typeof state.present === 'boolean' ? (state.present ? 'present in the current scene' : 'not currently visible') : '',
+		status && status !== 'active' ? `status: ${status}` : '',
+		location ? `location: ${location}` : '',
+		action ? `action: ${action}` : '',
+		emotion ? `emotional state: ${emotion}` : '',
+		relationship ? `relationship: ${relationship}` : '',
+		...Array.from(new Set([...asStringArray(state.pressures), ...asStringArray(metadata.pressures)].map((item) => item.trim()).filter(Boolean))).slice(0, 2).map((item) => `pressure: ${item}`),
+	].filter(Boolean).slice(0, 8);
+}
+
+function eventMemoryLines(state: Record<string, unknown>, metadata: Record<string, unknown>, gmBrief: GmTimelineBrief | null | undefined, entityId: string): string[] {
+	const stateMemory = asRecord(state.eventMemory ?? state.npcEventMemory);
+	const metadataMemory = asRecord(metadata.eventMemory ?? metadata.npcEventMemory);
+	const keys = [
+		['did', 'did'],
+		['saw', 'saw'],
+		['knew', 'knew'],
+		['knows', 'knows'],
+	] as const;
+	const buckets = keys.map(([key, label]) => {
+		const seen = new Set<string>();
+		return [
+			...asStringArray(metadataMemory[key]),
+			...asStringArray(stateMemory[key]),
+		].map((item) => item.trim()).filter((item) => {
+			if (!item) return false;
+			const normalized = item.toLowerCase();
+			if (seen.has(normalized)) return false;
+			seen.add(normalized);
+			return true;
+		}).slice(-4).reverse().map((item) => `${label}: ${item}`);
+	});
+	const stateLines: string[] = [];
+	for (let index = 0; index < 4; index += 1) {
+		for (const bucket of buckets) {
+			if (bucket[index]) stateLines.push(bucket[index]);
+		}
+	}
+	const linkedLines = (gmBrief?.npcEvents ?? [])
+		.filter((event) => event.npcEntityId === entityId)
+		.map((event) => `${event.visibility === 'secret' ? `${SECRET_TIMELINE_LABEL} ` : ''}linked: ${event.summary}`);
+	return [...stateLines, ...linkedLines].slice(0, 8);
+}
+
+function renderSimpleTemplate(template: string, values: Record<string, string>): string {
+	return template.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, key: string) => values[key] ?? '');
+}
+
+function templateHasSlot(template: string, slot: string): boolean {
+	return new RegExp(`{{\\s*${slot}\\s*}}`).test(template);
+}
+
+function renderCharacterBlocks(ctx: TurnContext, characters: TurnContext['entities'], excludeEntityId?: string | null): string {
+	const factionById = new Map(ctx.factions.map((faction) => [faction.id, faction.name]));
+	const lines = characters
+		.filter((entity) => isUsableEntity(entity) && entity.type === 'character')
+		.filter((entity) => entity.id !== excludeEntityId)
+		.slice(0, CHARACTER_BLOCK_LIMIT)
+		.map((entity) => {
+			const state = asRecord(entity.state);
+			const metadata = metadataWithOriginal(entity);
+			const memberships = ctx.factionMemberships
+				.filter((membership) => membership.entityId === entity.id && membership.status !== 'archived')
+				.map((membership) => {
+					const details = [
+						membership.role ? `role=${membership.role}` : '',
+						membership.rank ? `rank=${membership.rank}` : '',
+						membership.status ? `status=${membership.status}` : '',
+					].filter(Boolean).join('; ');
+					return `${factionById.get(membership.factionId) ?? membership.factionId}${details ? ` (${details})` : ''}`;
+				});
+			const factionTags = [
+				...asStringArray(state.factionTags),
+				...asStringArray(state.faction_tags),
+				...asStringArray(metadata.factionTags),
+				...asStringArray(metadata.faction_tags),
+			].map((tag) => tag.trim()).filter(Boolean);
+			const factions = Array.from(new Set([...memberships, ...factionTags]));
+			const aliases = Array.from(new Set([
+				...asStringArray(state.aliases),
+				...asStringArray(metadata.aliases),
+			].map((alias) => alias.trim()).filter(Boolean)));
+			const values = {
+				id: entity.id,
+				name: entity.name,
+				aliases: blockList(aliases),
+				description: compact(entity.description, CHARACTER_DESCRIPTION_CHAR_LIMIT),
+				appearance: characterStringValue(state, metadata, ['appearance'], PORTRAYAL_APPEARANCE_CHAR_LIMIT),
+				background: characterStringValue(state, metadata, ['background', 'bio'], 520),
+				currentState: blockList(characterCurrentState(entity, state, metadata)),
+				goals: blockList(characterGoals(state, metadata)),
+				speechStyle: characterStringValue(state, metadata, ['speechStyle', 'voice'], PORTRAYAL_VOICE_CHAR_LIMIT),
+				factions: blockList(factions),
+				eventMemory: blockList(eventMemoryLines(state, metadata, ctx.gmBrief, entity.id)),
+			};
+			const template = templateText(entity);
+			const rendered = renderSimpleTemplate(template, values);
+			const aliasFooter = aliases.length && !templateHasSlot(template, 'aliases')
+				? `\nAliases:\n${values.aliases}`
+				: '';
+			return compactBlock(`${rendered}${aliasFooter}`, 1800);
+		})
+		.filter(Boolean);
+	return lines.length ? `Character canon blocks:\n${lines.join('\n\n')}` : '';
+}
+
 function normalizeLookup(text: string): string {
 	return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function lookupMentionsEntity(text: string, entity: TurnContext['entities'][number]): boolean {
+	const haystack = ` ${normalizeLookup(text)} `;
+	const state = asRecord(entity.state);
+	const metadata = metadataWithOriginal(entity);
+	const names = [
+		entity.name,
+		...asStringArray(state.aliases),
+		...asStringArray(metadata.aliases),
+	];
+	return names.some((name) => {
+		const needle = normalizeLookup(name);
+		return needle.length >= 4 && haystack.includes(` ${needle} `);
+	});
+}
+
+function latestNarrationHeader(ctx: TurnContext): string {
+	const latestNarration = [...ctx.recentEntries].reverse().find((entry) => entry.type === 'narration');
+	const firstLine = latestNarration?.content
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.find(Boolean);
+	return firstLine ? compact(firstLine, 900) : '';
+}
+
+function latestSceneText(ctx: TurnContext): string {
+	const header = latestNarrationHeader(ctx);
+	if (header) return header;
+	const latestChapter = ctx.chapters.at(-1);
+	const storyTime = typeof (ctx.story as Record<string, unknown>).currentWorldTime === 'string'
+		? String((ctx.story as Record<string, unknown>).currentWorldTime)
+		: '';
+	return compactBlock([
+		storyTime,
+		latestChapter?.sceneOutcome ?? '',
+	].filter((part) => part.trim().length > 0).join('\n'), 5000);
+}
+
+function renderCurrentScene(ctx: TurnContext): string {
+	const header = latestNarrationHeader(ctx);
+	if (header) return `Current scene from latest narration:\n${header}`;
+	const storyTime = typeof (ctx.story as Record<string, unknown>).currentWorldTime === 'string'
+		? String((ctx.story as Record<string, unknown>).currentWorldTime).trim()
+		: '';
+	return storyTime ? `Current scene from story clock:\n${compact(storyTime, 900)}` : '';
+}
+
+function entitySceneText(entity: TurnContext['entities'][number]): string {
+	const state = asRecord(entity.state);
+	const metadata = metadataWithOriginal(entity);
+	return [
+		entity.type === 'location' ? entity.name : '',
+		characterStringValue(state, metadata, ['currentLocation', 'location', 'lastSeenLocation'], 240),
+	].filter(Boolean).join(' ');
+}
+
+function textOverlapsScene(value: string, sceneText: string): boolean {
+	const scene = normalizeLookup(sceneText);
+	const target = normalizeLookup(value);
+	if (!scene || !target) return false;
+	if (scene.includes(target) || target.includes(scene)) return true;
+	const targetTokens = target.split(/\s+/).filter((token) => token.length > 3);
+	if (targetTokens.length === 0) return false;
+	const hits = targetTokens.filter((token) => scene.includes(token)).length;
+	return hits >= Math.min(2, targetTokens.length);
+}
+
+function entityMatchesScene(entity: TurnContext['entities'][number], sceneText: string): boolean {
+	if (!sceneText.trim()) return true;
+	if (lookupMentionsEntity(sceneText, entity)) return true;
+	const locationText = entitySceneText(entity);
+	return locationText ? textOverlapsScene(locationText, sceneText) : false;
+}
+
+function uniqueEntities(entities: TurnContext['entities']): TurnContext['entities'] {
+	const seen = new Set<string>();
+	return entities.filter((entity) => {
+		if (seen.has(entity.id)) return false;
+		seen.add(entity.id);
+		return true;
+	});
+}
+
+function selectCharacterBlockEntities(input: {
+	activeEntities: TurnContext['entities'];
+	presentEntities: TurnContext['entities'];
+	retrieved: RetrievedMemoryPacket;
+	sceneEntityIds: Set<string>;
+	excludeEntityId?: string | null;
+}): TurnContext['entities'] {
+	const lookupText = `${input.retrieved.query} ${input.retrieved.packet}`;
+	const isCharacter = (entity: TurnContext['entities'][number]) =>
+		entity.type === 'character' && entity.id !== input.excludeEntityId;
+	const presentCharacters = input.presentEntities.filter(isCharacter);
+	const sceneCharacters = presentCharacters.filter((entity) => input.sceneEntityIds.has(entity.id));
+	const namedCharacters = input.activeEntities
+		.filter((entity) => isCharacter(entity) && !input.presentEntities.some((present) => present.id === entity.id))
+		.filter((entity) => lookupMentionsEntity(lookupText, entity));
+	const incidentalPresent = presentCharacters.filter((entity) => !input.sceneEntityIds.has(entity.id));
+	return uniqueEntities([...sceneCharacters, ...namedCharacters, ...incidentalPresent]);
 }
 
 function queryTokens(text: string): string[] {
@@ -260,6 +602,63 @@ function renderContinuityLedger(ctx: TurnContext): string {
 	return sections.length ? `Continuity ledger:\n${sections.join('\n')}` : '';
 }
 
+function unresolvedCharacterReferenceContextLabel(metadata: Record<string, unknown>): string {
+	const referenceContext = typeof metadata.referenceContext === 'string' ? metadata.referenceContext.trim() : '';
+	if (!referenceContext) return '';
+	const detail = typeof metadata.agreementCategory === 'string' && metadata.agreementCategory.trim()
+		? metadata.agreementCategory.trim()
+		: typeof metadata.factionName === 'string' && metadata.factionName.trim()
+			? metadata.factionName.trim()
+			: typeof metadata.timelineTitle === 'string' && metadata.timelineTitle.trim()
+				? metadata.timelineTitle.trim()
+				: '';
+	return detail ? `${referenceContext}/${compact(detail, 60)}` : referenceContext;
+}
+
+function unresolvedCharacterReferenceDetails(proposal: TurnContext['patchProposals'][number]): { name: string; description: string; contextLabel: string } | null {
+	if (proposal.proposalType !== 'character_reference_review') return null;
+	if (!['pending', 'needs_review'].includes(proposal.status)) return null;
+
+	const metadata = asRecord(proposal.metadata);
+	const operationValue = proposal.operations
+		.map((operation) => asRecord(operation.value))
+		.find((value) => typeof value.name === 'string' && value.name.trim().length > 0);
+	const name = typeof metadata.sourceName === 'string' && metadata.sourceName.trim()
+		? metadata.sourceName.trim()
+		: typeof operationValue?.name === 'string'
+			? operationValue.name.trim()
+			: '';
+	if (!name) return null;
+	const description = typeof operationValue?.description === 'string'
+		? operationValue.description.trim()
+		: proposal.reason;
+	return { name, description, contextLabel: unresolvedCharacterReferenceContextLabel(metadata) };
+}
+
+function renderUnresolvedCharacterReferences(ctx: TurnContext): string {
+	const seen = new Set<string>();
+	const lines: string[] = [];
+	for (const proposal of ctx.patchProposals) {
+		const details = unresolvedCharacterReferenceDetails(proposal);
+		if (!details) continue;
+		const key = normalizeLookup(details.name);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const source = proposal.sourceEntryIds.length ? ` source=${proposal.sourceEntryIds.slice(0, 3).join(',')}` : '';
+		const context = details.contextLabel ? `, ${details.contextLabel}` : '';
+		lines.push(`- ${details.name} (not yet canon${context}): ${compact(details.description, 180)}${source}`);
+		if (lines.length >= UNRESOLVED_CHARACTER_REFERENCE_LIMIT) break;
+	}
+
+	return lines.length
+		? [
+				'Unresolved character references:',
+				'These are names the story mentioned but the backend has not created as character canon. Keep them available as context, but do not portray them as established characters until reviewed or explicitly approved.',
+				...lines,
+			].join('\n')
+		: '';
+}
+
 function renderEntries(ctx: TurnContext, currentEntryId: string): Array<{ role: 'user' | 'assistant'; content: string }> {
 	const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 	for (const entry of ctx.recentEntries) {
@@ -268,50 +667,78 @@ function renderEntries(ctx: TurnContext, currentEntryId: string): Array<{ role: 
 			messages.push({ role: 'user', content: compactBlock(entry.content, USER_MESSAGE_CHAR_LIMIT) });
 		}
 		if (entry.type === 'narration') {
-			messages.push({ role: 'assistant', content: compactBlock(entry.content, NARRATION_MESSAGE_CHAR_LIMIT) });
+			messages.push({ role: 'assistant', content: compactNarrationBlock(entry.content) });
 		}
 	}
 	return messages.slice(-RECENT_ENTRY_LIMIT);
 }
 
-function renderList(values: string[]): string {
-	return values.length ? values.map((value) => `    - ${value}`).join('\n') : '';
+function renderList(values: string[], max = 220, limit = 12): string {
+	return values.length ? values.slice(0, limit).map((value) => `    - ${compact(value, max)}`).join('\n') : '';
+}
+
+function newestWithinCharBudget<T>(items: T[], render: (item: T) => string, maxChars: number): string[] {
+	const selected: string[] = [];
+	let total = 0;
+	for (const item of [...items].reverse()) {
+		const rendered = render(item);
+		const nextTotal = total + rendered.length + (selected.length ? 1 : 0);
+		if (selected.length && nextTotal > maxChars) break;
+		selected.unshift(rendered);
+		total = nextTotal;
+	}
+	return selected;
+}
+
+function readableChapterOutcome(value: string | null | undefined): string {
+	const raw = value?.trim() ?? '';
+	if (!raw) return '';
+	if (/\[(?:CHECKPOINT|RECENT STORY STATE|CHARACTER STATE|ACTIVE THREADS)\s*=/i.test(raw)) {
+		return summarizeMtheriosMemoryForRollup(raw);
+	}
+	return raw;
 }
 
 function renderChapterMemory(ctx: TurnContext): string {
-	const lines = ctx.chapters.map((chapter) => {
-		const sections = [
-			`- Chapter ${chapter.number}${chapter.title ? `: ${chapter.title}` : ''}`,
-			chapter.sceneOutcome ? `  outcome: ${chapter.sceneOutcome}` : '',
-			renderList(chapter.irreversibleChanges ?? []),
-			renderList((chapter.npcKnowledgeChanges ?? []).map((change) => JSON.stringify(change))),
-			renderList(chapter.promisesDebtsOaths ?? []),
-			renderList(chapter.discoveredClues ?? []),
-			renderList(chapter.relationshipChanges ?? []),
-			renderList(chapter.factionChanges ?? []),
-			renderList(chapter.openThreads ?? []),
-		].filter(Boolean);
-		return sections.join('\n');
-	});
+	const coveredChapterIds = new Set(ctx.arcs.flatMap((arc) => arc.chapterIds));
+	const uncoveredChapters = ctx.chapters.filter((chapter) => !coveredChapterIds.has(chapter.id));
+	const lines = newestWithinCharBudget(uncoveredChapters, (chapter) => {
+			const outcome = readableChapterOutcome(chapter.sceneOutcome);
+			const sections = [
+				`- Chapter ${chapter.number}${chapter.title ? `: ${chapter.title}` : ''}`,
+				outcome ? `  outcome: ${compactBlock(outcome, CHAPTER_MEMORY_OUTCOME_CHAR_LIMIT)}` : '',
+				renderList(chapter.irreversibleChanges ?? []),
+				renderList((chapter.npcKnowledgeChanges ?? []).map((change) => JSON.stringify(change))),
+				renderList(chapter.promisesDebtsOaths ?? []),
+				renderList(chapter.discoveredClues ?? []),
+				renderList(chapter.relationshipChanges ?? []),
+				renderList(chapter.factionChanges ?? []),
+				renderList(chapter.openThreads ?? []),
+			].filter(Boolean);
+			return sections.join('\n');
+		}, CHAPTER_MEMORY_CHAR_BUDGET);
 	return lines.length ? `Chapter memory:\n${lines.join('\n')}` : '';
 }
 
 function renderArcMemory(ctx: TurnContext): string {
-	const lines = ctx.arcs.map((arc) => [
-		`- Arc ${arc.number}: ${arc.title}`,
-		`  summary: ${arc.summary}`,
-		arc.openThreadIds.length ? `  open threads: ${arc.openThreadIds.join(', ')}` : '',
-	].filter(Boolean).join('\n'));
+	const lines = newestWithinCharBudget(ctx.arcs, (arc) => {
+		const openThreads = compactBlock(arc.openThreadIds.join(', '), ARC_MEMORY_OPEN_THREADS_CHAR_LIMIT);
+		return [
+			`- Arc ${arc.number}: ${arc.title}`,
+			`  summary: ${compactBlock(arc.summary, ARC_MEMORY_SUMMARY_CHAR_LIMIT)}`,
+			openThreads ? `  open threads: ${openThreads}` : '',
+		].filter(Boolean).join('\n');
+	}, ARC_MEMORY_CHAR_BUDGET);
 	return lines.length ? `Arc memory:\n${lines.join('\n')}` : '';
 }
 
 function renderSagaMemory(ctx: TurnContext): string {
-	const lines = ctx.sagas.map((saga) => [
+	const lines = ctx.sagas.slice(-SAGA_MEMORY_LIMIT).map((saga) => [
 		`- Saga ${saga.number}: ${saga.title}`,
-		`  summary: ${saga.summary}`,
-		saga.keyFactionShifts.length ? `  faction shifts:\n${renderList(saga.keyFactionShifts)}` : '',
-		saga.majorPowerChanges.length ? `  power changes:\n${renderList(saga.majorPowerChanges)}` : '',
-		saga.lingeringThreads.length ? `  lingering threads:\n${renderList(saga.lingeringThreads)}` : '',
+		`  summary: ${compactBlock(saga.summary, SAGA_MEMORY_SUMMARY_CHAR_LIMIT)}`,
+		saga.keyFactionShifts.length ? `  faction shifts:\n${renderList(saga.keyFactionShifts, SAGA_MEMORY_LIST_CHAR_LIMIT, 8)}` : '',
+		saga.majorPowerChanges.length ? `  power changes:\n${renderList(saga.majorPowerChanges, SAGA_MEMORY_LIST_CHAR_LIMIT, 8)}` : '',
+		saga.lingeringThreads.length ? `  lingering threads:\n${renderList(saga.lingeringThreads, SAGA_MEMORY_LIST_CHAR_LIMIT, 8)}` : '',
 		saga.overallTone ? `  tone: ${saga.overallTone}` : '',
 	].filter(Boolean).join('\n'));
 	return lines.length ? `Saga memory:\n${lines.join('\n')}` : '';
@@ -386,22 +813,28 @@ export function buildServerTurnPrompt(
 	const storyHeader = ctx.story.headerPrompt?.trim();
 	const metadata = ctx.story.metadata && typeof ctx.story.metadata === 'object' ? ctx.story.metadata as Record<string, unknown> : {};
 	const playerReputation = typeof metadata.playerReputation === 'string' ? metadata.playerReputation : '';
-	const playerCharacter = renderPlayerCharacter(selectProtagonistEntity(ctx.entities), playerReputation);
+	const protagonist = selectProtagonistEntity(ctx.entities);
+	const playerCharacter = renderPlayerCharacter(ctx, protagonist, playerReputation);
 	const wikiContextMarkdown = compactBlock(options.wikiContextMarkdown, WIKI_CONTEXT_CHAR_LIMIT);
-	const currentLocation = ctx.entities.find((entity) => entity.type === 'location' && (entity.state as Record<string, unknown> | null)?.current === true);
+	const activeEntities = ctx.entities.filter(isUsableEntity);
+	const currentLocation = activeEntities.find((entity) => entity.type === 'location' && (entity.state as Record<string, unknown> | null)?.current === true);
+	const sceneText = latestSceneText(ctx);
+	const currentScene = renderCurrentScene(ctx);
 	const sceneEntityIds = new Set(options.sceneEntityIds ?? []);
-	const presentEntities = ctx.entities
+	const presentEntities = activeEntities
 		.map((entity, index) => {
 			const state = entity.state as Record<string, unknown> | null;
-			const isCurrentLocation = entity.id === currentLocation?.id;
+			const matchesScene = entityMatchesScene(entity, sceneText);
+			const isProtagonist = entity.id === protagonist?.id;
+			const isCurrentLocation = entity.id === currentLocation?.id && matchesScene;
 			const isSceneEntity = sceneEntityIds.has(entity.id);
-			const isPresent = state?.present === true;
-			const isCurrent = state?.current === true;
-			const rank = isCurrentLocation ? 0 : isSceneEntity ? 1 : isPresent ? 2 : isCurrent ? 3 : 4;
+			const isPresent = state?.present === true && (isProtagonist || isSceneEntity || matchesScene);
+			const isCurrent = state?.current === true && matchesScene;
+			const rank = isCurrentLocation ? 0 : isSceneEntity ? 1 : isProtagonist ? 2 : isPresent ? 3 : isCurrent ? 4 : 5;
 			return {
 				entity,
 				index,
-				isIncluded: isCurrentLocation || isSceneEntity || isPresent || isCurrent,
+				isIncluded: isCurrentLocation || isSceneEntity || isProtagonist || isPresent || isCurrent,
 				rank,
 			};
 		})
@@ -410,7 +843,7 @@ export function buildServerTurnPrompt(
 		.slice(0, PRESENT_ENTITY_LIMIT)
 		.map((item) => item.entity);
 	const presentEntityIds = new Set(presentEntities.map((entity) => entity.id));
-	const entityNameById = new Map(ctx.entities.map((entity) => [entity.id, entity.name]));
+	const entityNameById = new Map(activeEntities.map((entity) => [entity.id, entity.name]));
 	const relevantFactions = selectRelevantFactions(ctx, retrieved, presentEntityIds, options);
 
 	const factionLines = relevantFactions.map((faction) => {
@@ -462,6 +895,7 @@ export function buildServerTurnPrompt(
 		`- ${event.type}: ${event.title} - ${compact(event.body, 160)}`
 	);
 	const continuityLedger = renderContinuityLedger(ctx);
+	const unresolvedCharacterReferences = renderUnresolvedCharacterReferences(ctx);
 	const gmTimelineBrief = renderGmTimelineBrief(ctx.gmBrief);
 	const sagaMemory = renderSagaMemory(ctx);
 	const arcMemory = renderArcMemory(ctx);
@@ -471,6 +905,14 @@ export function buildServerTurnPrompt(
 	const entityLines = presentEntities.map((entity) =>
 		`- ${entity.type}: ${entity.name}${renderEntityPortrayal(entity.state, portrayalMode)}${entity.description ? ` - ${compact(entity.description, portrayalMode === 'compact' ? 120 : entity.type === 'character' ? CHARACTER_DESCRIPTION_CHAR_LIMIT : 260)}` : ''}`
 	);
+	const characterBlockEntities = selectCharacterBlockEntities({
+		activeEntities,
+		presentEntities,
+		retrieved,
+		sceneEntityIds,
+		excludeEntityId: protagonist?.id,
+	});
+	const characterBlocks = renderCharacterBlocks(ctx, characterBlockEntities, protagonist?.id);
 
 	const system = [
 		storyHeader ? `Story-specific preamble:\n${storyHeader}` : '',
@@ -492,6 +934,7 @@ export function buildServerTurnPrompt(
 		'Terminal wiki context is compiled Obsidian/Qdrant lore from the terminal process. Use it as durable canon unless fresher backend state in this prompt clearly supersedes it.',
 		buildEconomyScaleBlock('Economy scale'),
 		buildWorldScaleBlock('World scale'),
+		'D&D-style d20 checks: for meaningful uncertainty use DC 10 easy/15 moderate/20 hard/25 very hard and narrate visible consequences; terminal/server-only turns must not emit unresolved {{roll:...}} markers unless roll support is available.',
 		'Bayesian social prior: before choosing betrayal, hidden motive, refusal, alliance, loyalty, or marriage, update from evidence. Weigh baseline temperament, relationship, standing, need, upside, public cost, detection risk, and available alternatives. A high-trust or mutually profitable offer often gets a sincere yes; betrayal needs a stronger cause than genre habit.',
 		'Political pressure should build gradually. Avoid constant twists; prefer slow escalation, debts, rumors, small moves, and delayed consequences.',
 		'HARD TONE RULES: Never soften violence, sex, betrayal, or cruelty when they arise from the story. Rape, incest, torture, slavery, and child death are possible and should be portrayed unflinchingly. NPCs may lie, betray, seduce, use, support, marry, or ally with the protagonist when it serves their interests. Do not insert moral lessons.',
@@ -501,11 +944,13 @@ export function buildServerTurnPrompt(
 		`Story: ${ctx.story.title}`,
 		ctx.story.description ? `Setting: ${ctx.story.description}` : '',
 		playerCharacter,
-		currentLocation ? `Current location:\n${currentLocation.name}: ${compact(currentLocation.description, 320)}` : '',
+		currentScene || (currentLocation ? `Current location:\n${currentLocation.name}: ${compact(currentLocation.description, 320)}` : ''),
+		characterBlocks,
 		entityLines.length ? `Present or active entities:\n${entityLines.join('\n')}` : '',
 		factionLines.length ? `Faction canon:\n${factionLines.join('\n')}` : '',
 		beliefLines.length ? `Actor belief limits:\n${beliefLines.join('\n')}` : '',
 		agreementLines.length ? `Agreements and obligations:\n${agreementLines.join('\n')}` : '',
+		unresolvedCharacterReferences,
 		continuityLedger,
 		threadLines.length ? `Open plot ledger:\n${threadLines.join('\n')}` : '',
 		sagaMemory,
@@ -529,7 +974,10 @@ export function buildStateExtractionPrompt(playerText: string, narration: string
 		'Return a JSON object with a single key "update".',
 		'The value of "update" must contain only facts that clearly changed or became known in this turn.',
 		'Keep the update minimal: include the fewest valid records needed, usually 1-8 concrete facts.',
-		'Use these optional keys when applicable: characters, locations, items, time_delta, mood, player_reputation, conversations, relationships, story_beats, meter_changes, agreements, lorebook_entries.',
+		'Use these optional keys when applicable: characters, locations, items, time_delta, mood, player_reputation, conversations, relationships, story_beats, timeline_events, meter_changes, agreements, lorebook_entries.',
+		'Do not create new character canon from narration extraction. Use characters only for established canonical characters already present in context; leave new names as reviewable references through timeline_events, agreements, faction known_members, conversations, or relationships until a human creates or approves the character.',
+		'For established characters, include only changed durable fields: appearance, background, currentLocation, currentAction, emotionalState, goals, speechStyle, eventMemory.did/saw/knew/knows, status, relationship, traits, present, pressures, faction_tags.',
+		'Use timeline_events for delayed plans, rumors, faction moves, hidden schemes, deadlines, or consequences that should become due later instead of bloating immediate memory.',
 		'Do not invent extra facts. Do not summarize prose. Do not mark NPCs as knowing things they could not perceive or learn.',
 		'Player action:',
 		playerText,

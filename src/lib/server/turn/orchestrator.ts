@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
 import { storyEntries, syncOps } from '$lib/server/db/schema';
 import { turnRequestSchema, type RetrievedMemoryPacket, type TurnRequest, type TurnResponse } from '$lib/contracts/memory';
@@ -59,6 +59,65 @@ function stableJson(value: unknown): string {
 	return JSON.stringify(value) ?? 'null';
 }
 
+export function chaptersForPromptContinuity<T extends { id: string }>(chapters: T[], arcs: Array<{ chapterIds: string[] }>): T[] {
+	const coveredChapterIds = new Set(arcs.flatMap((arc) => arc.chapterIds));
+	return chapters.filter((chapter) => !coveredChapterIds.has(chapter.id));
+}
+
+const CONTINUITY_CACHE_CHAPTER_OUTCOME_CHAR_LIMIT = 900;
+const CONTINUITY_CACHE_ARC_SUMMARY_CHAR_LIMIT = 2400;
+const CONTINUITY_CACHE_SAGA_SUMMARY_CHAR_LIMIT = 2400;
+const CONTINUITY_CACHE_LIST_LIMIT = 12;
+const CONTINUITY_CACHE_LIST_ITEM_CHAR_LIMIT = 180;
+
+function compactContinuityCacheText(value: string | null | undefined, max: number): string {
+	const text = toWellFormedText(value ?? '').trim();
+	if (text.length <= max) return text;
+	return `${sliceWellFormedText(text, max - 3).trimEnd()}...`;
+}
+
+function compactContinuityCacheList(values: string[], limit = CONTINUITY_CACHE_LIST_LIMIT): string[] {
+	return values
+		.slice(0, limit)
+		.map((value) => compactContinuityCacheText(value, CONTINUITY_CACHE_LIST_ITEM_CHAR_LIMIT))
+		.filter(Boolean);
+}
+
+export function buildCampaignContinuityCachePayload(ctx: Pick<TurnContext, 'chapters' | 'arcs' | 'sagas'>) {
+	const chapters = chaptersForPromptContinuity(ctx.chapters, ctx.arcs);
+	return {
+		chapters: chapters.map((chapter) => ({
+			id: chapter.id,
+			number: chapter.number,
+			title: chapter.title,
+			sceneOutcome: compactContinuityCacheText(chapter.sceneOutcome, CONTINUITY_CACHE_CHAPTER_OUTCOME_CHAR_LIMIT),
+			openThreads: compactContinuityCacheList(chapter.openThreads),
+			updatedAt: chapter.updatedAt,
+		})),
+		arcs: ctx.arcs.map((arc) => ({
+			id: arc.id,
+			number: arc.number,
+			title: arc.title,
+			summary: compactContinuityCacheText(arc.summary, CONTINUITY_CACHE_ARC_SUMMARY_CHAR_LIMIT),
+			chapterIds: arc.chapterIds,
+			openThreadIds: compactContinuityCacheList(arc.openThreadIds),
+			updatedAt: arc.updatedAt,
+		})),
+		sagas: ctx.sagas.map((saga) => ({
+			id: saga.id,
+			number: saga.number,
+			title: saga.title,
+			summary: compactContinuityCacheText(saga.summary, CONTINUITY_CACHE_SAGA_SUMMARY_CHAR_LIMIT),
+			arcIds: saga.arcIds,
+			keyFactionShifts: compactContinuityCacheList(saga.keyFactionShifts),
+			majorPowerChanges: compactContinuityCacheList(saga.majorPowerChanges),
+			lingeringThreads: compactContinuityCacheList(saga.lingeringThreads),
+			overallTone: compactContinuityCacheText(saga.overallTone, CONTINUITY_CACHE_LIST_ITEM_CHAR_LIMIT),
+			updatedAt: saga.updatedAt,
+		})),
+	};
+}
+
 function hashText(value: string): string {
 	return createHash('sha256').update(value).digest('hex');
 }
@@ -110,6 +169,9 @@ type ProviderProfile = NonNullable<TurnRequest['providerProfile']>;
 type GenerationTiming = NonNullable<TurnResponse['generationTimings']>[number];
 type ResolvedGenerationService = Awaited<ReturnType<typeof resolveServiceGeneration>>;
 type ServerTurnPrompt = ReturnType<typeof buildServerTurnPrompt>;
+export interface ProcessServerTurnOptions {
+	onNarrationChunk?: (chunk: string) => void | Promise<void>;
+}
 type MemorySettings = {
 	chapterThreshold: number;
 	postChapterBuffer: number;
@@ -260,11 +322,66 @@ export interface TurnContextReceipt {
 		memoryNodes: number;
 		wikiChunks: number;
 		timelineEvents: number;
+		chapters: number;
+		arcs: number;
+		chaptersSuppressedByArcs: number;
+		chaptersSent: number;
+		arcsSent: number;
+		chaptersSuppressedByArc: number;
+		memoryNodesSent: number;
+		totalChars: number;
+		totalTokens: number | null;
+		facts: number;
+		patchProposals: number;
+		unresolvedCharacterReferences: number;
+		continuityWarnings: number;
 		factionSheets: string[];
 	};
 	skipped: Array<{
 		source: string;
 		reason: string;
+	}>;
+	unresolvedCharacterReferences: Array<{
+		proposalId: string;
+		name: string;
+		contextLabel: string;
+		reason: string;
+		sourceEntryIds: string[];
+	}>;
+	continuityLedger: {
+		facts: Array<{
+			id: string;
+			statement: string;
+			sourceEntryIds: string[];
+			sourcePatchIds: string[];
+		}>;
+		patchProposals: Array<{
+			id: string;
+			status: string;
+			proposalType: string;
+			targetTable: string;
+			targetRecordId: string;
+			reason: string;
+			sourceEntryIds: string[];
+			sourcePatchIds: string[];
+		}>;
+		warnings: Array<{
+			id: string;
+			level: string;
+			status: string;
+			title: string;
+			sourceEntryIds: string[];
+			sourcePatchIds: string[];
+		}>;
+	};
+	cacheSegments: Array<{
+		kind: string;
+		cacheKey: string;
+		contentHash: string;
+		hit: boolean;
+		invalidated: boolean;
+		tokenEstimate: number;
+		dependencyCount: number;
 	}>;
 	budgets: {
 		memoryTokensUsed: number;
@@ -313,6 +430,10 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asStringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function sourceIds(...values: Array<string | null | undefined>): string[] {
+	return [...new Set(values.map((value) => value?.trim() ?? '').filter(Boolean))];
 }
 
 function asNumber(value: unknown, fallback = 0): number {
@@ -441,6 +562,142 @@ function emptyGmTimelineBrief(storyId: string): NonNullable<TurnContext['gmBrief
 	};
 }
 
+function countUnresolvedCharacterReferences(patchProposals: TurnContext['patchProposals']): number {
+	const seen = new Set<string>();
+	for (const proposal of patchProposals) {
+		if (proposal.proposalType !== 'character_reference_review') continue;
+		if (!['pending', 'needs_review'].includes(proposal.status)) continue;
+		const metadata = asRecord(proposal.metadata);
+		const sourceName = typeof metadata.sourceName === 'string' ? metadata.sourceName.trim() : '';
+		const operations = Array.isArray(proposal.operations) ? proposal.operations : [];
+		const operationName = operations
+			.map((operation) => asRecord(asRecord(operation).value))
+			.map((value) => typeof value.name === 'string' ? value.name.trim() : '')
+			.find(Boolean) ?? '';
+		const name = sourceName || operationName || proposal.targetRecordId;
+		if (name) seen.add(name.toLowerCase());
+	}
+	return seen.size;
+}
+
+function unresolvedCharacterReferenceContextLabel(metadata: Record<string, unknown>): string {
+	const referenceContext = typeof metadata.referenceContext === 'string' ? metadata.referenceContext.trim() : '';
+	if (!referenceContext) return '';
+	const detail = typeof metadata.agreementCategory === 'string' && metadata.agreementCategory.trim()
+		? metadata.agreementCategory.trim()
+		: typeof metadata.factionName === 'string' && metadata.factionName.trim()
+			? metadata.factionName.trim()
+			: typeof metadata.timelineTitle === 'string' && metadata.timelineTitle.trim()
+				? metadata.timelineTitle.trim()
+				: '';
+	return detail ? `${referenceContext}/${detail.slice(0, 60)}` : referenceContext;
+}
+
+function unresolvedCharacterReferenceNameAndReason(proposal: TurnContext['patchProposals'][number]): { name: string; reason: string } {
+	const metadata = asRecord(proposal.metadata);
+	const operations = Array.isArray(proposal.operations) ? proposal.operations : [];
+	const operationValue = operations
+		.map((operation) => asRecord(asRecord(operation).value))
+		.find((value) => typeof value.name === 'string' && value.name.trim().length > 0);
+	const sourceName = typeof metadata.sourceName === 'string' ? metadata.sourceName.trim() : '';
+	const operationName = typeof operationValue?.name === 'string' ? operationValue.name.trim() : '';
+	const operationDescription = typeof operationValue?.description === 'string' ? operationValue.description.trim() : '';
+	return {
+		name: sourceName || operationName || proposal.targetRecordId,
+		reason: operationDescription || proposal.reason,
+	};
+}
+
+function summarizeUnresolvedCharacterReferences(patchProposals: TurnContext['patchProposals']): TurnContextReceipt['unresolvedCharacterReferences'] {
+	const seen = new Set<string>();
+	const references: TurnContextReceipt['unresolvedCharacterReferences'] = [];
+	for (const proposal of patchProposals) {
+		if (proposal.proposalType !== 'character_reference_review') continue;
+		if (!['pending', 'needs_review'].includes(proposal.status)) continue;
+		const { name, reason } = unresolvedCharacterReferenceNameAndReason(proposal);
+		if (!name) continue;
+		const key = name.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		references.push({
+			proposalId: proposal.id,
+			name: name.slice(0, 120),
+			contextLabel: unresolvedCharacterReferenceContextLabel(asRecord(proposal.metadata)),
+			reason: reason.slice(0, 180),
+			sourceEntryIds: proposal.sourceEntryIds.slice(0, 3),
+		});
+		if (references.length >= 12) break;
+	}
+	return references;
+}
+
+function sanitizeContinuityLedger(input?: Partial<TurnContextReceipt['continuityLedger']>): TurnContextReceipt['continuityLedger'] {
+	return {
+		facts: (input?.facts ?? [])
+			.map((fact) => ({
+				id: fact.id.trim(),
+				statement: fact.statement.trim().slice(0, 180),
+				sourceEntryIds: sourceIds(...fact.sourceEntryIds).slice(0, 3),
+				sourcePatchIds: sourceIds(...fact.sourcePatchIds).slice(0, 3),
+			}))
+			.filter((fact) => fact.id && fact.statement)
+			.slice(0, 6),
+		patchProposals: (input?.patchProposals ?? [])
+			.map((proposal) => ({
+				id: proposal.id.trim(),
+				status: proposal.status.trim(),
+				proposalType: proposal.proposalType.trim(),
+				targetTable: proposal.targetTable.trim(),
+				targetRecordId: proposal.targetRecordId.trim(),
+				reason: proposal.reason.trim().slice(0, 180),
+				sourceEntryIds: sourceIds(...proposal.sourceEntryIds).slice(0, 3),
+				sourcePatchIds: sourceIds(...proposal.sourcePatchIds).slice(0, 3),
+			}))
+			.filter((proposal) => proposal.id && proposal.proposalType)
+			.slice(0, 6),
+		warnings: (input?.warnings ?? [])
+			.map((warning) => ({
+				id: warning.id.trim(),
+				level: warning.level.trim(),
+				status: warning.status.trim(),
+				title: warning.title.trim().slice(0, 120),
+				sourceEntryIds: sourceIds(...warning.sourceEntryIds).slice(0, 3),
+				sourcePatchIds: sourceIds(...warning.sourcePatchIds).slice(0, 3),
+			}))
+			.filter((warning) => warning.id && warning.title)
+			.slice(0, 6),
+	};
+}
+
+function summarizeContinuityLedger(ctx: TurnContext): TurnContextReceipt['continuityLedger'] {
+	return sanitizeContinuityLedger({
+		facts: ctx.facts.slice(0, 6).map((fact) => ({
+			id: fact.id,
+			statement: fact.statement,
+			sourceEntryIds: fact.sourceEntryIds,
+			sourcePatchIds: fact.sourcePatchIds,
+		})),
+		patchProposals: ctx.patchProposals.slice(0, 6).map((proposal) => ({
+			id: proposal.id,
+			status: proposal.status,
+			proposalType: proposal.proposalType,
+			targetTable: proposal.targetTable,
+			targetRecordId: proposal.targetRecordId,
+			reason: proposal.reason,
+			sourceEntryIds: proposal.sourceEntryIds,
+			sourcePatchIds: proposal.sourcePatchIds,
+		})),
+		warnings: ctx.continuityWarnings.slice(0, 6).map((warning) => ({
+			id: warning.id,
+			level: warning.level,
+			status: warning.status,
+			title: warning.title,
+			sourceEntryIds: warning.sourceEntryIds,
+			sourcePatchIds: warning.sourcePatchIds,
+		})),
+	});
+}
+
 export function buildTurnContextReceipt(input: {
 	turnId: string;
 	storyId: string;
@@ -449,8 +706,34 @@ export function buildTurnContextReceipt(input: {
 	memoryNodeCount?: number | null;
 	wikiChunkCount?: number | null;
 	timelineEventCount?: number | null;
+	chapterCount?: number | null;
+	arcCount?: number | null;
+	chaptersSuppressedByArcs?: number | null;
+	promptChars?: number | null;
+	promptTokens?: number | null;
+	factCount?: number | null;
+	patchProposalCount?: number | null;
+	unresolvedCharacterReferenceCount?: number | null;
+	continuityWarningCount?: number | null;
 	factionIds?: string[];
 	skipped?: Array<{ source: string; reason: string }>;
+	unresolvedCharacterReferences?: Array<{
+		proposalId?: string | null;
+		name?: string | null;
+		contextLabel?: string | null;
+		reason?: string | null;
+		sourceEntryIds?: string[] | null;
+	}>;
+	continuityLedger?: Partial<TurnContextReceipt['continuityLedger']>;
+	cacheSegments?: Array<{
+		kind?: string | null;
+		cacheKey?: string | null;
+		contentHash?: string | null;
+		hit?: boolean | null;
+		invalidated?: boolean | null;
+		tokenEstimate?: number | null;
+		dependencyCount?: number | null;
+	}>;
 	budgets?: Partial<TurnContextReceipt['budgets']>;
 }): TurnContextReceipt {
 	const clampCount = (value: number | null | undefined) => Math.max(0, Math.trunc(Number.isFinite(value) ? Number(value) : 0));
@@ -458,6 +741,29 @@ export function buildTurnContextReceipt(input: {
 	const skipped = (input.skipped ?? [])
 		.map((item) => ({ source: item.source.trim(), reason: item.reason.trim() }))
 		.filter((item) => item.source && item.reason);
+	const unresolvedCharacterReferences = (input.unresolvedCharacterReferences ?? [])
+		.map((reference) => ({
+			proposalId: (reference.proposalId ?? '').trim(),
+			name: (reference.name ?? '').trim(),
+			contextLabel: (reference.contextLabel ?? '').trim(),
+			reason: (reference.reason ?? '').trim(),
+			sourceEntryIds: [...new Set((reference.sourceEntryIds ?? []).map((id) => id.trim()).filter(Boolean))].slice(0, 3),
+		}))
+		.filter((reference) => reference.proposalId && reference.name)
+		.slice(0, 12);
+	const continuityLedger = sanitizeContinuityLedger(input.continuityLedger);
+	const cacheSegments = (input.cacheSegments ?? [])
+		.map((segment) => ({
+			kind: (segment.kind ?? '').trim(),
+			cacheKey: (segment.cacheKey ?? '').trim(),
+			contentHash: (segment.contentHash ?? '').trim(),
+			hit: segment.hit === true,
+			invalidated: segment.invalidated === true,
+			tokenEstimate: clampCount(segment.tokenEstimate),
+			dependencyCount: clampCount(segment.dependencyCount),
+		}))
+		.filter((segment) => segment.kind && segment.cacheKey && segment.contentHash)
+		.slice(0, 12);
 	const budgets = input.budgets ?? {};
 	return {
 		turnId: input.turnId,
@@ -468,9 +774,25 @@ export function buildTurnContextReceipt(input: {
 			memoryNodes: clampCount(input.memoryNodeCount),
 			wikiChunks: clampCount(input.wikiChunkCount),
 			timelineEvents: clampCount(input.timelineEventCount),
+			chapters: clampCount(input.chapterCount),
+			arcs: clampCount(input.arcCount),
+			chaptersSuppressedByArcs: clampCount(input.chaptersSuppressedByArcs),
+			chaptersSent: clampCount(input.chapterCount),
+			arcsSent: clampCount(input.arcCount),
+			chaptersSuppressedByArc: clampCount(input.chaptersSuppressedByArcs),
+			memoryNodesSent: clampCount(input.memoryNodeCount),
+			totalChars: clampCount(input.promptChars),
+			totalTokens: input.promptTokens == null ? null : clampCount(input.promptTokens),
+			facts: clampCount(input.factCount),
+			patchProposals: clampCount(input.patchProposalCount),
+			unresolvedCharacterReferences: clampCount(input.unresolvedCharacterReferenceCount),
+			continuityWarnings: clampCount(input.continuityWarningCount),
 			factionSheets,
 		},
 		skipped,
+		unresolvedCharacterReferences,
+		continuityLedger,
+		cacheSegments,
 		budgets: {
 			memoryTokensUsed: clampCount(budgets.memoryTokensUsed),
 			memoryTokensMax: clampCount(budgets.memoryTokensMax),
@@ -755,6 +1077,7 @@ function turnContextCounts(ctx: Awaited<ReturnType<typeof loadTurnContext>>): Re
 	const gmRecentEvents = ctx.gmBrief?.recentEvents.length ?? 0;
 	const gmScheduledEvents = ctx.gmBrief?.scheduledEvents.length ?? 0;
 	const gmNpcEvents = ctx.gmBrief?.npcEvents.length ?? 0;
+	const continuityChapters = chaptersForPromptContinuity(ctx.chapters, ctx.arcs);
 	return {
 		recentEntries: ctx.recentEntries.length,
 		entities: ctx.entities.length,
@@ -767,7 +1090,11 @@ function turnContextCounts(ctx: Awaited<ReturnType<typeof loadTurnContext>>): Re
 		threads: ctx.threads.length,
 		events: ctx.events.length,
 		beliefs: ctx.beliefs.length,
-		chapters: ctx.chapters.length,
+		facts: ctx.facts.length,
+		patchProposals: ctx.patchProposals.length,
+		unresolvedCharacterReferences: countUnresolvedCharacterReferences(ctx.patchProposals),
+		continuityWarnings: ctx.continuityWarnings.length,
+		chapters: continuityChapters.length,
 		arcs: ctx.arcs.length,
 		sagas: ctx.sagas.length,
 		gmDueEvents,
@@ -867,8 +1194,11 @@ async function existingTurn(storyId: string, clientTurnId: string): Promise<Turn
 	const rows = await db
 		.select()
 		.from(storyEntries)
-		.where(eq(storyEntries.storyId, storyId))
-		.limit(200);
+		.where(and(
+			eq(storyEntries.storyId, storyId),
+			inArray(storyEntries.id, [playerEntryId, assistantEntryId]),
+		))
+		.limit(2);
 	const player = rows.find((entry) => entry.id === playerEntryId);
 	const assistant = rows.find((entry) => entry.id === assistantEntryId);
 	if (!player && !assistant) return null;
@@ -889,6 +1219,52 @@ async function existingTurn(storyId: string, clientTurnId: string): Promise<Turn
 		performance: null,
 		contextReceipt: null,
 	};
+}
+
+async function reserveTurnCommand(request: TurnRequest, createdAt: string): Promise<boolean> {
+	const [row] = await getDb().insert(syncOps).values({
+		id: `turn_${request.clientTurnId}`,
+		storyId: request.storyId,
+		type: 'turn_command',
+		payload: {
+			playerText: request.playerText,
+			clientContext: request.clientContext ?? null,
+			status: 'running',
+			reservedAt: createdAt,
+		},
+		clientVersion: request.localVersion,
+		status: 'running',
+		createdAt,
+	}).onConflictDoNothing().returning({ id: syncOps.id });
+	return Boolean(row);
+}
+
+async function markTurnCommandApplied(request: TurnRequest, updatedAt: string): Promise<void> {
+	await getDb().update(syncOps).set({
+		payload: {
+			playerText: request.playerText,
+			clientContext: request.clientContext ?? null,
+			status: 'applied',
+			appliedAt: updatedAt,
+		},
+		clientVersion: request.localVersion,
+		status: 'applied',
+	}).where(eq(syncOps.id, `turn_${request.clientTurnId}`));
+}
+
+async function markTurnCommandFailed(request: TurnRequest, error: unknown): Promise<void> {
+	const failedAt = nowIso();
+	await getDb().update(syncOps).set({
+		payload: {
+			playerText: request.playerText,
+			clientContext: request.clientContext ?? null,
+			status: 'failed',
+			failedAt,
+			error: error instanceof Error ? error.message : String(error),
+		},
+		clientVersion: request.localVersion,
+		status: 'failed',
+	}).where(eq(syncOps.id, `turn_${request.clientTurnId}`));
 }
 
 function summarizePreparedTurnContext(
@@ -1087,14 +1463,18 @@ export async function prepareServerTurnContext(
 	const narrativeSystemDynamic = promptBudget.value;
 	const narrativePrompt = `Player action:\n${request.playerText}`;
 	const narrativeDebugPrompt = `${narrativeSystemDynamic}\n\n${narrativePrompt}`;
+	const promptMessageChars = prompt.messages.reduce((sum, message) => sum + message.content.length, 0);
+	const promptTotalChars = narrativeSystem.length + narrativeSystemDynamic.length + narrativePrompt.length + promptMessageChars;
+	const promptTokenEstimate = Math.max(1, Math.ceil(promptTotalChars / 4));
 	recorder.record('turn.prompt_payload', 0, {
 		systemChars: narrativeSystem.length,
 		systemDynamicChars: narrativeSystemDynamic.length,
 		promptChars: narrativePrompt.length,
 		messageCount: prompt.messages.length,
-		messageChars: prompt.messages.reduce((sum, message) => sum + message.content.length, 0),
+		messageChars: promptMessageChars,
 	});
 	let promptCacheStats: { hitCount: number; missCount: number; segments: RecordEngineCacheSegmentResult[] } | null = null;
+	const continuityChapters = chaptersForPromptContinuity(ctxWithTimeline.chapters, ctxWithTimeline.arcs);
 	try {
 		promptCacheStats = await recorder.time('turn.engine_cache.prompt_segments', {
 			retrievedMemoryNodes: retrieved.nodes.length,
@@ -1160,13 +1540,9 @@ export async function prepareServerTurnContext(
 						kind: 'campaign_continuity',
 						parts: ['chapters-arcs-sagas'],
 					}),
-					value: stableJson({
-						chapters: ctxWithTimeline.chapters,
-						arcs: ctxWithTimeline.arcs,
-						sagas: ctxWithTimeline.sagas,
-					}),
+					value: stableJson(buildCampaignContinuityCachePayload(ctxWithTimeline)),
 					dependencyHashes: [
-						...ctxWithTimeline.chapters.map((chapter) => engineCacheDependencyHash({
+						...continuityChapters.map((chapter) => engineCacheDependencyHash({
 							id: chapter.id,
 							type: 'chapter',
 							number: chapter.number,
@@ -1192,7 +1568,8 @@ export async function prepareServerTurnContext(
 						})),
 					],
 					metadata: {
-						chapterCount: ctxWithTimeline.chapters.length,
+						chapterCount: continuityChapters.length,
+						coveredChapterCount: ctxWithTimeline.chapters.length - continuityChapters.length,
 						arcCount: ctxWithTimeline.arcs.length,
 						sagaCount: ctxWithTimeline.sagas.length,
 					},
@@ -1220,11 +1597,31 @@ export async function prepareServerTurnContext(
 		memoryNodeCount: retrieved.nodes.length,
 		wikiChunkCount: wikiContext?.pageCount ?? 0,
 		timelineEventCount: gmBrief.dueEvents.length + gmBrief.recentEvents.length + gmBrief.scheduledEvents.length,
+		chapterCount: continuityChapters.length,
+		arcCount: ctxWithTimeline.arcs.length,
+		chaptersSuppressedByArcs: Math.max(0, ctxWithTimeline.chapters.length - continuityChapters.length),
+		promptChars: promptTotalChars,
+		promptTokens: promptTokenEstimate,
+		factCount: contextCounts.facts,
+		patchProposalCount: contextCounts.patchProposals,
+		unresolvedCharacterReferenceCount: contextCounts.unresolvedCharacterReferences,
+		continuityWarningCount: contextCounts.continuityWarnings,
 		factionIds: [
 			request.clientContext?.currentFactionId ?? '',
 			...ctxWithTimeline.factions.map((faction) => faction.id),
 		].filter(Boolean).slice(0, 20),
 		skipped: contextSkipped,
+		unresolvedCharacterReferences: summarizeUnresolvedCharacterReferences(ctxWithTimeline.patchProposals),
+		continuityLedger: summarizeContinuityLedger(ctxWithTimeline),
+		cacheSegments: (promptCacheStats?.segments ?? []).map(({ entry, hit, invalidated }) => ({
+			kind: entry.kind,
+			cacheKey: entry.cacheKey,
+			contentHash: entry.contentHash,
+			hit,
+			invalidated,
+			tokenEstimate: entry.tokenEstimate,
+			dependencyCount: entry.dependencyHashes.length,
+		})),
 		budgets: {
 			memoryTokensUsed: retrieved.tokenEstimate,
 			memoryTokensMax: memoryTokenBudget,
@@ -1273,7 +1670,7 @@ export async function prepareServerTurn(input: unknown): Promise<PreparedServerT
 	return summarizePreparedTurnContext(prepared, recorder.timings);
 }
 
-export async function processServerTurn(input: unknown): Promise<TurnResponse> {
+export async function processServerTurn(input: unknown, options: ProcessServerTurnOptions = {}): Promise<TurnResponse> {
 	const turnStartedAt = monotonicNow();
 	const request = turnRequestSchema.parse(input);
 	const recorder = createTimingRecorder({
@@ -1293,8 +1690,20 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		return existing;
 	}
 
+	const reservedAt = nowIso();
+	const reserved = await recorder.time('turn.command.reserve', {}, () => reserveTurnCommand(request, reservedAt));
+	if (!reserved) {
+		const existingAfterReserve = await recorder.time('turn.idempotency_check_after_reserve_conflict', {}, () => existingTurn(request.storyId, request.clientTurnId));
+		if (existingAfterReserve) {
+			recorder.record('turn.response_cached_after_reserve_conflict', 0, { serverVersion: existingAfterReserve.serverVersion });
+			return existingAfterReserve;
+		}
+		throw new Error(`Turn ${request.clientTurnId} is already reserved or running for story ${request.storyId}.`);
+	}
+
+	try {
 	const db = getDb();
-	const createdAt = nowIso();
+	const createdAt = reservedAt;
 	const assistantEntryId = `narration_${request.clientTurnId}`;
 	const prepared = await prepareServerTurnContext(request, { recorder, consumePrepared: true });
 	const {
@@ -1357,6 +1766,7 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 			systemDynamic: narrativeSystemDynamic,
 			messages: prompt.messages,
 			prompt: narrativePrompt,
+			onTextDelta: options.onNarrationChunk,
 		});
 		narration = result.text;
 		generationTimings.push(timingFromResult('turn.narration', 'narrative', result, 'success'));
@@ -1440,15 +1850,7 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		narrationChars: narration.length,
 		playerTextChars: request.playerText.length,
 	}, () => Promise.all([
-		db.insert(syncOps).values({
-			id: `turn_${request.clientTurnId}`,
-			storyId: request.storyId,
-			type: 'turn_command',
-			payload: { playerText: request.playerText, clientContext: request.clientContext ?? null },
-			clientVersion: request.localVersion,
-			status: 'applied',
-			createdAt,
-		}).onConflictDoNothing(),
+		markTurnCommandApplied(request, createdAt),
 		db.insert(storyEntries).values({
 			id: playerEntryId,
 			storyId: request.storyId,
@@ -1764,4 +2166,8 @@ export async function processServerTurn(input: unknown): Promise<TurnResponse> {
 		performance,
 		contextReceipt,
 	};
+	} catch (error) {
+		await recorder.time('turn.command.mark_failed', {}, () => markTurnCommandFailed(request, error));
+		throw error;
+	}
 }

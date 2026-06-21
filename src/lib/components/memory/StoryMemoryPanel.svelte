@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { BookOpen, CloudUpload, Edit3, GitBranch, Loader2, Save, Search, Shield, X } from 'lucide-svelte';
+	import { BookOpen, CloudUpload, Edit3, GitBranch, Loader2, RotateCcw, Save, Search, Shield, Trash2, X } from 'lucide-svelte';
 	import {
 		getAgreements,
 		getArcs,
@@ -10,8 +10,13 @@
 		getStoryThreads,
 	} from '$lib/services/database';
 	import { importLocalStoryToBackend } from '$lib/services/backendMemory';
-	import { saveCanonicalArc, saveCanonicalChapter } from '$lib/services/canonicalWrites';
-	import { refreshStoryCatalog } from '$lib/services/serverStories';
+	import { deleteCanonicalArc, deleteCanonicalChapter, saveCanonicalArc, saveCanonicalChapter } from '$lib/services/canonicalWrites';
+	import {
+		createContextCheckpoint,
+		listContextCheckpoints,
+		refreshStoryCatalog,
+		revertToContextCheckpoint,
+	} from '$lib/services/serverStories';
 	import { story } from '$lib/stores/story.svelte';
 	import type { Agreement, Arc, Chapter, ConversationMemoryEntry, FactionActionRecord, Story, StoryThread } from '$lib/types';
 
@@ -31,6 +36,11 @@
 	let editingChapter = $state<Chapter | null>(null);
 	let editingArc = $state<Arc | null>(null);
 	let savingEdit = $state(false);
+	let deletingRecordId = $state<string | null>(null);
+	let contextCheckpoints = $state<Array<Record<string, unknown>>>([]);
+	let checkpointLabel = $state('');
+	let checkpointBusy = $state(false);
+	let checkpointMessage = $state<string | null>(null);
 
 	let chapterTitleDraft = $state('');
 	let chapterSummaryDraft = $state('');
@@ -62,6 +72,7 @@
 			agreements = [];
 			factionActions = [];
 			conversationMemory = [];
+			contextCheckpoints = [];
 			return;
 		}
 
@@ -70,13 +81,17 @@
 			if (story.currentStory?.id === selectedStoryId && story.currentStory.serverStoryId) {
 				await story.pullBackendProjection();
 			}
-			const [loadedChapters, loadedArcs, loadedThreads, loadedAgreements, loadedFactionActions, loadedConversationMemory] = await Promise.all([
+			const terminalStoryId = story.currentStory?.id === selectedStoryId
+				? story.currentStory.serverStoryId
+				: selectedStory?.serverStoryId;
+			const [loadedChapters, loadedArcs, loadedThreads, loadedAgreements, loadedFactionActions, loadedConversationMemory, loadedCheckpoints] = await Promise.all([
 				getChapters(selectedStoryId),
 				getArcs(selectedStoryId),
 				getStoryThreads(selectedStoryId),
 				getAgreements(selectedStoryId),
 				getFactionActions(selectedStoryId),
 				getConversationMemory(selectedStoryId),
+				terminalStoryId ? listContextCheckpoints(terminalStoryId, 20).then((result) => result.checkpoints) : Promise.resolve([]),
 			]);
 			chapters = loadedChapters;
 			arcs = loadedArcs;
@@ -84,6 +99,7 @@
 			agreements = loadedAgreements;
 			factionActions = loadedFactionActions;
 			conversationMemory = loadedConversationMemory;
+			contextCheckpoints = loadedCheckpoints;
 		} finally {
 			loading = false;
 		}
@@ -174,12 +190,88 @@
 		if (serverVersion) applyBackendVersion(arc.storyId, serverVersion);
 	}
 
+	async function deleteChapterMemory(chapter: Chapter) {
+		if (deletingRecordId) return;
+		if (!confirm(`Delete ${chapterTitle(chapter)}?`)) return;
+		deletingRecordId = chapter.id;
+		try {
+			const serverVersion = await deleteCanonicalChapter(chapter.storyId, chapter.id);
+			if (serverVersion) applyBackendVersion(chapter.storyId, serverVersion);
+			chapters = chapters.filter(item => item.id !== chapter.id);
+			arcs = arcs.map(arc => ({
+				...arc,
+				chapterIds: arc.chapterIds.filter(id => id !== chapter.id),
+			}));
+		} finally {
+			deletingRecordId = null;
+		}
+	}
+
+	async function deleteArcMemory(arc: Arc) {
+		if (deletingRecordId) return;
+		if (!confirm(`Delete ${arc.title}?`)) return;
+		deletingRecordId = arc.id;
+		try {
+			const serverVersion = await deleteCanonicalArc(arc.storyId, arc.id);
+			if (serverVersion) applyBackendVersion(arc.storyId, serverVersion);
+			arcs = arcs.filter(item => item.id !== arc.id);
+		} finally {
+			deletingRecordId = null;
+		}
+	}
+
+	async function makeCheckpoint() {
+		if (!selectedStory?.serverStoryId || checkpointBusy) return;
+		checkpointBusy = true;
+		checkpointMessage = null;
+		try {
+			const result = await createContextCheckpoint(selectedStory.serverStoryId, {
+				label: checkpointLabel.trim() || undefined,
+				reason: 'Manual context checkpoint',
+			});
+			applyBackendVersion(selectedStory.id, result.serverVersion);
+			contextCheckpoints = [result.checkpoint, ...contextCheckpoints];
+			checkpointLabel = '';
+			checkpointMessage = 'Checkpoint saved.';
+		} catch (error) {
+			checkpointMessage = error instanceof Error ? error.message : String(error);
+		} finally {
+			checkpointBusy = false;
+		}
+	}
+
+	async function revertCheckpoint(checkpoint: Record<string, unknown>) {
+		if (!selectedStory?.serverStoryId || checkpointBusy) return;
+		const checkpointId = typeof checkpoint.id === 'string' ? checkpoint.id : '';
+		const label = typeof checkpoint.label === 'string' ? checkpoint.label : checkpointId;
+		if (!checkpointId || !confirm(`Revert context to ${label}?`)) return;
+		checkpointBusy = true;
+		checkpointMessage = null;
+		try {
+			const result = await revertToContextCheckpoint(selectedStory.serverStoryId, checkpointId, 'Manual context checkpoint revert');
+			applyBackendVersion(selectedStory.id, result.serverVersion);
+			checkpointMessage = `Reverted to ${label}.`;
+			await story.pullBackendProjection().catch(() => undefined);
+			await loadMemory();
+		} catch (error) {
+			checkpointMessage = error instanceof Error ? error.message : String(error);
+		} finally {
+			checkpointBusy = false;
+		}
+	}
+
 	function chapterTitle(chapter: Chapter): string {
 		return chapter.title?.trim() || `Chapter ${chapter.number}`;
 	}
 
 	function formatDate(ts: number): string {
 		return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+	}
+
+	function formatCheckpointDate(value: unknown): string {
+		if (typeof value !== 'string') return '';
+		const time = new Date(value).getTime();
+		return Number.isFinite(time) ? new Date(time).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
 	}
 
 	function splitList(text: string): string[] {
@@ -373,6 +465,55 @@
 					<p class="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">{backendMessage}</p>
 				{/if}
 			</div>
+
+			{#if selectedStory.serverStoryId}
+				<div class="mb-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
+					<div class="mb-2 flex items-center justify-between gap-3">
+						<div class="min-w-0">
+							<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Context Checkpoints</div>
+							<p class="mt-1 truncate text-xs text-[var(--text-secondary)]">{contextCheckpoints.length} saved</p>
+						</div>
+						<button
+							class="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-primary)] px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-accent)] disabled:opacity-50"
+							disabled={checkpointBusy}
+							onclick={makeCheckpoint}
+							title="Save context checkpoint"
+						>
+							{#if checkpointBusy}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Save class="h-3.5 w-3.5" />{/if}
+							Save
+						</button>
+					</div>
+					<input
+						type="text"
+						bind:value={checkpointLabel}
+						placeholder="Checkpoint label"
+						class="mb-2 w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
+					/>
+					{#if contextCheckpoints.length > 0}
+						<div class="max-h-28 space-y-1 overflow-y-auto">
+							{#each contextCheckpoints.slice(0, 5) as checkpoint}
+								<div class="flex items-center justify-between gap-2 rounded-md bg-[var(--bg-primary)] px-2 py-1.5">
+									<div class="min-w-0">
+										<div class="truncate text-xs text-[var(--text-primary)]">{typeof checkpoint.label === 'string' ? checkpoint.label : 'Checkpoint'}</div>
+										<div class="text-[10px] text-[var(--text-muted)]">{formatCheckpointDate(checkpoint.createdAt)} · turn {typeof checkpoint.currentTurn === 'number' ? checkpoint.currentTurn : 0}</div>
+									</div>
+									<button
+										class="shrink-0 rounded p-1 text-[var(--text-muted)] hover:bg-[rgba(212,168,83,0.08)] hover:text-[var(--text-accent)] disabled:opacity-50"
+										disabled={checkpointBusy}
+										onclick={() => revertCheckpoint(checkpoint)}
+										title="Revert to checkpoint"
+									>
+										<RotateCcw class="h-3.5 w-3.5" />
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+					{#if checkpointMessage}
+						<p class="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">{checkpointMessage}</p>
+					{/if}
+				</div>
+			{/if}
 		{/if}
 
 		<div class="mb-3 grid grid-cols-3 gap-2">
@@ -514,6 +655,15 @@
 									<Edit3 class="h-3 w-3" />
 									Edit
 								</button>
+								<button
+									class="ml-1 flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] text-[var(--text-muted)] hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50"
+									disabled={deletingRecordId === chapter.id}
+									onclick={() => deleteChapterMemory(chapter)}
+									title="Delete chapter"
+								>
+									{#if deletingRecordId === chapter.id}<Loader2 class="h-3 w-3 animate-spin" />{:else}<Trash2 class="h-3 w-3" />{/if}
+									Delete
+								</button>
 							</div>
 
 							<p class="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">{chapter.summary}</p>
@@ -561,6 +711,15 @@
 								>
 									<Edit3 class="h-3 w-3" />
 									Edit
+								</button>
+								<button
+									class="ml-1 flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] text-[var(--text-muted)] hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50"
+									disabled={deletingRecordId === arc.id}
+									onclick={() => deleteArcMemory(arc)}
+									title="Delete arc"
+								>
+									{#if deletingRecordId === arc.id}<Loader2 class="h-3 w-3 animate-spin" />{:else}<Trash2 class="h-3 w-3" />{/if}
+									Delete
 								</button>
 							</div>
 

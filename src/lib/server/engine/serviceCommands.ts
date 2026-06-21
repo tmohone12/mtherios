@@ -1,8 +1,10 @@
 import {
 	engineJobStatusArgsSchema,
+	engineRollupArcJobArgsSchema,
 	engineStoryVaultSyncJobArgsSchema,
 	reindexStoryRequestSchema,
 	type EngineJobStatusArgs,
+	type EngineRollupArcJobArgs,
 	type EngineStoryVaultSyncJobArgs,
 } from '$lib/contracts/engine';
 import {
@@ -56,6 +58,10 @@ export interface RunDueJobsCommandInput {
 }
 
 export interface JobStatusCommandInput extends EngineJobStatusArgs {
+	storyId?: string | null;
+}
+
+export interface RollupArcJobCommandInput extends EngineRollupArcJobArgs {
 	storyId?: string | null;
 }
 
@@ -213,6 +219,44 @@ export async function runDueBackendJobsCommand(input: RunDueJobsCommandInput | J
 		before,
 		after,
 		...result,
+	};
+}
+
+export async function runRollupArcJobCommand(input: RollupArcJobCommandInput | JsonRecord): Promise<JsonRecord> {
+	const body = asRecord(input);
+	const args = engineRollupArcJobArgsSchema.parse(body);
+	const storyId = optionalString(body.storyId);
+	if (!storyId) throw new Error('storyId is required.');
+	const requestedAt = new Date().toISOString();
+	const workerId = args.workerId ?? `manual_arc_rollup_${Date.now()}`;
+	const before = await getBackendJobStats(storyId);
+	const jobId = await enqueueBackendJob({
+		storyId,
+		type: 'rollup_arc',
+		payload: {
+			manual: true,
+			requestedAt,
+			chaptersPerArc: args.chaptersPerArc,
+		},
+		metadata: {
+			source: 'manual_arc_rollup',
+			requestedAt,
+		},
+		maxAttempts: 2,
+	});
+	const runNow = args.runNow !== false;
+	const job = runNow ? await runBackendJobNow(jobId, workerId) : null;
+	const after = await getBackendJobStats(storyId);
+
+	return {
+		ok: job ? job.completed : true,
+		storyId,
+		jobId,
+		workerId,
+		runNow,
+		before,
+		after,
+		job,
 	};
 }
 

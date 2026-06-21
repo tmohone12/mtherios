@@ -109,6 +109,7 @@ describe('backend memory turn client', () => {
 			nodes: [],
 			tokenEstimate: 12,
 			retrievalDebug: [],
+			retrievalTrace: [],
 		};
 		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
 			commandId: 'cmd_memory',

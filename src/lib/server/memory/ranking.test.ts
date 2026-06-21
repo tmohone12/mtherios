@@ -84,4 +84,173 @@ describe('backend memory ranking', () => {
 		expect(packet.packet).toContain('events:event_1');
 		expect(packet.tokenEstimate).toBeLessThanOrEqual(request.tokenBudget);
 	});
+
+	it('trims oversized memory nodes before they can break the requested budget', () => {
+		const packet = buildMemoryPacket([
+			node({
+				id: 'giant_arc',
+				type: 'plot_ledger',
+				title: 'Arc 3: Oversized Rollup',
+				summary: `Important opening fact. ${'raw chapter wall '.repeat(2000)} Oversized memory tail sentinel.`,
+				content: `Important opening fact. ${'raw chapter wall '.repeat(2000)} Oversized memory tail sentinel.`,
+				importance: 1,
+			}),
+			node({
+				id: 'small_fact',
+				title: 'Useful small fact',
+				summary: 'Arlan still remembers the gate promise.',
+				content: 'Arlan still remembers the gate promise.',
+				importance: 0.8,
+			}),
+		], request);
+
+		expect(packet.packet).toContain('Important opening fact.');
+		expect(packet.packet).not.toContain('Oversized memory tail sentinel');
+		expect(packet.tokenEstimate).toBeLessThanOrEqual(request.tokenBudget);
+	});
+
+	it('keeps OOC repair notes out of retrieved canon memory', () => {
+		const packet = buildMemoryPacket([
+			node({
+				id: 'ooc_repair_note',
+				title: 'OOC correction',
+				summary: '**OOC:** I overreached and created poisoned context. Do not treat this as canon.',
+				content: '**OOC:** I overreached and created poisoned context. Do not treat this as canon.',
+				keywords: ['Arlan', 'gate', 'promise'],
+				entityIds: ['npc_arlan'],
+				importance: 1,
+			}),
+			node({
+				id: 'real_gate_memory',
+				title: 'Gate promise',
+				summary: 'Arlan promised to open the postern gate before dawn.',
+				content: 'Arlan promised to open the postern gate before dawn.',
+				keywords: ['gate', 'promise'],
+				entityIds: ['npc_arlan'],
+				importance: 0.9,
+			}),
+		], request);
+
+		expect(packet.nodes.map((item) => item.id)).toContain('real_gate_memory');
+		expect(packet.nodes.map((item) => item.id)).not.toContain('ooc_repair_note');
+		expect(packet.packet).not.toContain('poisoned context');
+		expect(packet.retrievalDebug).toContain('filteredUnsafe=1');
+	});
+
+	it('renders Mtherios checkpoint memories as readable story memory', () => {
+		const packet = buildMemoryPacket([
+			node({
+				id: 'chapter_checkpoint',
+				title: 'The Gate Chapter',
+				summary: [
+					'[CHECKPOINT = Chapter checkpoint covering transcript positions 1-40.]',
+					'[SOURCE COVERAGE =',
+					'- 40 entries covered.',
+					']',
+					'[RECENT STORY STATE =',
+					'- Arlan admits he promised to open the postern gate before dawn.',
+					']',
+					'[CHARACTER STATE =',
+					'Arlan [npc_arlan]:',
+					'- Frightened, cornered, and still bound by the gate promise.',
+					']',
+					'[ACTIVE THREADS =',
+					'- Whether Arlan keeps the gate promise.',
+					']',
+				].join('\n'),
+				content: 'fallback content',
+				keywords: ['Arlan', 'gate', 'promise'],
+				entityIds: ['npc_arlan'],
+				importance: 1,
+			}),
+		], request);
+
+		expect(packet.packet).toContain('Arlan admits he promised to open the postern gate before dawn.');
+		expect(packet.packet).toContain('Characters: Arlan [npc_arlan]:');
+		expect(packet.packet).not.toContain('[CHECKPOINT');
+		expect(packet.packet).not.toContain('SOURCE COVERAGE');
+	});
+
+	it('returns an explainable selected and dropped retrieval trace', () => {
+		const packet = buildMemoryPacket([
+			node({
+				id: 'selected_memory',
+				title: 'Gate promise',
+				content: 'Arlan promised the gate would open.',
+				entityIds: ['npc_arlan'],
+				threadIds: ['thread_gate'],
+				locationId: 'loc_keep',
+				sourceEventIds: ['event_gate'],
+				importance: 0.9,
+			}),
+			node({
+				id: 'dropped_secret',
+				title: 'Hidden betrayal',
+				content: 'Secret fact.',
+				visibility: 'secret',
+				importance: 1,
+			}),
+		], request);
+
+		expect(packet.retrievalTrace.map((item) => item.id)).toContain('selected_memory');
+		expect(packet.retrievalTrace).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				id: 'selected_memory',
+				included: true,
+				reason: 'selected',
+				entityIds: ['npc_arlan'],
+				sourceEventIds: ['event_gate'],
+				tokenEstimate: expect.any(Number),
+			}),
+			expect.objectContaining({
+				id: 'dropped_secret',
+				included: false,
+				reason: 'low_score',
+			}),
+		]));
+		expect(packet.retrievalTrace[0].signals.length).toBeGreaterThan(0);
+	});
+
+	it('combines vector similarity with keyword relevance and reports score signals', () => {
+		const packet = buildMemoryPacket([
+			node({
+				id: 'vector_memory',
+				title: 'Gate promise',
+				content: 'Arlan promised the gate would open before dawn.',
+				keywords: ['gate', 'promise'],
+				score: 0.95,
+				importance: 0.5,
+			}),
+		], request);
+
+		expect(packet.retrievalTrace[0].score).toBeGreaterThan(3);
+		expect(packet.retrievalTrace[0].signals).toEqual(expect.arrayContaining([
+			expect.stringMatching(/^keyword /),
+			expect.stringMatching(/^vector /),
+		]));
+	});
+
+	it('prefers fresh memories over stale low-importance memories and reports age decay', () => {
+		const fresh = node({
+			id: 'fresh_gate',
+			title: 'Gate promise',
+			content: 'Arlan promised the gate would open before dawn.',
+			importance: 0.25,
+			updatedAt: new Date().toISOString(),
+		});
+		const stale = node({
+			id: 'stale_gate',
+			title: 'Gate promise',
+			content: 'Arlan promised the gate would open before dawn.',
+			importance: 0.25,
+			updatedAt: '2000-01-01T00:00:00.000Z',
+		});
+
+		expect(scoreMemoryNode(fresh, request)).toBeGreaterThan(scoreMemoryNode(stale, request));
+
+		const packet = buildMemoryPacket([stale], request);
+		expect(packet.retrievalTrace[0].signals).toEqual(expect.arrayContaining([
+			expect.stringMatching(/^age decay /),
+		]));
+	});
 });

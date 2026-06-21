@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { backendJobTypes, continuityAuditDedupeKey, shouldQueueTurnStoryVaultSync, turnStateExtractionDedupeKey } from './outbox';
-import { backendJobStatusEventData, buildChapterSummary, isSupersededJobFailure, storyVaultFollowupVersion, summarizeBackendJobs } from './processor';
+import {
+	backendJobStatusEventData,
+	buildArcMemoryFields,
+	buildArcSummary,
+	chapterCharacterContextPatch,
+	chapterCharacterContextProposalValues,
+	buildChapterMemoryDigest,
+	buildChapterSummary,
+	chapterCharacterReferenceCandidates,
+	refreshChapterCharacterContextProposalValues,
+	isSupersededJobFailure,
+	selectArcRollupBatches,
+	shouldProjectEventToMemory,
+	storyVaultFollowupVersion,
+	summarizeBackendJobs,
+} from './processor';
 
 describe('turn state extraction jobs', () => {
 	it('exposes a stable background job type and dedupe key', () => {
@@ -145,18 +160,49 @@ describe('job status stream events', () => {
 });
 
 describe('deterministic chapter summaries', () => {
-	it('writes a clean Mtherios rollup instead of nested raw transcript dumps', () => {
+	it('covers the beginning, middle, and ending of a full chapter window', () => {
+		const entries = Array.from({ length: 12 }, (_, index) => ({
+			id: `entry_${index + 1}`,
+			type: index % 2 === 0 ? 'user_action' : 'narration',
+			content: [
+				'Opening beat: Aurion is still angry that House Balaerys sent him east.',
+				'Early beat: the heat of Yin presses against the trading post.',
+				'Early beat: Ser Davos and Malyrio fall into watchful silence.',
+				'Middle beat: Xanda sends a lapis-sealed dinner invitation.',
+				'Middle beat: the Copper Court feels rich, dangerous, and unfamiliar.',
+				'Middle beat sentinel: Aurion admits the exile wound still has teeth.',
+				'Middle beat: Xanda listens with polished courtly interest.',
+				'Late beat: honeyed locusts arrive with the warning of poison.',
+				'Late beat: Aurion jokes that Xanda may smile while deciding to kill him.',
+				'Late beat sentinel: Aurion eats the locusts anyway.',
+				'Ending beat: Xanda laughs and becomes more intrigued.',
+				'Ending beat sentinel: romance, manipulation, and political danger remain open.',
+			][index],
+			position: index + 1,
+		})) as any[];
+
+		const summary = buildChapterSummary(entries, []);
+
+		expect(summary).toContain('Opening beat: Aurion is still angry');
+		expect(summary).toContain('Middle beat sentinel: Aurion admits the exile wound still has teeth.');
+		expect(summary).toContain('Late beat sentinel: Aurion eats the locusts anyway.');
+		expect(summary).toContain('Ending beat sentinel: romance, manipulation, and political danger remain open.');
+		expect(summary).toContain('Time passed in this chapter: not established.');
+		expect(summary).not.toContain('more transcript entries are covered by this checkpoint');
+	});
+
+	it('writes a continuity rollup with source coverage and tracked entity ids', () => {
 		const entries = [
 			{
 				id: 'entry_62',
 				type: 'user_action',
-				content: '> I say, "Yes, Aelyx’s younger better-looking brother."',
+				content: '> I say, "Yes, Aelyx\'s younger better-looking brother."',
 				position: 62,
 			},
 			{
 				id: 'entry_63',
 				type: 'narration',
-				content: '[ 🕰️ Time 15:30 | 🗓️ Day 3, Seventh Moon, 295 AC | 📍 Location The Black Walls - Fountain of the First Flame | 🌤️ Weather Sweltering, 34°C ] Aerene teases Aurion while Serala watches from the fountain.',
+				content: '[ Time 15:30 | Day 3, Seventh Moon, 295 AC | Location The Black Walls - Fountain of the First Flame | Weather Sweltering, 34 C ] Aerene teases Aurion while Serala watches from the fountain.',
 				position: 63,
 			},
 			{
@@ -168,7 +214,7 @@ describe('deterministic chapter summaries', () => {
 			{
 				id: 'entry_65',
 				type: 'narration',
-				content: '[ 🕰️ Time 15:31 | 🗓️ Day 3, Seventh Moon, 295 AC | 📍 Location The Black Walls - Fountain of the First Flame | 🌤️ Weather Sweltering, 34°C ] Serala explains that House Balaerys is still remembered for dragonlord blood and relics.',
+				content: '[ Time 15:31 | Day 3, Seventh Moon, 295 AC | Location The Black Walls - Fountain of the First Flame | Weather Sweltering, 34 C ] Serala explains that House Balaerys is still remembered for dragonlord blood and relics.',
 				position: 65,
 			},
 		] as any[];
@@ -189,13 +235,452 @@ describe('deterministic chapter summaries', () => {
 
 		const summary = buildChapterSummary(entries, events);
 
-		expect(summary).toContain('[BEGINNING= Terminal checkpoint covering transcript positions 62-65.');
-		expect(summary).toContain('[RECENT=');
-		expect(summary).toContain('- Player: says, "Yes, Aelyx’s younger better-looking brother."');
-		expect(summary).toContain('- Narrator: Serala explains that House Balaerys is still remembered for dragonlord blood and relics.');
+		expect(summary).toContain('[CHECKPOINT = Chapter checkpoint covering transcript positions 62-65.]');
+		expect(summary).toContain('[SOURCE COVERAGE =');
+		expect(summary).toContain('- Transcript positions 62-65.');
+		expect(summary).toContain('- 4 entries covered.');
+		expect(summary).toContain('- 2 source event records.');
+		expect(summary).toContain('[CURRENT SCENE = Day 3, Seventh Moon, 295 AC | 15:31 | The Black Walls - Fountain of the First Flame | Sweltering, 34 C]');
+		expect(summary).toContain('[RECENT STORY STATE =');
+		expect(summary).toContain('- The player character says, "Yes, Aelyx\'s younger better-looking brother."');
+		expect(summary).toContain('- Serala explains that House Balaerys is still remembered for dragonlord blood and relics.');
+		expect(summary).toContain('- Time passed in this chapter: a minute or less.');
+		expect(summary).toContain('[CHARACTER STATE =');
+		expect(summary).toContain('Serala [npc_serala]:');
+		expect(summary).toContain('[ACTIVE THREADS =');
+		expect(summary).toContain('[TONE TO CONTINUE = Continue from the established scene pressure, character choices, and unresolved consequences.]');
+		expect(summary).not.toContain('Terminal checkpoint');
+		expect(summary).not.toContain('[IMPORTANT STRINGS=');
 		expect(summary).not.toContain('- - Turn resolved');
 		expect(summary).not.toContain('Transcript trace:');
 		expect(summary).not.toContain('not established by deterministic terminal checkpoint');
-		expect(summary).not.toContain('🕰️');
+	});
+
+	it('builds typed memory fields for the chapter editor and retrieval', () => {
+		const entries = [
+			{
+				id: 'entry_91',
+				type: 'narration',
+				content: '[ Time 15:30 | Day Tenth Moon, 296 AC | Location Yi Ti, Yin, the Merchants’ Quarter, the Balaerys Trading Post | Weather Sweltering heat, 36 C ] Aurion arrives beneath date palms while Ser Davos and Malyrio watch the crowds.',
+				position: 91,
+			},
+			{
+				id: 'entry_92',
+				type: 'narration',
+				content: 'Xanda sends an invitation sealed in lapis-blue wax and draws Aurion toward dinner at the Copper Court.',
+				position: 92,
+			},
+		] as any[];
+		const events = [
+			{
+				type: 'scene_transition',
+				title: 'Aurion reaches the Balaerys Trading Post in Yin',
+				body: entries[0].content,
+				actorEntityIds: ['pc_aurion', 'npc_ser_davos', 'npc_malyrio'],
+				metadata: { location: 'Yi Ti, Yin, the Merchants’ Quarter' },
+			},
+			{
+				type: 'relationship_shift',
+				title: 'Xanda tests Aurion with courtly dinner politics',
+				body: entries[1].content,
+				actorEntityIds: ['pc_aurion', 'npc_xanda'],
+				threadIds: ['thread_xanda_dinner'],
+			},
+		] as any[];
+
+		const digest = buildChapterMemoryDigest(3, entries, events);
+
+		expect(digest.title).toContain('Aurion reaches');
+		expect(digest.summary).toContain('[CHARACTER STATE =');
+		expect(digest.keyCharacters).toEqual(expect.arrayContaining(['Aurion', 'Ser Davos', 'Malyrio', 'Xanda']));
+		expect(digest.keyLocations).toEqual(expect.arrayContaining(['Yi Ti, Yin, the Merchants’ Quarter']));
+		expect(digest.keywords).toEqual(expect.arrayContaining(['relationship shift', 'scene transition']));
+		expect(digest.plotThreads).toEqual(expect.arrayContaining(['thread_xanda_dinner', 'Xanda tests Aurion with courtly dinner politics']));
+		expect(digest.emotionalTone).not.toBe('');
+	});
+
+	it('keeps long chapter windows as readable beats instead of one blocked paragraph', () => {
+		const entries = Array.from({ length: 15 }, (_, index) => ({
+			id: `entry_${index + 1}`,
+			type: 'narration',
+			content: `Readable beat ${index + 1}: Aurion and Zhen move through a distinct court consequence that must stay legible.`,
+			position: index + 1,
+		})) as any[];
+
+		const summary = buildChapterSummary(entries, []);
+		const openingLine = summary.split(/\r?\n/).find((line) => line.includes('Opening:'));
+
+		expect(summary).toContain('- Opening:');
+		expect(summary).toContain('- Readable beat 1: Aurion and Zhen move through a distinct court consequence');
+		expect(summary).toContain('- Readable beat 5: Aurion and Zhen move through a distinct court consequence');
+		expect(openingLine).toBeDefined();
+		expect(openingLine?.length).toBeLessThan(80);
+		expect(openingLine).not.toContain('Readable beat 2:');
+	});
+});
+
+describe('deterministic arc summaries', () => {
+	it('selects every full uncovered chapter batch for arc catch-up', () => {
+		const chapters = Array.from({ length: 15 }, (_, index) => ({ id: `chapter_${index + 1}` }));
+		const batches = selectArcRollupBatches(chapters, [{ chapterIds: ['chapter_1', 'chapter_2', 'chapter_3', 'chapter_4', 'chapter_5'] }], 5);
+
+		expect(batches.map((batch) => batch.map((chapter) => chapter.id))).toEqual([
+			['chapter_6', 'chapter_7', 'chapter_8', 'chapter_9', 'chapter_10'],
+			['chapter_11', 'chapter_12', 'chapter_13', 'chapter_14', 'chapter_15'],
+		]);
+	});
+
+	it('rolls chapter summaries into readable story memory instead of nested clipped checkpoints', () => {
+		const chapterSummary = buildChapterSummary([
+			{
+				id: 'entry_91',
+				type: 'narration',
+				content: 'Aurion reaches Yin under heat, incense, silk, trade-gold, and foreign perfume.',
+				position: 91,
+			},
+			{
+				id: 'entry_92',
+				type: 'narration',
+				content: 'Xanda draws him into dinner politics at the Copper Court.',
+				position: 92,
+			},
+			{
+				id: 'entry_93',
+				type: 'narration',
+				content: 'Arc-summary sentinel: the dinner may become romance, manipulation, political danger, or all three.',
+				position: 93,
+			},
+		] as any[], [{
+			type: 'relationship_shift',
+			title: 'Xanda tests Aurion with courtly dinner politics',
+			body: 'Xanda tests Aurion with courtly dinner politics.',
+			actorEntityIds: ['pc_aurion', 'npc_xanda'],
+			targetEntityIds: [],
+			threadIds: ['thread_xanda_dinner'],
+		}] as any[]);
+
+		const summary = buildArcSummary([{
+			id: 'chapter_yin',
+			storyId: 'story_balaerys',
+			number: 7,
+			title: 'Dinner in Yin',
+			sceneOutcome: chapterSummary,
+			irreversibleChanges: [],
+			promisesDebtsOaths: [],
+			openThreads: ['thread_xanda_dinner'],
+		}] as any[]);
+
+		expect(summary).toContain('Chapter 7 (Dinner in Yin):');
+		expect(summary).toContain('Arc-summary sentinel: the dinner may become romance');
+		expect(summary).toContain('Characters:');
+		expect(summary).toContain('Aurion [pc_aurion]');
+		expect(summary).not.toContain('[CHECKPOINT = Chapter checkpoint');
+		expect(summary).not.toContain('...');
+	});
+
+	it('derives the editable arc fields from covered chapter memory', () => {
+		const chapterSummary = buildChapterSummary([
+			{
+				id: 'entry_91',
+				type: 'narration',
+				content: 'Aurion reaches Yin under heat, incense, silk, trade-gold, and foreign perfume.',
+				position: 91,
+			},
+			{
+				id: 'entry_92',
+				type: 'narration',
+				content: 'Xanda draws him into dinner politics at the Copper Court.',
+				position: 92,
+			},
+			{
+				id: 'entry_93',
+				type: 'narration',
+				content: 'Arc-field sentinel: Xanda may become ally, lover, rival, threat, or all of them.',
+				position: 93,
+			},
+		] as any[], [{
+			type: 'relationship_shift',
+			title: 'Xanda tests Aurion with courtly dinner politics',
+			body: 'Xanda tests Aurion with courtly dinner politics.',
+			actorEntityIds: ['pc_aurion', 'npc_xanda'],
+			targetEntityIds: [],
+			threadIds: ['thread_xanda_dinner'],
+		}] as any[]);
+
+		const fields = buildArcMemoryFields([{
+			id: 'chapter_yin',
+			storyId: 'story_balaerys',
+			number: 7,
+			title: 'Dinner in Yin',
+			sceneOutcome: chapterSummary,
+			irreversibleChanges: ['Aurion accepts the danger of Xanda dinner politics'],
+			promisesDebtsOaths: [],
+			openThreads: ['thread_xanda_dinner'],
+			metadata: { emotionalTone: 'courtly danger, flirtation, and exile ache' },
+		}] as any[]);
+
+		expect(fields.keyPlotPoints.join('\n')).toContain('Chapter 7 (Dinner in Yin):');
+		expect(fields.keyPlotPoints.join('\n')).toContain('Arc-field sentinel: Xanda may become ally');
+		expect(fields.characterArcs).toEqual(expect.arrayContaining([
+			expect.objectContaining({ name: 'Aurion' }),
+			expect.objectContaining({ name: 'Xanda' }),
+		]));
+		expect(fields.unresolvedThreads).toEqual(expect.arrayContaining([
+			'thread_xanda_dinner',
+			'Xanda tests Aurion with courtly dinner politics',
+		]));
+		expect(fields.emotionalProgression).toBe('courtly danger, flirtation, and exile ache');
+	});
+
+	it('keeps generated arc rollup fields compact enough for prompt use', () => {
+		const chapterSummary = [
+			'[CHECKPOINT = Chapter checkpoint covering transcript positions 1-40.]',
+			'[RECENT STORY STATE =',
+			`- Arc-rollup opening fact survives. ${'raw checkpoint wall '.repeat(1000)} Arc-rollup tail sentinel.`,
+			']',
+			'[CHARACTER STATE =',
+			`Aurion [pc_aurion]:\n- ${'heavy character detail '.repeat(200)} character tail sentinel.`,
+			']',
+			'[ACTIVE THREADS =',
+			`- thread opening ${'thread filler '.repeat(200)} thread tail sentinel`,
+			']',
+		].join('\n');
+
+		const fields = buildArcMemoryFields([{
+			id: 'chapter_yin',
+			storyId: 'story_balaerys',
+			number: 7,
+			title: 'Dinner in Yin',
+			sceneOutcome: chapterSummary,
+			irreversibleChanges: [],
+			promisesDebtsOaths: [],
+			openThreads: [],
+			metadata: {},
+		}] as any[]);
+		const summary = buildArcSummary([{
+			id: 'chapter_yin',
+			storyId: 'story_balaerys',
+			number: 7,
+			title: 'Dinner in Yin',
+			sceneOutcome: chapterSummary,
+			irreversibleChanges: [],
+			promisesDebtsOaths: [],
+			openThreads: [],
+			metadata: {},
+		}] as any[]);
+
+		expect(summary).toContain('Arc-rollup opening fact survives.');
+		expect(summary).not.toContain('Arc-rollup tail sentinel');
+		expect(fields.characterArcs[0]?.development).not.toContain('character tail sentinel');
+		expect(fields.unresolvedThreads.join(' ')).not.toContain('thread tail sentinel');
+		expect(summary.length).toBeLessThan(1400);
+	});
+});
+
+describe('event memory projection hygiene', () => {
+	it('does not project deleted transcript correction events into durable memory', () => {
+		expect(shouldProjectEventToMemory({
+			type: 'correction',
+			title: 'Transcript context removed',
+			body: 'Player deleted a poisoned context message.',
+		} as any)).toBe(false);
+		expect(shouldProjectEventToMemory({
+			type: 'promise',
+			title: 'Gate promise',
+			body: 'Arlan promised to open the postern gate.',
+		} as any)).toBe(true);
+	});
+});
+
+describe('chapter character reference candidates', () => {
+	it('keeps important unresolved chapter characters and skips duplicates or one-off mentions', () => {
+		const candidates = chapterCharacterReferenceCandidates({
+			digest: {
+				title: 'Xanda tests Aurion',
+				summary: 'Aurion dines with Xanda while the boy-guide fades back into the Copper Court.',
+				keywords: [],
+				keyCharacters: ['Aurion', 'Xanda', 'Boy-guide', 'Consort', 'Dancer', 'Jogos Nhai warrior', 'the fire-wyrm', 'Vermillion Zhen Lian'],
+				keyLocations: [],
+				plotThreads: [],
+				emotionalTone: 'courtly danger',
+				source: 'llm',
+			},
+			events: [
+				{
+					id: 'event_1',
+					title: 'Xanda invites Aurion to dinner',
+					body: 'The invitation pulls Aurion into Xanda’s orbit.',
+				},
+				{
+					id: 'event_2',
+					title: 'Xanda tests Aurion with honeyed locusts',
+					body: 'Xanda laughs when Aurion eats despite the warning.',
+				},
+				{
+					id: 'event_3',
+					title: 'Boy-guide haggles with the innkeep',
+					body: 'The boy-guide runs ahead through the Copper Court.',
+				},
+				{
+					id: 'event_4',
+					title: 'Consort rumor spreads',
+					body: 'The court calls Aurion the Consort, and the Consort title echoes through the hall.',
+				},
+				{
+					id: 'event_5',
+					title: 'Consort title repeated',
+					body: 'The Consort is only a title attached to Aurion, not a separate person.',
+				},
+				{
+					id: 'event_6',
+					title: 'Dancer crosses the room',
+					body: 'The dancer and the Dancer are role labels in the court scene.',
+				},
+				{
+					id: 'event_7',
+					title: 'Jogos Nhai warrior threatens the gate',
+					body: 'The Jogos Nhai warrior remains an unnamed role, not a durable NPC.',
+				},
+				{
+					id: 'event_8',
+					title: 'The fire-wyrm is named',
+					body: 'The fire-wyrm is a beast label, not a person in this chapter.',
+				},
+			],
+			existingNames: ['Aurion', 'Vermillion Zhen Lian'],
+		});
+
+		expect(candidates.map((candidate) => candidate.name)).toEqual(['Xanda']);
+		expect(candidates[0].sourceEventIds).toEqual(['event_1', 'event_2']);
+	});
+});
+
+describe('chapter character context patches', () => {
+	it('turns source events into reviewable current state without erasing old memory', () => {
+		const patch = chapterCharacterContextPatch({
+			entityId: 'npc_xanda',
+			currentState: {
+				relationship: 'testing Aurion',
+				eventMemory: { saw: ['Xanda watched Aurion enter the Copper Court.'] },
+			},
+			digest: {
+				title: 'Dinner in Yin',
+				summary: 'Xanda tests Aurion with dinner politics.',
+				keywords: [],
+				keyCharacters: ['Xanda', 'Aurion'],
+				keyLocations: ['The Copper Court'],
+				plotThreads: [],
+				emotionalTone: 'courtly danger',
+				source: 'llm',
+			},
+			events: [
+				{
+					id: 'event_1',
+					type: 'relationship_shift',
+					title: 'Xanda tests Aurion with honeyed locusts',
+					body: 'Xanda laughs when Aurion eats despite the warning.',
+					actorEntityIds: ['npc_xanda'],
+					targetEntityIds: ['pc_aurion'],
+				},
+			] as any[],
+		});
+
+		expect(patch?.sourceEventIds).toEqual(['event_1']);
+		expect(patch?.state).toMatchObject({
+			relationship: 'testing Aurion',
+			currentLocation: 'The Copper Court',
+			currentAction: 'relationship_shift: Xanda tests Aurion with honeyed locusts - Xanda laughs when Aurion eats despite the warning.',
+			eventMemory: {
+				saw: ['Xanda watched Aurion enter the Copper Court.'],
+				did: ['relationship_shift: Xanda tests Aurion with honeyed locusts - Xanda laughs when Aurion eats despite the warning.'],
+			},
+		});
+	});
+
+	it('builds a reusable review proposal payload for chapter character refreshes', () => {
+		const values = chapterCharacterContextProposalValues({
+			storyId: 'story_balaerys',
+			entityId: 'npc_xanda',
+			entityName: 'Xanda',
+			chapterId: 'chapter_7',
+			chapterNumber: 7,
+			chapterTitle: 'Dinner in Yin',
+			patch: {
+				state: {
+					currentAction: 'testing Aurion at dinner',
+					eventMemory: { did: ['tested Aurion at dinner'] },
+				},
+				sourceEventIds: ['event_dinner'],
+				did: ['tested Aurion at dinner'],
+				saw: [],
+			},
+			sourceEntryIds: ['entry_91', 'entry_92'],
+			serverVersion: 12,
+			now: '2026-06-18T12:00:00.000Z',
+		});
+
+		expect(values).toMatchObject({
+			id: 'proposal_chapter_character_context_story_balaerys_chapter_7_npc_xanda',
+			proposalType: 'character_context_update',
+			targetRecordId: 'npc_xanda',
+			operations: [{
+				op: 'replace',
+				path: '/characters/npc_xanda/state',
+				value: {
+					currentAction: 'testing Aurion at dinner',
+					eventMemory: { did: ['tested Aurion at dinner'] },
+				},
+			}],
+			reason: 'Xanda appears in chapter 7: Dinner in Yin.',
+			sourceEntryIds: ['entry_91', 'entry_92'],
+			sourceEventIds: ['event_dinner'],
+			metadata: {
+				sourceType: 'chapter_character_context',
+				characterName: 'Xanda',
+				chapterId: 'chapter_7',
+				chapterNumber: 7,
+			},
+		});
+	});
+
+	it('refreshes pending chapter character context proposals instead of losing newer evidence', () => {
+		const values = chapterCharacterContextProposalValues({
+			storyId: 'story_balaerys',
+			entityId: 'npc_xanda',
+			entityName: 'Xanda',
+			chapterId: 'chapter_8',
+			chapterNumber: 8,
+			chapterTitle: 'After the Dinner',
+			patch: {
+				state: { currentAction: 'pressing Aurion after dinner' },
+				sourceEventIds: ['event_new'],
+				did: ['pressing Aurion after dinner'],
+				saw: [],
+			},
+			sourceEntryIds: ['entry_new'],
+			serverVersion: 13,
+			now: '2026-06-18T13:00:00.000Z',
+		});
+
+		const refreshed = refreshChapterCharacterContextProposalValues({
+			sourceEntryIds: ['entry_old'],
+			sourceEventIds: ['event_old'],
+			metadata: { firstChapterId: 'chapter_7', chapterId: 'chapter_7' },
+		}, values);
+
+		expect(refreshed).toMatchObject({
+			operations: values.operations,
+			sourceEntryIds: ['entry_old', 'entry_new'],
+			sourceEventIds: ['event_old', 'event_new'],
+			metadata: {
+				firstChapterId: 'chapter_7',
+				chapterId: 'chapter_8',
+				chapterNumber: 8,
+				refreshedFromChapterId: 'chapter_8',
+				refreshedFromChapterNumber: 8,
+			},
+			serverVersion: 13,
+			updatedAt: '2026-06-18T13:00:00.000Z',
+		});
 	});
 });

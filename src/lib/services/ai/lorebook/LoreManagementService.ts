@@ -88,15 +88,15 @@ Faction goals define why a faction fights; schemes define how they try to win; s
 
 ${buildWarMemoryContinuityBlock()}
 
-Your job has two parts: DISCOVER new entries worth tracking, and CURATE existing ones.
+Your job has two parts: DISCOVER new non-character entries worth tracking, and CURATE existing ones.
 
 ═══ EXISTING LOREBOOK ═══
 ${existingList || '(empty lorebook)'}
 
 ═══ AVAILABLE ACTIONS ═══
 
-• create: Add a new entry for a world element that appears in the story but is NOT yet tracked
-  - Named characters who spoke, acted, or were described in detail (not unnamed crowd members)
+• create: Add a new non-character entry for a world element that appears in the story but is NOT yet tracked
+  - Do not create new character entries during automatic lore management. New character names remain evidence in summaries, events, conversations, and proposals until a human creates or approves them.
   - Named places that were visited, described, or are clearly important to the plot
   - Named objects with narrative significance (weapons, artifacts, documents — not generic "a sword")
   - Organizations, groups, guilds, armies that were named and described
@@ -111,7 +111,7 @@ ${existingList || '(empty lorebook)'}
   - Provide: entryId, updated description that APPENDS to existing info (do not erase what's already there)
   - Provide: updated keywords if new searchable terms were introduced
 
-• For CHARACTER entries: also produce these fields when you have enough evidence (2+ chapters of presence):
+• For CHARACTER entries: update existing character entries only, and also produce these fields when you have enough evidence (2+ chapters of presence):
   - bio: 2-4 sentence biography — who they are, their background, their role. Only confirmed facts from summaries.
   - motivations: 1-4 driving goals as short phrases (e.g., "Avenge his family", "Earn passage across the sea")
   - personality: 1-2 sentence personality sketch from observed behavior patterns
@@ -136,7 +136,7 @@ ${existingList || '(empty lorebook)'}
 
 ═══ GUIDELINES ═══
 
-1. DISCOVER aggressively, CURATE conservatively — missing a new entry is worse than having an extra one,
+1. DISCOVER non-character lore aggressively, CURATE conservatively — missing a new non-character entry is worse than having an extra one,
    but wrong updates to existing entries are worse than missed updates
 2. Never invent information not present in the chapter/arc summaries
 3. For updates: cross-reference across multiple chapters before acting — single mentions are not enough

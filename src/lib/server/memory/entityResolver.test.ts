@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	chooseEntityResolution,
+	isCharacterTitleOnlyName,
 	normalizeEntityName,
 	scoreEntityNameSimilarity,
 	type EntityResolutionCandidate,
@@ -29,6 +30,12 @@ describe('entity resolver identity scoring', () => {
 
 	it('treats a short alias as a strong possible match for a canonical name', () => {
 		expect(scoreEntityNameSimilarity('Mira', 'Mira Vey')).toBeGreaterThanOrEqual(0.82);
+	});
+
+	it('recognizes title-only character names that should not create canon records', () => {
+		expect(isCharacterTitleOnlyName('Consort')).toBe(true);
+		expect(isCharacterTitleOnlyName('Golden Dragon')).toBe(true);
+		expect(isCharacterTitleOnlyName('Aurion Balaerys')).toBe(false);
 	});
 
 	it('updates strong matches instead of creating duplicate entities', () => {

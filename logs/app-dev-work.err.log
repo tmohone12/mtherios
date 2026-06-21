@@ -1,0 +1,3710 @@
+[jobs] waiting for app job endpoint: fetch failed
+[slow-turn] {
+  turnId: '472432aa-9d11-440c-a599-3660427bd99e',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 36144,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 34118 },
+    { operation: 'turn.context_assembly', durationMs: 1873 },
+    { operation: 'turn.memory_retrieval', durationMs: 1872 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 111 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 27 },
+    { operation: 'turn.validation.apply_update', durationMs: 26 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b93b1b6d-c59c-4064-9738-8957e01f1d91',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 34024,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 32059 },
+    { operation: 'turn.context_assembly', durationMs: 1829 },
+    { operation: 'turn.memory_retrieval', durationMs: 1829 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 90 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '9e5d3a0d-e2d8-4581-8aaf-231af332f1a3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 28628,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 27505 },
+    { operation: 'turn.context_assembly', durationMs: 997 },
+    { operation: 'turn.memory_retrieval', durationMs: 996 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 71 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '3efcaca2-4a6b-4e1c-b641-2821de0f7d73',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 29019,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 27933 },
+    { operation: 'turn.context_assembly', durationMs: 957 },
+    { operation: 'turn.memory_retrieval', durationMs: 956 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 101 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 },
+    { operation: 'turn.context_load', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '185a576c-ae2a-440a-aeae-cff34028d8e5',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 42986,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 41978 },
+    { operation: 'turn.context_assembly', durationMs: 879 },
+    { operation: 'turn.memory_retrieval', durationMs: 879 },
+    { operation: 'turn.wiki_context', durationMs: 705 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 59 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 },
+    { operation: 'turn.context_load', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '6a5ec2bb-0a00-47b3-8e92-7c75f3ad9702',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 27203,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 26072 },
+    { operation: 'turn.context_assembly', durationMs: 1004 },
+    { operation: 'turn.memory_retrieval', durationMs: 1003 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 75 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 21 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'f0dd891e-f343-4d65-b7c2-6d924111cdec',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 40553,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 38217 },
+    { operation: 'turn.context_assembly', durationMs: 2196 },
+    { operation: 'turn.memory_retrieval', durationMs: 2196 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 108 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 }
+  ]
+}
+The request id "E:\DEV\Projects\mtherios-factions\.svelte-kit\generated\client\app.js" is outside of Vite serving allow list.
+
+- E:/DEV/Projects/mtherios-factions-work/src/lib
+- E:/DEV/Projects/mtherios-factions-work/src/routes
+- E:/DEV/Projects/mtherios-factions-work/.svelte-kit
+- E:/DEV/Projects/mtherios-factions-work/src
+- E:/DEV/Projects/mtherios-factions-work/node_modules
+
+Refer to docs https://vite.dev/config/server-options.html#server-fs-allow for configurations and more details.
+
+The request id "E:\DEV\Projects\mtherios-factions\node_modules\@sveltejs\kit\src\runtime\client\entry.js" is outside of Vite serving allow list.
+[slow-turn] {
+  turnId: '5ca1ca6c-77a1-4294-96d0-bfca6451a491',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 35337,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 33392 },
+    { operation: 'turn.context_assembly', durationMs: 1809 },
+    { operation: 'turn.memory_retrieval', durationMs: 1808 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 102 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c22effb4-3bdb-4acd-9080-5b9577d0de10',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 27180,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 26165 },
+    { operation: 'turn.context_assembly', durationMs: 887 },
+    { operation: 'turn.memory_retrieval', durationMs: 887 },
+    { operation: 'turn.wiki_context', durationMs: 703 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 52 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 22 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'a85fc362-f410-4d9a-9763-0812f68b85e3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 40551,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 39449 },
+    { operation: 'turn.context_assembly', durationMs: 970 },
+    { operation: 'turn.memory_retrieval', durationMs: 969 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 90 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '82298260-90bf-4464-beb3-adeed70c53c3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 50272,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 48360 },
+    { operation: 'turn.context_assembly', durationMs: 1778 },
+    { operation: 'turn.memory_retrieval', durationMs: 1777 },
+    { operation: 'turn.wiki_context', durationMs: 712 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 66 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: 'db618074-ba18-4b44-8cf3-297879518993',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 44861,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 43753 },
+    { operation: 'turn.context_assembly', durationMs: 979 },
+    { operation: 'turn.memory_retrieval', durationMs: 979 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 107 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.validation.apply_update', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: '52152471-3efe-4833-a57d-3ceae0b3f0f4',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 46047,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 44123 },
+    { operation: 'turn.context_assembly', durationMs: 1783 },
+    { operation: 'turn.memory_retrieval', durationMs: 1782 },
+    { operation: 'turn.wiki_context', durationMs: 703 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 49 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '42fc9946-b582-4463-b052-217930e13819',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 35453,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 34275 },
+    { operation: 'turn.context_assembly', durationMs: 1048 },
+    { operation: 'turn.memory_retrieval', durationMs: 1047 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 105 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '9459bd98-064a-44ac-b299-e5a91b557fa7',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 59210,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 57115 },
+    { operation: 'turn.context_assembly', durationMs: 1851 },
+    { operation: 'turn.memory_retrieval', durationMs: 1847 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 90 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '3ff63481-60b8-4655-8f4e-07c55f0dbe7d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 30929,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 29621 },
+    { operation: 'turn.context_assembly', durationMs: 986 },
+    { operation: 'turn.memory_retrieval', durationMs: 966 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 85 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 21 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '40a22227-8e1c-4008-b3ec-952dddf72b70',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 46139,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 45066 },
+    { operation: 'turn.context_assembly', durationMs: 932 },
+    { operation: 'turn.memory_retrieval', durationMs: 931 },
+    { operation: 'turn.wiki_context', durationMs: 714 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 115 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 21 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '25a9e204-2aea-4797-9ac8-cd4776276904',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 34071,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 32916 },
+    { operation: 'turn.context_assembly', durationMs: 1026 },
+    { operation: 'turn.memory_retrieval', durationMs: 1025 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 96 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 21 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '5cc548bb-cc20-4ed2-a03a-75b7fd556d04',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 39997,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 38014 },
+    { operation: 'turn.context_assembly', durationMs: 1848 },
+    { operation: 'turn.memory_retrieval', durationMs: 1847 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 98 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 },
+    { operation: 'turn.context_load', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: 'a1cfaef6-adb8-4b56-aa10-b352f975d47d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 50100,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 48200 },
+    { operation: 'turn.context_assembly', durationMs: 1771 },
+    { operation: 'turn.memory_retrieval', durationMs: 1770 },
+    { operation: 'turn.wiki_context', durationMs: 705 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 57 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '395a9bd3-9a3c-457e-bbac-0ea2f5c7f87a',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 46882,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 44320 },
+    { operation: 'turn.context_assembly', durationMs: 2424 },
+    { operation: 'turn.memory_retrieval', durationMs: 2424 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 124 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 29 },
+    { operation: 'turn.context_load', durationMs: 25 }
+  ]
+}
+[slow-turn] {
+  turnId: '6d4bcf95-74e7-498b-8fd3-f3248aee0ba3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 46441,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 44514 },
+    { operation: 'turn.context_assembly', durationMs: 1794 },
+    { operation: 'turn.memory_retrieval', durationMs: 1793 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 63 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c2dd9ce4-aa21-4805-aa69-57d73b165282',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 52615,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 51481 },
+    { operation: 'turn.context_assembly', durationMs: 1003 },
+    { operation: 'turn.memory_retrieval', durationMs: 1002 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 97 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '158a43d4-309e-48e9-8307-45c6bb374b46',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 67194,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 66011 },
+    { operation: 'turn.context_assembly', durationMs: 1049 },
+    { operation: 'turn.memory_retrieval', durationMs: 1048 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 103 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c4006167-4b44-41d7-bc07-bd153f8856c6',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 41456,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 40348 },
+    { operation: 'turn.context_assembly', durationMs: 980 },
+    { operation: 'turn.memory_retrieval', durationMs: 979 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 92 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 22 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '88cabce0-129e-4af7-8286-3d8b96d50efa',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 56643,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 55487 },
+    { operation: 'turn.context_assembly', durationMs: 1028 },
+    { operation: 'turn.memory_retrieval', durationMs: 1027 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 106 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 22 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'db9d1943-4fe3-451a-bc00-efc6aab6b13a',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 43958,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 42827 },
+    { operation: 'turn.context_assembly', durationMs: 985 },
+    { operation: 'turn.memory_retrieval', durationMs: 985 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 104 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c3042960-fdc8-4120-b96e-4269309f24c6',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 43967,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 42790 },
+    { operation: 'turn.context_assembly', durationMs: 1010 },
+    { operation: 'turn.memory_retrieval', durationMs: 1009 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 110 },
+    { operation: 'turn.validation.apply_update', durationMs: 43 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '5fd51243-58e4-4f6e-b6a3-805fce14bba5',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 83582,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 82449 },
+    { operation: 'turn.context_assembly', durationMs: 994 },
+    { operation: 'turn.memory_retrieval', durationMs: 994 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 83 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.context_load', durationMs: 22 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '590cefef-f9c3-40de-8839-bf85bc61fb53',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 83426,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 82271 },
+    { operation: 'turn.context_assembly', durationMs: 1014 },
+    { operation: 'turn.memory_retrieval', durationMs: 1013 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 109 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: '99e9e0af-b58c-454c-9759-b43092480537',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 57602,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 56511 },
+    { operation: 'turn.context_assembly', durationMs: 961 },
+    { operation: 'turn.memory_retrieval', durationMs: 960 },
+    { operation: 'turn.wiki_context', durationMs: 706 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 56 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 20 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: '572cadfe-8f25-4754-90ec-1b55941d0d84',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 75914,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 73881 },
+    { operation: 'turn.context_assembly', durationMs: 1889 },
+    { operation: 'turn.memory_retrieval', durationMs: 1889 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 86 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 },
+    { operation: 'turn.context_load', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '6c3b4bbb-5889-438e-9c9f-e850acedd627',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 114288,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 113118 },
+    { operation: 'turn.context_assembly', durationMs: 1029 },
+    { operation: 'turn.memory_retrieval', durationMs: 1028 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 88 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 },
+    { operation: 'turn.context_load', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'dc5b01e8-8352-493c-af9f-e42cbddef7e4',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 113754,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 111694 },
+    { operation: 'turn.context_assembly', durationMs: 1865 },
+    { operation: 'turn.memory_retrieval', durationMs: 1864 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 121 },
+    { operation: 'turn.validation.apply_update', durationMs: 46 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 29 }
+  ]
+}
+[slow-turn] {
+  turnId: '534d26f4-0232-4964-a043-5016a73e0e1f',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 74078,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 71924 },
+    { operation: 'turn.context_assembly', durationMs: 1850 },
+    { operation: 'turn.memory_retrieval', durationMs: 1850 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 86 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'af817442-8908-4a5c-a7d7-f909378178ff',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 79914,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 78708 },
+    { operation: 'turn.context_assembly', durationMs: 1064 },
+    { operation: 'turn.memory_retrieval', durationMs: 1064 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 98 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c9236929-e1dc-4822-9384-da9de52b5cd1',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 58676,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 56764 },
+    { operation: 'turn.context_assembly', durationMs: 1776 },
+    { operation: 'turn.memory_retrieval', durationMs: 1776 },
+    { operation: 'turn.wiki_context', durationMs: 704 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 54 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 24 },
+    { operation: 'turn.context_load', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '5f1eb1e5-81cb-424e-a3ff-aae76fba6f7e',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 52150,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 50994 },
+    { operation: 'turn.context_assembly', durationMs: 1019 },
+    { operation: 'turn.memory_retrieval', durationMs: 1018 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 100 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '7eda5cd4-e7cf-4865-a1d3-847f49a848c3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 77467,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 75428 },
+    { operation: 'turn.context_assembly', durationMs: 1895 },
+    { operation: 'turn.memory_retrieval', durationMs: 1895 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 95 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '879a7626-8867-45a0-9a68-5d3d070d2463',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 55052,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 53905 },
+    { operation: 'turn.context_assembly', durationMs: 1008 },
+    { operation: 'turn.memory_retrieval', durationMs: 1007 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 97 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '5cfae51b-dd68-4df4-ac70-b9ca1d5fa38d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 62897,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 61848 },
+    { operation: 'turn.context_assembly', durationMs: 911 },
+    { operation: 'turn.memory_retrieval', durationMs: 910 },
+    { operation: 'turn.wiki_context', durationMs: 703 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 49 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 24 },
+    { operation: 'turn.context_load', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'cd8c6488-c9eb-46e7-a4c1-6e369e283725',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 56413,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 55233 },
+    { operation: 'turn.context_assembly', durationMs: 1042 },
+    { operation: 'turn.memory_retrieval', durationMs: 1041 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 91 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '46e6aca0-7e2c-4cca-9869-8faac4ab95c2',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 77872,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 76635 },
+    { operation: 'turn.context_assembly', durationMs: 1032 },
+    { operation: 'turn.memory_retrieval', durationMs: 1031 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 97 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 69 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '52716da4-19f5-4758-ae53-f1b8820ec325',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 66381,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 65175 },
+    { operation: 'turn.context_assembly', durationMs: 1018 },
+    { operation: 'turn.memory_retrieval', durationMs: 1017 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 96 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 69 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '17597a01-3024-48aa-b3ff-774d0edf9b63',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 56896,
+  model: 'anthropic/claude-opus-4.6',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 55720 },
+    { operation: 'turn.context_assembly', durationMs: 1027 },
+    { operation: 'turn.memory_retrieval', durationMs: 1026 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 110 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 },
+    { operation: 'turn.context_load', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '1d520961-b639-4874-ab76-19f6310fbb89',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 26191,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 24253 },
+    { operation: 'turn.context_assembly', durationMs: 1803 },
+    { operation: 'turn.memory_retrieval', durationMs: 1802 },
+    { operation: 'turn.wiki_context', durationMs: 703 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 54 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 },
+    { operation: 'turn.context_load', durationMs: 19 }
+  ]
+}
+[jobs] chapter memory LLM summarization failed via memory: ServerGenerationError: Server LLM request timed out after 90000ms
+    at generateServerTextWithMetrics (E:/DEV/Projects/mtherios-factions-work/src/lib/server/turn/provider.ts:270:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async summarizeChapterMemoryWithLlm (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1155:22)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async createChapterCheckpoint (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1391:18)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async runClaimedJob (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2039:20)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2072:22)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/concurrency.ts:28:24)
+    at async Promise.all (index 0) {
+  result: {
+    model: 'zai-org/glm-5.2',
+    endpoint: 'https://nano-gpt.com/api/v1/chat/completions',
+    durationMs: 90003,
+    promptChars: 172519
+  }
+}
+[slow-turn] {
+  turnId: '02ce3788-be10-4975-bb9a-c652ec67cad5',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19767,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18569 },
+    { operation: 'turn.context_assembly', durationMs: 1067 },
+    { operation: 'turn.memory_retrieval', durationMs: 1066 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 94 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '34a7dda2-f9e8-4584-87e9-a562017cd1c7',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 28817,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 27763 },
+    { operation: 'turn.context_assembly', durationMs: 915 },
+    { operation: 'turn.memory_retrieval', durationMs: 914 },
+    { operation: 'turn.wiki_context', durationMs: 706 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 57 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 21 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c5905684-63ec-4900-9975-f24f7f6953b3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 34384,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 32313 },
+    { operation: 'turn.context_assembly', durationMs: 1926 },
+    { operation: 'turn.memory_retrieval', durationMs: 1926 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 95 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'e5909160-b7e0-4ad1-a6c8-917b2e1674a4',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 17567,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16381 },
+    { operation: 'turn.context_assembly', durationMs: 1046 },
+    { operation: 'turn.memory_retrieval', durationMs: 1045 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 97 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '336e360e-f184-4337-8c41-5cde63db3468',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 13577,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 12400 },
+    { operation: 'turn.context_assembly', durationMs: 1039 },
+    { operation: 'turn.memory_retrieval', durationMs: 1038 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 90 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+
+[1;31m[404] GET /favicon.ico[0m
+[slow-turn] {
+  turnId: '7bd48dca-3608-4067-8481-c3d437337a3b',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 24893,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 23347 },
+    { operation: 'turn.context_assembly', durationMs: 1114 },
+    { operation: 'turn.memory_retrieval', durationMs: 1113 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.final_response.readback', durationMs: 115 },
+    { operation: 'turn.validation.apply_update', durationMs: 104 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 88 },
+    {
+      operation: 'turn.campaign_vault.append_evidence',
+      durationMs: 51
+    }
+  ]
+}
+[slow-turn] {
+  turnId: '1082f4b2-5bad-41f2-9186-c37f82e4f8df',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19158,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16829 },
+    { operation: 'turn.context_assembly', durationMs: 2129 },
+    { operation: 'turn.memory_retrieval', durationMs: 2129 },
+    { operation: 'turn.wiki_context', durationMs: 707 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 74 },
+    { operation: 'turn.final_response.readback', durationMs: 72 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: 'd33bac4d-d403-4d0f-b4ae-26fe6b2fd168',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20627,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19299 },
+    { operation: 'turn.context_assembly', durationMs: 1153 },
+    { operation: 'turn.memory_retrieval', durationMs: 1152 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 108 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 40 },
+    { operation: 'turn.validation.apply_update', durationMs: 27 }
+  ]
+}
+[slow-turn] {
+  turnId: 'a161c785-df13-42b2-a78c-adf9bae7a4c9',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 27585,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 26729 },
+    { operation: 'turn.context_assembly', durationMs: 701 },
+    { operation: 'turn.wiki_context', durationMs: 701 },
+    { operation: 'turn.memory_retrieval', durationMs: 610 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 152 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.validation.apply_update', durationMs: 35 },
+    { operation: 'turn.context_load', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'cd6b46d9-9728-4852-8d92-cf9618535da7',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23063,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20327 },
+    { operation: 'turn.context_assembly', durationMs: 2574 },
+    { operation: 'turn.memory_retrieval', durationMs: 2573 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 99 },
+    { operation: 'turn.final_response.readback', durationMs: 55 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 28 }
+  ]
+}
+[slow-turn] {
+  turnId: 'de8e4c10-c7ec-4189-a332-d8144d00308b',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20828,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19967 },
+    { operation: 'turn.context_assembly', durationMs: 699 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.memory_retrieval', durationMs: 667 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 119 },
+    { operation: 'turn.final_response.readback', durationMs: 54 },
+    { operation: 'turn.context_load', durationMs: 35 },
+    { operation: 'turn.validation.apply_update', durationMs: 26 }
+  ]
+}
+[slow-turn] {
+  turnId: 'f53cbb06-56a3-4e82-9710-58f10dd01ee4',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 24372,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 22087 },
+    { operation: 'turn.context_assembly', durationMs: 2093 },
+    { operation: 'turn.memory_retrieval', durationMs: 2092 },
+    { operation: 'turn.wiki_context', durationMs: 708 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 62 },
+    { operation: 'turn.validation.apply_update', durationMs: 47 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.context_load', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '633a7fd1-0afe-41a6-96fc-3e81ec07972b',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 36716,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 35201 },
+    { operation: 'turn.context_assembly', durationMs: 1258 },
+    { operation: 'turn.memory_retrieval', durationMs: 1257 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 115 },
+    { operation: 'turn.final_response.readback', durationMs: 77 },
+    { operation: 'turn.validation.apply_update', durationMs: 55 },
+    { operation: 'turn.context_load', durationMs: 36 }
+  ]
+}
+[slow-turn] {
+  turnId: '35dace26-2575-4cb9-ae3b-a7438a6f39c7',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 27717,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 26290 },
+    { operation: 'turn.context_assembly', durationMs: 1273 },
+    { operation: 'turn.memory_retrieval', durationMs: 1272 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 104 },
+    { operation: 'turn.final_response.readback', durationMs: 52 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '6456af05-9348-49a4-ac3f-292d1347de29',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 24148,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 22740 },
+    { operation: 'turn.context_assembly', durationMs: 1259 },
+    { operation: 'turn.memory_retrieval', durationMs: 1258 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 121 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.context_load', durationMs: 29 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 }
+  ]
+}
+[jobs] chapter memory LLM summarization failed via memory: ServerGenerationError: Server LLM request timed out after 90000ms
+    at generateServerTextWithMetrics (E:/DEV/Projects/mtherios-factions-work/src/lib/server/turn/provider.ts:270:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async summarizeChapterMemoryWithLlm (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1155:22)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async createChapterCheckpoint (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1391:18)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async runClaimedJob (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2039:20)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2072:22)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/concurrency.ts:28:24)
+    at async Promise.all (index 0) {
+  result: {
+    model: 'zai-org/glm-5.2',
+    endpoint: 'https://nano-gpt.com/api/v1/chat/completions',
+    durationMs: 90014,
+    promptChars: 104863
+  }
+}
+[slow-turn] {
+  turnId: 'e07f50b5-09b0-48ce-9c82-bbd018381510',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20761,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19404 },
+    { operation: 'turn.context_assembly', durationMs: 1208 },
+    { operation: 'turn.memory_retrieval', durationMs: 1207 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 116 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '69c691a1-d2ac-4497-bd4f-8cb94cf69ad1',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22429,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20998 },
+    { operation: 'turn.context_assembly', durationMs: 1252 },
+    { operation: 'turn.memory_retrieval', durationMs: 1250 },
+    { operation: 'turn.wiki_context', durationMs: 708 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 113 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.context_load', durationMs: 39 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 38 }
+  ]
+}
+[slow-turn] {
+  turnId: '55e7bd90-2727-41b0-90a1-53f6b38e66ba',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18693,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 17320 },
+    { operation: 'turn.context_assembly', durationMs: 1226 },
+    { operation: 'turn.memory_retrieval', durationMs: 1224 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 115 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'e9080c54-16a5-453c-8484-da661297d286',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 29537,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 28082 },
+    { operation: 'turn.context_assembly', durationMs: 1300 },
+    { operation: 'turn.memory_retrieval', durationMs: 1299 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 159 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.validation.apply_update', durationMs: 26 },
+    { operation: 'turn.context_load', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '7cc7b415-55b0-4318-97f4-16cfd6d21460',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 13084,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 11785 },
+    { operation: 'turn.context_assembly', durationMs: 1109 },
+    { operation: 'turn.memory_retrieval', durationMs: 1108 },
+    { operation: 'turn.wiki_context', durationMs: 703 },
+    { operation: 'turn.final_response.readback', durationMs: 81 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 57 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '0d1d5f53-3668-4709-aa00-52a4cd6adf1c',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 24957,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 22636 },
+    { operation: 'turn.context_assembly', durationMs: 2128 },
+    { operation: 'turn.memory_retrieval', durationMs: 2127 },
+    { operation: 'turn.wiki_context', durationMs: 704 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 68 },
+    { operation: 'turn.final_response.readback', durationMs: 63 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 49 },
+    { operation: 'turn.context_load', durationMs: 27 }
+  ]
+}
+[slow-turn] {
+  turnId: '62703324-bdd6-44f0-9559-b8a68229db2d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 16509,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 15036 },
+    { operation: 'turn.context_assembly', durationMs: 1327 },
+    { operation: 'turn.memory_retrieval', durationMs: 1326 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 109 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c4ec1ba6-ffbf-49ef-aab4-4fc72e2371a4',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20873,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19470 },
+    { operation: 'turn.context_assembly', durationMs: 1256 },
+    { operation: 'turn.memory_retrieval', durationMs: 1255 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 92 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '1db95cb4-0b7f-448f-9087-cddba9edea28',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 29259,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 27851 },
+    { operation: 'turn.context_assembly', durationMs: 1251 },
+    { operation: 'turn.memory_retrieval', durationMs: 1250 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 104 },
+    { operation: 'turn.final_response.readback', durationMs: 53 },
+    { operation: 'turn.context_load', durationMs: 35 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '4e79989f-0dae-40e5-8f4e-89da1b1e89b4',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23310,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21993 },
+    { operation: 'turn.context_assembly', durationMs: 1164 },
+    { operation: 'turn.memory_retrieval', durationMs: 1164 },
+    { operation: 'turn.wiki_context', durationMs: 706 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 60 },
+    { operation: 'turn.final_response.readback', durationMs: 54 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '3f98c774-e70c-4c35-b067-ef215497c5ad',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 26320,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 24845 },
+    { operation: 'turn.context_assembly', durationMs: 1306 },
+    { operation: 'turn.memory_retrieval', durationMs: 1257 },
+    { operation: 'turn.wiki_context', durationMs: 708 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 104 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '6e382e7b-d872-4824-92de-4d9d5514c7fc',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19691,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18269 },
+    { operation: 'turn.context_assembly', durationMs: 1278 },
+    { operation: 'turn.memory_retrieval', durationMs: 1277 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 108 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '6ad5bd64-8eda-4fbd-a917-14897d115bc5',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 38422,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 37030 },
+    { operation: 'turn.context_assembly', durationMs: 1246 },
+    { operation: 'turn.memory_retrieval', durationMs: 1245 },
+    { operation: 'turn.wiki_context', durationMs: 724 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 110 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 29 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'd40c82fd-eaae-409a-ad1c-d99aeedac555',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 21479,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20031 },
+    { operation: 'turn.context_assembly', durationMs: 1297 },
+    { operation: 'turn.memory_retrieval', durationMs: 1296 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 106 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '4b240db3-ef83-488c-8109-427477ac7bff',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 38695,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 37400 },
+    { operation: 'turn.context_assembly', durationMs: 1129 },
+    { operation: 'turn.memory_retrieval', durationMs: 1129 },
+    { operation: 'turn.wiki_context', durationMs: 709 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 75 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.context_load', durationMs: 33 },
+    { operation: 'turn.validation.apply_update', durationMs: 28 }
+  ]
+}
+[slow-turn] {
+  turnId: '6afca878-95ff-483b-b6f4-f0885793c019',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 17266,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 15827 },
+    { operation: 'turn.context_assembly', durationMs: 1268 },
+    { operation: 'turn.memory_retrieval', durationMs: 1267 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 99 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.validation.apply_update', durationMs: 32 },
+    { operation: 'turn.context_load', durationMs: 25 }
+  ]
+}
+[slow-turn] {
+  turnId: '12b59cde-dc1e-4d0c-bdff-48b3e9183e0b',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22652,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21321 },
+    { operation: 'turn.context_assembly', durationMs: 1161 },
+    { operation: 'turn.memory_retrieval', durationMs: 1160 },
+    { operation: 'turn.wiki_context', durationMs: 714 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 86 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '0856c15b-5054-4351-b6d6-760030ce3cc4',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 21778,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20257 },
+    { operation: 'turn.context_assembly', durationMs: 1370 },
+    { operation: 'turn.memory_retrieval', durationMs: 1369 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 124 },
+    { operation: 'turn.final_response.readback', durationMs: 50 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '20b426b8-8098-42d7-aa3c-4f8687ae65f3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23295,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21800 },
+    { operation: 'turn.context_assembly', durationMs: 1345 },
+    { operation: 'turn.memory_retrieval', durationMs: 1344 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 144 },
+    { operation: 'turn.final_response.readback', durationMs: 51 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '6ab71325-6fec-43a5-879f-0426af245bf0',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 14789,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 13429 },
+    { operation: 'turn.context_assembly', durationMs: 1201 },
+    { operation: 'turn.memory_retrieval', durationMs: 1200 },
+    { operation: 'turn.wiki_context', durationMs: 710 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 77 },
+    { operation: 'turn.final_response.readback', durationMs: 57 },
+    { operation: 'turn.context_load', durationMs: 30 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '1562fc81-dcff-4035-85be-74a4fe64a298',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 17406,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 15222 },
+    { operation: 'turn.context_assembly', durationMs: 2016 },
+    { operation: 'turn.memory_retrieval', durationMs: 2015 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 95 },
+    { operation: 'turn.final_response.readback', durationMs: 72 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '4aa11563-dcb4-40f5-911e-d324b7153cee',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 11647,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 9388 },
+    { operation: 'turn.context_assembly', durationMs: 2103 },
+    { operation: 'turn.memory_retrieval', durationMs: 2102 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 111 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.context_load', durationMs: 29 },
+    { operation: 'turn.validation.apply_update', durationMs: 27 }
+  ]
+}
+[slow-turn] {
+  turnId: '3e533f42-8ab5-4c93-b438-b945d4cc78ef',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19489,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18174 },
+    { operation: 'turn.context_assembly', durationMs: 1142 },
+    { operation: 'turn.memory_retrieval', durationMs: 1141 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 89 },
+    { operation: 'turn.final_response.readback', durationMs: 64 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 37 },
+    { operation: 'turn.context_load', durationMs: 25 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c8e6fc25-646f-499c-83a6-005515daaf7e',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 15524,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14594 },
+    { operation: 'turn.context_assembly', durationMs: 771 },
+    { operation: 'turn.memory_retrieval', durationMs: 770 },
+    { operation: 'turn.wiki_context', durationMs: 708 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 60 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.validation.apply_update', durationMs: 26 }
+  ]
+}
+
+[1;31m[404] GET /favicon.ico[0m
+[slow-turn] {
+  turnId: 'f2f41dd6-6ab4-4748-bd38-b81a5b5854d1',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 32919,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 30547 },
+    { operation: 'turn.context_assembly', durationMs: 2145 },
+    { operation: 'turn.memory_retrieval', durationMs: 2145 },
+    { operation: 'turn.wiki_context', durationMs: 714 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 95 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 74 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '61466a75-9cc2-4f22-a928-cc04a6b4997c',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18295,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16615 },
+    { operation: 'turn.context_assembly', durationMs: 1338 },
+    { operation: 'turn.memory_retrieval', durationMs: 1274 },
+    { operation: 'turn.wiki_context', durationMs: 701 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 94 },
+    { operation: 'turn.final_response.readback', durationMs: 50 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 36 },
+    { operation: 'turn.validation.apply_update', durationMs: 28 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c51dc494-d93c-49da-8804-2568d70acd25',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 16374,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14960 },
+    { operation: 'turn.context_assembly', durationMs: 1275 },
+    { operation: 'turn.memory_retrieval', durationMs: 1273 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 89 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c967f7e3-6801-42e6-8551-04ecece0fea1',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 28608,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 27175 },
+    { operation: 'turn.context_assembly', durationMs: 1278 },
+    { operation: 'turn.memory_retrieval', durationMs: 1276 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 102 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 28 },
+    { operation: 'turn.context_load', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '3a978128-5408-4f2c-b7a4-393af25fd822',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 12783,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 11579 },
+    { operation: 'turn.context_assembly', durationMs: 1064 },
+    { operation: 'turn.memory_retrieval', durationMs: 1063 },
+    { operation: 'turn.wiki_context', durationMs: 714 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 56 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '52dcea08-aea0-48c2-9452-a886535f6eae',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 31767,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 30427 },
+    { operation: 'turn.context_assembly', durationMs: 1200 },
+    { operation: 'turn.memory_retrieval', durationMs: 1199 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 86 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'bfc60915-1caf-4fa3-8eec-2fe3f8d6db83',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 21825,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20517 },
+    { operation: 'turn.context_assembly', durationMs: 1161 },
+    { operation: 'turn.memory_retrieval', durationMs: 1160 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 87 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 },
+    { operation: 'turn.context_load', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c0e1fbec-eee0-4297-ac0a-076acdf4a42e',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23931,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 22443 },
+    { operation: 'turn.context_assembly', durationMs: 1299 },
+    { operation: 'turn.memory_retrieval', durationMs: 1299 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 102 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.command.reserve', durationMs: 29 },
+    { operation: 'turn.context_load', durationMs: 26 }
+  ]
+}
+[slow-turn] {
+  turnId: '3bd56db8-9ae2-4427-823d-528c9e41b140',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 17630,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 15358 },
+    { operation: 'turn.context_assembly', durationMs: 2088 },
+    { operation: 'turn.memory_retrieval', durationMs: 2088 },
+    { operation: 'turn.wiki_context', durationMs: 710 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 44 },
+    {
+      operation: 'turn.persistence.allocate_position_version',
+      durationMs: 29
+    },
+    { operation: 'turn.context_load', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: 'efb2c697-9f62-4c1d-8d68-65a9e45a3a35',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19492,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16704 },
+    { operation: 'turn.context_assembly', durationMs: 2574 },
+    { operation: 'turn.memory_retrieval', durationMs: 2573 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 141 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 58 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    {
+      operation: 'turn.persistence.allocate_position_version',
+      durationMs: 27
+    }
+  ]
+}
+[slow-turn] {
+  turnId: '19aac88d-da52-46a4-8bf7-b995f0e8d8a9',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20717,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18329 },
+    { operation: 'turn.context_assembly', durationMs: 2197 },
+    { operation: 'turn.memory_retrieval', durationMs: 2196 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 105 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 59 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.context_load', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'd1ab579a-ea79-4cb4-b76c-164f003a67cc',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 33831,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 32380 },
+    { operation: 'turn.context_assembly', durationMs: 1296 },
+    { operation: 'turn.memory_retrieval', durationMs: 1295 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 134 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.validation.apply_update', durationMs: 29 },
+    { operation: 'turn.context_load', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: '8ec9dd40-5f0d-4d07-8534-f08c5d98e8d4',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19248,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 17862 },
+    { operation: 'turn.context_assembly', durationMs: 1214 },
+    { operation: 'turn.memory_retrieval', durationMs: 1213 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 91 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 28 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '57799e42-c243-44a5-a95b-2cee75c7bcf8',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22915,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20612 },
+    { operation: 'turn.context_assembly', durationMs: 2072 },
+    { operation: 'turn.memory_retrieval', durationMs: 2072 },
+    { operation: 'turn.wiki_context', durationMs: 702 },
+    { operation: 'turn.final_response.readback', durationMs: 88 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 73 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 46 },
+    { operation: 'turn.context_load', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '6359ac21-f551-40d5-a6b4-e9d41b9ed5c0',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22486,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21059 },
+    { operation: 'turn.context_assembly', durationMs: 1231 },
+    { operation: 'turn.memory_retrieval', durationMs: 1230 },
+    { operation: 'turn.wiki_context', durationMs: 702 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 123 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 60 },
+    { operation: 'turn.final_response.readback', durationMs: 60 },
+    { operation: 'turn.context_load', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'ee7b8e74-deed-4f83-8897-9d75ef860f3f',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23239,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21764 },
+    { operation: 'turn.context_assembly', durationMs: 1313 },
+    { operation: 'turn.memory_retrieval', durationMs: 1312 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 98 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 38 },
+    { operation: 'turn.validation.apply_update', durationMs: 26 }
+  ]
+}
+[slow-turn] {
+  turnId: 'acf4eb3a-a0d7-4513-a6b7-8c9d7e0f82d3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23262,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21839 },
+    { operation: 'turn.context_assembly', durationMs: 1247 },
+    { operation: 'turn.memory_retrieval', durationMs: 1246 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 92 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.idempotency_check', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b97360e9-eebc-46ae-beba-5f5a256715fe',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18250,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16956 },
+    { operation: 'turn.context_assembly', durationMs: 1139 },
+    { operation: 'turn.memory_retrieval', durationMs: 1138 },
+    { operation: 'turn.wiki_context', durationMs: 709 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 59 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 34 },
+    { operation: 'turn.context_load', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'd59ca03a-e18b-48b0-90a1-a857c98a17b7',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 15219,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 13791 },
+    { operation: 'turn.context_assembly', durationMs: 1295 },
+    { operation: 'turn.memory_retrieval', durationMs: 1294 },
+    { operation: 'turn.wiki_context', durationMs: 706 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 95 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 21 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: '16196ce2-0b12-4e3a-9720-e825515cba64',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 26450,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 25002 },
+    { operation: 'turn.context_assembly', durationMs: 1301 },
+    { operation: 'turn.memory_retrieval', durationMs: 1300 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 111 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 26 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'a29187f0-c185-47e2-97f8-b590503a8ff4',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 34586,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 33072 },
+    { operation: 'turn.context_assembly', durationMs: 1349 },
+    { operation: 'turn.memory_retrieval', durationMs: 1348 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 113 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 40 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 38 }
+  ]
+}
+[slow-turn] {
+  turnId: 'db517375-1fc1-4fd8-96d1-5446aef407af',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 48473,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 46071 },
+    { operation: 'turn.context_assembly', durationMs: 2206 },
+    { operation: 'turn.memory_retrieval', durationMs: 2205 },
+    { operation: 'turn.wiki_context', durationMs: 701 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 104 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 57 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.context_load', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b27ec44b-e171-4454-a4d0-2bf5b702244b',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 37545,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 36174 },
+    { operation: 'turn.context_assembly', durationMs: 1184 },
+    { operation: 'turn.memory_retrieval', durationMs: 1184 },
+    { operation: 'turn.wiki_context', durationMs: 702 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 59 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 57 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '91e7c53b-244d-4fac-bc91-a00fc26a05c5',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23443,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21874 },
+    { operation: 'turn.context_assembly', durationMs: 1383 },
+    { operation: 'turn.memory_retrieval', durationMs: 1382 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 102 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 58 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.context_load', durationMs: 25 }
+  ]
+}
+[slow-turn] {
+  turnId: '9d6b44da-f862-4bfc-9edc-3b6605158ade',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 25449,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 23824 },
+    { operation: 'turn.context_assembly', durationMs: 1338 },
+    { operation: 'turn.memory_retrieval', durationMs: 1290 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 109 },
+    { operation: 'turn.final_response.readback', durationMs: 85 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '796552c3-9792-449e-83a2-7a58a9e05ae1',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 39667,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 38209 },
+    { operation: 'turn.context_assembly', durationMs: 1318 },
+    { operation: 'turn.memory_retrieval', durationMs: 1317 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 113 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.context_load', durationMs: 31 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'f891a08e-e705-47de-b0c0-8749bed34565',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 43213,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 41840 },
+    { operation: 'turn.context_assembly', durationMs: 1165 },
+    { operation: 'turn.memory_retrieval', durationMs: 1164 },
+    { operation: 'turn.wiki_context', durationMs: 701 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 59 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 56 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'bc2b2627-3915-460a-8b51-4ff930052e4d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 54684,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 52104 },
+    { operation: 'turn.context_assembly', durationMs: 2317 },
+    { operation: 'turn.memory_retrieval', durationMs: 2316 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 98 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 65 },
+    { operation: 'turn.final_response.readback', durationMs: 54 },
+    { operation: 'turn.context_load', durationMs: 33 }
+  ]
+}
+[slow-turn] {
+  turnId: '9620a439-48c8-4854-a07a-b8bce9742365',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 40839,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 39342 },
+    { operation: 'turn.context_assembly', durationMs: 1338 },
+    { operation: 'turn.memory_retrieval', durationMs: 1337 },
+    { operation: 'turn.wiki_context', durationMs: 715 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 80 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 35 },
+    { operation: 'turn.context_load', durationMs: 26 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b0f26e77-28b3-47b5-8a80-a4cd1631afee',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 39542,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 36829 },
+    { operation: 'turn.context_assembly', durationMs: 2311 },
+    { operation: 'turn.memory_retrieval', durationMs: 2254 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 113 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 57 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.validation.apply_update', durationMs: 29 }
+  ]
+}
+[slow-turn] {
+  turnId: '98befc12-768d-49d5-a8d7-a43b6e4c351c',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 25181,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 23608 },
+    { operation: 'turn.context_assembly', durationMs: 1346 },
+    { operation: 'turn.memory_retrieval', durationMs: 1345 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 131 },
+    { operation: 'turn.final_response.readback', durationMs: 73 },
+    { operation: 'turn.validation.apply_update', durationMs: 50 },
+    { operation: 'turn.context_load', durationMs: 28 }
+  ]
+}
+[jobs] chapter memory LLM summarization failed via memory: ServerGenerationError: Server LLM request timed out after 90000ms
+    at generateServerTextWithMetrics (E:/DEV/Projects/mtherios-factions-work/src/lib/server/turn/provider.ts:270:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async summarizeChapterMemoryWithLlm (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1155:22)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async createChapterCheckpoint (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1391:18)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async runClaimedJob (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2039:20)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2072:22)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/concurrency.ts:28:24)
+    at async Promise.all (index 0) {
+  result: {
+    model: 'zai-org/glm-5.2',
+    endpoint: 'https://nano-gpt.com/api/v1/chat/completions',
+    durationMs: 90005,
+    promptChars: 82663
+  }
+}
+[jobs] chapter memory LLM summarization failed via classifier: ServerGenerationError: Server LLM request timed out after 90000ms
+    at generateServerTextWithMetrics (E:/DEV/Projects/mtherios-factions-work/src/lib/server/turn/provider.ts:270:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async summarizeChapterMemoryWithLlm (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1155:22)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async createChapterCheckpoint (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1391:18)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async runClaimedJob (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2039:20)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2072:22)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/concurrency.ts:28:24)
+    at async Promise.all (index 0) {
+  result: {
+    model: 'minimax/minimax-m3',
+    endpoint: 'https://nano-gpt.com/api/v1/chat/completions',
+    durationMs: 90002,
+    promptChars: 82663
+  }
+}
+[slow-turn] {
+  turnId: '31187621-298e-4dd1-831b-3430a0fbe6fe',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 25128,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 23755 },
+    { operation: 'turn.context_assembly', durationMs: 1183 },
+    { operation: 'turn.memory_retrieval', durationMs: 1182 },
+    { operation: 'turn.wiki_context', durationMs: 703 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 74 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 37 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 36 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c3dc6845-7f9b-4e20-8184-7f989a2948a3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 31349,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 29907 },
+    { operation: 'turn.context_assembly', durationMs: 1264 },
+    { operation: 'turn.memory_retrieval', durationMs: 1263 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 131 },
+    { operation: 'turn.final_response.readback', durationMs: 50 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 31 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '14f2f146-78b0-44d6-a62b-6e75a421a4a7',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 37096,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 35535 },
+    { operation: 'turn.context_assembly', durationMs: 1413 },
+    { operation: 'turn.memory_retrieval', durationMs: 1412 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 58 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.validation.apply_update', durationMs: 25 }
+  ]
+}
+[slow-turn] {
+  turnId: '3e99f2cd-1e82-4289-afd3-67fc27cbfd5b',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 32863,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 31317 },
+    { operation: 'turn.context_assembly', durationMs: 1363 },
+    { operation: 'turn.memory_retrieval', durationMs: 1362 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 105 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.validation.apply_update', durationMs: 32 },
+    { operation: 'turn.state_extraction.enqueue', durationMs: 25 }
+  ]
+}
+[slow-turn] {
+  turnId: 'd63bb855-9214-4d28-adbe-b5b08f1a57ca',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 45556,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 44014 },
+    { operation: 'turn.context_assembly', durationMs: 1374 },
+    { operation: 'turn.memory_retrieval', durationMs: 1373 },
+    { operation: 'turn.wiki_context', durationMs: 731 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 111 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 },
+    { operation: 'turn.context_load', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'f5706c50-5599-4e64-807f-e1f4807a44d8',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23919,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 22508 },
+    { operation: 'turn.context_assembly', durationMs: 1207 },
+    { operation: 'turn.memory_retrieval', durationMs: 1206 },
+    { operation: 'turn.wiki_context', durationMs: 703 },
+    { operation: 'turn.final_response.readback', durationMs: 63 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 54 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 53 },
+    { operation: 'turn.validation.apply_update', durationMs: 26 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b2df6cf5-f9ff-4c3d-ae10-8277c38e4628',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 31012,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 29426 },
+    { operation: 'turn.context_assembly', durationMs: 1361 },
+    { operation: 'turn.memory_retrieval', durationMs: 1359 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 97 },
+    { operation: 'turn.final_response.readback', durationMs: 83 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 51 },
+    { operation: 'turn.validation.apply_update', durationMs: 26 }
+  ]
+}
+[slow-turn] {
+  turnId: '5c3d2f89-d56a-49a9-aadd-72af56707b3a',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 35104,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 33601 },
+    { operation: 'turn.context_assembly', durationMs: 1341 },
+    { operation: 'turn.memory_retrieval', durationMs: 1340 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 96 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.validation.apply_update', durationMs: 36 },
+    { operation: 'turn.context_load', durationMs: 26 }
+  ]
+}
+[slow-turn] {
+  turnId: '6ac8319d-6e9e-4c09-802b-29ffb9777193',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 24480,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 23012 },
+    { operation: 'turn.context_assembly', durationMs: 1316 },
+    { operation: 'turn.memory_retrieval', durationMs: 1314 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 103 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '86fcc6c3-f3f1-458f-9b40-354fe93471fa',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19387,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 17916 },
+    { operation: 'turn.context_assembly', durationMs: 1308 },
+    { operation: 'turn.memory_retrieval', durationMs: 1307 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 88 },
+    { operation: 'turn.final_response.readback', durationMs: 51 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '32650986-5413-4c6a-83ab-6b63014f68a4',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18302,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16818 },
+    { operation: 'turn.context_assembly', durationMs: 1336 },
+    { operation: 'turn.memory_retrieval', durationMs: 1335 },
+    { operation: 'turn.wiki_context', durationMs: 706 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 115 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c7bad98e-a7f3-47e7-85a6-8216dc41708e',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 16498,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14801 },
+    { operation: 'turn.context_assembly', durationMs: 1439 },
+    { operation: 'turn.memory_retrieval', durationMs: 1367 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 122 },
+    { operation: 'turn.final_response.readback', durationMs: 64 },
+    { operation: 'turn.context_load', durationMs: 41 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 39 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b9db46ea-ed2f-493b-a648-df4e353a16cf',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 14358,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 12854 },
+    { operation: 'turn.context_assembly', durationMs: 1371 },
+    { operation: 'turn.memory_retrieval', durationMs: 1370 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 97 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'aa5a53b7-fdaa-4055-9937-bd9910d09b56',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 15910,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14549 },
+    { operation: 'turn.context_assembly', durationMs: 1184 },
+    { operation: 'turn.memory_retrieval', durationMs: 1184 },
+    { operation: 'turn.wiki_context', durationMs: 703 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 59 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    {
+      operation: 'turn.campaign_vault.append_evidence',
+      durationMs: 29
+    },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '10d5f4d5-f938-4013-ac14-3cbc24e063a9',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22157,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20623 },
+    { operation: 'turn.context_assembly', durationMs: 1333 },
+    { operation: 'turn.memory_retrieval', durationMs: 1331 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 110 },
+    { operation: 'turn.final_response.readback', durationMs: 65 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 59 },
+    { operation: 'turn.context_load', durationMs: 28 }
+  ]
+}
+[jobs] chapter memory LLM summarization failed via memory: ServerGenerationError: Server LLM request timed out after 90000ms
+    at generateServerTextWithMetrics (E:/DEV/Projects/mtherios-factions-work/src/lib/server/turn/provider.ts:270:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async summarizeChapterMemoryWithLlm (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1155:22)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async createChapterCheckpoint (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1391:18)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async runClaimedJob (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2039:20)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2072:22)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/concurrency.ts:28:24)
+    at async Promise.all (index 0) {
+  result: {
+    model: 'zai-org/glm-5.2',
+    endpoint: 'https://nano-gpt.com/api/v1/chat/completions',
+    durationMs: 90007,
+    promptChars: 95892
+  }
+}
+[slow-turn] {
+  turnId: '9e8ff7dc-5a1b-49a1-8576-6a38cfe21e43',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22443,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21006 },
+    { operation: 'turn.context_assembly', durationMs: 1289 },
+    { operation: 'turn.memory_retrieval', durationMs: 1288 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 91 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 }
+  ]
+}
+[jobs] chapter memory LLM summarization failed via classifier: ServerGenerationError: Server LLM request timed out after 90000ms
+    at generateServerTextWithMetrics (E:/DEV/Projects/mtherios-factions-work/src/lib/server/turn/provider.ts:270:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async summarizeChapterMemoryWithLlm (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1155:22)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async createChapterCheckpoint (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:1391:18)
+    at async Object.time (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/timing.ts:78:16)
+    at async runClaimedJob (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2039:20)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/jobs/processor.ts:2072:22)
+    at async eval (E:/DEV/Projects/mtherios-factions-work/src/lib/server/performance/concurrency.ts:28:24)
+    at async Promise.all (index 0) {
+  result: {
+    model: 'minimax/minimax-m3',
+    endpoint: 'https://nano-gpt.com/api/v1/chat/completions',
+    durationMs: 90016,
+    promptChars: 95892
+  }
+}
+[slow-turn] {
+  turnId: 'ec377eab-bfbe-4d42-8cd2-3e0784329667',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20969,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19532 },
+    { operation: 'turn.context_assembly', durationMs: 1233 },
+    { operation: 'turn.memory_retrieval', durationMs: 1232 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 93 },
+    { operation: 'turn.final_response.readback', durationMs: 65 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 40 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '791d349a-9cef-49af-88fb-36e04bb1ee87',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 21671,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20210 },
+    { operation: 'turn.context_assembly', durationMs: 1311 },
+    { operation: 'turn.memory_retrieval', durationMs: 1310 },
+    { operation: 'turn.wiki_context', durationMs: 701 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 101 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 },
+    { operation: 'turn.context_load', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b54b2bf8-905a-4f21-950a-eb756bb2260b',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 21399,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20023 },
+    { operation: 'turn.context_assembly', durationMs: 1241 },
+    { operation: 'turn.memory_retrieval', durationMs: 1240 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 94 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '78002a51-a967-46c9-9b21-f3366744fb34',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 14961,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 12469 },
+    { operation: 'turn.context_assembly', durationMs: 2347 },
+    { operation: 'turn.memory_retrieval', durationMs: 2346 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 99 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '1eaada65-3772-4798-9302-259b3d7aec03',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 24848,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 23691 },
+    { operation: 'turn.context_assembly', durationMs: 1020 },
+    { operation: 'turn.memory_retrieval', durationMs: 1019 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 94 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: '723638fb-8cb1-4718-938a-886845f61448',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 16210,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14973 },
+    { operation: 'turn.context_assembly', durationMs: 1099 },
+    { operation: 'turn.memory_retrieval', durationMs: 1098 },
+    { operation: 'turn.wiki_context', durationMs: 704 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 52 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c96429e2-c118-4f5b-b7fd-1efd8ce43875',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18319,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 17009 },
+    { operation: 'turn.context_assembly', durationMs: 1173 },
+    { operation: 'turn.memory_retrieval', durationMs: 1172 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 93 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 21 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+
+[1;31m[404] GET /favicon.ico[0m
+[slow-turn] {
+  turnId: '185e7f8a-ecf2-45f3-9100-dea77d8ce0a7',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20807,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19432 },
+    { operation: 'turn.context_assembly', durationMs: 1190 },
+    { operation: 'turn.memory_retrieval', durationMs: 1189 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 64 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 59 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.context_load', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '06bc713b-0f81-45db-b50d-fbdb6f1510b3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 15690,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14171 },
+    { operation: 'turn.context_assembly', durationMs: 1320 },
+    { operation: 'turn.memory_retrieval', durationMs: 1319 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 117 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 63 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.validation.apply_update', durationMs: 26 }
+  ]
+}
+[slow-turn] {
+  turnId: 'e62c343e-815d-47c7-974e-0a68e48eb272',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 24118,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 22789 },
+    { operation: 'turn.context_assembly', durationMs: 1164 },
+    { operation: 'turn.memory_retrieval', durationMs: 1164 },
+    { operation: 'turn.wiki_context', durationMs: 711 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 57 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c98b7092-9bf3-497e-9ebb-d5a6eab030c2',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 11473,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 10174 },
+    { operation: 'turn.context_assembly', durationMs: 1156 },
+    { operation: 'turn.memory_retrieval', durationMs: 1156 },
+    { operation: 'turn.wiki_context', durationMs: 711 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 59 },
+    { operation: 'turn.final_response.readback', durationMs: 44 },
+    { operation: 'turn.context_load', durationMs: 22 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '293680b2-5f48-4cee-a4c2-e4d8e2ab85d7',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23700,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 22319 },
+    { operation: 'turn.context_assembly', durationMs: 1229 },
+    { operation: 'turn.memory_retrieval', durationMs: 1228 },
+    { operation: 'turn.wiki_context', durationMs: 712 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 121 },
+    { operation: 'turn.final_response.readback', durationMs: 53 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '466f847a-a1b4-4b8b-97ea-62388a49c460',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 17261,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 15736 },
+    { operation: 'turn.context_assembly', durationMs: 1354 },
+    { operation: 'turn.memory_retrieval', durationMs: 1353 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 164 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 29 }
+  ]
+}
+[slow-turn] {
+  turnId: 'd8431040-b5dd-4838-91e7-87d320770900',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 17900,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16295 },
+    { operation: 'turn.context_assembly', durationMs: 1429 },
+    { operation: 'turn.memory_retrieval', durationMs: 1428 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 97 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 58 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '6e56724c-0e6f-4bfb-a412-a7424d0fff94',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 13055,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 11551 },
+    { operation: 'turn.context_assembly', durationMs: 1325 },
+    { operation: 'turn.memory_retrieval', durationMs: 1324 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 118 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'cbc44dc7-97ff-4121-8c90-e43c52ff117d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23003,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20669 },
+    { operation: 'turn.context_assembly', durationMs: 2140 },
+    { operation: 'turn.memory_retrieval', durationMs: 2139 },
+    { operation: 'turn.wiki_context', durationMs: 705 },
+    { operation: 'turn.final_response.readback', durationMs: 84 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 62 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'd127af94-f95b-4cb1-ae2a-3da39662b878',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18092,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16627 },
+    { operation: 'turn.context_assembly', durationMs: 1307 },
+    { operation: 'turn.memory_retrieval', durationMs: 1306 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 128 },
+    { operation: 'turn.final_response.readback', durationMs: 60 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'efb5b503-1757-451b-b1fd-cc1118d84835',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19264,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16722 },
+    { operation: 'turn.context_assembly', durationMs: 2380 },
+    { operation: 'turn.memory_retrieval', durationMs: 2379 },
+    { operation: 'turn.wiki_context', durationMs: 708 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 135 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.context_load', durationMs: 29 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '028efd9c-bd94-41de-8ad4-26a2fb16b8e3',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18289,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16686 },
+    { operation: 'turn.context_assembly', durationMs: 1397 },
+    { operation: 'turn.memory_retrieval', durationMs: 1396 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 115 },
+    { operation: 'turn.final_response.readback', durationMs: 69 },
+    { operation: 'turn.context_load', durationMs: 34 },
+    { operation: 'turn.command.reserve', durationMs: 26 }
+  ]
+}
+[slow-turn] {
+  turnId: 'f209b5a4-6513-44b2-a938-16defced4536',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 13405,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 12564 },
+    { operation: 'turn.context_assembly', durationMs: 700 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.memory_retrieval', durationMs: 517 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 99 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'f5e9ed53-8013-4916-920f-a3e86cbf2379',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20156,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18523 },
+    { operation: 'turn.context_assembly', durationMs: 1433 },
+    { operation: 'turn.memory_retrieval', durationMs: 1432 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 152 },
+    { operation: 'turn.final_response.readback', durationMs: 90 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 34 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '5828c9a6-2c7c-4aad-93e2-67417465204f',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 21055,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19450 },
+    { operation: 'turn.context_assembly', durationMs: 1341 },
+    { operation: 'turn.memory_retrieval', durationMs: 1340 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 110 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 56 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.validation.apply_update', durationMs: 28 }
+  ]
+}
+[slow-turn] {
+  turnId: '584f0b27-de44-4482-b15e-2519cedbabcc',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22381,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20881 },
+    { operation: 'turn.context_assembly', durationMs: 1338 },
+    { operation: 'turn.memory_retrieval', durationMs: 1337 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 173 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 36 },
+    { operation: 'turn.context_load', durationMs: 34 }
+  ]
+}
+[slow-turn] {
+  turnId: '67a1544f-15f3-4747-ae36-b211cc902fe5',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 21961,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19433 },
+    { operation: 'turn.context_assembly', durationMs: 2359 },
+    { operation: 'turn.memory_retrieval', durationMs: 2359 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 109 },
+    { operation: 'turn.final_response.readback', durationMs: 49 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 25 }
+  ]
+}
+[slow-turn] {
+  turnId: '0bb0e405-3d27-44c9-917d-6d30f8da4684',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 16703,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14283 },
+    { operation: 'turn.context_assembly', durationMs: 2252 },
+    { operation: 'turn.memory_retrieval', durationMs: 2251 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 129 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '5989c33d-32fb-482d-8659-2bc1a25cbf95',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20474,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18912 },
+    { operation: 'turn.context_assembly', durationMs: 1411 },
+    { operation: 'turn.memory_retrieval', durationMs: 1410 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 118 },
+    { operation: 'turn.final_response.readback', durationMs: 49 },
+    { operation: 'turn.context_load', durationMs: 31 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'f15d5cac-f3f2-4b94-ae55-1d28c6a88c46',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18214,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16916 },
+    { operation: 'turn.context_assembly', durationMs: 1156 },
+    { operation: 'turn.memory_retrieval', durationMs: 1156 },
+    { operation: 'turn.wiki_context', durationMs: 712 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 60 },
+    { operation: 'turn.final_response.readback', durationMs: 47 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'bf564a4b-3dee-4133-b67b-3b75f9044ac7',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 16194,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14759 },
+    { operation: 'turn.context_assembly', durationMs: 1290 },
+    { operation: 'turn.memory_retrieval', durationMs: 1289 },
+    { operation: 'turn.wiki_context', durationMs: 722 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 100 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '8855c08c-99f8-40bb-aac3-0e03dbd90959',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 14482,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 12955 },
+    { operation: 'turn.context_assembly', durationMs: 1367 },
+    { operation: 'turn.memory_retrieval', durationMs: 1366 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 110 },
+    { operation: 'turn.final_response.readback', durationMs: 50 },
+    { operation: 'turn.validation.apply_update', durationMs: 29 },
+    { operation: 'turn.context_load', durationMs: 25 }
+  ]
+}
+[slow-turn] {
+  turnId: '9ad6b1df-83d1-467c-82ae-33bf599563b6',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20562,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18385 },
+    { operation: 'turn.context_assembly', durationMs: 2024 },
+    { operation: 'turn.memory_retrieval', durationMs: 2024 },
+    { operation: 'turn.wiki_context', durationMs: 708 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 59 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '3c95cb62-b5f8-4201-a4df-7a9b0dbc3616',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 28220,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 25819 },
+    { operation: 'turn.context_assembly', durationMs: 2256 },
+    { operation: 'turn.memory_retrieval', durationMs: 2255 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 108 },
+    { operation: 'turn.final_response.readback', durationMs: 46 },
+    { operation: 'turn.context_load', durationMs: 32 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '98985544-388a-4c40-b5b2-e95d8ee7c0f0',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 14604,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 13115 },
+    { operation: 'turn.context_assembly', durationMs: 1308 },
+    { operation: 'turn.memory_retrieval', durationMs: 1281 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 106 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '0f1fefb3-2620-4bbb-b3cf-7e55254cdfde',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 33551,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 32154 },
+    { operation: 'turn.context_assembly', durationMs: 1258 },
+    { operation: 'turn.memory_retrieval', durationMs: 1256 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 98 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '43b51018-921c-478c-acf2-196db6ebdc38',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 27360,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 26108 },
+    { operation: 'turn.context_assembly', durationMs: 1121 },
+    { operation: 'turn.memory_retrieval', durationMs: 1121 },
+    { operation: 'turn.wiki_context', durationMs: 704 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 61 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '21ad2126-2247-426b-ac1b-500a4245c9ef',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22425,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20848 },
+    { operation: 'turn.context_assembly', durationMs: 1441 },
+    { operation: 'turn.memory_retrieval', durationMs: 1440 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 107 },
+    { operation: 'turn.final_response.readback', durationMs: 48 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'd4e24bd0-cff4-4339-944b-bd5c3cad54d1',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 28449,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 26018 },
+    { operation: 'turn.context_assembly', durationMs: 2284 },
+    { operation: 'turn.memory_retrieval', durationMs: 2284 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 115 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c9c67dd8-8ee0-4ea3-9b1c-8c83a658d343',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 15597,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14304 },
+    { operation: 'turn.context_assembly', durationMs: 1159 },
+    { operation: 'turn.memory_retrieval', durationMs: 1159 },
+    { operation: 'turn.wiki_context', durationMs: 702 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 59 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'eae0b125-5b55-4063-8c28-e111b937d830',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 15426,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 13974 },
+    { operation: 'turn.context_assembly', durationMs: 1320 },
+    { operation: 'turn.memory_retrieval', durationMs: 1319 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 107 },
+    { operation: 'turn.final_response.readback', durationMs: 36 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: 'c31f6837-7786-4022-8858-8e0ae3a553bc',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20297,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18793 },
+    { operation: 'turn.context_assembly', durationMs: 1365 },
+    { operation: 'turn.memory_retrieval', durationMs: 1364 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 104 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 22 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b4992711-cc7c-4649-8f2c-b959f11ccc0e',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20695,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18445 },
+    { operation: 'turn.context_assembly', durationMs: 2119 },
+    { operation: 'turn.memory_retrieval', durationMs: 2118 },
+    { operation: 'turn.wiki_context', durationMs: 715 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 61 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'ae61130a-98cb-4818-8eab-e438980974da',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 26932,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 25529 },
+    { operation: 'turn.context_assembly', durationMs: 1245 },
+    { operation: 'turn.memory_retrieval', durationMs: 1244 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 120 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 43 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '353fdc2b-9526-481f-8667-4a2dd889ec04',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20267,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 17593 },
+    { operation: 'turn.context_assembly', durationMs: 2538 },
+    { operation: 'turn.memory_retrieval', durationMs: 2538 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 108 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 29 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '68352b6b-6b71-4ce7-ba27-3301193afa21',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22050,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20493 },
+    { operation: 'turn.context_assembly', durationMs: 1424 },
+    { operation: 'turn.memory_retrieval', durationMs: 1423 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 109 },
+    { operation: 'turn.final_response.readback', durationMs: 37 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 }
+  ]
+}
+[slow-turn] {
+  turnId: '424ab46b-ff3f-4aad-933a-85a80d58236d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22657,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21233 },
+    { operation: 'turn.context_assembly', durationMs: 1283 },
+    { operation: 'turn.memory_retrieval', durationMs: 1282 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 119 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '0ce3d17f-b676-46ce-b0e4-de13ea18989a',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23337,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 22048 },
+    { operation: 'turn.context_assembly', durationMs: 1163 },
+    { operation: 'turn.memory_retrieval', durationMs: 1163 },
+    { operation: 'turn.wiki_context', durationMs: 708 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 61 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '5a1dc659-2f58-4d81-949f-0235c4e90836',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20788,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19362 },
+    { operation: 'turn.context_assembly', durationMs: 1284 },
+    { operation: 'turn.memory_retrieval', durationMs: 1283 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 114 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.validation.apply_update', durationMs: 26 },
+    { operation: 'turn.context_load', durationMs: 25 }
+  ]
+}
+[slow-turn] {
+  turnId: 'd9d74f62-3103-4b76-b992-bd45781ce97d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 26015,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 23230 },
+    { operation: 'turn.context_assembly', durationMs: 2584 },
+    { operation: 'turn.memory_retrieval', durationMs: 2584 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 119 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 71 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 28 }
+  ]
+}
+[slow-turn] {
+  turnId: 'ffba924c-6aa8-4c14-8318-96664340e46f',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 28374,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 26006 },
+    { operation: 'turn.context_assembly', durationMs: 2229 },
+    { operation: 'turn.memory_retrieval', durationMs: 2228 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 105 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 30 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '76d3c1ed-e9e2-49f1-93c9-20106ef9a4dc',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20199,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18777 },
+    { operation: 'turn.context_assembly', durationMs: 1284 },
+    { operation: 'turn.memory_retrieval', durationMs: 1283 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 108 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '20772449-15ab-4995-b90a-cedc0973772b',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 17720,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 15418 },
+    { operation: 'turn.context_assembly', durationMs: 2166 },
+    { operation: 'turn.memory_retrieval', durationMs: 2166 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 154 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '8e1e2476-0f27-473a-b70f-de2c4d5e7010',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 16632,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 15189 },
+    { operation: 'turn.context_assembly', durationMs: 1311 },
+    { operation: 'turn.memory_retrieval', durationMs: 1310 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 99 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.validation.apply_update', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '3ee23972-d251-4216-be77-69c699943033',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18086,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 16637 },
+    { operation: 'turn.context_assembly', durationMs: 1314 },
+    { operation: 'turn.memory_retrieval', durationMs: 1313 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 114 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: 'a985243f-cc77-48e6-83ed-a7eed9cf6f75',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23053,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21726 },
+    { operation: 'turn.context_assembly', durationMs: 1191 },
+    { operation: 'turn.memory_retrieval', durationMs: 1190 },
+    { operation: 'turn.wiki_context', durationMs: 712 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 60 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '27e4d072-b838-464d-bf8d-1efccdd47319',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18515,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 17070 },
+    { operation: 'turn.context_assembly', durationMs: 1311 },
+    { operation: 'turn.memory_retrieval', durationMs: 1310 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 118 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '5e955ba5-bfdf-46f3-8941-89441c5d912d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 23399,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 21968 },
+    { operation: 'turn.context_assembly', durationMs: 1280 },
+    { operation: 'turn.memory_retrieval', durationMs: 1279 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 101 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b18686e0-8ef8-445c-8002-6122b8e80031',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 26140,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 24675 },
+    { operation: 'turn.context_assembly', durationMs: 1329 },
+    { operation: 'turn.memory_retrieval', durationMs: 1328 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 106 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '5d543de4-93e9-4323-978e-44dc4f5e1712',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20478,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19055 },
+    { operation: 'turn.context_assembly', durationMs: 1288 },
+    { operation: 'turn.memory_retrieval', durationMs: 1287 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 128 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 30 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '1103fbcf-76e2-4909-a2f3-d255f7880a93',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 25560,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 24120 },
+    { operation: 'turn.context_assembly', durationMs: 1304 },
+    { operation: 'turn.memory_retrieval', durationMs: 1303 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 103 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '8b1e968a-d0e4-48b5-8848-89d1342db304',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 14878,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 13461 },
+    { operation: 'turn.context_assembly', durationMs: 1283 },
+    { operation: 'turn.memory_retrieval', durationMs: 1282 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 98 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: '28d1bfd6-04f9-43b2-ada6-d636ec9d460c',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 26079,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 24665 },
+    { operation: 'turn.context_assembly', durationMs: 1277 },
+    { operation: 'turn.memory_retrieval', durationMs: 1276 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 104 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b6d6a3d6-0443-4cd5-931e-bad4dab44c81',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 29179,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 27721 },
+    { operation: 'turn.context_assembly', durationMs: 1315 },
+    { operation: 'turn.memory_retrieval', durationMs: 1314 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 124 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '101844a6-6779-4c72-a760-8d546c873ca7',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19535,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18185 },
+    { operation: 'turn.context_assembly', durationMs: 1197 },
+    { operation: 'turn.memory_retrieval', durationMs: 1196 },
+    { operation: 'turn.wiki_context', durationMs: 714 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 65 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'a8dbd20c-0cfc-436a-b17d-a7ab2c232028',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 17069,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 15583 },
+    { operation: 'turn.context_assembly', durationMs: 1351 },
+    { operation: 'turn.memory_retrieval', durationMs: 1350 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 122 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '27368a20-b82f-41bc-b879-ea72d9089114',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20726,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19273 },
+    { operation: 'turn.context_assembly', durationMs: 1315 },
+    { operation: 'turn.memory_retrieval', durationMs: 1314 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 108 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 28 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'bd6ddc8d-288d-40c5-bfda-4ce5a03715c1',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 18814,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 17181 },
+    { operation: 'turn.context_assembly', durationMs: 1269 },
+    { operation: 'turn.memory_retrieval', durationMs: 1269 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 111 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '92f2dd1f-d9b4-4c7c-9f68-118599f0c21e',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 21085,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19443 },
+    { operation: 'turn.context_assembly', durationMs: 1400 },
+    { operation: 'turn.memory_retrieval', durationMs: 1371 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 129 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: 'a71db55b-6c0b-48f3-820b-1a04261c2234',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19682,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18236 },
+    { operation: 'turn.context_assembly', durationMs: 1310 },
+    { operation: 'turn.memory_retrieval', durationMs: 1309 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 104 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '88e7b2a2-8450-416b-bba8-aa3ffc2bae61',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 16549,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14818 },
+    { operation: 'turn.context_assembly', durationMs: 1356 },
+    { operation: 'turn.memory_retrieval', durationMs: 1326 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 105 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '548dfd30-6e14-4372-81f7-d1206ac1cd53',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20828,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19262 },
+    { operation: 'turn.context_assembly', durationMs: 1380 },
+    { operation: 'turn.memory_retrieval', durationMs: 1327 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 111 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 22 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '6914aab0-5518-47fd-a6a6-086a0c2eb32c',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 16160,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 14871 },
+    { operation: 'turn.context_assembly', durationMs: 1155 },
+    { operation: 'turn.memory_retrieval', durationMs: 1155 },
+    { operation: 'turn.wiki_context', durationMs: 714 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 60 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'dc9e8908-9088-49e3-8499-e9d9be4ad665',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19257,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 17852 },
+    { operation: 'turn.context_assembly', durationMs: 1266 },
+    { operation: 'turn.memory_retrieval', durationMs: 1265 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 108 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '10c996a1-5e51-4c2b-9a05-166a2160275f',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 25141,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 23635 },
+    { operation: 'turn.context_assembly', durationMs: 1364 },
+    { operation: 'turn.memory_retrieval', durationMs: 1363 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 106 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.validation.apply_update', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'd31ebc25-620b-420f-95c8-fc34ac104c60',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 24088,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 22625 },
+    { operation: 'turn.context_assembly', durationMs: 1328 },
+    { operation: 'turn.memory_retrieval', durationMs: 1327 },
+    { operation: 'turn.wiki_context', durationMs: 705 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 57 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.validation.apply_update', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: 'e9f77cab-10f8-4ab7-9f60-28ddff0432c9',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 14201,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 12753 },
+    { operation: 'turn.context_assembly', durationMs: 1319 },
+    { operation: 'turn.memory_retrieval', durationMs: 1317 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 106 },
+    { operation: 'turn.final_response.readback', durationMs: 37 },
+    { operation: 'turn.context_load', durationMs: 27 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'df339a11-87b1-418a-9d8b-09e26dc30479',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19874,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 17571 },
+    { operation: 'turn.context_assembly', durationMs: 2168 },
+    { operation: 'turn.memory_retrieval', durationMs: 2168 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 106 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '17acfb2e-986d-48a6-affc-55d817eeba5d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 25849,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 24422 },
+    { operation: 'turn.context_assembly', durationMs: 1291 },
+    { operation: 'turn.memory_retrieval', durationMs: 1290 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 64 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: 'fd3d4dcb-2bcb-45b3-94ff-017f7c67e602',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 27199,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 25728 },
+    { operation: 'turn.context_assembly', durationMs: 1328 },
+    { operation: 'turn.memory_retrieval', durationMs: 1327 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 104 },
+    { operation: 'turn.final_response.readback', durationMs: 43 },
+    { operation: 'turn.context_load', durationMs: 26 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '85f5301e-7a1c-4dfd-b02e-85739bb1a900',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 15090,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 13632 },
+    { operation: 'turn.context_assembly', durationMs: 1321 },
+    { operation: 'turn.memory_retrieval', durationMs: 1320 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 117 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+[slow-turn] {
+  turnId: '501c0b18-2e99-425c-aa70-1bab6e660ad8',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 19772,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 18145 },
+    { operation: 'turn.context_assembly', durationMs: 1371 },
+    { operation: 'turn.memory_retrieval', durationMs: 1321 },
+    { operation: 'turn.wiki_context', durationMs: 703 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 96 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '006c043b-0412-4bd6-96f9-d3ee85c00a11',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 13158,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 11112 },
+    { operation: 'turn.context_assembly', durationMs: 1896 },
+    { operation: 'turn.memory_retrieval', durationMs: 1895 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 109 },
+    { operation: 'turn.final_response.readback', durationMs: 45 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '4abfa54f-5821-4008-a47d-b236064e437c',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 30590,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 29072 },
+    { operation: 'turn.context_assembly', durationMs: 1383 },
+    { operation: 'turn.memory_retrieval', durationMs: 1382 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 113 },
+    { operation: 'turn.final_response.readback', durationMs: 42 },
+    { operation: 'turn.context_load', durationMs: 21 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '033877b8-ed08-4c5d-998a-e0b63d35ce78',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20536,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19209 },
+    { operation: 'turn.context_assembly', durationMs: 1193 },
+    { operation: 'turn.memory_retrieval', durationMs: 1192 },
+    { operation: 'turn.wiki_context', durationMs: 706 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 56 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 22 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+[slow-turn] {
+  turnId: '0626a471-ecc1-44b8-b1ba-7b1eb4b8b666',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 27602,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 26136 },
+    { operation: 'turn.context_assembly', durationMs: 1335 },
+    { operation: 'turn.memory_retrieval', durationMs: 1335 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 119 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 20 }
+  ]
+}
+
+[1;31m[404] GET /favicon.ico[0m
+[slow-turn] {
+  turnId: 'aefb6239-5263-4bdd-b5a7-9e292ebb6b7a',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 30596,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 28254 },
+    { operation: 'turn.context_assembly', durationMs: 2205 },
+    { operation: 'turn.memory_retrieval', durationMs: 2204 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 136 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '80c1db67-71bd-4e0a-9169-6732ebcac1fa',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 22476,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 20274 },
+    { operation: 'turn.context_assembly', durationMs: 2068 },
+    { operation: 'turn.memory_retrieval', durationMs: 2067 },
+    { operation: 'turn.wiki_context', durationMs: 708 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 64 },
+    { operation: 'turn.final_response.readback', durationMs: 37 },
+    { operation: 'turn.context_load', durationMs: 25 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '4e035832-eda0-4e6b-b91e-ca0903bafa4c',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 29959,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 28089 },
+    { operation: 'turn.context_assembly', durationMs: 1558 },
+    { operation: 'turn.memory_retrieval', durationMs: 1518 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 115 },
+    { operation: 'turn.final_response.readback', durationMs: 38 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '172cd213-830f-4ac3-aa5f-89aa12ba9e6d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20074,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 17766 },
+    { operation: 'turn.context_assembly', durationMs: 2168 },
+    { operation: 'turn.memory_retrieval', durationMs: 2167 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 98 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.validation.apply_update', durationMs: 24 },
+    { operation: 'turn.context_load', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: 'b510b024-85b6-4f08-bd2b-a0194255e45d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 25650,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 24150 },
+    { operation: 'turn.context_assembly', durationMs: 1363 },
+    { operation: 'turn.memory_retrieval', durationMs: 1362 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 100 },
+    { operation: 'turn.final_response.readback', durationMs: 40 },
+    { operation: 'turn.context_load', durationMs: 22 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '4b3fb802-fe7d-4cb9-8447-29b6716d549d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 20847,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 19217 },
+    { operation: 'turn.context_assembly', durationMs: 1342 },
+    { operation: 'turn.memory_retrieval', durationMs: 1309 },
+    { operation: 'turn.wiki_context', durationMs: 700 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 106 },
+    { operation: 'turn.final_response.readback', durationMs: 39 },
+    { operation: 'turn.context_load', durationMs: 22 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 22 }
+  ]
+}
+[slow-turn] {
+  turnId: '6d75d9d0-aa98-408d-bed6-2fb75543267d',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 25998,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 24651 },
+    { operation: 'turn.context_assembly', durationMs: 1204 },
+    { operation: 'turn.memory_retrieval', durationMs: 1204 },
+    { operation: 'turn.wiki_context', durationMs: 711 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 61 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 24 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 23 }
+  ]
+}
+[slow-turn] {
+  turnId: '947ba0bd-16b9-406e-8675-3ba5d682c459',
+  storyId: 'story_volantis_black_walls',
+  totalMs: 26197,
+  model: 'deepseek-v4-pro',
+  topSpans: [
+    { operation: 'turn.llm.narration', durationMs: 24729 },
+    { operation: 'turn.context_assembly', durationMs: 1333 },
+    { operation: 'turn.memory_retrieval', durationMs: 1331 },
+    { operation: 'turn.wiki_context', durationMs: 699 },
+    { operation: 'turn.gm_timeline_brief', durationMs: 112 },
+    { operation: 'turn.final_response.readback', durationMs: 41 },
+    { operation: 'turn.context_load', durationMs: 23 },
+    { operation: 'turn.engine_cache.prompt_segments', durationMs: 21 }
+  ]
+}
+
+[1;31m[404] GET /favicon.ico[0m

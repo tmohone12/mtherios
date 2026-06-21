@@ -2,10 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deleteStory } from '$lib/services/database';
 import {
 	createBackendStoryShell,
+	createContextCheckpoint,
 	createBackendArc,
 	createBackendChapter,
 	createBackendLorebookEntry,
 	createBackendSaga,
+	deleteBackendArc,
+	deleteBackendChapter,
 	deleteBackendLorebookEntry,
 	deleteStoryEverywhere,
 	fetchBackendStoryBootstrap,
@@ -13,6 +16,8 @@ import {
 	fetchBackendStoryProjection,
 	fetchEngineCacheStatus,
 	listBackendStories,
+	listContextCheckpoints,
+	revertToContextCheckpoint,
 	upsertBackendArc,
 	upsertBackendChapter,
 	upsertBackendLivingMemory,
@@ -57,7 +62,10 @@ const projection: CampaignProjection = {
 	mode: 'control_surface',
 	story: { id: 'story_alpha', title: 'Long Campaign', serverVersion: 7 },
 	entries: [{ id: 'entry_1', position: 1 }],
-	counts: { entries: 10000, entities: 12, events: 3, memoryNodes: 30 },
+	chapters: [],
+	arcs: [],
+	sagas: [],
+	counts: { entries: 10000, entities: 12, events: 3, memoryNodes: 30, chapters: 0, arcs: 0, sagas: 0 },
 	vault: { vaultPath: 'data/vaults/campaigns/story_alpha', fileCount: 6, lastIndexedVersion: 7 },
 	cache: { storyId: 'story_alpha', entryCount: 4, hitCount: 3, missCount: 1, tokenEstimate: 640, byKind: [], segments: [] },
 };
@@ -322,6 +330,18 @@ describe('server story control-surface client', () => {
 		const arcResult = { storyId: 'story_alpha', serverVersion: 12, arc: { id: 'arc_1' } };
 		const sagaResult = { storyId: 'story_alpha', serverVersion: 13, saga: { id: 'saga_1' } };
 		const livingResult = { storyId: 'story_alpha', serverVersion: 14, kind: 'worldEvent', recordIds: ['event_1'], counts: { worldEvents: 1 } };
+		const chapterDeleteResult = {
+			storyId: 'story_alpha',
+			serverVersion: 15,
+			chapterId: 'chapter_1',
+			deleted: true,
+			unwrappedArcIds: ['arc_1'],
+			unwrappedArcs: [{ id: 'arc_1', chapterIds: ['chapter_2'] }],
+		};
+		const arcDeleteResult = { storyId: 'story_alpha', serverVersion: 16, arcId: 'arc_1', deleted: true };
+		const checkpointResult = { storyId: 'story_alpha', serverVersion: 17, checkpoint: { id: 'checkpoint_1' } };
+		const checkpointListResult = { storyId: 'story_alpha', checkpoints: [{ id: 'checkpoint_1' }] };
+		const checkpointRevertResult = { storyId: 'story_alpha', serverVersion: 18, checkpoint: { id: 'checkpoint_1' }, restoredCounts: { storyEntries: 2 } };
 		const fetchMock = vi.spyOn(globalThis, 'fetch')
 			.mockResolvedValueOnce(jsonResponse(engineResponse('chapter.upsert', 'story_alpha', chapterResult)))
 			.mockResolvedValueOnce(jsonResponse(engineResponse('chapter.create', 'story_alpha', chapterResult)))
@@ -329,7 +349,12 @@ describe('server story control-surface client', () => {
 			.mockResolvedValueOnce(jsonResponse(engineResponse('arc.create', 'story_alpha', arcResult)))
 			.mockResolvedValueOnce(jsonResponse(engineResponse('saga.upsert', 'story_alpha', sagaResult)))
 			.mockResolvedValueOnce(jsonResponse(engineResponse('saga.create', 'story_alpha', sagaResult)))
-			.mockResolvedValueOnce(jsonResponse(engineResponse('livingMemory.upsert', 'story_alpha', livingResult)));
+			.mockResolvedValueOnce(jsonResponse(engineResponse('livingMemory.upsert', 'story_alpha', livingResult)))
+			.mockResolvedValueOnce(jsonResponse(engineResponse('chapter.delete', 'story_alpha', chapterDeleteResult)))
+			.mockResolvedValueOnce(jsonResponse(engineResponse('arc.delete', 'story_alpha', arcDeleteResult)))
+			.mockResolvedValueOnce(jsonResponse(engineResponse('context.checkpoint.create', 'story_alpha', checkpointResult)))
+			.mockResolvedValueOnce(jsonResponse(engineResponse('context.checkpoint.list', 'story_alpha', checkpointListResult)))
+			.mockResolvedValueOnce(jsonResponse(engineResponse('context.checkpoint.revert', 'story_alpha', checkpointRevertResult)));
 
 		await expect(upsertBackendChapter('story_alpha', { id: 'chapter_1' } as never)).resolves.toEqual(chapterResult);
 		await expect(createBackendChapter('story_alpha', { id: 'chapter_1' } as never)).resolves.toEqual(chapterResult);
@@ -338,6 +363,11 @@ describe('server story control-surface client', () => {
 		await expect(upsertBackendSaga('story_alpha', { id: 'saga_1' } as never)).resolves.toEqual(sagaResult);
 		await expect(createBackendSaga('story_alpha', { id: 'saga_1' } as never)).resolves.toEqual(sagaResult);
 		await expect(upsertBackendLivingMemory('story_alpha', 'worldEvent', [{ id: 'event_1' }])).resolves.toEqual(livingResult);
+		await expect(deleteBackendChapter('story_alpha', 'chapter_1')).resolves.toEqual(chapterDeleteResult);
+		await expect(deleteBackendArc('story_alpha', 'arc_1')).resolves.toEqual(arcDeleteResult);
+		await expect(createContextCheckpoint('story_alpha', { label: 'Before poison' })).resolves.toEqual(checkpointResult);
+		await expect(listContextCheckpoints('story_alpha', 5)).resolves.toEqual(checkpointListResult);
+		await expect(revertToContextCheckpoint('story_alpha', 'checkpoint_1', 'bad turn')).resolves.toEqual(checkpointRevertResult);
 
 		const commands = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).command);
 		expect(commands).toEqual([
@@ -348,6 +378,11 @@ describe('server story control-surface client', () => {
 			'saga.upsert',
 			'saga.create',
 			'livingMemory.upsert',
+			'chapter.delete',
+			'arc.delete',
+			'context.checkpoint.create',
+			'context.checkpoint.list',
+			'context.checkpoint.revert',
 		]);
 	});
 });

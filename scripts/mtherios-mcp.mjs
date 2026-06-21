@@ -186,6 +186,22 @@ export const tools = [
 		},
 	},
 	{
+		name: 'mtherios_draft_character_update',
+		description: 'Draft a reviewable NPC/character state update from recent story context.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId', 'recordId'],
+			properties: {
+				storyId: { type: 'string' },
+				recordId: { type: 'string' },
+				instructions: { type: 'string', default: 'Update this NPC from recent story context.' },
+				recentLimit: { type: 'integer', minimum: 1, maximum: 80, default: 30 },
+				clientCommandId: { type: 'string' },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
 		name: 'mtherios_orchestrator_run',
 		description: 'Run the terminal-owned AI orchestrator planner. It coordinates RPG agent roles and can execute existing backend services as engine tool calls.',
 		inputSchema: {
@@ -337,6 +353,54 @@ export const tools = [
 		inputSchema: {
 			type: 'object',
 			properties: {},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_update_llm_settings',
+		description: 'Update terminal-side LLM service settings through the same settings API used by the browser.',
+		inputSchema: {
+			type: 'object',
+			required: ['settings'],
+			properties: {
+				settings: {
+					type: 'array',
+					items: {
+						type: 'object',
+						required: ['serviceId'],
+						properties: {
+							serviceId: { type: 'string' },
+							providerType: { type: 'string' },
+							baseUrl: { type: ['string', 'null'] },
+							model: { type: ['string', 'null'] },
+							temperature: { type: 'number' },
+							maxTokens: { type: 'integer' },
+							topP: { type: ['number', 'null'] },
+							frequencyPenalty: { type: ['number', 'null'] },
+							presencePenalty: { type: ['number', 'null'] },
+							reasoningEffort: { type: ['string', 'null'] },
+							contextBudget: { type: ['integer', 'null'] },
+							enabled: { type: 'boolean' },
+							systemPromptOverride: { type: ['string', 'null'] },
+							apiKeyRef: { type: ['string', 'null'] },
+							metadata: { type: 'object' },
+						},
+						additionalProperties: false,
+					},
+				},
+				secrets: {
+					type: 'array',
+					items: {
+						type: 'object',
+						required: ['ref', 'value'],
+						properties: {
+							ref: { type: 'string' },
+							value: { type: 'string' },
+						},
+						additionalProperties: false,
+					},
+				},
+			},
 			additionalProperties: false,
 		},
 	},
@@ -540,6 +604,17 @@ export async function callTool(name, args = {}, options = {}) {
 			timeoutMs: 180_000,
 		});
 	}
+	if (name === 'mtherios_draft_character_update') {
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'world.character.draftUpdate', {
+				recordId: requiredString(args.recordId, 'recordId'),
+				instructions: optionalString(args.instructions) || 'Update this NPC from recent story context.',
+				recentLimit: optionalInteger(args.recentLimit, 30),
+			})),
+			timeoutMs: 180_000,
+		});
+	}
 	if (name === 'mtherios_orchestrator_run') {
 		return requestJson('/api/engine/command', {
 			method: 'POST',
@@ -651,6 +726,16 @@ export async function callTool(name, args = {}, options = {}) {
 		});
 	}
 	if (name === 'mtherios_llm_settings') return requestJson('/api/settings/llm', { timeoutMs: 15_000 });
+	if (name === 'mtherios_update_llm_settings') {
+		return requestJson('/api/settings/llm', {
+			method: 'PATCH',
+			body: JSON.stringify({
+				settings: Array.isArray(args.settings) ? args.settings : [],
+				secrets: Array.isArray(args.secrets) ? args.secrets : undefined,
+			}),
+			timeoutMs: 30_000,
+		});
+	}
 	if (name === 'mtherios_api_call_logs') {
 		return requestJson(queryPath('/api/api-call-logs', {
 			storyId: optionalString(args.storyId),

@@ -1,5 +1,9 @@
 import { getServerMemoryConfig } from '$lib/server/env';
 
+const MEMORY_EMBEDDING_TEXT_CHAR_LIMIT = 6000;
+const MEMORY_EMBEDDING_SUMMARY_CHAR_LIMIT = 2200;
+const MEMORY_EMBEDDING_CONTENT_CHAR_LIMIT = 3400;
+
 export interface MemoryEmbeddingConfig {
 	provider: string;
 	model: string;
@@ -36,12 +40,18 @@ export function memoryNodeEmbeddingText(node: {
 	const keywords = Array.isArray(node.keywords)
 		? node.keywords.filter((item): item is string => typeof item === 'string').join(', ')
 		: '';
-	return [
+	return clipEmbeddingText([
 		node.title,
-		node.summary,
+		node.summary ? clipEmbeddingText(node.summary, MEMORY_EMBEDDING_SUMMARY_CHAR_LIMIT) : null,
 		keywords ? `Keywords: ${keywords}` : null,
-		node.content,
-	].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('\n\n');
+		clipEmbeddingText(node.content, MEMORY_EMBEDDING_CONTENT_CHAR_LIMIT),
+	].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('\n\n'), MEMORY_EMBEDDING_TEXT_CHAR_LIMIT);
+}
+
+function clipEmbeddingText(value: string, max = MEMORY_EMBEDDING_TEXT_CHAR_LIMIT): string {
+	const text = value.replace(/\s+/g, ' ').trim();
+	if (text.length <= max) return text;
+	return `${text.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
 }
 
 export async function embedMemoryTexts(

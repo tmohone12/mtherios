@@ -73,4 +73,62 @@ describe('buildStrategicWorldBrainUserPrompt', () => {
 		expect(prompt).toContain('WAR DOCTRINE');
 		expect(prompt).toContain('warPressureCard');
 	});
+
+	it('keeps unresolved faction member names in strategic context without making them canon', () => {
+		const prompt = buildStrategicWorldBrainUserPrompt({
+			story: {
+				id: 'story-1',
+				title: 'Border Ledger',
+				description: 'A faction context test story.',
+			},
+			trigger: 'manual_debug_run',
+			currentArc: null,
+			recentArcs: [],
+			relevantOlderArcs: [],
+			currentArcChapters: [],
+			recentChapters: [],
+			recentEntries: [],
+			factions: [{
+				id: 'faction-ridge-watch',
+				name: 'Ridge Watch',
+				type: 'faction',
+				description: 'A faction watching the high passes.',
+				hiddenInfo: null,
+				aliases: [],
+				state: {
+					type: 'faction',
+					playerStanding: 0,
+					status: 'unknown',
+					knownMembers: ['char-established-ally'],
+					unresolvedKnownMembers: ['Unnamed Scout'],
+				},
+			}],
+			characters: [{
+				id: 'char-established-ally',
+				name: 'Established Ally',
+				type: 'character',
+				description: 'A known canonical ally.',
+				hiddenInfo: null,
+				aliases: [],
+				state: { type: 'character' },
+			}],
+			activeSchemes: [],
+			recentlyResolvedSchemes: [],
+			storyThreads: [],
+			worldEvents: [],
+			rumors: [],
+			agreements: [],
+			factionActions: [],
+			playerLedger: null,
+			playerReputation: null,
+			previousStrategicFrame: null,
+			mode: 'adventure',
+			pov: 'second',
+			tense: 'present',
+			timeTracker: null,
+		} as any);
+
+		expect(prompt).toContain('Members: Established Ally');
+		expect(prompt).toContain('Unresolved member references: Unnamed Scout (review context; not character canon)');
+	});
 });

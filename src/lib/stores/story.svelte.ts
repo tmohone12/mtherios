@@ -9,12 +9,12 @@ import {
 	updateStory,
 	putLorebookEntry, putCharacter, putLocation, putItem,
 	getEntryRelationships, getConversationMemory, getWorldEvents,
-	getChapters, getStoryBeats, getArcs,
+	getChapters, getStoryBeats, getArcs, getSagas,
 	getEmbeddedImages, getEmbeddedImagesForEntryIds, createEmbeddedImage, deleteEmbeddedImage,
 	createAgreement, updateAgreement, getAgreements, putAgreement,
 	getFactionActions, getRumors, putConversationMemory, bulkPutFactionActions, bulkPutRumors, bulkPutSchemes,
 	getSchemes, getStoryThreads,
-	putChapter, putArc, putSaga, putWorldEvent, putStoryThread,
+	putChapter, putArc, putSaga, putWorldEvent, putStoryThread, deleteChapter, deleteArc, deleteSaga,
 	getSyncOpsForStory, updateSyncOp, deleteSyncOp,
 } from '$lib/services/database';
 import {
@@ -33,6 +33,7 @@ import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelation
 import { injectSchemes } from '$lib/services/ai/scheme/SchemeService';
 import type { WorldSimulationResult, PlotMomentum } from '$lib/services/ai/sdk/schemas/worldsim';
 import type { SeasonEffect } from '$lib/services/ai/generation/WorldSimulationService';
+import { projectionReconciliationPlan } from './backendProjectionSync';
 
 const INITIAL_TRANSCRIPT_LOAD_LIMIT = 80;
 const OLDER_TRANSCRIPT_PAGE_SIZE = 80;
@@ -119,7 +120,7 @@ import { processBackendTurn, pullBackendChanges, pushPendingBackendOps, queueBac
 import { openEngineEventStream, type EngineStreamEvent, type EngineStreamSubscription } from '$lib/services/engineStream';
 import { cacheBackendStoryFromBootstrap, fetchBackendStoryBootstrap, fetchBackendStoryEntriesPage, fetchBackendStoryProjection } from '$lib/services/serverStories';
 import { settings } from '$lib/stores/settings.svelte';
-import type { BootstrapResponse, SyncChange, TurnPerformanceSummary, TurnRequest, TurnResponse } from '$lib/contracts/memory';
+import type { BootstrapResponse, SyncChange, TurnContextReceipt, TurnPerformanceSummary, TurnRequest, TurnResponse } from '$lib/contracts/memory';
 import type { CampaignProjection } from '$lib/contracts/engine';
 import {
 	DEFAULT_CONTROL_SURFACE_ENTRY_WINDOW,
@@ -470,6 +471,7 @@ class StoryStore {
 	/** Last known total context tokens sent to API */
 	lastContextTotal = $state<number>(0);
 	lastTurnPerformance = $state<TurnPerformanceSummary | null>(null);
+	lastContextReceipt = $state<TurnContextReceipt | null>(null);
 	/** Entry index floor for conversation history — set when a chapter is created to prevent context rot.
 	 *  buildConversationMessages() won't include entries before this index. */
 	chatHistoryFloor = $state<number>(0);
@@ -591,6 +593,7 @@ class StoryStore {
 		this.lastPromptSectionUsage = null;
 		this.lastContextTotal = 0;
 		this.lastTurnPerformance = null;
+		this.lastContextReceipt = null;
 		this.chatHistoryFloor = 0;
 	}
 
@@ -745,6 +748,31 @@ class StoryStore {
 		this.promptEntries = mergePromptEntryWindow(this.promptEntries, entries);
 		this.entryCount = Math.max(projection.counts.entries, this.entries.length);
 		this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+		const chapters = projection.chapters
+			.map((row) => this.serverChapterToLocal(row))
+			.filter((chapter): chapter is Chapter => Boolean(chapter));
+		const arcs = projection.arcs
+			.map((row) => this.serverArcToLocal(row))
+			.filter((arc): arc is Arc => Boolean(arc));
+		const sagas = projection.sagas
+			.map((row) => this.serverSagaToLocal(row))
+			.filter((saga): saga is Saga => Boolean(saga));
+		const [localChapters, localArcs, localSagas] = await Promise.all([
+			getChapters(this.currentStory.id),
+			getArcs(this.currentStory.id),
+			getSagas(this.currentStory.id),
+		]);
+		const chapterPlan = projectionReconciliationPlan(localChapters, chapters, projection.counts.chapters);
+		const arcPlan = projectionReconciliationPlan(localArcs, arcs, projection.counts.arcs);
+		const sagaPlan = projectionReconciliationPlan(localSagas, sagas, projection.counts.sagas);
+		await Promise.all([
+			...chapterPlan.deleteIds.map((id) => deleteChapter(id)),
+			...arcPlan.deleteIds.map((id) => deleteArc(id)),
+			...sagaPlan.deleteIds.map((id) => deleteSaga(id)),
+			...chapterPlan.upserts.map((chapter) => putChapter(chapter)),
+			...arcPlan.upserts.map((arc) => putArc(arc)),
+			...sagaPlan.upserts.map((saga) => putSaga(saga)),
+		]);
 		const serverVersion = asNumber(projection.story.serverVersion, this.currentStory.serverVersion ?? 1);
 		this.currentStory = {
 			...this.currentStory,
@@ -787,6 +815,10 @@ class StoryStore {
 				onTurnPerformance: (performance) => {
 					if (!this.isCurrentLoad(localStoryId, generation)) return;
 					this.lastTurnPerformance = performance;
+				},
+				onTurnContextReceipt: (receipt) => {
+					if (!this.isCurrentLoad(localStoryId, generation)) return;
+					this.lastContextReceipt = receipt;
 				},
 				onRefreshRequested: () => this.queueEngineProjectionRefresh(localStoryId, generation),
 				onError: (error) => this.recordEngineStreamError(error, localStoryId, generation),
@@ -1898,6 +1930,7 @@ class StoryStore {
 		await this.mirrorBackendEntries(response.entries);
 		await this.applyBackendSyncChanges(response.syncChanges);
 		this.lastTurnPerformance = response.performance;
+		this.lastContextReceipt = response.contextReceipt;
 		this.currentStory = {
 			...this.currentStory,
 			serverVersion: response.serverVersion,
@@ -1978,6 +2011,13 @@ class StoryStore {
 			: [...this.lorebookEntries, entry];
 	}
 
+	private upsertProjectedCharacter(previousId: string, character: Character): void {
+		const replaced = this.characters.some((existing) => existing.id === previousId || existing.id === character.id);
+		this.characters = replaced
+			? this.characters.map((existing) => (existing.id === previousId || existing.id === character.id) ? character : existing)
+			: [...this.characters, character];
+	}
+
 	async addCharacter(name: string, description?: string, relationship?: string): Promise<Character> {
 		if (!this.currentStory) throw new Error('No story loaded');
 		const char: Character = {
@@ -1996,8 +2036,8 @@ class StoryStore {
 		const result = await saveCanonicalCharacter(char, 'create');
 		this.applyCanonicalVersion(result.serverVersion);
 		this.upsertProjectedLoreEntry(result.entry);
-		this.characters = [...this.characters, char];
-		return char;
+		this.upsertProjectedCharacter(char.id, result.character);
+		return result.character;
 	}
 
 	async createCharacter(input: {
@@ -2048,14 +2088,14 @@ class StoryStore {
 		const result = await saveCanonicalCharacter(char, 'create');
 		this.applyCanonicalVersion(result.serverVersion);
 		this.upsertProjectedLoreEntry(result.entry);
-		this.characters = [...this.characters, char];
+		this.upsertProjectedCharacter(char.id, result.character);
 		const aliases = [...new Set((input.aliases ?? []).map((alias) => alias.trim()).filter(Boolean))];
 		if (aliases.length > 0) {
-			const patched = await patchCanonicalLorebookEntry(char.id, { aliases, updatedAt: Date.now() });
+			const patched = await patchCanonicalLorebookEntry(result.character.id, { aliases, updatedAt: Date.now() });
 			this.applyCanonicalVersion(patched.serverVersion);
 			if (patched.entry) this.upsertProjectedLoreEntry(patched.entry);
 		}
-		return char;
+		return result.character;
 	}
 
 	async updateCharacterFromClassification(name: string, updates: { description?: string | null; relationship?: string | null; status?: string; traits?: string[] }) {
@@ -2087,7 +2127,7 @@ class StoryStore {
 		const result = await saveCanonicalCharacter(updated);
 		this.applyCanonicalVersion(result.serverVersion);
 		this.upsertProjectedLoreEntry(result.entry);
-		this.characters = this.characters.map(c => c.id === char.id ? updated : c);
+		this.upsertProjectedCharacter(char.id, result.character);
 	}
 
 	async updateCharacterDetails(id: string, updates: Partial<Pick<Character, 'name' | 'description' | 'traits' | 'status'>>): Promise<void> {
@@ -2114,7 +2154,7 @@ class StoryStore {
 		const result = await saveCanonicalCharacter(updated);
 		this.applyCanonicalVersion(result.serverVersion);
 		this.upsertProjectedLoreEntry(result.entry);
-		this.characters = this.characters.map(c => c.id === char.id ? updated : c);
+		this.upsertProjectedCharacter(char.id, result.character);
 
 		if (clean.name && char.relationship === 'self') {
 			const oldName = char.name.toLowerCase();
@@ -2156,7 +2196,7 @@ class StoryStore {
 				const result = await saveCanonicalCharacter(updated);
 				this.applyCanonicalVersion(result.serverVersion);
 				this.upsertProjectedLoreEntry(result.entry);
-				this.characters = this.characters.map(c => c.id === char.id ? updated : c);
+				this.upsertProjectedCharacter(char.id, result.character);
 			}
 			return;
 		}
@@ -2178,7 +2218,7 @@ class StoryStore {
 			const result = await saveCanonicalCharacter(updated);
 			this.applyCanonicalVersion(result.serverVersion);
 			this.upsertProjectedLoreEntry(result.entry);
-			this.characters = this.characters.map(c => c.id === existing.id ? updated : c);
+			this.upsertProjectedCharacter(existing.id, result.character);
 		}
 	}
 
@@ -2233,9 +2273,7 @@ class StoryStore {
 			const result = await saveCanonicalCharacter(updated);
 			this.applyCanonicalVersion(result.serverVersion);
 			this.upsertProjectedLoreEntry(result.entry);
-			this.characters = this.characters.map(c =>
-				c.id === char.id ? updated : c
-			);
+			this.upsertProjectedCharacter(char.id, result.character);
 			await this.syncLorebookPresence(char.name, true, locationName);
 		}
 	}
@@ -2254,9 +2292,7 @@ class StoryStore {
 			const result = await saveCanonicalCharacter(updated);
 			this.applyCanonicalVersion(result.serverVersion);
 			this.upsertProjectedLoreEntry(result.entry);
-			this.characters = this.characters.map(c =>
-				c.id === char.id ? updated : c
-			);
+			this.upsertProjectedCharacter(char.id, result.character);
 			await this.syncLorebookPresence(char.name, false, null);
 		}
 	}
@@ -2270,9 +2306,7 @@ class StoryStore {
 		const result = await saveCanonicalCharacter(updated);
 		this.applyCanonicalVersion(result.serverVersion);
 		this.upsertProjectedLoreEntry(result.entry);
-		this.characters = this.characters.map(c =>
-			c.id === characterId ? updated : c
-		);
+		this.upsertProjectedCharacter(characterId, result.character);
 		await this.syncLorebookPresence(char.name, false, null);
 	}
 
@@ -2542,7 +2576,7 @@ class StoryStore {
 
 			parts.push(`### Header Rules\n\nUPDATE H1 the moment {{user}} moves to a new room, building, wilderness feature, vehicle, or district. Be specific enough that the player knows where they can act.\nUPDATE H2 every turn. Even a single beat moves time. Use clear diegetic time: "early morning, Day 12", "midnight, three hours later", or the setting's own calendar if the story header defines one.\nUPDATE H3 with immediate atmosphere only: weather, light, noise, crowd pressure, danger, or other scene conditions.\nThe H1/H2/H3 format itself is shown in the Role section — follow it exactly.`);
 
-			parts.push(`### World\n\nUse the story's header, world description, lorebook, character state, faction dossiers, and recent memory as canon. If those sources conflict, prefer the most recent explicit in-story fact, then the user's header instructions, then older lore.\n\nDefault preset: A Song of Ice and Fire-style Known World political fantasy. Westeros supplies feudal houses, bannermen, wards, hostages, bastards, bloodlines, marriages, dowries, inheritance, guest right, oaths, ravens, maesters, septons, tourneys, trials, spies, sellswords, smallfolk, famine, debt, and reputation. Essos supplies free cities, merchant princes, magisters, triarchs, courtesans, sellsail fleets, banks, guilds, slave economies, red priests, black stone, old Valyrian ruins, and city-state rivalries. Braavos, Volantis, Pentos, Myr, Tyrosh, Lys, Norvos, Qohor, Lorath, Slaver's Bay, the Dothraki Sea, the Summer Isles, and other far places should shape customs and pressure when the lorebook or scene points there.\n\nDo not force Westeros as the center of every story beat. Do not hard-code a specific canon city, route, ruler, or timeline unless the story header or lorebook establishes it. Use the wider world's social rules, distances, cultures, religions, trade, debts, and rumors as pressure.\n\nWhen the player changes the world, keep the consequences alive. Factions spend resources, NPCs remember, rumors travel, promises bind, injuries linger, and time makes unattended problems worse.\n\n**World Scale — The Known World is VAST.** Cities like Volantis, King's Landing, and Braavos number their populations in the millions or high hundreds of thousands. Even secondary cities hold tens to hundreds of thousands. A town is thousands; a village is hundreds. Never shrink a city to a few streets.\n\nPowerful Free Cities and great houses field fleets numbering in the hundreds of ships. The Ironborn reave in swarms. The Braavosi sealord commands a navy that could blockade a continent. A "fleet" is not ten galleys — it is fifty, a hundred, or more.\n\nMajor wars consist of multiple hosts operating across regions simultaneously. A great house can raise twenty thousand men or more. The Reach, the Westerlands, and the Riverlands can field tens of thousands each. Battles are fought by combined armies, not single companies. A host of five thousand is modest; twenty thousand is formidable; combined royal armies can reach fifty thousand or more.\n\nThe world does not revolve around {{user}}. NPCs have their own full lives, armies, courts, conspiracies, trade deals, marriages, and wars that operate off-screen. Factions scheme independently. Rulers die while {{user}} is elsewhere. Geography is an obstacle, not a backdrop.`);
+			parts.push(`### World\n\nUse the story's header, world description, lorebook, character state, faction dossiers, and recent memory as canon. If those sources conflict, prefer the most recent explicit in-story fact, then the user's header instructions, then older lore.\n\nDefault preset: A Song of Ice and Fire-style Known World political fantasy. Westeros supplies feudal houses, bannermen, wards, hostages, bastards, bloodlines, marriages, dowries, inheritance, guest right, oaths, ravens, maesters, septons, tourneys, trials, spies, sellswords, smallfolk, famine, debt, and reputation. Essos supplies free cities, merchant princes, magisters, triarchs, courtesans, sellsail fleets, banks, guilds, slave economies, red priests, black stone, old Valyrian ruins, and city-state rivalries. Braavos, Volantis, Pentos, Myr, Tyrosh, Lys, Norvos, Qohor, Lorath, Slaver's Bay, the Dothraki Sea, the Summer Isles, and other far places should shape customs and pressure when the lorebook or scene points there.\n\nDo not force Westeros as the center of every story beat. Do not hard-code a specific canon city, route, ruler, or timeline unless the story header or lorebook establishes it. Use the wider world's social rules, distances, cultures, religions, trade, debts, and rumors as pressure.\n\nWhen the player changes the world, keep the consequences alive. Factions spend resources, NPCs remember, rumors travel, promises bind, injuries linger, and time makes unattended problems worse.\n\n**World Scale — The Known World is VAST.** Cities like Volantis, King's Landing, and Braavos number their populations in the millions or high hundreds of thousands. Even secondary cities hold tens to hundreds of thousands. A town is thousands; a village is hundreds. Never shrink a city to a few streets. Grand Yi Ti cities can dwarf Westerosi and Free City expectations.\n\nPowerful Free Cities and great houses field fleets numbering in the hundreds of ships. The Ironborn reave in swarms. The Braavosi sealord commands a navy that could blockade a continent. A massive fleet is 200+ ships; a "fleet" is not ten galleys.\n\nMajor wars consist of multiple hosts operating across regions simultaneously. A great house can raise twenty thousand men or more. The Reach, the Westerlands, and the Riverlands can field tens of thousands each. Battles are fought by combined armies, not single companies. A host of five thousand is modest; twenty thousand is formidable; combined royal armies can reach fifty thousand or more.\n\nThe world does not revolve around {{user}}. NPCs have their own full lives, armies, courts, conspiracies, trade deals, marriages, and wars that operate off-screen. Factions scheme independently. Rulers die while {{user}} is elsewhere. Geography is an obstacle, not a backdrop.`);
 
 			parts.push(`### Dragons And Public Reaction\n\nDragons are not treated like ordinary beasts. People react with awe, terror, religious dread, ambition, greed, disbelief, or political calculation depending on what they have seen, heard, and survived. Smallfolk may flee, pray, riot, hide children, spread wild rumors, or worship. Nobles and factions measure dragons as legitimacy, conquest, succession, hostage value, apocalyptic threat, or a weapon that changes every alliance.\n\nReactions are not uniform. Veterans, maesters, dragonkeepers, priests, rulers, soldiers, merchants, and peasants respond differently. Distance matters: a rumor of a dragon creates denial and gossip; a shadow overhead creates panic; burned fields create famine, hatred, refugees, and faction moves. If dragons appear, make the social, military, religious, and economic consequences visible.`);
 
@@ -2614,8 +2648,8 @@ class StoryStore {
 				'- **update_world_state** — call ONCE at the end of each turn. Cover:',
 				'  - **Location** (paramount): if the player moved this turn, emit a location with `current: true`. Only one location may be current. The previous current location is unset automatically.',
 				'  - **Time** (paramount, NEVER skip when time passed): emit a `time_delta` whenever any time passes in the scene. Examples: "a few seconds" (a quick exchange), "5 minutes" (a short walk), "30 minutes" (a brief conversation), "3 hours" (a meal + travel), "1 day" (overnight rest), "a week" (training/travel montage). Numbers + units parse most reliably. **If you don\'t emit `time_delta`, the world clock freezes — factions stop acting, rumors stop spreading, the world becomes static.** The only time you may omit it is for a reaction beat that takes no in-world time (a single line of dialogue mid-action).',
-				'  - **Characters**: status (`active` for present, `inactive` for alive but off-screen, `departed` for "left this turn", `deceased` for died this turn) and `present: true/false`. New traits, relationships, descriptions when revealed.',
-				'  - **Lorebook entries**: create or deepen rich wiki entries for significant NPCs, factions, places, items, concepts, and events. Characters/locations/items alone are runtime state; use `lorebook_entries` for durable wiki memory.',
+				'  - **Characters**: update only established canonical characters with status (`active` for present, `inactive` for alive but off-screen, `departed` for "left this turn", `deceased` for died this turn), `present: true/false`, and revealed traits, relationships, or descriptions. Do not create new character canon from a narration/tool extraction pass.',
+				'  - **Lorebook entries**: create or deepen rich wiki entries for factions, places, items, concepts, and events. Character lorebook entries are review-only unless the character already exists; leave new names in prose/conversations/relationships until a human creates or approves the character.',
 				'  - **Items**: picked up, dropped, equipped, quantity changes.',
 				'  - **Conversations**: what NPCs revealed/learned, emotional shifts.',
 				'  - **Relationships**: changes between entities.',
@@ -2637,10 +2671,12 @@ class StoryStore {
 			'- **Name characters and locations explicitly** when they appear, change, or leave. Avoid vague pronouns at state-change moments.',
 			'- **State time passage clearly** in prose ("an hour later", "by morning", "five minutes pass", "a moment passes"). Frozen clock = dead world.',
 			'- **Show outcomes plainly** — items picked up, NPCs departing, oaths sworn or broken, injuries inflicted, meters shifting.',
-			'- **Make significant new lore obvious**. The follow-up state tracker creates or deepens lorebook/wiki entries from explicit names, descriptions, secrets, relationships, and consequences.',
+			'- **Make significant new non-character lore obvious**. The follow-up state tracker creates or deepens lorebook/wiki entries from explicit names, descriptions, secrets, relationships, and consequences. New character names stay in the narrative/context until a human creates or approves them as canon.',
 			'- Anything you don\'t make obvious in prose will be missed and forgotten by the world.',
 			'',
 			'### Dice Rolls',
+			'',
+			'Use D&D-style d20 checks only when failure would be interesting: stealth under pressure, combat risk, persuasion with real stakes, dangerous travel, ritual magic, or other uncertain actions where both success and failure change canon.',
 			'',
 			'When an outcome is genuinely uncertain, end your response with a roll marker:',
 			'',
@@ -2838,7 +2874,14 @@ class StoryStore {
 				const memberNames = state.knownMembers
 					.map(id => this.lorebookEntries.find(e => e.id === id)?.name ?? id)
 					.filter((n): n is string => !!n);
-				if (memberNames.length > 0) lines.push(`Known members: ${memberNames.slice(0, 6).join(', ')}.`);
+				const unresolvedMemberNames = (state.unresolvedKnownMembers ?? []).slice(0, 6);
+				const memberText = [
+					...memberNames.slice(0, 6),
+					...unresolvedMemberNames.map(name => `${name} (unresolved)`),
+				];
+				if (memberText.length > 0) lines.push(`Known members: ${memberText.slice(0, 8).join(', ')}.`);
+			} else if (state.unresolvedKnownMembers && state.unresolvedKnownMembers.length > 0) {
+				lines.push(`Known members: ${state.unresolvedKnownMembers.slice(0, 8).map(name => `${name} (unresolved)`).join(', ')}.`);
 			}
 
 			// Hidden GM lore — narrator-only, never quoted in prose
@@ -3025,15 +3068,7 @@ class StoryStore {
 
 		const sorted = [...chapters].sort((a, b) => a.number - b.number);
 		const coveredIds = new Set(snap.arcs.flatMap(a => a.chapterIds));
-		// Always include the last 2 chapters even if covered by an arc — recency matters
-		// more than the small token cost, and arc summaries lose the per-chapter emotional tone.
-		const recent = sorted.slice(-2);
-		const recentIds = new Set(recent.map(c => c.id));
-		const uncovered = sorted.filter(c => c.pinned || !coveredIds.has(c.id));
-		const merged = [
-			...recent,
-			...uncovered.filter(c => !recentIds.has(c.id)),
-		].sort((a, b) => a.number - b.number);
+		const merged = sorted.filter(c => c.pinned || !coveredIds.has(c.id));
 		if (merged.length === 0) return '';
 
 		const out: string[] = ['## Chapters'];
@@ -4080,6 +4115,7 @@ class StoryStore {
 		this.lastPromptSectionUsage = null;
 		this.lastContextTotal = 0;
 		this.lastTurnPerformance = null;
+		this.lastContextReceipt = null;
 		this.chatHistoryFloor = 0;
 	}
 }

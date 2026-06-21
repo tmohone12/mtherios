@@ -1,4 +1,5 @@
 import { indexedDbImportResponseSchema } from '$lib/contracts/memory';
+import { worldDatabaseImportResponseSchema } from '$lib/contracts/worldDatabase';
 import { updateStory } from '$lib/services/database';
 
 interface EngineCommandResponse {
@@ -32,6 +33,11 @@ function storyIdFromImportBundle(bundle: unknown): string {
 	return id || 'imported_story';
 }
 
+function isFullDatabaseBundle(bundle: unknown): boolean {
+	return Boolean(bundle && typeof bundle === 'object' && !Array.isArray(bundle)
+		&& ('worldDatabase' in bundle || 'backendCanon' in bundle));
+}
+
 export async function importStoryBundleToBackend(
 	bundle: unknown,
 	localStoryId: string,
@@ -40,12 +46,17 @@ export async function importStoryBundleToBackend(
 	serverVersion: number;
 	counts: Record<string, number>;
 }> {
-	const request = {
-		bundle,
-		options: { preserveIds: true, rebuildMemoryNodes: true },
-	};
-	const raw = await postEngineCommand(storyIdFromImportBundle(bundle), 'story.importIndexedDb', request);
-	const imported = indexedDbImportResponseSchema.parse(raw);
+	const fullDatabase = isFullDatabaseBundle(bundle);
+	const raw = await postEngineCommand(
+		storyIdFromImportBundle(bundle),
+		fullDatabase ? 'database.importWorldBundle' : 'story.importIndexedDb',
+		fullDatabase
+			? { bundle, options: { preserveIds: false, replaceExisting: false, syncWiki: true } }
+			: { bundle, options: { preserveIds: true, rebuildMemoryNodes: true } },
+	);
+	const imported = fullDatabase
+		? worldDatabaseImportResponseSchema.parse(raw)
+		: indexedDbImportResponseSchema.parse(raw);
 	await updateStory(localStoryId, {
 		serverStoryId: imported.storyId,
 		serverVersion: imported.serverVersion,

@@ -6,12 +6,14 @@ import {
 	engineCampaignPageReadArgsSchema,
 	engineCampaignPageWriteArgsSchema,
 	engineCampaignStatusArgsSchema,
+	engineCharacterDraftUpdateArgsSchema,
 	engineCacheStatusArgsSchema,
 	engineEntriesAroundArgsSchema,
 	engineEntityDeleteArgsSchema,
 	engineJobStatusArgsSchema,
 	engineOrchestratorRunArgsSchema,
 	enginePromptPacketDebugArgsSchema,
+	engineRollupArcJobArgsSchema,
 	engineRunDueJobsArgsSchema,
 	engineStoryVaultSyncJobArgsSchema,
 	engineTranscriptPageArgsSchema,
@@ -29,17 +31,27 @@ import {
 	type EngineCommandRequest,
 	type EngineCommandResponse,
 	type LlmServiceSetting,
+	type LlmServiceSettingPatch,
 	type RecordPatchRequest,
 	worldRecordsQuerySchema,
 } from '$lib/contracts/engine';
 import type { GmTimelineBrief } from '$lib/contracts/memory';
 import { worldDatabaseImportRequestSchema, type WorldDatabaseImportRequest } from '$lib/contracts/worldDatabase';
 import {
+	arcDeleteRequestSchema,
 	arcUpsertRequestSchema,
 	type BootstrapResponse,
+	chapterDeleteRequestSchema,
 	chapterUpsertRequestSchema,
 	type ArcCommandResponse,
+	type ArcDeleteResponse,
 	type ChapterCommandResponse,
+	type ChapterDeleteResponse,
+	contextCheckpointCreateRequestSchema,
+	contextCheckpointRevertRequestSchema,
+	type ContextCheckpointCommandResponse,
+	type ContextCheckpointListResponse,
+	type ContextCheckpointRevertResponse,
 	type EntityCommandResponse,
 	type EntityDeleteResponse,
 	indexedDbImportRequestSchema,
@@ -66,6 +78,9 @@ import {
 	type CampaignVaultWriteResult,
 } from './campaignVault';
 import {
+	createContextCheckpoint,
+	deleteBackendArc,
+	deleteBackendChapter,
 	deleteBackendEntity,
 	deleteBackendStory,
 	exportBackendStory,
@@ -73,7 +88,9 @@ import {
 	getBootstrap,
 	getStoryEntriesPage,
 	importIndexedDbBundle,
+	listContextCheckpoints,
 	listBackendStories,
+	revertToContextCheckpoint,
 	upsertBackendArcFromLocal,
 	upsertBackendChapterFromLocal,
 	upsertBackendEntityFromEntry,
@@ -94,11 +111,13 @@ import {
 	listBackendJobsCommand,
 	runDueBackendJobsCommand,
 	runReindexStoryJobCommand,
+	runRollupArcJobCommand,
 	runStoryVaultSyncJobCommand,
 	runSyncPullCommand,
 	runSyncPushCommand,
 	runWorldSimJobCommand,
 	type JobStatusCommandInput,
+	type RollupArcJobCommandInput,
 	type RunDueJobsCommandInput,
 	type StoryVaultSyncJobCommandInput,
 	type SyncPullCommandResult,
@@ -122,6 +141,7 @@ import {
 	listWorldRecords as listWorldRecordsFromStore,
 	patchWorldRecord,
 } from './worldRecords';
+import { draftCharacterUpdateFromStoryContext, type CharacterDraftUpdateArgs } from './characterDrafts';
 import { searchCanonicalWorld } from './canonicalSearch';
 import { importWorldDatabaseBundle } from '$lib/server/db/worldDatabaseImport';
 import { TERMINAL_WORLD_DATABASE_SCHEMA } from '$lib/server/db/worldDatabaseSchema';
@@ -137,6 +157,7 @@ import {
 } from './wikiCommands';
 import {
 	addEntityAlias as addEntityAliasCommand,
+	cleanupCanonDrift as cleanupCanonDriftCommand,
 	continuityAudit as continuityAuditCommand,
 	mergeEntities as mergeEntitiesCommand,
 	previewEntityResolution as previewEntityResolutionCommand,
@@ -145,7 +166,7 @@ import {
 
 type JsonRecord = Record<string, unknown>;
 type LlmSettingsSaveInput = {
-	settings: LlmServiceSetting[];
+	settings: LlmServiceSettingPatch[];
 	secrets: Array<{ ref: string; value: string }>;
 };
 
@@ -175,6 +196,7 @@ export interface EngineCommandHandlers {
 	listWorldRecords?: (storyId: string, options?: Parameters<typeof listWorldRecordsFromStore>[1]) => Promise<JsonRecord>;
 	getWorldRecord?: (type: string, recordId: string) => Promise<JsonRecord>;
 	patchWorldRecord?: (type: string, recordId: string, request: RecordPatchRequest) => Promise<JsonRecord>;
+	draftCharacterUpdate?: (storyId: string, args: CharacterDraftUpdateArgs) => Promise<JsonRecord>;
 	searchWorld?: (input: Parameters<typeof searchCanonicalWorld>[0]) => Promise<JsonRecord>;
 	listStories?: () => Promise<JsonRecord[]>;
 	createStory?: (input: unknown) => Promise<JsonRecord>;
@@ -185,6 +207,11 @@ export interface EngineCommandHandlers {
 	deleteEntity?: (storyId: string, entityId: string) => Promise<EntityDeleteResponse>;
 	upsertChapter?: (storyId: string, chapter: JsonRecord) => Promise<ChapterCommandResponse>;
 	upsertArc?: (storyId: string, arc: JsonRecord) => Promise<ArcCommandResponse>;
+	deleteChapter?: (storyId: string, chapterId: string) => Promise<ChapterDeleteResponse>;
+	deleteArc?: (storyId: string, arcId: string) => Promise<ArcDeleteResponse>;
+	createContextCheckpoint?: (storyId: string, input: JsonRecord) => Promise<ContextCheckpointCommandResponse>;
+	listContextCheckpoints?: (storyId: string, limit?: number) => Promise<ContextCheckpointListResponse>;
+	revertToContextCheckpoint?: (storyId: string, input: JsonRecord) => Promise<ContextCheckpointRevertResponse>;
 	upsertSaga?: (storyId: string, saga: JsonRecord) => Promise<SagaCommandResponse>;
 	upsertLivingMemory?: (storyId: string, kind: Parameters<typeof upsertBackendLivingMemoryFromLocal>[1], records: JsonRecord[]) => Promise<LivingMemoryCommandResponse>;
 	previewEntityResolution?: (input: Parameters<typeof previewEntityResolutionCommand>[0]) => Promise<JsonRecord>;
@@ -192,6 +219,7 @@ export interface EngineCommandHandlers {
 	mergeEntities?: (input: Parameters<typeof mergeEntitiesCommand>[0]) => Promise<JsonRecord>;
 	reviewPatchProposal?: (input: Parameters<typeof reviewPatchProposalCommand>[0]) => Promise<JsonRecord>;
 	continuityAudit?: (input: Parameters<typeof continuityAuditCommand>[0]) => Promise<JsonRecord>;
+	cleanupCanonDrift?: (input: Parameters<typeof cleanupCanonDriftCommand>[0]) => Promise<JsonRecord>;
 	submitTurn?: (input: unknown) => Promise<TurnResponse>;
 	loadTimelineBrief?: (input: Parameters<typeof loadGmTimelineBrief>[0]) => Promise<GmTimelineBrief>;
 	scheduleTimelineEvent?: (input: Parameters<typeof scheduleTimelineEvent>[0]) => Promise<StoryEventRow>;
@@ -208,6 +236,7 @@ export interface EngineCommandHandlers {
 	runReindexStoryJob?: (input: unknown) => Promise<JsonRecord>;
 	listJobs?: (input: JobStatusCommandInput) => Promise<JsonRecord>;
 	runDueJobs?: (input: RunDueJobsCommandInput) => Promise<JsonRecord>;
+	runRollupArcJob?: (input: RollupArcJobCommandInput) => Promise<JsonRecord>;
 	runStoryVaultSyncJob?: (input: StoryVaultSyncJobCommandInput) => Promise<JsonRecord>;
 	runWorldSimJob?: (input: WorldSimJobCommandInput) => Promise<JsonRecord>;
 	runOrchestrator?: (input: EngineOrchestratorRunInput) => Promise<EngineOrchestratorRunResult>;
@@ -276,6 +305,7 @@ export async function executeEngineCommand(
 	}));
 	const readWorldRecord = handlers.getWorldRecord ?? getWorldRecord;
 	const writeWorldRecord = handlers.patchWorldRecord ?? patchWorldRecord;
+	const draftCharacterUpdate = handlers.draftCharacterUpdate ?? draftCharacterUpdateFromStoryContext;
 	const searchWorld = handlers.searchWorld ?? searchCanonicalWorld;
 	const listStories = handlers.listStories ?? listBackendStories;
 	const createStory = handlers.createStory ?? createBackendStory;
@@ -286,6 +316,11 @@ export async function executeEngineCommand(
 	const deleteEntity = handlers.deleteEntity ?? deleteBackendEntity;
 	const upsertChapter = handlers.upsertChapter ?? upsertBackendChapterFromLocal;
 	const upsertArc = handlers.upsertArc ?? upsertBackendArcFromLocal;
+	const removeChapter = handlers.deleteChapter ?? deleteBackendChapter;
+	const removeArc = handlers.deleteArc ?? deleteBackendArc;
+	const makeContextCheckpoint = handlers.createContextCheckpoint ?? createContextCheckpoint;
+	const getContextCheckpoints = handlers.listContextCheckpoints ?? listContextCheckpoints;
+	const restoreContextCheckpoint = handlers.revertToContextCheckpoint ?? revertToContextCheckpoint;
 	const upsertSaga = handlers.upsertSaga ?? upsertBackendSagaFromLocal;
 	const upsertLivingMemory = handlers.upsertLivingMemory ?? upsertBackendLivingMemoryFromLocal;
 	const submitTurn = handlers.submitTurn ?? processServerTurn;
@@ -300,6 +335,7 @@ export async function executeEngineCommand(
 	const runReindexStoryJob = handlers.runReindexStoryJob ?? runReindexStoryJobCommand;
 	const listJobs = handlers.listJobs ?? listBackendJobsCommand;
 	const runDueJobs = handlers.runDueJobs ?? runDueBackendJobsCommand;
+	const runRollupArcJob = handlers.runRollupArcJob ?? runRollupArcJobCommand;
 	const runStoryVaultSyncJob = handlers.runStoryVaultSyncJob ?? runStoryVaultSyncJobCommand;
 	const runWorldSimJob = handlers.runWorldSimJob ?? runWorldSimJobCommand;
 	const previewResolution = handlers.previewEntityResolution ?? previewEntityResolutionCommand;
@@ -307,6 +343,7 @@ export async function executeEngineCommand(
 	const mergeDuplicateEntities = handlers.mergeEntities ?? mergeEntitiesCommand;
 	const reviewProposal = handlers.reviewPatchProposal ?? reviewPatchProposalCommand;
 	const runContinuityAudit = handlers.continuityAudit ?? continuityAuditCommand;
+	const runCanonDriftCleanup = handlers.cleanupCanonDrift ?? cleanupCanonDriftCommand;
 	const runOrchestrator = handlers.runOrchestrator ?? ((input: EngineOrchestratorRunInput) => runEngineOrchestrator(input, {
 		runTool: (call) => executeEngineCommand({
 			storyId: input.storyId,
@@ -718,6 +755,9 @@ export async function executeEngineCommand(
 				const args = engineCampaignStatusArgsSchema.parse(request.args ?? {});
 				const projection = await loadCampaignProjection(request.storyId, {
 					entryLimit: args.entryLimit,
+					chapterLimit: args.chapterLimit,
+					arcLimit: args.arcLimit,
+					sagaLimit: args.sagaLimit,
 				});
 				const response = {
 					...base,
@@ -986,6 +1026,27 @@ export async function executeEngineCommand(
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;
 				publishEngineEvent({ storyId: storyId ?? request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.character.draftUpdate': {
+				const args = engineCharacterDraftUpdateArgsSchema.parse(request.args ?? {});
+				const result = await draftCharacterUpdate(request.storyId, args);
+				const record = asRecord(result);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						characterDraftUpdate: {
+							recordId: String(record.recordId ?? args.recordId),
+							proposalId: typeof record.proposalId === 'string' ? record.proposalId : null,
+							status: typeof record.status === 'string' ? record.status : null,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
 				publishSucceededEvent(response);
 				return response;
 			}
@@ -1264,10 +1325,42 @@ export async function executeEngineCommand(
 							openWarnings: typeof summary.openWarnings === 'number' ? summary.openWarnings : 0,
 							pendingProposals: typeof summary.pendingProposals === 'number' ? summary.pendingProposals : 0,
 							inactiveEntities: typeof summary.inactiveEntities === 'number' ? summary.inactiveEntities : 0,
+							dueFactionProjects: typeof summary.dueFactionProjects === 'number' ? summary.dueFactionProjects : 0,
+							factionProjectProposals: typeof summary.factionProjectProposals === 'number' ? summary.factionProjectProposals : 0,
+							factionProjectWarnings: typeof summary.factionProjectWarnings === 'number' ? summary.factionProjectWarnings : 0,
 						},
 					},
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'canon.cleanupDrift': {
+				const args = asRecord(request.args ?? {});
+				const result = await runCanonDriftCleanup({
+					storyId: request.storyId,
+					dryRun: args.dryRun === true,
+				});
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						canonCleanup: {
+							storyId: request.storyId,
+							dryRun: result.dryRun === true,
+							deleted: result.deleted === true,
+							invalidSourceRefs: typeof result.invalidSourceRefs === 'number' ? result.invalidSourceRefs : 0,
+							duplicateSourceRefs: typeof result.duplicateSourceRefs === 'number' ? result.duplicateSourceRefs : 0,
+							unsafeMemoryNodes: typeof result.unsafeMemoryNodes === 'number' ? result.unsafeMemoryNodes : 0,
+							deleteCount: typeof result.deleteCount === 'number' ? result.deleteCount : 0,
+							serverVersion: typeof result.serverVersion === 'number' ? result.serverVersion : null,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
 				publishSucceededEvent(response);
 				return response;
 			}
@@ -1289,6 +1382,28 @@ export async function executeEngineCommand(
 				publishSucceededEvent(response);
 				return response;
 			}
+			case 'chapter.delete': {
+				const args = chapterDeleteRequestSchema.parse(request.args ?? {});
+				const result = await removeChapter(request.storyId, args.chapterId);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						chapter: {
+							id: result.chapterId,
+							deleted: result.deleted,
+						},
+						unwrappedArcIds: result.unwrappedArcIds,
+						unwrappedArcs: result.unwrappedArcs,
+						serverVersion: result.serverVersion,
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
 			case 'arc.create':
 			case 'arc.upsert': {
 				const args = arcUpsertRequestSchema.parse(request.args ?? {});
@@ -1299,6 +1414,80 @@ export async function executeEngineCommand(
 					result,
 					projectionChanges: {
 						arc: result.arc,
+						serverVersion: result.serverVersion,
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'arc.delete': {
+				const args = arcDeleteRequestSchema.parse(request.args ?? {});
+				const result = await removeArc(request.storyId, args.arcId);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						arc: {
+							id: result.arcId,
+							deleted: result.deleted,
+						},
+						serverVersion: result.serverVersion,
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'context.checkpoint.create': {
+				const args = contextCheckpointCreateRequestSchema.parse(request.args ?? {});
+				const result = await makeContextCheckpoint(request.storyId, asRecord(args));
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						contextCheckpoint: result.checkpoint,
+						serverVersion: result.serverVersion,
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'context.checkpoint.list': {
+				const args = asRecord(request.args ?? {});
+				const result = await getContextCheckpoints(
+					request.storyId,
+					typeof args.limit === 'number' ? args.limit : undefined,
+				);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						contextCheckpoints: result.checkpoints,
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'context.checkpoint.revert': {
+				const args = contextCheckpointRevertRequestSchema.parse(request.args ?? {});
+				const result = await restoreContextCheckpoint(request.storyId, asRecord(args));
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						contextCheckpoint: result.checkpoint,
+						restoredCounts: result.restoredCounts,
 						serverVersion: result.serverVersion,
 					},
 					updatedAt: nowIso(),
@@ -1832,6 +2021,37 @@ export async function executeEngineCommand(
 								claimed: typeof job.claimed === 'number' ? job.claimed : 0,
 								completed: typeof job.completed === 'number' ? job.completed : 0,
 								failedCount: failed.length,
+							},
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'jobs.rollupArc': {
+				const args = engineRollupArcJobArgsSchema.parse(request.args ?? {});
+				const job = await runRollupArcJob({
+					storyId: request.storyId,
+					...args,
+				});
+				const jobRow = asRecord(job.job);
+				const result = asRecord(jobRow.result);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: job,
+					projectionChanges: {
+						jobs: {
+							rollupArc: {
+								ok: job.ok !== false,
+								storyId: request.storyId,
+								workerId: typeof job.workerId === 'string' ? job.workerId : args.workerId ?? null,
+								jobId: typeof job.jobId === 'string' ? job.jobId : null,
+								runNow: typeof job.runNow === 'boolean' ? job.runNow : args.runNow !== false,
+								completed: typeof jobRow.completed === 'boolean' ? jobRow.completed : job.ok !== false,
+								arcCount: typeof result.arcCount === 'number' ? result.arcCount : null,
 							},
 						},
 					},

@@ -21,13 +21,31 @@ export const llmServiceSettingSchema = z.object({
 	updatedAt: z.string().optional(),
 });
 
+export const llmServiceSettingPatchSchema = z.object({
+	serviceId: z.string().min(1),
+	providerType: z.string().min(1).optional(),
+	baseUrl: z.string().nullable().optional(),
+	model: z.string().nullable().optional(),
+	temperature: z.number().min(0).max(2).optional(),
+	maxTokens: z.number().int().min(128).max(65536).optional(),
+	topP: z.number().min(0).max(1).nullable().optional(),
+	frequencyPenalty: z.number().min(-2).max(2).nullable().optional(),
+	presencePenalty: z.number().min(-2).max(2).nullable().optional(),
+	reasoningEffort: z.string().nullable().optional(),
+	contextBudget: z.number().int().positive().nullable().optional(),
+	enabled: z.boolean().optional(),
+	systemPromptOverride: z.string().nullable().optional(),
+	apiKeyRef: z.string().nullable().optional(),
+	metadata: jsonObjectSchema.optional(),
+});
+
 export const llmSecretRefSchema = z.object({
 	ref: z.string().min(1),
 	value: z.string().min(1),
 });
 
 export const llmSettingsPatchSchema = z.object({
-	settings: z.array(llmServiceSettingSchema).default([]),
+	settings: z.array(llmServiceSettingPatchSchema).default([]),
 	secrets: z.array(llmSecretRefSchema).default([]),
 });
 
@@ -44,6 +62,12 @@ export const engineWorldRecordDetailArgsSchema = z.object({
 export const engineWorldRecordPatchArgsSchema = engineWorldRecordDetailArgsSchema.extend({
 	updates: jsonObjectSchema,
 	reason: z.string().default('Manual explorer edit.'),
+});
+
+export const engineCharacterDraftUpdateArgsSchema = z.object({
+	recordId: z.string().min(1),
+	instructions: z.string().default('Update this NPC from recent story context.'),
+	recentLimit: z.number().int().min(1).max(80).default(30),
 });
 
 export const worldRecordsQuerySchema = z.object({
@@ -73,6 +97,12 @@ export const engineRunDueJobsArgsSchema = z.object({
 	workerId: z.string().min(1).optional(),
 	limit: z.number().int().min(1).max(100).default(10),
 	allStories: z.boolean().default(false),
+});
+
+export const engineRollupArcJobArgsSchema = z.object({
+	workerId: z.string().min(1).optional(),
+	runNow: z.boolean().default(true),
+	chaptersPerArc: z.number().int().min(1).max(50).optional(),
 });
 
 export const engineJobStatusArgsSchema = z.object({
@@ -175,11 +205,17 @@ export const campaignProjectionSchema = z.object({
 	mode: z.literal('control_surface'),
 	story: jsonObjectSchema,
 	entries: z.array(jsonObjectSchema).default([]),
+	chapters: z.array(jsonObjectSchema).default([]),
+	arcs: z.array(jsonObjectSchema).default([]),
+	sagas: z.array(jsonObjectSchema).default([]),
 	counts: z.object({
 		entries: z.number().int().nonnegative().default(0),
 		entities: z.number().int().nonnegative().default(0),
 		events: z.number().int().nonnegative().default(0),
 		memoryNodes: z.number().int().nonnegative().default(0),
+		chapters: z.number().int().nonnegative().default(0),
+		arcs: z.number().int().nonnegative().default(0),
+		sagas: z.number().int().nonnegative().default(0),
 	}),
 	vault: campaignVaultStatusSchema,
 	cache: engineCacheStatusSchema,
@@ -194,6 +230,9 @@ export const engineCommandRequestSchema = z.object({
 
 export const engineCampaignStatusArgsSchema = z.object({
 	entryLimit: z.number().int().min(1).max(200).optional(),
+	chapterLimit: z.number().int().min(1).max(200).optional(),
+	arcLimit: z.number().int().min(1).max(200).optional(),
+	sagaLimit: z.number().int().min(1).max(200).optional(),
 });
 
 export const engineCacheStatusArgsSchema = z.object({
@@ -373,6 +412,7 @@ export const engineCommandResponseSchema = z.object({
 });
 
 export type LlmServiceSetting = z.infer<typeof llmServiceSettingSchema>;
+export type LlmServiceSettingPatch = z.infer<typeof llmServiceSettingPatchSchema>;
 export type RecordPatchRequest = z.infer<typeof recordPatchRequestSchema>;
 export type EngineWorldRecordDetailArgs = z.infer<typeof engineWorldRecordDetailArgsSchema>;
 export type EngineWorldRecordPatchArgs = z.infer<typeof engineWorldRecordPatchArgsSchema>;
@@ -399,6 +439,7 @@ export type EngineOrchestratorMode = z.infer<typeof engineOrchestratorModeSchema
 export type EngineOrchestratorContext = z.infer<typeof engineOrchestratorContextSchema>;
 export type EngineOrchestratorRunArgs = z.infer<typeof engineOrchestratorRunArgsSchema>;
 export type EngineRunDueJobsArgs = z.infer<typeof engineRunDueJobsArgsSchema>;
+export type EngineRollupArcJobArgs = z.infer<typeof engineRollupArcJobArgsSchema>;
 export type EngineJobStatusArgs = z.infer<typeof engineJobStatusArgsSchema>;
 export type EngineStoryVaultSyncJobArgs = z.infer<typeof engineStoryVaultSyncJobArgsSchema>;
 export type EnginePromptPacketDebugArgs = z.infer<typeof enginePromptPacketDebugArgsSchema>;

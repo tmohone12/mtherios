@@ -598,19 +598,75 @@ describe('timeline selection helpers', () => {
 		]);
 	});
 
+	it('loads present npc memory by conservative text match when old events lack npc links', async () => {
+		const storyRow = {
+			id: 'story_1',
+			currentTurn: 12,
+			currentWorldTime: 'Snow in the private study',
+		};
+		const textRows = [
+			event({
+				id: 'zhen_named_memory',
+				status: 'committed',
+				title: 'Zhen offers Aurion the choice',
+				body: 'The empress keeps her hand over her heart while Aurion refuses to presume.',
+				occurredTurn: 10,
+				createdTurn: 10,
+			}),
+		];
+		const entityRows = [{ id: 'character_zhen', name: 'Vermillion Zhen Lian' }];
+		const aliasRows = [{ entityId: 'character_zhen', alias: 'Zhen' }];
+		const chains = [[storyRow], [], [], [], [], entityRows, aliasRows, textRows]
+			.map(createSelectChain);
+		const select = vi.fn()
+			.mockReturnValueOnce(chains[0])
+			.mockReturnValueOnce(chains[1])
+			.mockReturnValueOnce(chains[2])
+			.mockReturnValueOnce(chains[3])
+			.mockReturnValueOnce(chains[4])
+			.mockReturnValueOnce(chains[5])
+			.mockReturnValueOnce(chains[6])
+			.mockReturnValueOnce(chains[7]);
+		dbMocks.getDb.mockReturnValue({ select });
+
+		const brief = await loadGmTimelineBrief({
+			storyId: 'story_1',
+			presentNpcIds: ['character_zhen'],
+			dueLimit: 0,
+			recentLimit: 0,
+			scheduledLimit: 0,
+			npcLimit: 1,
+			npcEventLimit: 1,
+		});
+
+		expect(select).toHaveBeenCalledTimes(8);
+		expect(chains[7].limit).toHaveBeenCalledWith(expect.any(Number));
+		expect(brief.npcEvents).toEqual([
+			{
+				npcEntityId: 'character_zhen',
+				eventIds: ['zhen_named_memory'],
+				summary: 'Zhen offers Aurion the choice',
+				visibility: 'player_known',
+			},
+		]);
+		expect(brief.recentEvents).toEqual([]);
+	});
+
 	it('applies public visibility filters before bounded timeline query limits', async () => {
 		const storyRow = {
 			id: 'story_1',
 			currentTurn: 8,
 			currentWorldTime: 'Dawn court',
 		};
-		const chains = [[storyRow], [], [], [], []].map(createSelectChain);
+		const chains = [[storyRow], [], [], [], [], [], []].map(createSelectChain);
 		const select = vi.fn()
 			.mockReturnValueOnce(chains[0])
 			.mockReturnValueOnce(chains[1])
 			.mockReturnValueOnce(chains[2])
 			.mockReturnValueOnce(chains[3])
-			.mockReturnValueOnce(chains[4]);
+			.mockReturnValueOnce(chains[4])
+			.mockReturnValueOnce(chains[5])
+			.mockReturnValueOnce(chains[6]);
 		dbMocks.getDb.mockReturnValue({ select });
 
 		await loadGmTimelineBrief({

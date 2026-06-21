@@ -21,7 +21,15 @@ const sampleInput = {
 	sourceRefs: ['entry_01JZ', 'event_01JZ'],
 	confidence: 0.92,
 	description: 'Mira Vey keeps the harbor moving by moving information and metal scraps.',
+	currentStateLines: [
+		'- Current action: holding the bridge bargain together',
+		'- Emotional state: controlled fear under professional calm',
+	],
 	profileLines: ['- Temper: guarded', '- Disposition: opportunistic and practical'],
+	eventMemoryLines: [
+		'- Saw: Mira saw Valen hesitate at the bridge.',
+		'- Knows: Mira knows the bargain has a hidden witness.',
+	],
 	relatedFactions: ['- Linked to [[Harbor Compact]]'],
 	relationships: ['- Mira trusts [[Korrin Vale]]'],
 	beliefsHeld: ['- The coast guard is underfunded.'],
@@ -54,6 +62,10 @@ describe('character projection markdown service', () => {
 			schema_version: CHARACTER_PROJECTION_SCHEMA_VERSION,
 		});
 		expect(markdown).toContain('## Human Edits');
+		expect(markdown).toContain('## Current State');
+		expect(markdown).toContain('- Current action: holding the bridge bargain together');
+		expect(markdown).toContain('## NPC Event Memory');
+		expect(markdown).toContain('- Knows: Mira knows the bargain has a hidden witness.');
 	});
 
 	it('does not duplicate character pages by stable ID and preserves human edits during regeneration', async () => {

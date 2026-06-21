@@ -423,6 +423,9 @@ async function runLoreManagement(chapters: Chapter[]): Promise<void> {
 				type: update.type as any,
 				aliases: [],
 			});
+			if (update.type === 'character' && !existing) {
+				continue;
+			}
 			if (!existing) {
 				const entry = makeLoreEntry(story.currentStory.id, update.name, update.type as any, update.description, update.keywords);
 				if (update.type === 'character') {
@@ -552,10 +555,12 @@ function applyFactionUpdateState(
 ): boolean {
 	let changed = false;
 	if (update.knownMembers?.length) {
-		const ids = update.knownMembers
-			.map(name => findMatchingLoreEntry(story.lorebookEntries, { name, type: 'character' })?.id ?? name)
-			.filter(Boolean);
-		state.knownMembers = [...new Set([...(state.knownMembers ?? []), ...ids])];
+		const members = resolveFactionKnownMembers(update.knownMembers);
+		state.knownMembers = mergeStringList(state.knownMembers ?? [], members.knownMemberIds);
+		state.unresolvedKnownMembers = mergeStringList(
+			state.unresolvedKnownMembers ?? [],
+			members.unresolvedMemberNames,
+		).filter(name => !members.resolvedMemberNames.has(name.toLowerCase()));
 		changed = true;
 	}
 	if (update.goals?.length) {
@@ -596,6 +601,45 @@ function applyFactionUpdateState(
 		changed = true;
 	}
 	return changed;
+}
+
+function mergeStringList(existing: string[], incoming: string[]): string[] {
+	const seen = new Set<string>();
+	const merged: string[] = [];
+	for (const value of [...existing, ...incoming]) {
+		const clean = value.trim();
+		const key = clean.toLowerCase();
+		if (!clean || seen.has(key)) continue;
+		seen.add(key);
+		merged.push(clean);
+	}
+	return merged;
+}
+
+function resolveFactionKnownMembers(names: string[]): {
+	knownMemberIds: string[];
+	unresolvedMemberNames: string[];
+	resolvedMemberNames: Set<string>;
+} {
+	const knownMemberIds: string[] = [];
+	const unresolvedMemberNames: string[] = [];
+	const resolvedMemberNames = new Set<string>();
+	for (const name of names) {
+		const clean = name.trim();
+		if (!clean) continue;
+		const entry = findMatchingLoreEntry(story.lorebookEntries, { name: clean, type: 'character' });
+		if (entry) {
+			knownMemberIds.push(entry.id);
+			resolvedMemberNames.add(clean.toLowerCase());
+		} else {
+			unresolvedMemberNames.push(clean);
+		}
+	}
+	return {
+		knownMemberIds: mergeStringList([], knownMemberIds),
+		unresolvedMemberNames: mergeStringList([], unresolvedMemberNames),
+		resolvedMemberNames,
+	};
 }
 
 function normalizeRange(value: number | undefined, min: number, max: number, fallback: number): number {

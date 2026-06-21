@@ -7,8 +7,13 @@ import {
 } from '$lib/services/database';
 import {
 	arcCommandResponseSchema,
+	arcDeleteResponseSchema,
 	bootstrapResponseSchema,
 	chapterCommandResponseSchema,
+	chapterDeleteResponseSchema,
+	contextCheckpointCommandResponseSchema,
+	contextCheckpointListResponseSchema,
+	contextCheckpointRevertResponseSchema,
 	createStoryResponseSchema,
 	entityCommandResponseSchema,
 	entityDeleteResponseSchema,
@@ -16,8 +21,13 @@ import {
 	sagaCommandResponseSchema,
 	storyEntriesPageResponseSchema,
 	type ArcCommandResponse,
+	type ArcDeleteResponse,
 	type BootstrapResponse,
 	type ChapterCommandResponse,
+	type ChapterDeleteResponse,
+	type ContextCheckpointCommandResponse,
+	type ContextCheckpointListResponse,
+	type ContextCheckpointRevertResponse,
 	type EntityCommandResponse,
 	type EntityDeleteResponse,
 	type SagaCommandResponse,
@@ -232,12 +242,39 @@ export async function createBackendChapter(serverStoryId: string, chapter: Chapt
 	return sendStoryEngineCommandResult(serverStoryId, 'chapter.create', { chapter }, chapterCommandResponseSchema);
 }
 
+export async function deleteBackendChapter(serverStoryId: string, chapterId: string): Promise<ChapterDeleteResponse> {
+	return sendStoryEngineCommandResult(serverStoryId, 'chapter.delete', { chapterId }, chapterDeleteResponseSchema);
+}
+
 export async function upsertBackendArc(serverStoryId: string, arc: Arc): Promise<ArcCommandResponse> {
 	return sendStoryEngineCommandResult(serverStoryId, 'arc.upsert', { arc }, arcCommandResponseSchema);
 }
 
 export async function createBackendArc(serverStoryId: string, arc: Arc): Promise<ArcCommandResponse> {
 	return sendStoryEngineCommandResult(serverStoryId, 'arc.create', { arc }, arcCommandResponseSchema);
+}
+
+export async function deleteBackendArc(serverStoryId: string, arcId: string): Promise<ArcDeleteResponse> {
+	return sendStoryEngineCommandResult(serverStoryId, 'arc.delete', { arcId }, arcDeleteResponseSchema);
+}
+
+export async function createContextCheckpoint(
+	serverStoryId: string,
+	input: { label?: string; reason?: string | null } = {},
+): Promise<ContextCheckpointCommandResponse> {
+	return sendStoryEngineCommandResult(serverStoryId, 'context.checkpoint.create', input, contextCheckpointCommandResponseSchema);
+}
+
+export async function listContextCheckpoints(serverStoryId: string, limit = 50): Promise<ContextCheckpointListResponse> {
+	return sendStoryEngineCommandResult(serverStoryId, 'context.checkpoint.list', { limit }, contextCheckpointListResponseSchema);
+}
+
+export async function revertToContextCheckpoint(
+	serverStoryId: string,
+	checkpointId: string,
+	reason?: string | null,
+): Promise<ContextCheckpointRevertResponse> {
+	return sendStoryEngineCommandResult(serverStoryId, 'context.checkpoint.revert', { checkpointId, reason }, contextCheckpointRevertResponseSchema);
 }
 
 export async function upsertBackendSaga(serverStoryId: string, saga: Saga): Promise<SagaCommandResponse> {

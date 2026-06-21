@@ -137,6 +137,7 @@
 			state.disposition,
 			state.territory?.join(' '),
 			memberNames.join(' '),
+			state.unresolvedKnownMembers?.join(' '),
 			state.goals?.map(goal => `${goal.type} ${goal.description} ${goal.deadline ?? ''}`).join(' '),
 		].filter(Boolean).join(' ').toLowerCase();
 	}
@@ -535,6 +536,7 @@
 	const engineCacheSegments = $derived((engineProjection?.cache.segments ?? []).slice(0, 5));
 	const engineCacheInvalidations = $derived((engineProjection?.cache.byKind ?? []).reduce((sum, kind) => sum + kind.invalidatedCount, 0));
 	const lastTurnPerformance = $derived(story.lastTurnPerformance);
+	const lastContextReceipt = $derived(story.lastContextReceipt);
 
 	$effect(() => {
 		if (!open || !story.currentStory) return;
@@ -1516,6 +1518,7 @@
 					{#each visibleFactionEntries as faction}
 						{@const fs = faction.state as FactionEntryState}
 						{@const members = (fs.knownMembers ?? []).map(id => story.lorebookEntries.find(e => e.id === id)?.name ?? id).slice(0, 5)}
+						{@const unresolvedMembers = (fs.unresolvedKnownMembers ?? []).slice(0, 5)}
 						{@const topGoal = (fs.goals ?? []).filter(g => (g.progress ?? 0) < 100).sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0]}
 						{@const lastMove = latestFactionAction(faction.name)}
 						<div class="rounded-lg bg-[var(--bg-tertiary)] p-2.5">
@@ -1538,6 +1541,11 @@
 							{/if}
 							{#if members.length > 0}
 								<p class="mt-1 text-[10px] text-[var(--text-muted)] line-clamp-1">Members: {members.join(', ')}</p>
+							{/if}
+							{#if unresolvedMembers.length > 0}
+								<p class="mt-1 text-[10px] text-amber-300/80 line-clamp-1" title="Mentioned by evidence, not approved as character canon">
+									Unresolved members: {unresolvedMembers.join(', ')}
+								</p>
 							{/if}
 							{#if lastMove}
 								<p class="mt-1 text-[10px] text-orange-300/80 line-clamp-1">Last move: {lastMove.action}</p>
@@ -2074,6 +2082,133 @@
 									{#each lastTurnPerformance.slowTimings.slice(0, 3) as timing}
 										<span class="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[9px] text-amber-300" title={timing.operation}>
 											{timing.operation.replace('turn.', '')} {formatDurationMs(timing.durationMs)}
+										</span>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/if}
+
+					{#if lastContextReceipt}
+						<div class="mt-2 rounded bg-[var(--bg-primary)] px-2 py-1.5 text-[9px]">
+							<div class="mb-1 flex items-center justify-between gap-2">
+								<span class="uppercase tracking-wider text-[var(--text-muted)]">Context Receipt</span>
+								<span class="tabular-nums {lastContextReceipt.truncated ? 'text-amber-400' : 'text-emerald-400'}">
+									{lastContextReceipt.truncated ? 'Truncated' : 'Full'}
+								</span>
+							</div>
+							<div class="grid grid-cols-4 gap-2 text-[9px]">
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Recent</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{lastContextReceipt.included.recentEntries}</div>
+								</div>
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Memory</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{lastContextReceipt.included.memoryNodes}</div>
+								</div>
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Wiki</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{lastContextReceipt.included.wikiChunks}</div>
+								</div>
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Timeline</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{lastContextReceipt.included.timelineEvents}</div>
+								</div>
+							</div>
+							<div class="mt-1 grid grid-cols-4 gap-2 text-[9px]">
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Facts</div>
+									<div class="tabular-nums text-[var(--text-primary)]">{lastContextReceipt.included.facts}</div>
+								</div>
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Patch proposals</div>
+									<div class="tabular-nums {lastContextReceipt.included.patchProposals > 0 ? 'text-amber-300' : 'text-[var(--text-primary)]'}">{lastContextReceipt.included.patchProposals}</div>
+								</div>
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Unresolved refs</div>
+									<div class="tabular-nums {lastContextReceipt.included.unresolvedCharacterReferences > 0 ? 'text-amber-300' : 'text-[var(--text-primary)]'}">{lastContextReceipt.included.unresolvedCharacterReferences}</div>
+								</div>
+								<div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Warnings</div>
+									<div class="tabular-nums {lastContextReceipt.included.continuityWarnings > 0 ? 'text-rose-300' : 'text-[var(--text-primary)]'}">{lastContextReceipt.included.continuityWarnings}</div>
+								</div>
+							</div>
+							<div class="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--text-muted)]">
+								<span>memory {formatTokens(lastContextReceipt.budgets.memoryTokensUsed)} / {formatTokens(lastContextReceipt.budgets.memoryTokensMax)}</span>
+								<span>wiki {lastContextReceipt.budgets.wikiCharsUsed} / {lastContextReceipt.budgets.wikiCharsMax} chars</span>
+								<span>chapters {lastContextReceipt.included.chaptersSent} sent / {lastContextReceipt.included.chaptersSuppressedByArc} suppressed</span>
+								<span>arcs {lastContextReceipt.included.arcsSent} sent</span>
+								<span>prompt {lastContextReceipt.included.totalChars} chars / {formatOptionalTokens(lastContextReceipt.included.totalTokens)} tokens</span>
+								{#if lastContextReceipt.included.factionSheets.length}
+									<span>{lastContextReceipt.included.factionSheets.length} faction sheets</span>
+								{/if}
+							</div>
+							{#if lastContextReceipt.unresolvedCharacterReferences.length}
+								<div class="mt-1">
+									<div class="mb-1 uppercase tracking-wider text-[var(--text-muted)]">Character refs kept</div>
+									<div class="flex flex-wrap gap-1">
+										{#each lastContextReceipt.unresolvedCharacterReferences.slice(0, 4) as reference}
+											<span
+												class="rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-300"
+												title={`${reference.name}: ${reference.reason}${reference.contextLabel ? ` | ${reference.contextLabel}` : ''}${reference.sourceEntryIds.length ? ` | source ${reference.sourceEntryIds.join(', ')}` : ''}`}
+											>
+												{reference.name}{reference.contextLabel ? ` (${reference.contextLabel})` : ''}
+											</span>
+										{/each}
+									</div>
+								</div>
+							{/if}
+							{#if lastContextReceipt.continuityLedger.facts.length || lastContextReceipt.continuityLedger.patchProposals.length || lastContextReceipt.continuityLedger.warnings.length}
+								<div class="mt-1">
+									<div class="mb-1 uppercase tracking-wider text-[var(--text-muted)]">Ledger evidence</div>
+									<div class="flex flex-wrap gap-1">
+										{#each lastContextReceipt.continuityLedger.facts.slice(0, 2) as fact}
+											<span
+												class="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[9px] text-sky-300"
+												title={`${fact.statement}${fact.sourceEntryIds.length ? ` | source ${fact.sourceEntryIds.join(', ')}` : ''}${fact.sourcePatchIds.length ? ` | patches ${fact.sourcePatchIds.join(', ')}` : ''}`}
+											>
+												Fact {formatHash(fact.id)}
+											</span>
+										{/each}
+										{#each lastContextReceipt.continuityLedger.patchProposals.slice(0, 2) as proposal}
+											<span
+												class="rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-300"
+												title={`${proposal.proposalType} ${proposal.status}: ${proposal.reason}${proposal.sourceEntryIds.length ? ` | source ${proposal.sourceEntryIds.join(', ')}` : ''}${proposal.sourcePatchIds.length ? ` | patches ${proposal.sourcePatchIds.join(', ')}` : ''}`}
+											>
+												Proposal {formatHash(proposal.id)}
+											</span>
+										{/each}
+										{#each lastContextReceipt.continuityLedger.warnings.slice(0, 2) as warning}
+											<span
+												class="rounded bg-rose-500/10 px-1.5 py-0.5 text-[9px] text-rose-300"
+												title={`${warning.level}/${warning.status}: ${warning.title}${warning.sourceEntryIds.length ? ` | source ${warning.sourceEntryIds.join(', ')}` : ''}${warning.sourcePatchIds.length ? ` | patches ${warning.sourcePatchIds.join(', ')}` : ''}`}
+											>
+												Warning {formatHash(warning.id)}
+											</span>
+										{/each}
+									</div>
+								</div>
+							{/if}
+							{#if lastContextReceipt.cacheSegments.length}
+								<div class="mt-1">
+									<div class="mb-1 uppercase tracking-wider text-[var(--text-muted)]">Cache segments</div>
+									<div class="flex flex-wrap gap-1">
+										{#each lastContextReceipt.cacheSegments.slice(0, 4) as segment}
+											<span
+												class="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[9px] {segment.hit ? 'text-emerald-300' : 'text-cyan-300'}"
+												title={`${segment.kind}: ${segment.cacheKey} | ${segment.tokenEstimate} tokens | ${segment.dependencyCount} dependencies | ${segment.invalidated ? 'invalidated' : 'fresh'} | hash ${formatHash(segment.contentHash)}`}
+											>
+												{segment.hit ? 'Hit' : 'Miss'} {segment.kind.replaceAll('_', ' ')} {formatHash(segment.contentHash)}
+											</span>
+										{/each}
+									</div>
+								</div>
+							{/if}
+							{#if lastContextReceipt.skipped.length}
+								<div class="mt-1 flex flex-wrap gap-1">
+									{#each lastContextReceipt.skipped.slice(0, 3) as item}
+										<span class="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 text-[9px] text-amber-300" title={`${item.source}: ${item.reason}`}>
+											Skipped {item.source}
 										</span>
 									{/each}
 								</div>

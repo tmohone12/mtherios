@@ -64,7 +64,7 @@ Agents can use the same services through the MCP server:
   "mcpServers": {
     "mtherios-terminal-database": {
       "command": "node",
-      "args": ["E:\\DEV\\Projects\\mtherios-factions\\scripts\\mtherios-mcp.mjs"],
+      "args": ["E:\\DEV\\Projects\\mtherios-factions-work\\scripts\\mtherios-mcp.mjs"],
       "env": {
         "MTHERIOS_APP_URL": "http://127.0.0.1:5173"
       }

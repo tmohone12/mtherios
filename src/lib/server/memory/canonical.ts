@@ -1,9 +1,10 @@
-import { and, asc, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lt, sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
 import {
 	agreements,
 	arcs,
 	chapters,
+	contextCheckpoints,
 	continuityWarnings,
 	entities,
 	entityAliases,
@@ -39,12 +40,14 @@ import {
 import { enqueueImportProjectionJobs, enqueueStoryVaultSyncJob, enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
 import { deleteStoryVaultArtifacts } from '$lib/server/wiki/storyVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
-import { entityResolutionSummary, resolveEntityIdentity, shouldReuseResolvedEntity } from './entityResolver';
+import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from './entityResolver';
 import type { EngineCampaignBootstrapArgs } from '$lib/contracts/engine';
 
 type JsonRecord = Record<string, unknown>;
 type LivingMemoryKind = 'conversationMemory' | 'worldEvent' | 'factionAction' | 'rumor' | 'scheme';
 type LivingMemoryWriteMode = 'ignore' | 'upsert';
+type Db = ReturnType<typeof getDb>;
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 export interface BootstrapProjectionLimits {
 	entryLimit: number;
@@ -189,6 +192,10 @@ function normalizeAlias(value: string): string {
 	return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+function stableIdSegment(value: string): string {
+	return normalizeAlias(value).replace(/\s+/g, '_').slice(0, 96) || 'record';
+}
+
 function sourceEntries(...values: unknown[]): string[] {
 	return [...new Set(values.map(asNullableString).filter((value): value is string => Boolean(value)))];
 }
@@ -200,6 +207,92 @@ function stringList(...values: unknown[]): string[] {
 		return item ? [item] : [];
 	});
 	return [...new Set(items)];
+}
+
+function namedProposalOperationValue(proposal: typeof patchProposals.$inferSelect): JsonRecord {
+	return asArray<JsonRecord>(proposal.operations)
+		.map((operation) => asRecord(asRecord(operation).value))
+		.find((value) => asNullableString(value.name)) ?? {};
+}
+
+function characterReferenceProposalName(proposal: typeof patchProposals.$inferSelect): string {
+	const metadata = asRecord(proposal.metadata);
+	const operationValue = namedProposalOperationValue(proposal);
+	return asString(metadata.sourceName, asString(operationValue.name, ''));
+}
+
+async function loadMatchingCharacterReferenceProposals(
+	db: Db,
+	storyId: string,
+	names: string[],
+): Promise<Array<typeof patchProposals.$inferSelect>> {
+	const normalizedNames = new Set(names.map(normalizeAlias).filter(Boolean));
+	if (normalizedNames.size === 0) return [];
+	const rows = await db.select().from(patchProposals).where(and(
+		eq(patchProposals.storyId, storyId),
+		eq(patchProposals.proposalType, 'character_reference_review'),
+		inArray(patchProposals.status, ['pending', 'needs_review']),
+	)).limit(500);
+	return rows.filter((proposal) => normalizedNames.has(normalizeAlias(characterReferenceProposalName(proposal))));
+}
+
+async function applyCharacterReferenceProposalResolutions(
+	db: Db,
+	input: {
+		storyId: string;
+		entityId: string;
+		entityName: string;
+		proposals: Array<typeof patchProposals.$inferSelect>;
+		serverVersion: number;
+		now: string;
+	},
+): Promise<Array<{ proposalId: string; name: string; entityId: string }>> {
+	const resolved: Array<{ proposalId: string; name: string; entityId: string }> = [];
+	for (const proposal of input.proposals) {
+		const name = characterReferenceProposalName(proposal);
+		const operation = {
+			op: 'update',
+			path: '/entities/character',
+			table: 'entities',
+			recordId: input.entityId,
+			name: input.entityName,
+		};
+		const metadata = {
+			...asRecord(proposal.metadata),
+			resolvedByEntityUpsert: true,
+			resolvedEntityId: input.entityId,
+			resolvedEntityName: input.entityName,
+			resolvedAt: input.now,
+			appliedOperations: [...asArray(asRecord(proposal.metadata).appliedOperations), operation],
+		};
+		await db.update(patchProposals).set({
+			status: 'applied',
+			decision: 'approved',
+			validatedBy: 'entity_upsert',
+			affectedEntityIds: stringList(proposal.affectedEntityIds, input.entityId),
+			metadata,
+			serverVersion: input.serverVersion,
+			updatedAt: input.now,
+		}).where(eq(patchProposals.id, proposal.id));
+		await db.insert(sourceRefs).values({
+			id: `source_ref_${stableIdSegment(`${proposal.id}_${input.entityId}`)}`,
+			storyId: input.storyId,
+			sourceType: 'patch_proposal',
+			sourceId: proposal.id,
+			targetTable: 'entities',
+			targetRecordId: input.entityId,
+			targetRecordField: 'state',
+			sourceField: 'character_reference_review',
+			confidence: proposal.confidence,
+			rationale: proposal.reason,
+			notes: 'Explicit character upsert resolved this unresolved character reference.',
+			serverVersion: input.serverVersion,
+			createdAt: input.now,
+			updatedAt: input.now,
+		}).onConflictDoNothing();
+		resolved.push({ proposalId: proposal.id, name, entityId: input.entityId });
+	}
+	return resolved;
 }
 
 async function nextStoryEntryPosition(storyId: string): Promise<number> {
@@ -246,6 +339,19 @@ export async function bumpStoryVersion(storyId: string): Promise<number> {
 		.where(eq(stories.id, storyId))
 		.returning({ serverVersion: stories.serverVersion });
 	return row?.serverVersion ?? 1;
+}
+
+async function bumpStoryVersionTx(tx: Tx, storyId: string, now = nowIso()): Promise<number> {
+	const [row] = await tx
+		.update(stories)
+		.set({
+			serverVersion: sql`${stories.serverVersion} + 1`,
+			updatedAt: now,
+		})
+		.where(eq(stories.id, storyId))
+		.returning({ serverVersion: stories.serverVersion });
+	if (!row) throw new Error(`Story not found: ${storyId}`);
+	return row.serverVersion;
 }
 
 async function queueStoryVaultSync(
@@ -498,10 +604,14 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 	const now = nowIso();
 	const [story] = await db.select({ id: stories.id }).from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
-	const sourceEntryIds = sourceEntries(entry.firstMentioned, entry.lastMentioned);
+	const sourceEntryIds = stringList(entry.sourceEntryIds, entry.firstMentioned, entry.lastMentioned);
 	const description = asString(entry.description);
 	const sourceEventIds = asStringArray(entry.sourceEventIds);
 	const sourcePatchIds = asStringArray(entry.sourcePatchIds);
+	const entryAliases = asStringArray(entry.aliases);
+	if (type === 'character' && isCharacterTitleOnlyName(name) && entryAliases.length === 0 && !requestedEntityId) {
+		throw new Error(`Character name "${name}" is a title or role. Add it as an alias/title on an existing character instead.`);
+	}
 	const resolution = await resolveEntityIdentity({
 		storyId,
 		db,
@@ -509,7 +619,7 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 			id: requestedEntityId,
 			type,
 			name,
-			aliases: asStringArray(entry.aliases),
+			aliases: entryAliases,
 			description,
 			sourceEntryIds,
 			sourceEventIds,
@@ -520,14 +630,32 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 		? resolution.entityId
 		: requestedEntityId ?? id('entity');
 	const [existing] = await db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, entityId))).limit(1);
+	const matchingCharacterReferences = type === 'character'
+		? await loadMatchingCharacterReferenceProposals(db, storyId, [name, ...entryAliases])
+		: [];
 	const serverVersion = await bumpStoryVersion(storyId);
 	const state = { ...asRecord(existing?.state), ...entityStateFromEntry(entry) };
-	const mergedSourceEntryIds = stringList(existing?.sourceEntryIds, sourceEntryIds);
-	const mergedSourceEventIds = stringList(existing?.sourceEventIds, sourceEventIds);
-	const mergedSourcePatchIds = stringList(existing?.sourcePatchIds, sourcePatchIds);
+	const mergedSourceEntryIds = stringList(
+		existing?.sourceEntryIds,
+		sourceEntryIds,
+		...matchingCharacterReferences.map((proposal) => proposal.sourceEntryIds),
+	);
+	const mergedSourceEventIds = stringList(
+		existing?.sourceEventIds,
+		sourceEventIds,
+		...matchingCharacterReferences.map((proposal) => proposal.sourceEventIds),
+	);
+	const mergedSourcePatchIds = stringList(
+		existing?.sourcePatchIds,
+		sourcePatchIds,
+		...matchingCharacterReferences.flatMap((proposal) => [proposal.sourcePatchIds, proposal.id]),
+	);
 	const metadata = {
 		...entityMetadataFromEntry(entry, asRecord(existing?.metadata)),
 		entityResolver: entityResolutionSummary(resolution),
+		...(matchingCharacterReferences.length > 0 ? {
+			resolvedCharacterReferenceProposalIds: matchingCharacterReferences.map((proposal) => proposal.id),
+		} : {}),
 	};
 	const canonicalName = existing && normalizeAlias(existing.name) !== normalizeAlias(name) && existing.name.length >= name.length
 		? existing.name
@@ -588,6 +716,15 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 		}).onConflictDoNothing();
 	}
 
+	const resolvedCharacterReferences = await applyCharacterReferenceProposalResolutions(db, {
+		storyId,
+		entityId,
+		entityName: canonicalName,
+		proposals: matchingCharacterReferences,
+		serverVersion,
+		now,
+	});
+
 	if (type === 'faction') {
 		await importFactionFromEntry(storyId, { ...entry, id: entityId, name: canonicalName, state }, entityId, {}, serverVersion);
 	} else {
@@ -595,7 +732,7 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 	}
 
 	await queueStoryVaultSync(storyId, serverVersion, 'entity-upsert', { entityId, type, name: canonicalName, resolution: resolution.decision });
-	return { storyId, serverVersion, entity, resolution };
+	return { storyId, serverVersion, entity, resolution, resolvedCharacterReferences };
 }
 
 export async function deleteBackendEntity(storyId: string, entityId: string) {
@@ -626,6 +763,150 @@ function chapterMetadataFromLocal(chapter: JsonRecord, existing: JsonRecord = {}
 		pinned: asBoolean(chapter.pinned ?? existing.pinned),
 		updatedBy: 'chapter-command',
 	};
+}
+
+function plausibleChapterCharacterName(value: string): boolean {
+	const normalized = normalizeAlias(value);
+	if (!normalized || normalized.length < 3) return false;
+	if (isCharacterTitleOnlyName(value)) return false;
+	if (['player', 'narrator', 'chapter', 'scene', 'unknown', 'someone', 'innkeep'].includes(normalized)) return false;
+	return !/\b(house|court|empire|kingdom|city|quarter|market|fleet|army|bank|temple|palace)\b/.test(normalized);
+}
+
+async function createLocalChapterCharacterReferenceProposals(input: {
+	storyId: string;
+	chapterId: string;
+	chapterNumber: number;
+	summary: string;
+	characterNames: string[];
+	sourceEntryIds: string[];
+	sourceEventIds: string[];
+	serverVersion: number;
+	now: string;
+}): Promise<void> {
+	const db = getDb();
+	for (const name of stringList(input.characterNames)) {
+		if (!plausibleChapterCharacterName(name)) continue;
+		const resolution = await resolveEntityIdentity({
+			storyId: input.storyId,
+			candidate: {
+				type: 'character',
+				name,
+				description: `${name} is listed as a chapter character.`,
+				sourceEntryIds: input.sourceEntryIds,
+				sourceEventIds: input.sourceEventIds,
+			},
+			includeSemantic: false,
+		});
+		if (shouldReuseResolvedEntity(resolution) || resolution.decision === 'ask') continue;
+
+		const targetRecordId = `unresolved_character_${stableIdSegment(name)}`;
+		const [existingProposal] = await db.select().from(patchProposals).where(and(
+			eq(patchProposals.storyId, input.storyId),
+			eq(patchProposals.proposalType, 'character_reference_review'),
+			eq(patchProposals.targetRecordId, targetRecordId),
+			inArray(patchProposals.status, ['pending', 'needs_review']),
+		)).limit(1);
+
+		const proposalId = `proposal_chapter_character_${stableIdSegment(`${input.storyId}_${name}`)}`;
+		if (existingProposal) {
+			const metadata = asRecord(existingProposal.metadata);
+			const chapterReferences = [
+				...asArray<JsonRecord>(metadata.chapterReferences).filter((ref) => asNullableString(ref.chapterId) !== input.chapterId),
+				{ chapterId: input.chapterId, chapterNumber: input.chapterNumber },
+			].slice(-12);
+			await db.update(patchProposals).set({
+				sourceEntryIds: stringList(existingProposal.sourceEntryIds, input.sourceEntryIds),
+				sourceEventIds: stringList(existingProposal.sourceEventIds, input.sourceEventIds),
+				metadata: {
+					...metadata,
+					chapterReferences,
+				},
+				confidence: Math.max(existingProposal.confidence, input.summary.toLowerCase().includes(name.toLowerCase()) ? 0.72 : 0.62),
+				serverVersion: input.serverVersion,
+				updatedAt: input.now,
+			}).where(and(eq(patchProposals.storyId, input.storyId), eq(patchProposals.id, existingProposal.id)));
+			await db.insert(sourceRefs).values({
+				id: `source_ref_${stableIdSegment(`${input.chapterId}_${name}`)}`,
+				storyId: input.storyId,
+				sourceType: 'chapter',
+				sourceId: input.chapterId,
+				targetTable: 'patch_proposals',
+				targetRecordId: existingProposal.id,
+				targetRecordField: 'operations',
+				sourceField: 'characters',
+				confidence: 0.72,
+				rationale: `${name} was listed as a chapter character.`,
+				notes: 'Chapter character list added evidence to an existing review-only character reference.',
+				serverVersion: input.serverVersion,
+				createdAt: input.now,
+				updatedAt: input.now,
+			}).onConflictDoNothing();
+			continue;
+		}
+
+		await db.insert(patchProposals).values({
+			id: proposalId,
+			storyId: input.storyId,
+			proposalType: 'character_reference_review',
+			targetTable: 'entities',
+			targetRecordId,
+			proposedBy: 'chapter_command',
+			operations: [{
+				op: 'review',
+				path: '/entities/character',
+				value: {
+					storyId: input.storyId,
+					type: 'character',
+					name,
+					description: `${name} is important in chapter ${input.chapterNumber}.`,
+					status: 'active',
+					visibility: 'player_known',
+					state: {
+						type: 'character',
+						firstSeenChapterId: input.chapterId,
+						firstSeenChapterNumber: input.chapterNumber,
+						eventMemory: { did: [], saw: [], knew: [], knows: [] },
+					},
+				},
+			}],
+			reason: `${name} is listed as a key character in chapter ${input.chapterNumber}.`,
+			suggestion: 'Review this chapter-important character before creating canon.',
+			status: 'pending',
+			decision: null,
+			validatedBy: null,
+			affectedEntityIds: [],
+			confidence: input.summary.toLowerCase().includes(name.toLowerCase()) ? 0.72 : 0.62,
+			sourceEntryIds: input.sourceEntryIds,
+			sourceEventIds: input.sourceEventIds,
+			sourcePatchIds: [],
+			metadata: {
+				sourceType: 'chapter_character_reference',
+				sourceName: name,
+				chapterId: input.chapterId,
+				chapterNumber: input.chapterNumber,
+			},
+			serverVersion: input.serverVersion,
+			createdAt: input.now,
+			updatedAt: input.now,
+		}).onConflictDoNothing();
+		await db.insert(sourceRefs).values({
+			id: `source_ref_${stableIdSegment(`${input.chapterId}_${name}`)}`,
+			storyId: input.storyId,
+			sourceType: 'chapter',
+			sourceId: input.chapterId,
+			targetTable: 'patch_proposals',
+			targetRecordId: proposalId,
+			targetRecordField: 'operations',
+			sourceField: 'characters',
+			confidence: 0.72,
+			rationale: `${name} was listed as a chapter character.`,
+			notes: 'Chapter character list created a review-only character reference.',
+			serverVersion: input.serverVersion,
+			createdAt: input.now,
+			updatedAt: input.now,
+		}).onConflictDoNothing();
+	}
 }
 
 async function upsertChapterMemoryNode(
@@ -751,6 +1032,18 @@ export async function upsertBackendChapterFromLocal(storyId: string, rawChapter:
 		keywords: metadata.legacyKeywords,
 	}, serverVersion, now);
 
+	await createLocalChapterCharacterReferenceProposals({
+		storyId,
+		chapterId,
+		chapterNumber: number,
+		summary,
+		characterNames: metadata.legacyCharacters as string[],
+		sourceEntryIds,
+		sourceEventIds,
+		serverVersion,
+		now,
+	});
+
 	await queueStoryVaultSync(storyId, serverVersion, 'chapter-upsert', { chapterId, number, title });
 	return { storyId, serverVersion, chapter: savedChapter };
 }
@@ -818,6 +1111,315 @@ export async function upsertBackendArcFromLocal(storyId: string, rawArc: unknown
 
 	await queueStoryVaultSync(storyId, serverVersion, 'arc-upsert', { arcId, number, title });
 	return { storyId, serverVersion, arc: savedArc };
+}
+
+export async function deleteBackendChapter(storyId: string, chapterId: string) {
+	const db = getDb();
+	const [chapter] = await db.select().from(chapters).where(and(eq(chapters.storyId, storyId), eq(chapters.id, chapterId))).limit(1);
+	if (!chapter) throw new Error(`Chapter not found: ${chapterId}`);
+	const serverVersion = await bumpStoryVersion(storyId);
+	await db.delete(chapters).where(and(eq(chapters.storyId, storyId), eq(chapters.id, chapterId)));
+	await db.delete(memoryNodes).where(and(eq(memoryNodes.storyId, storyId), eq(memoryNodes.id, `mem_chapter_${chapterId}`)));
+	const arcRows = await db.select().from(arcs).where(eq(arcs.storyId, storyId));
+	const now = nowIso();
+	const unwrappedArcs: JsonRecord[] = [];
+	for (const arc of arcRows) {
+		if (!arc.chapterIds.includes(chapterId)) continue;
+		const nextChapterIds = arc.chapterIds.filter((id) => id !== chapterId);
+		await db.update(arcs).set({
+			chapterIds: nextChapterIds,
+			serverVersion,
+			updatedAt: now,
+		}).where(and(eq(arcs.storyId, storyId), eq(arcs.id, arc.id)));
+		unwrappedArcs.push({
+			...arc,
+			chapterIds: nextChapterIds,
+			serverVersion,
+			updatedAt: now,
+		});
+	}
+	await queueStoryVaultSync(storyId, serverVersion, 'chapter-delete', { chapterId });
+	return {
+		storyId,
+		serverVersion,
+		chapterId,
+		deleted: true,
+		unwrappedArcIds: unwrappedArcs.map((arc) => String(arc.id)).filter(Boolean),
+		unwrappedArcs,
+	};
+}
+
+export async function deleteBackendArc(storyId: string, arcId: string) {
+	const db = getDb();
+	const [arc] = await db.select().from(arcs).where(and(eq(arcs.storyId, storyId), eq(arcs.id, arcId))).limit(1);
+	if (!arc) throw new Error(`Arc not found: ${arcId}`);
+	const serverVersion = await bumpStoryVersion(storyId);
+	await db.delete(arcs).where(and(eq(arcs.storyId, storyId), eq(arcs.id, arcId)));
+	await db.delete(memoryNodes).where(and(eq(memoryNodes.storyId, storyId), eq(memoryNodes.id, `mem_arc_${arcId}`)));
+	await queueStoryVaultSync(storyId, serverVersion, 'arc-delete', { arcId });
+	return { storyId, serverVersion, arcId, deleted: true };
+}
+
+async function selectStoryRows(tx: Tx, table: unknown, storyColumn: unknown, storyId: string): Promise<JsonRecord[]> {
+	return await tx
+		.select()
+		.from(table as never)
+		.where(eq(storyColumn as never, storyId)) as JsonRecord[];
+}
+
+async function clearStoryRows(tx: Tx, table: unknown, storyColumn: unknown, storyId: string): Promise<void> {
+	await tx.delete(table as never).where(eq(storyColumn as never, storyId));
+}
+
+const CONTEXT_RESTORE_INSERT_BATCH_SIZE = 1000;
+
+async function restoreStoryRows(tx: Tx, table: unknown, rows: JsonRecord[], serverVersion: number, now: string): Promise<number> {
+	if (rows.length === 0) return 0;
+	const stamped = rows.map((row) => ({
+		...row,
+		serverVersion,
+		updatedAt: now,
+	}));
+	for (let index = 0; index < stamped.length; index += CONTEXT_RESTORE_INSERT_BATCH_SIZE) {
+		await tx.insert(table as never).values(stamped.slice(index, index + CONTEXT_RESTORE_INSERT_BATCH_SIZE) as never);
+	}
+	return stamped.length;
+}
+
+const CONTEXT_SNAPSHOT_TABLES = [
+	{ key: 'storyEntries', table: storyEntries, storyColumn: storyEntries.storyId },
+	{ key: 'entities', table: entities, storyColumn: entities.storyId },
+	{ key: 'entityAliases', table: entityAliases, storyColumn: entityAliases.storyId },
+	{ key: 'relationships', table: relationships, storyColumn: relationships.storyId },
+	{ key: 'factions', table: factions, storyColumn: factions.storyId },
+	{ key: 'factionMemberships', table: factionMemberships, storyColumn: factionMemberships.storyId },
+	{ key: 'factionResources', table: factionResources, storyColumn: factionResources.storyId },
+	{ key: 'factionGoals', table: factionGoals, storyColumn: factionGoals.storyId },
+	{ key: 'factionProjects', table: factionProjects, storyColumn: factionProjects.storyId },
+	{ key: 'agreements', table: agreements, storyColumn: agreements.storyId },
+	{ key: 'storyThreads', table: storyThreads, storyColumn: storyThreads.storyId },
+	{ key: 'npcBeliefs', table: npcBeliefs, storyColumn: npcBeliefs.storyId },
+	{ key: 'storyEvents', table: storyEvents, storyColumn: storyEvents.storyId },
+	{ key: 'npcEventLinks', table: npcEventLinks, storyColumn: npcEventLinks.storyId },
+	{ key: 'statePatches', table: statePatches, storyColumn: statePatches.storyId },
+	{ key: 'facts', table: facts, storyColumn: facts.storyId },
+	{ key: 'sourceRefs', table: sourceRefs, storyColumn: sourceRefs.storyId },
+	{ key: 'patchProposals', table: patchProposals, storyColumn: patchProposals.storyId },
+	{ key: 'continuityWarnings', table: continuityWarnings, storyColumn: continuityWarnings.storyId },
+	{ key: 'memoryNodes', table: memoryNodes, storyColumn: memoryNodes.storyId },
+	{ key: 'chapters', table: chapters, storyColumn: chapters.storyId },
+	{ key: 'arcs', table: arcs, storyColumn: arcs.storyId },
+	{ key: 'sagas', table: sagas, storyColumn: sagas.storyId },
+] as const;
+
+const CONTEXT_RESTORE_DELETE_ORDER = [
+	'contextCheckpointsIgnored',
+	'npcEventLinks',
+	'sourceRefs',
+	'entityAliases',
+	'factionMemberships',
+	'factionResources',
+	'factionGoals',
+	'factionProjects',
+	'npcBeliefs',
+	'relationships',
+	'facts',
+	'patchProposals',
+	'continuityWarnings',
+	'memoryNodes',
+	'statePatches',
+	'storyEvents',
+	'storyThreads',
+	'chapters',
+	'arcs',
+	'sagas',
+	'agreements',
+	'factions',
+	'entities',
+	'storyEntries',
+] as const;
+
+const CONTEXT_RESTORE_INSERT_ORDER = [
+	'storyEntries',
+	'entities',
+	'factions',
+	'agreements',
+	'storyThreads',
+	'storyEvents',
+	'chapters',
+	'arcs',
+	'sagas',
+	'entityAliases',
+	'relationships',
+	'factionMemberships',
+	'factionResources',
+	'factionGoals',
+	'factionProjects',
+	'npcBeliefs',
+	'npcEventLinks',
+	'statePatches',
+	'facts',
+	'patchProposals',
+	'continuityWarnings',
+	'memoryNodes',
+	'sourceRefs',
+] as const;
+
+function snapshotTableByKey(key: string) {
+	return CONTEXT_SNAPSHOT_TABLES.find((spec) => spec.key === key) ?? null;
+}
+
+function rowsForSnapshotKey(snapshotTables: JsonRecord, key: string): JsonRecord[] {
+	const rows = snapshotTables[key];
+	return Array.isArray(rows) ? rows.filter((row): row is JsonRecord => Boolean(row && typeof row === 'object' && !Array.isArray(row))) : [];
+}
+
+export async function createContextCheckpoint(storyId: string, input: unknown = {}) {
+	const request = asRecord(input);
+	const db = getDb();
+	const now = nowIso();
+	return await db.transaction(async (tx) => {
+		const [story] = await tx.select().from(stories).where(eq(stories.id, storyId)).limit(1);
+		if (!story) throw new Error(`Story not found: ${storyId}`);
+		const [lastEntry] = await tx.select({ position: storyEntries.position })
+			.from(storyEntries)
+			.where(eq(storyEntries.storyId, storyId))
+			.orderBy(desc(storyEntries.position))
+			.limit(1);
+		const snapshotTables: JsonRecord = {};
+		for (const spec of CONTEXT_SNAPSHOT_TABLES) {
+			snapshotTables[spec.key] = await selectStoryRows(tx, spec.table, spec.storyColumn, storyId);
+		}
+		const checkpointId = id('checkpoint');
+		const label = asString(request.label, `Checkpoint turn ${story.currentTurn}`);
+		const reason = asNullableString(request.reason);
+		const snapshot = {
+			version: 1,
+			story: {
+				id: story.id,
+				currentLocationId: story.currentLocationId,
+				currentTurn: story.currentTurn,
+				currentWorldTime: story.currentWorldTime,
+				metadata: story.metadata,
+			},
+			tables: snapshotTables,
+		};
+		const serverVersion = await bumpStoryVersionTx(tx, storyId, now);
+		const [checkpoint] = await tx.insert(contextCheckpoints).values({
+			id: checkpointId,
+			storyId,
+			label,
+			reason,
+			entryPosition: lastEntry?.position ?? -1,
+			currentTurn: story.currentTurn,
+			snapshot,
+			metadata: {
+				sourceType: 'manual_context_checkpoint',
+				tableCount: CONTEXT_SNAPSHOT_TABLES.length,
+			},
+			serverVersion,
+			createdAt: now,
+			updatedAt: now,
+		}).returning();
+		return { storyId, serverVersion, checkpoint };
+	});
+}
+
+export async function listContextCheckpoints(storyId: string, limit = 50) {
+	const max = Math.max(1, Math.min(200, Math.trunc(limit)));
+	const checkpoints = await getDb()
+		.select({
+			id: contextCheckpoints.id,
+			storyId: contextCheckpoints.storyId,
+			label: contextCheckpoints.label,
+			reason: contextCheckpoints.reason,
+			entryPosition: contextCheckpoints.entryPosition,
+			currentTurn: contextCheckpoints.currentTurn,
+			metadata: contextCheckpoints.metadata,
+			serverVersion: contextCheckpoints.serverVersion,
+			createdAt: contextCheckpoints.createdAt,
+			updatedAt: contextCheckpoints.updatedAt,
+		})
+		.from(contextCheckpoints)
+		.where(eq(contextCheckpoints.storyId, storyId))
+		.orderBy(desc(contextCheckpoints.createdAt))
+		.limit(max);
+	return { storyId, checkpoints };
+}
+
+export async function revertToContextCheckpoint(storyId: string, input: unknown) {
+	const request = asRecord(input);
+	const checkpointId = asString(request.checkpointId).trim();
+	if (!checkpointId) throw new Error('Checkpoint id is required.');
+	const db = getDb();
+	const now = nowIso();
+	const result = await db.transaction(async (tx) => {
+		const [checkpoint] = await tx.select().from(contextCheckpoints).where(and(
+			eq(contextCheckpoints.storyId, storyId),
+			eq(contextCheckpoints.id, checkpointId),
+		)).limit(1);
+		if (!checkpoint) throw new Error(`Context checkpoint not found: ${checkpointId}`);
+		const snapshot = asRecord(checkpoint.snapshot);
+		const storySnapshot = asRecord(snapshot.story);
+		const snapshotTables = asRecord(snapshot.tables);
+		const serverVersion = await bumpStoryVersionTx(tx, storyId, now);
+		const restoredCounts: JsonRecord = {};
+
+		for (const key of CONTEXT_RESTORE_DELETE_ORDER) {
+			const spec = snapshotTableByKey(key);
+			if (!spec) continue;
+			await clearStoryRows(tx, spec.table, spec.storyColumn, storyId);
+		}
+		for (const key of CONTEXT_RESTORE_INSERT_ORDER) {
+			const spec = snapshotTableByKey(key);
+			if (!spec) continue;
+			restoredCounts[key] = await restoreStoryRows(tx, spec.table, rowsForSnapshotKey(snapshotTables, key), serverVersion, now);
+		}
+		await tx.update(stories).set({
+			currentLocationId: asNullableString(storySnapshot.currentLocationId),
+			currentTurn: asNumber(storySnapshot.currentTurn, checkpoint.currentTurn),
+			currentWorldTime: asNullableString(storySnapshot.currentWorldTime),
+			metadata: {
+				...asRecord(storySnapshot.metadata),
+				lastContextCheckpointRevert: {
+					checkpointId,
+					revertedAt: now,
+					reason: asNullableString(request.reason),
+				},
+			},
+			serverVersion,
+			updatedAt: now,
+		}).where(eq(stories.id, storyId));
+		await tx.update(contextCheckpoints).set({
+			metadata: {
+				...asRecord(checkpoint.metadata),
+				lastRevertedAt: now,
+				lastRevertReason: asNullableString(request.reason),
+			},
+			serverVersion,
+			updatedAt: now,
+		}).where(eq(contextCheckpoints.id, checkpoint.id));
+		return {
+			storyId,
+			serverVersion,
+			checkpoint: {
+				...checkpoint,
+				metadata: {
+					...asRecord(checkpoint.metadata),
+					lastRevertedAt: now,
+					lastRevertReason: asNullableString(request.reason),
+				},
+				serverVersion,
+				updatedAt: now,
+			},
+			restoredCounts,
+		};
+	});
+	await queueStoryVaultSync(storyId, result.serverVersion, 'context-checkpoint-revert', {
+		checkpointId,
+		reason: asNullableString(request.reason),
+	});
+	return result;
 }
 
 function sagaMetadataFromLocal(saga: JsonRecord, existing: JsonRecord = {}): JsonRecord {

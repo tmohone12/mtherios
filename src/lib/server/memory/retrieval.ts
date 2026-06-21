@@ -41,6 +41,7 @@ function toMemoryNode(row: MemoryNodeRow): MemoryNode {
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),
 		sourcePatchIds: asStringArray(row.sourcePatchIds),
+		metadata: row.metadata,
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt,
 	};
@@ -244,7 +245,13 @@ async function vectorCandidateNodes(
 			.limit(80);
 		return rows.map((row, index) => ({
 			...toMemoryNode(row),
-			score: Math.max(0.2, 0.95 - (index * 0.006)),
+			metadata: {
+				...row.metadata,
+				retrieval: {
+					...(typeof row.metadata.retrieval === 'object' && row.metadata.retrieval !== null && !Array.isArray(row.metadata.retrieval) ? row.metadata.retrieval : {}),
+					vectorScore: Math.max(0.2, 0.95 - (index * 0.006)),
+				},
+			},
 		}));
 	} catch (error) {
 		console.warn('[BackendMemory] Vector retrieval unavailable; using text/ranking fallback:', error);

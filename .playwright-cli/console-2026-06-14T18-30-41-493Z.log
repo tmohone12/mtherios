@@ -1,0 +1,3783 @@
+[      34ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:5173/favicon.ico:0
+[     596ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ http://127.0.0.1:5173/:0
+[   25672ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[  253226ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[  259734ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[  514669ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[  521741ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[  525929ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[  535108ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[  541564ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[  726084ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[  773575ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[ 1220718ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[ 1239233ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[ 1248258ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[ 1289898ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[ 1297420ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[ 1382410ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[ 1419013ms] [ERROR] Failed to load resource: the server responded with a status of 504 (Outdated Optimize Dep) @ http://127.0.0.1:5173/node_modules/.vite/deps/dompurify.js?v=f2d7d7e6:0
+[ 1419014ms] [WARNING] The next HMR update will cause the page to reload @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=0e2edd55:3211
+[ 1419014ms] [ERROR] TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:5173/.svelte-kit/generated/client/nodes/0.js @ http://127.0.0.1:5173/@fs/E:/DEV/Projects/mtherios-factions/.svelte-kit/generated/client/app.js:15
+[ 1419015ms] Failed to fetch dynamically imported module: http://127.0.0.1:5173/.svelte-kit/generated/client/nodes/0.js
+[ 1419015ms] Failed to fetch dynamically imported module: http://127.0.0.1:5173/.svelte-kit/generated/client/nodes/0.js
+[ 1420976ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:125:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-MYVAZYHE.js?v=993ad540:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:856:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=993ad540:3211
+[ 1442912ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[ 1510369ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[ 1692874ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[ 1697881ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[ 1711254ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts?t=1781463552402:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts?t=1781463552402:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[ 1720444ms] [WARNING] [Story] terminal runtime unavailable; refusing cached story fallback: ZodError: [
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      0,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      1,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      2,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      3,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      4,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      5,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      6,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      7,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      8,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      9,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      10,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      11,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      12,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      13,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      14,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      15,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      16,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      17,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      18,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      19,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  },
+  {
+    "expected": "record",
+    "code": "invalid_type",
+    "path": [
+      "memoryNodes",
+      20,
+      "metadata"
+    ],
+    "message": "Invalid input: expected record, received array"
+  }
+]
+    at sendStoryEngineCommandResult (http://127.0.0.1:5173/src/lib/services/serverStories.ts?t=1781463552402:128:17)
+    at async Module.track_reactivity_loss (http://127.0.0.1:5173/node_modules/.vite/deps/chunk-U5OUXPPU.js?v=74e319ae:1605:15)
+    at async StoryStore.loadStory (http://127.0.0.1:5173/src/lib/stores/story.svelte.ts?t=1781463552402:871:25) @ http://127.0.0.1:5173/node_modules/@sveltejs/kit/src/runtime/client/client.js?v=74e319ae:3211
+[63907480ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[63907481ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[174697395ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[174697397ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[175045778ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[175045778ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[177705390ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[177705391ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[177710448ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179471233ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179471233ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[179476302ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179481359ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179486416ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179491455ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179496497ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179501554ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179506612ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179511670ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179516731ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179521801ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179526839ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179531884ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179536925ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179541971ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179547038ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179552103ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179557157ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179562203ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179567274ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179572327ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179577391ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179582446ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179587495ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179592552ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179597592ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179602656ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179607698ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179612759ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179617806ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179622857ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179627927ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179632974ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179638020ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179643069ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179648101ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179653152ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179658205ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179663247ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179668304ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179673373ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179678436ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179683498ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179688548ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179693587ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179698633ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179703688ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179708724ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179713771ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179718821ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179723876ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179728925ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179733951ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179739012ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179744077ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179749133ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179754183ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179759208ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179764268ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179769322ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179774366ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179779421ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179784465ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179789506ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179794558ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179799612ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179804654ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179807668ms] [ERROR] Failed to load resource: net::ERR_NO_BUFFER_SPACE @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179812697ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179817733ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179822762ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179827822ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179832877ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179837943ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179842997ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179848041ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179853074ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179858095ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179863146ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179868199ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179873230ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[179878268ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[264434425ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[264434426ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[278125213ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[278125215ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[278127431ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/command:0
+[278130265ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[278484335ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[278484337ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[279000093ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[279000101ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[279121671ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[279121674ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[279126721ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[337452097ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[337452111ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[337949174ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[337949175ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[338166995ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[338166995ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[338809138ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[338809139ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0
+[339282709ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:864
+[339282710ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:5173/api/engine/stream?storyId=story_volantis_black_walls&replay=25:0

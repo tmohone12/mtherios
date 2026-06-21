@@ -72,6 +72,48 @@ describe('backend import engine gateway client', () => {
 		});
 	});
 
+	it('imports full backend database bundles through the world database importer', async () => {
+		const bundle = {
+			story: { id: 'story_import', title: 'Imported Campaign' },
+			storyEntries: [{ id: 'entry_1', content: 'Arrival.' }],
+			worldDatabase: {
+				story: { id: 'story_import', title: 'Imported Campaign' },
+				entries: [{ id: 'entry_1', storyId: 'story_import', content: 'Arrival.' }],
+				sourceRefs: [{ id: 'source_ref_1', storyId: 'story_import' }],
+				memoryNodes: [{ id: 'memory_1', storyId: 'story_import' }],
+			},
+		};
+		fetchMock.mockResolvedValue(engineResponse('database.importWorldBundle', {
+			ok: true,
+			storyId: 'story_import_copy',
+			serverVersion: 9,
+			counts: { stories: 1, entries: 1, sourceRefs: 1, memoryNodes: 1 },
+			jobIds: [],
+			importedAt: '2026-06-21T00:00:00.000Z',
+		}));
+
+		const result = await importStoryBundleToBackend(bundle, 'local_story');
+
+		expect(result).toEqual({
+			serverStoryId: 'story_import_copy',
+			serverVersion: 9,
+			counts: { stories: 1, entries: 1, sourceRefs: 1, memoryNodes: 1 },
+		});
+		expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+			storyId: 'story_import',
+			command: 'database.importWorldBundle',
+			args: {
+				bundle,
+				options: { preserveIds: false, replaceExisting: false, syncWiki: true },
+			},
+		});
+		expect(vi.mocked(updateStory)).toHaveBeenCalledWith('local_story', {
+			serverStoryId: 'story_import_copy',
+			serverVersion: 9,
+			syncStatus: 'synced',
+		});
+	});
+
 	it('surfaces failed engine imports', async () => {
 		fetchMock.mockResolvedValue(engineResponse('story.importIndexedDb', null, 'failed'));
 

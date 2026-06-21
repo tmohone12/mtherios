@@ -691,6 +691,65 @@ describe('legacy API route gateway compatibility', () => {
 		]);
 	});
 
+	it('wraps chapter arc deletes and context checkpoint routes in the engine command envelope', async () => {
+		const chapter = await import('./stories/[id]/chapters/[chapterId]/+server');
+		const arc = await import('./stories/[id]/arcs/[arcId]/+server');
+		const checkpoints = await import('./stories/[id]/context-checkpoints/+server');
+		const checkpointRevert = await import('./stories/[id]/context-checkpoints/[checkpointId]/revert/+server');
+
+		const chapterResponse = await chapter.DELETE({
+			params: { id: 'story_alpha', chapterId: 'chapter_2' },
+		} as Parameters<typeof chapter.DELETE>[0]);
+		const arcResponse = await arc.DELETE({
+			params: { id: 'story_alpha', arcId: 'arc_2' },
+		} as Parameters<typeof arc.DELETE>[0]);
+		const checkpointListResponse = await checkpoints.GET({
+			params: { id: 'story_alpha' },
+			url: new URL('http://localhost/api/stories/story_alpha/context-checkpoints?limit=9'),
+		} as Parameters<typeof checkpoints.GET>[0]);
+		const checkpointCreateResponse = await checkpoints.POST({
+			params: { id: 'story_alpha' },
+			request: jsonRequest({ label: 'Before poison' }),
+		} as Parameters<typeof checkpoints.POST>[0]);
+		const checkpointRevertResponse = await checkpointRevert.POST({
+			params: { id: 'story_alpha', checkpointId: 'checkpoint_1' },
+			request: jsonRequest({ reason: 'Bad context' }),
+		} as Parameters<typeof checkpointRevert.POST>[0]);
+
+		expect(chapterResponse.status).toBe(200);
+		expect(arcResponse.status).toBe(200);
+		expect(checkpointListResponse.status).toBe(200);
+		expect(checkpointCreateResponse.status).toBe(200);
+		expect(checkpointRevertResponse.status).toBe(200);
+		expect(commandCalls).toEqual([
+			{
+				storyId: 'story_alpha',
+				command: 'chapter.delete',
+				args: { chapterId: 'chapter_2' },
+			},
+			{
+				storyId: 'story_alpha',
+				command: 'arc.delete',
+				args: { arcId: 'arc_2' },
+			},
+			{
+				storyId: 'story_alpha',
+				command: 'context.checkpoint.list',
+				args: { limit: 9 },
+			},
+			{
+				storyId: 'story_alpha',
+				command: 'context.checkpoint.create',
+				args: { label: 'Before poison' },
+			},
+			{
+				storyId: 'story_alpha',
+				command: 'context.checkpoint.revert',
+				args: { reason: 'Bad context', checkpointId: 'checkpoint_1' },
+			},
+		]);
+	});
+
 	it('wraps entries-around reads in the engine command envelope', async () => {
 		const around = await import('./stories/[id]/entries/around/[position]/+server');
 

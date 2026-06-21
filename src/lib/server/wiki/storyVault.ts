@@ -1003,7 +1003,9 @@ function renderCharacterProjection(
 		sourceRefs,
 		confidence,
 		description: entity.description || '_No description yet._',
+		currentStateLines: characterCurrentStateLines(entity, entityTitleMap),
 		profileLines,
+		eventMemoryLines: characterEventMemoryLines(entity),
 		relatedFactions: relatedFactionLines,
 		relationships: outgoing.map((rel) => relationshipLine(rel, entityTitleMap)),
 		beliefsHeld: beliefsHeld.map((belief) => beliefLine(belief, entityTitleMap)),
@@ -1291,12 +1293,15 @@ function entityProfileLines(entity: EntityRow, entityTitleMap: Map<string, strin
 	const lines: string[] = [];
 	const type = String(state.type || entity.type);
 
-	pushLabeledValue(lines, 'Current location', linkIfKnown(firstString(state, ['currentLocation', 'currentLocationId', 'lastSeenLocation']), entityTitleMap));
+	pushLabeledValue(lines, 'Appearance', firstString(state, ['appearance']));
+	pushLabeledValue(lines, 'Background', firstString(state, ['background', 'bio']));
+	pushLabeledValue(lines, 'Speech style', firstString(state, ['speechStyle', 'voice']));
 	pushLabeledValue(lines, 'Disposition', firstString(state, ['currentDisposition', 'disposition', 'status']));
 	pushLabeledValue(lines, 'Personality', firstString(state, ['personality', 'personalOpinion']));
 	pushLabeledList(lines, 'Motivations', stringListFromKeys(state, ['motivations', 'goals', 'objectives']));
 	pushLabeledList(lines, 'Pressures', stringListFromKeys(state, ['pressures', 'activePressures']));
 	pushLabeledList(lines, 'Traits', stringListFromKeys(state, ['traits', 'tags']));
+	pushLabeledList(lines, 'Faction tags', stringListFromKeys(state, ['factionTags', 'faction_tags']));
 	pushLabeledList(lines, 'Known facts', stringListFromKeys(state, ['knownFacts', 'facts']));
 	pushLabeledList(lines, 'Secrets', stringListFromKeys(state, ['revealedSecrets', 'secrets']));
 	pushLabeledList(lines, 'Present characters', stringListFromKeys(state, ['presentCharacters']).map((value) => linkIfKnown(value, entityTitleMap)));
@@ -1318,6 +1323,38 @@ function entityProfileLines(entity: EntityRow, entityTitleMap: Map<string, strin
 	const legacyMetadata = asRecord(metadata.originalMetadata);
 	pushLabeledValue(lines, 'Original source', asString(legacyMetadata.source));
 	return lines;
+}
+
+function characterCurrentStateLines(entity: EntityRow, entityTitleMap: Map<string, string>): string[] {
+	const state = asRecord(entity.state);
+	const relationship = asRecord(state.relationship);
+	const lines: string[] = [];
+	if (typeof state.present === 'boolean') lines.push(`- Presence: ${state.present ? 'present in current scene' : 'not currently visible'}`);
+	pushLabeledValue(lines, 'Status', asString(state.status, entity.status));
+	pushLabeledValue(lines, 'Current location', linkIfKnown(firstString(state, ['currentLocation', 'currentLocationId', 'lastSeenLocation', 'location']), entityTitleMap));
+	pushLabeledValue(lines, 'Current action', firstString(state, ['currentAction', 'activeTask']));
+	pushLabeledValue(lines, 'Emotional state', firstString(state, ['emotionalState', 'emotionalPosture']));
+	if (Object.keys(relationship).length > 0) {
+		const status = asString(relationship.status);
+		const level = typeof relationship.level === 'number' ? relationship.level : null;
+		pushLabeledValue(lines, 'Relationship to player', [status, level != null ? `level ${level}` : ''].filter(Boolean).join(', '));
+	} else {
+		pushLabeledValue(lines, 'Relationship', firstString(state, ['relationship']));
+	}
+	return lines;
+}
+
+function characterEventMemoryLines(entity: EntityRow): string[] {
+	const state = asRecord(entity.state);
+	const memory = asRecord(state.eventMemory ?? state.npcEventMemory);
+	const labels = [
+		['did', 'Did'],
+		['saw', 'Saw'],
+		['knew', 'Knew'],
+		['knows', 'Knows'],
+	] as const;
+	return labels.flatMap(([key, label]) =>
+		asStringArray(memory[key]).slice(-8).map((item) => `- ${label}: ${compactText(item, 260)}`));
 }
 
 function membershipLine(

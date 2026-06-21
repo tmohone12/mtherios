@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
-import { arcs, backendJobs, chapters, factions, memoryNodes, stories, storyEntries, storyEvents } from '$lib/server/db/schema';
+import { arcs, backendJobs, chapters, entities, factions, memoryNodes, patchProposals, stories, storyEntries, storyEvents } from '$lib/server/db/schema';
 import type { MemoryNode } from '$lib/contracts/memory';
 import { getServerMemoryConfig } from '$lib/server/env';
 import {
@@ -12,7 +12,7 @@ import {
 import { getMtheriosAppConfig } from '$lib/server/app/config';
 import { getStoryVaultStatus, materializeStoryVault, writeStoryVaultLintReport, type StoryVaultStatus } from '$lib/server/wiki/storyVault';
 import { indexWiki, lintWiki } from '$lib/server/wiki/wikiCore';
-import { claimBackendJobs, enqueueStoryVaultSyncJob, markBackendJobComplete, markBackendJobFailed, type BackendJobType } from './outbox';
+import { claimBackendJobs, enqueueBackendJob, enqueueStoryVaultSyncJob, markBackendJobComplete, markBackendJobFailed, type BackendJobType } from './outbox';
 import { indexCanonicalRecords } from '$lib/server/engine/canonicalSearch';
 import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
 import { publishEngineEvent } from '$lib/server/engine/events';
@@ -22,13 +22,14 @@ import { mapWithConcurrency, readGenerationConcurrency } from '$lib/server/perfo
 import { buildTurnDebugSnapshot } from '$lib/server/turn/debugSnapshot';
 import { applyValidatedTurnUpdate, parseTurnUpdate, turnUpdateOperationCount } from '$lib/server/turn/patchValidator';
 import { buildStateExtractionPrompt } from '$lib/server/turn/promptPacket';
+import { isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from '$lib/server/memory/entityResolver';
 import {
 	ServerGenerationError,
 	generateServerTextWithMetrics,
 	parseJsonFromGeneratedText,
 	type ServerGenerationResult,
 } from '$lib/server/turn/provider';
-import { formatMtheriosMemorySummary } from '$lib/services/ai/context/mtheriosSummaryFormat';
+import { buildMtheriosSummaryInstruction, extractMtheriosSummarySection, formatMtheriosMemorySummary, summarizeMtheriosMemoryForRollup, type MtheriosCharacterState } from '$lib/services/ai/context/mtheriosSummaryFormat';
 
 type BackendJobRow = typeof backendJobs.$inferSelect;
 type ArcRow = typeof arcs.$inferSelect;
@@ -38,6 +39,102 @@ type StoryEntryRow = typeof storyEntries.$inferSelect;
 type StoryEventRow = typeof storyEvents.$inferSelect;
 type ProviderProfile = NonNullable<Awaited<ReturnType<typeof resolveServiceGeneration>>['profile']>;
 type GenerationResult = ServerGenerationResult | ServerGenerationError['result'];
+
+const ARC_ROLLUP_KEY_POINT_CHAR_LIMIT = 1200;
+const ARC_ROLLUP_CHARACTER_DEVELOPMENT_CHAR_LIMIT = 420;
+const ARC_ROLLUP_THREAD_CHAR_LIMIT = 240;
+const ARC_ROLLUP_THREAD_LIMIT = 20;
+
+export interface ChapterMemoryDigest {
+	title: string;
+	summary: string;
+	keywords: string[];
+	keyCharacters: string[];
+	keyLocations: string[];
+	plotThreads: string[];
+	emotionalTone: string;
+	source: 'deterministic' | 'llm';
+	model?: string;
+}
+
+export interface ChapterCharacterReferenceCandidate {
+	name: string;
+	description: string | null;
+	sourceEventIds: string[];
+	confidence: number;
+	reason: string;
+}
+
+export interface ChapterCharacterContextPatch {
+	state: Record<string, unknown>;
+	sourceEventIds: string[];
+	did: string[];
+	saw: string[];
+}
+
+export function chapterCharacterContextProposalValues(input: {
+	storyId: string;
+	entityId: string;
+	entityName: string;
+	chapterId: string;
+	chapterNumber: number;
+	chapterTitle: string | null;
+	patch: ChapterCharacterContextPatch;
+	sourceEntryIds: string[];
+	serverVersion: number;
+	now: string;
+}): typeof patchProposals.$inferInsert {
+	return {
+		id: stableId('proposal_chapter_character_context', [input.storyId, input.chapterId, input.entityId]),
+		storyId: input.storyId,
+		proposalType: 'character_context_update',
+		targetTable: 'entities',
+		targetRecordId: input.entityId,
+		proposedBy: 'chapter_scribe',
+		operations: [{ op: 'replace', path: `/characters/${input.entityId}/state`, value: input.patch.state }],
+		reason: `${input.entityName} appears in chapter ${input.chapterNumber}: ${input.chapterTitle ?? 'Untitled chapter'}.`,
+		suggestion: 'Review this chapter-derived character memory before applying it to canon.',
+		status: 'pending',
+		affectedEntityIds: [input.entityId],
+		confidence: 0.68,
+		sourceEntryIds: input.sourceEntryIds,
+		sourceEventIds: input.patch.sourceEventIds,
+		sourcePatchIds: [],
+		metadata: {
+			sourceType: 'chapter_character_context',
+			characterName: input.entityName,
+			chapterId: input.chapterId,
+			chapterNumber: input.chapterNumber,
+		},
+		serverVersion: input.serverVersion,
+		createdAt: input.now,
+		updatedAt: input.now,
+	};
+}
+
+export function refreshChapterCharacterContextProposalValues(
+	existingProposal: Pick<typeof patchProposals.$inferSelect, 'sourceEntryIds' | 'sourceEventIds' | 'metadata'>,
+	values: typeof patchProposals.$inferInsert,
+): Partial<typeof patchProposals.$inferInsert> {
+	const metadata = asRecord(values.metadata);
+	return {
+		operations: values.operations,
+		reason: values.reason,
+		suggestion: values.suggestion,
+		affectedEntityIds: values.affectedEntityIds,
+		confidence: values.confidence,
+		sourceEntryIds: uniqueStrings([...(existingProposal.sourceEntryIds ?? []), ...(values.sourceEntryIds ?? [])]),
+		sourceEventIds: uniqueStrings([...(existingProposal.sourceEventIds ?? []), ...(values.sourceEventIds ?? [])]),
+		metadata: {
+			...asRecord(existingProposal.metadata),
+			...metadata,
+			refreshedFromChapterId: metadata.chapterId,
+			refreshedFromChapterNumber: metadata.chapterNumber,
+		},
+		serverVersion: values.serverVersion,
+		updatedAt: values.updatedAt,
+	};
+}
 
 export interface BackendJobTimingReport {
 	jobId: string;
@@ -203,6 +300,102 @@ function stableId(prefix: string, parts: string[]): string {
 	return `${prefix}_${normalized || id('stable')}`;
 }
 
+function normalizedCharacterReference(value: string): string {
+	return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function characterReferenceMentioned(text: string, name: string): boolean {
+	const normalizedText = ` ${normalizedCharacterReference(text)} `;
+	const normalizedName = normalizedCharacterReference(name);
+	return Boolean(normalizedName) && normalizedText.includes(` ${normalizedName} `);
+}
+
+function cleanCharacterReferenceName(value: string): string {
+	return value.replace(/\s+/g, ' ').trim();
+}
+
+function plausibleCharacterReferenceName(value: string): boolean {
+	const normalized = normalizedCharacterReference(value);
+	if (!normalized || normalized.length < 3) return false;
+	if (isCharacterTitleOnlyName(value)) return false;
+	if (normalized === 'dancer' || normalized === 'fire wyrm' || normalized.endsWith(' warrior')) return false;
+	if (['player', 'narrator', 'chapter', 'scene', 'unknown', 'someone', 'innkeep'].includes(normalized)) return false;
+	if (/\b(house|court|empire|kingdom|city|quarter|market|fleet|army|bank|temple|palace)\b/.test(normalized)) return false;
+	return true;
+}
+
+export function chapterCharacterReferenceCandidates(input: {
+	digest: ChapterMemoryDigest;
+	events: Array<{ id?: string | null; title?: string | null; body?: string | null }>;
+	existingNames?: string[];
+}): ChapterCharacterReferenceCandidate[] {
+	const existing = new Set((input.existingNames ?? []).map(normalizedCharacterReference));
+	const candidates: ChapterCharacterReferenceCandidate[] = [];
+	for (const rawName of input.digest.keyCharacters) {
+		const name = cleanCharacterReferenceName(rawName);
+		const normalized = normalizedCharacterReference(name);
+		if (!plausibleCharacterReferenceName(name) || existing.has(normalized)) continue;
+
+		const sourceEventIds = uniqueStrings(input.events
+			.filter((event) => characterReferenceMentioned(`${event.title ?? ''} ${event.body ?? ''}`, name))
+			.map((event) => event.id ?? '')
+			.filter(Boolean));
+		const summaryHit = characterReferenceMentioned(input.digest.summary, name);
+		const importance = sourceEventIds.length + (summaryHit ? 1 : 0);
+		if (importance < 3) continue;
+
+		candidates.push({
+			name,
+			description: snippet(`${name} is important in this chapter checkpoint.`, 180),
+			sourceEventIds,
+			confidence: Math.min(0.82, 0.52 + (importance * 0.1)),
+			reason: summaryHit
+				? `${name} appears in the chapter summary and source events.`
+				: `${name} appears in multiple source events for this chapter.`,
+		});
+	}
+	return candidates;
+}
+
+function mergeStringList(previous: unknown, next: string[], max = 16): string[] {
+	return uniqueStrings([...asStringArray(previous), ...next]).slice(-max);
+}
+
+export function chapterCharacterContextPatch(input: {
+	entityId: string;
+	currentState: Record<string, unknown>;
+	digest: ChapterMemoryDigest;
+	events: StoryEventRow[];
+}): ChapterCharacterContextPatch | null {
+	const didEvents = input.events.filter((event) => asStringArray(event.actorEntityIds).includes(input.entityId));
+	const sawEvents = input.events.filter((event) =>
+		!asStringArray(event.actorEntityIds).includes(input.entityId) &&
+		asStringArray(event.targetEntityIds).includes(input.entityId)
+	);
+	const did = uniqueStrings(didEvents.map(eventSummaryForCharacter)).slice(-6);
+	const saw = uniqueStrings(sawEvents.map(eventSummaryForCharacter)).slice(-6);
+	if (!did.length && !saw.length) return null;
+
+	const memory = asRecord(input.currentState.eventMemory ?? input.currentState.npcEventMemory);
+	const state: Record<string, unknown> = {
+		...input.currentState,
+		currentAction: snippet([...did, ...saw].at(-1) ?? input.digest.title, 220),
+		eventMemory: {
+			...memory,
+			did: mergeStringList(memory.did, did),
+			saw: mergeStringList(memory.saw, saw),
+		},
+	};
+	const location = input.digest.keyLocations[0]?.trim();
+	if (location) state.currentLocation = location;
+	return {
+		state,
+		sourceEventIds: uniqueStrings([...didEvents, ...sawEvents].map((event) => event.id)),
+		did,
+		saw,
+	};
+}
+
 async function bumpStoryVersion(storyId: string): Promise<number> {
 	const [row] = await getDb()
 		.update(stories)
@@ -267,6 +460,11 @@ function eventImportance(row: StoryEventRow): number {
 	return 0.65;
 }
 
+export function shouldProjectEventToMemory(row: Pick<StoryEventRow, 'type' | 'title' | 'body'>): boolean {
+	if (row.type !== 'correction') return true;
+	return !/transcript context removed|poisoned context|deleted a poisoned context|removed transcript context/i.test(`${row.title}\n${row.body}`);
+}
+
 async function loadEventRows(storyId: string, eventIds: string[]): Promise<StoryEventRow[]> {
 	const db = getDb();
 	if (eventIds.length > 0) {
@@ -289,7 +487,9 @@ async function createMemoryNodesFromEvents(job: BackendJobRow): Promise<number> 
 	const eventIds = asStringArray(payload.eventIds);
 	const rows = await loadEventRows(job.storyId, eventIds);
 	const updatedAt = nowIso();
+	let created = 0;
 	for (const row of rows) {
+		if (!shouldProjectEventToMemory(row)) continue;
 		await db.insert(memoryNodes).values({
 			id: `mem_event_${row.id}`,
 			storyId: row.storyId,
@@ -332,8 +532,9 @@ async function createMemoryNodesFromEvents(job: BackendJobRow): Promise<number> 
 				updatedAt,
 			},
 		});
+		created += 1;
 	}
-	return rows.length;
+	return created;
 }
 
 function eventText(row: StoryEventRow): string {
@@ -999,9 +1200,12 @@ function cleanSummaryBeat(value: string, max = 220): string {
 }
 
 function checkpointBeat(entry: StoryEntryRow): string {
-	if (entry.type === 'user_action') return `Player: ${summarizePlayerAction(entry.content)}`;
-	if (entry.type === 'narration') return `Narrator: ${cleanSummaryBeat(entry.content)}`;
-	return `${entry.type}: ${cleanSummaryBeat(entry.content)}`;
+	if (entry.type === 'user_action') {
+		const action = summarizePlayerAction(entry.content);
+		return /^(?:says|asks|looks|walks|rises|acts:)\b/i.test(action) ? `The player character ${action}` : action;
+	}
+	if (entry.type === 'narration') return cleanSummaryBeat(entry.content, 1200);
+	return cleanSummaryBeat(entry.content, 1200);
 }
 
 function meaningfulEventString(event: StoryEventRow): string | null {
@@ -1009,6 +1213,87 @@ function meaningfulEventString(event: StoryEventRow): string | null {
 	const body = cleanSummaryBeat(event.body, 180);
 	if (!title || title.toLowerCase() === 'turn resolved') return null;
 	return `${event.type}: ${title}${body ? ` - ${body}` : ''}`;
+}
+
+function meaningfulEventStoryString(event: StoryEventRow): string | null {
+	const title = compactWhitespace(event.title);
+	const body = cleanSummaryBeat(event.body, 800);
+	if (!title || title.toLowerCase() === 'turn resolved') return null;
+	if (!body || body.toLowerCase() === title.toLowerCase()) return title;
+	return `${title} - ${body}`;
+}
+
+function chapterSynopsisParagraphs(beats: string[]): string[] {
+	if (beats.length <= 14) return beats;
+	const chunkSize = Math.ceil(beats.length / 3);
+	const groups = [
+		['Opening', beats.slice(0, chunkSize)],
+		['Middle', beats.slice(chunkSize, chunkSize * 2)],
+		['Ending', beats.slice(chunkSize * 2)],
+	] as const;
+	return groups
+		.filter(([, group]) => group.length > 0)
+		.flatMap(([label, group]) => [`${label}:`, ...group]);
+}
+
+function entryTimeMinutes(entry: StoryEntryRow): number | null {
+	const match = entry.content.match(/^\s*\[[^\]]*\bTime\s+(\d{1,2}):(\d{2})\b/i);
+	if (!match) return null;
+	const hours = Number.parseInt(match[1], 10);
+	const minutes = Number.parseInt(match[2], 10);
+	if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+	return (hours * 60) + minutes;
+}
+
+function chapterTimePassed(entries: StoryEntryRow[]): string {
+	const times = entries.map(entryTimeMinutes).filter((time): time is number => time !== null);
+	if (times.length < 2) return 'Time passed in this chapter: not established.';
+	const elapsed = times[times.length - 1] - times[0];
+	if (elapsed < 0) return 'Time passed in this chapter: not established.';
+	if (elapsed <= 1) return 'Time passed in this chapter: a minute or less.';
+	if (elapsed <= 5) return 'Time passed in this chapter: a few minutes.';
+	if (elapsed < 60) return `Time passed in this chapter: about ${elapsed} minutes.`;
+	const hours = Math.floor(elapsed / 60);
+	const minutes = elapsed % 60;
+	return `Time passed in this chapter: about ${hours} hour${hours === 1 ? '' : 's'}${minutes ? ` and ${minutes} minutes` : ''}.`;
+}
+
+function titleCaseFromId(value: string): string {
+	return value
+		.replace(/^(npc|pc|entity|character|char)_+/i, '')
+		.split(/[_\s-]+/)
+		.filter(Boolean)
+		.map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1).toLowerCase()}`)
+		.join(' ')
+		.trim() || value;
+}
+
+function eventEntityIds(events: StoryEventRow[]): string[] {
+	return uniqueStrings(events.flatMap((event) => [
+		...asStringArray(event.actorEntityIds),
+		...asStringArray(event.targetEntityIds),
+	])).slice(0, 16);
+}
+
+function eventSummaryForCharacter(event: StoryEventRow): string {
+	return meaningfulEventString(event) ?? (cleanSummaryBeat(event.body, 220) || 'Linked to this source event.');
+}
+
+function characterStatesForEvents(events: StoryEventRow[]): MtheriosCharacterState[] {
+	return eventEntityIds(events).map((entityId) => {
+		const relevantEvents = events
+			.filter((event) => [
+				...asStringArray(event.actorEntityIds),
+				...asStringArray(event.targetEntityIds),
+			].includes(entityId))
+			.map(eventSummaryForCharacter)
+			.filter(Boolean);
+		return {
+			name: titleCaseFromId(entityId),
+			entityId,
+			bullets: uniqueStrings(relevantEvents).slice(0, 3),
+		};
+	});
 }
 
 function parseCurrentAnchor(entries: StoryEntryRow[], first: StoryEntryRow, last: StoryEntryRow): string {
@@ -1021,14 +1306,17 @@ function parseCurrentAnchor(entries: StoryEntryRow[], first: StoryEntryRow, last
 		const location = header.match(/Location\s+([^|]+)/i)?.[1]?.trim();
 		const weather = header.match(/Weather\s+(.+)$/i)?.[1]?.trim();
 		if (time || date || location || weather) {
-			return `${date || 'day/date unknown'} | ${time || 'time unknown'} | ${location || 'location unknown'} | ${weather || 'weather unknown'}`;
+			const day = date ? `Day ${date.replace(/^Day\s+/i, '')}` : 'day/date unknown';
+			return `${day} | ${time || 'time unknown'} | ${location || 'location unknown'} | ${weather || 'weather unknown'}`;
 		}
 	}
 	return `positions ${first.position}-${last.position} | time unknown | location unknown | weather unknown, temp C unknown`;
 }
 
 function deriveChapterTitle(number: number, entries: StoryEntryRow[], events: StoryEventRow[]): string {
-	const eventTitle = events.find((event) => event.title.trim())?.title;
+	const eventTitle = events
+		.map((event) => compactWhitespace(event.title))
+		.find((title) => title && title.toLowerCase() !== 'turn resolved');
 	const firstAction = entries.find((entry) => entry.type === 'user_action')?.content;
 	const seed = eventTitle || firstAction || entries[0]?.content || `Chapter ${number}`;
 	const title = snippet(seed, 70).replace(/[.!?]+$/g, '');
@@ -1038,22 +1326,198 @@ function deriveChapterTitle(number: number, entries: StoryEntryRow[], events: St
 export function buildChapterSummary(entries: StoryEntryRow[], events: StoryEventRow[]): string {
 	const first = entries[0];
 	const last = entries[entries.length - 1];
-	const recentLines = entries.slice(0, 8).map(checkpointBeat);
-	if (entries.length > recentLines.length) recentLines.push(`${entries.length - recentLines.length} more transcript entries are covered by this checkpoint.`);
-	const importantStrings = [
-		...events.map(meaningfulEventString).filter((event): event is string => Boolean(event)).slice(0, 8),
-		`Source coverage: transcript positions ${first.position}-${last.position}; ${entries.length} entries; ${events.length} source event records.`,
-	];
+	const eventStoryLines = events.map(meaningfulEventStoryString).filter((event): event is string => Boolean(event));
+	const eventLines = events.map(meaningfulEventString).filter((event): event is string => Boolean(event));
+	const recentLines = uniqueStrings([
+		...eventStoryLines,
+		...chapterSynopsisParagraphs(entries.map(checkpointBeat)),
+		chapterTimePassed(entries),
+	]);
+	const activeThreads = uniqueStrings(eventLines).slice(0, 16);
 	return formatMtheriosMemorySummary({
-		beginning: `Terminal checkpoint covering transcript positions ${first.position}-${last.position}.`,
-		recent: recentLines,
-		charAppearance: 'not established',
-		charDemeanor: 'not established',
-		userAppearance: 'not established',
-		sideCharacters: uniqueStrings(events.flatMap((event) => asStringArray(event.actorEntityIds))).slice(0, 12),
-		importantStrings,
-		currently: parseCurrentAnchor(entries, first, last),
+		checkpoint: `Chapter checkpoint covering transcript positions ${first.position}-${last.position}.`,
+		sourceCoverage: [
+			`Transcript positions ${first.position}-${last.position}.`,
+			`${entries.length} entries covered.`,
+			`${events.length} source event records.`,
+		],
+		currentScene: parseCurrentAnchor(entries, first, last),
+		recentStoryState: recentLines,
+		characterStates: characterStatesForEvents(events),
+		activeThreads,
+		toneToContinue: 'Continue from the established scene pressure, character choices, and unresolved consequences.',
 	});
+}
+
+function friendlyEventType(type: string): string {
+	return compactWhitespace(type.replace(/[_-]+/g, ' ')).toLowerCase();
+}
+
+function locationFromAnchor(anchor: string): string | null {
+	const parts = anchor.split('|').map((part) => part.trim()).filter(Boolean);
+	const location = parts.length >= 3 ? parts[2] : null;
+	if (!location || /location unknown/i.test(location)) return null;
+	return location;
+}
+
+function locationsForChapter(entries: StoryEntryRow[], events: StoryEventRow[]): string[] {
+	const first = entries[0];
+	const last = entries[entries.length - 1];
+	const anchor = first && last ? locationFromAnchor(parseCurrentAnchor(entries, first, last)) : null;
+	return uniqueStrings([
+		anchor ?? '',
+		...events.flatMap((event) => {
+			const metadata = asRecord(event.metadata);
+			return [
+				metadata.location,
+				metadata.locationName,
+				metadata.place,
+			].filter((value): value is string => typeof value === 'string');
+		}),
+	].map((value) => compactWhitespace(value)).filter(Boolean)).slice(0, 8);
+}
+
+function chapterKeywords(entries: StoryEntryRow[], events: StoryEventRow[], keyLocations: string[], keyCharacters: string[]): string[] {
+	const eventTypes = events.map((event) => friendlyEventType(event.type)).filter(Boolean);
+	const titleTerms = events
+		.map((event) => compactWhitespace(event.title))
+		.filter((title) => title && title.toLowerCase() !== 'turn resolved')
+		.flatMap((title) => title.split(/\s+/).filter((part) => /^[A-Za-z][A-Za-z'-]{3,}$/.test(part)))
+		.map((part) => part.replace(/[^\w'-]/g, '').toLowerCase());
+	const locationTerms = keyLocations.flatMap((location) => location.split(/,\s*|\s+-\s+/).map((part) => part.trim().toLowerCase()));
+	const characterTerms = keyCharacters.map((character) => character.toLowerCase());
+	const chapterTerms = entries.length ? ['chapter', 'continuity memory'] : [];
+	return uniqueStrings([
+		...eventTypes,
+		...characterTerms,
+		...locationTerms,
+		...titleTerms,
+		...chapterTerms,
+	]).slice(0, 16);
+}
+
+function chapterTone(events: StoryEventRow[]): string {
+	const types = new Set(events.map((event) => event.type));
+	if (types.has('betrayal')) return 'betrayal pressure';
+	if (types.has('death') || types.has('injury')) return 'danger and consequence';
+	if (types.has('relationship_shift')) return 'courtly tension';
+	if (types.has('faction_move')) return 'political pressure';
+	if (types.has('reveal') || types.has('clue_discovery')) return 'revelatory tension';
+	return 'unresolved pressure';
+}
+
+export function buildChapterMemoryDigest(number: number, entries: StoryEntryRow[], events: StoryEventRow[]): ChapterMemoryDigest {
+	const keyCharacters = eventEntityIds(events).map(titleCaseFromId);
+	const keyLocations = locationsForChapter(entries, events);
+	const eventThreads = events.map(meaningfulEventString).filter((event): event is string => Boolean(event));
+	const eventTitles = events
+		.map((event) => compactWhitespace(event.title))
+		.filter((title) => title && title.toLowerCase() !== 'turn resolved');
+	const threadIds = uniqueStrings(events.flatMap((event) => asStringArray(event.threadIds)));
+	const plotThreads = uniqueStrings([
+		...threadIds,
+		...eventTitles,
+		...eventThreads,
+	]).slice(0, 12);
+	const keywords = chapterKeywords(entries, events, keyLocations, keyCharacters);
+	return {
+		title: deriveChapterTitle(number, entries, events),
+		summary: buildChapterSummary(entries, events),
+		keywords,
+		keyCharacters,
+		keyLocations,
+		plotThreads,
+		emotionalTone: chapterTone(events),
+		source: 'deterministic',
+	};
+}
+
+function generatedTextDigestPrompt(entries: StoryEntryRow[], events: StoryEventRow[], fallback: ChapterMemoryDigest): string {
+	const transcript = entries.map((entry) => `[${entry.position}] [${entry.type}] ${entry.content}`).join('\n\n');
+	const sourceEvents = events.map((event) => JSON.stringify({
+		id: event.id,
+		type: event.type,
+		title: event.title,
+		body: snippet(event.body, 800),
+		actorEntityIds: event.actorEntityIds,
+		targetEntityIds: event.targetEntityIds,
+		threadIds: event.threadIds,
+		metadata: event.metadata,
+	})).join('\n');
+	return [
+		'Condense this chapter window into durable story memory for the control surface.',
+		'Return strict JSON with title, summary, keywords, keyCharacters, keyLocations, plotThreads, emotionalTone.',
+		'Fill every array with useful values. Preserve entity ids inside summary character headers when source events provide ids.',
+		'Do not invent new canon. If a name or place is only implied by the text, include it as text evidence, not as a newly created entity.',
+		'Use plotThreads for unresolved dangers, promises, relationship tensions, mysteries, or thread ids that must carry forward.',
+		`Fallback title if needed: ${fallback.title}`,
+		'',
+		'Source events:',
+		sourceEvents || '(no structured source events)',
+		'',
+		'Transcript:',
+		transcript,
+	].join('\n');
+}
+
+function coerceGeneratedDigest(raw: unknown, fallback: ChapterMemoryDigest, result: ServerGenerationResult): ChapterMemoryDigest | null {
+	const record = asRecord(raw);
+	const title = compactWhitespace(typeof record.title === 'string' ? record.title : fallback.title);
+	const summary = typeof record.summary === 'string' ? record.summary.trim() : fallback.summary;
+	if (!title || !summary) return null;
+	return {
+		title,
+		summary,
+		keywords: uniqueStrings([...asStringArray(record.keywords), ...fallback.keywords]).slice(0, 16),
+		keyCharacters: uniqueStrings([
+			...asStringArray(record.keyCharacters),
+			...asStringArray(record.characters),
+			...fallback.keyCharacters,
+		]).slice(0, 16),
+		keyLocations: uniqueStrings([
+			...asStringArray(record.keyLocations),
+			...asStringArray(record.locations),
+			...fallback.keyLocations,
+		]).slice(0, 12),
+		plotThreads: uniqueStrings([
+			...asStringArray(record.plotThreads),
+			...asStringArray(record.activeThreads),
+			...fallback.plotThreads,
+		]).slice(0, 16),
+		emotionalTone: compactWhitespace(typeof record.emotionalTone === 'string' ? record.emotionalTone : fallback.emotionalTone),
+		source: 'llm',
+		model: result.model,
+	};
+}
+
+async function summarizeChapterMemoryWithLlm(entries: StoryEntryRow[], events: StoryEventRow[], fallback: ChapterMemoryDigest): Promise<ChapterMemoryDigest> {
+	const serviceIds = ['memory', 'classifier', 'narrative'];
+	for (const serviceId of serviceIds) {
+		const resolved = await resolveServiceGeneration(serviceId);
+		if (!resolved.profile) continue;
+		try {
+			const result = await generateServerTextWithMetrics({
+				profile: resolved.profile,
+				model: resolved.generation.model,
+				temperature: resolved.generation.temperature ?? 0.35,
+				maxTokens: Math.max(2048, Math.min(resolved.generation.maxTokens ?? 4096, 8192)),
+				timeoutMs: 90000,
+				system: [
+					'You are Mtherios chapter memory, not a narrator.',
+					'Write durable continuity memory that lets future scenes, POV switches, canon repair, and the frontend control surface remember what happened.',
+					buildMtheriosSummaryInstruction('chapter'),
+					'The response must be valid JSON only.',
+				].join('\n\n'),
+				prompt: generatedTextDigestPrompt(entries, events, fallback),
+				responseFormat: 'json_object',
+			});
+			const digest = coerceGeneratedDigest(parseJsonFromGeneratedText(result.text), fallback, result);
+			if (digest) return digest;
+		} catch (error) {
+			console.warn(`[jobs] chapter memory LLM summarization failed via ${serviceId}:`, error);
+		}
+	}
+	return fallback;
 }
 
 async function upsertChapterMemoryNode(input: {
@@ -1061,6 +1525,8 @@ async function upsertChapterMemoryNode(input: {
 	chapterId: string;
 	title: string;
 	summary: string;
+	keywords: string[];
+	entityIds: string[];
 	sourceEntryIds: string[];
 	sourceEventIds: string[];
 	threadIds: string[];
@@ -1075,8 +1541,8 @@ async function upsertChapterMemoryNode(input: {
 		title: input.title,
 		content: input.summary,
 		summary: input.summary,
-		keywords: ['chapter', 'terminal_checkpoint'],
-		entityIds: [],
+		keywords: uniqueStrings(['chapter', 'terminal_checkpoint', ...input.keywords]).slice(0, 24),
+		entityIds: input.entityIds,
 		factionIds: [],
 		threadIds: input.threadIds,
 		locationId: null,
@@ -1095,6 +1561,8 @@ async function upsertChapterMemoryNode(input: {
 			title: input.title,
 			content: input.summary,
 			summary: input.summary,
+			keywords: uniqueStrings(['chapter', 'terminal_checkpoint', ...input.keywords]).slice(0, 24),
+			entityIds: input.entityIds,
 			threadIds: input.threadIds,
 			sourceEntryIds: input.sourceEntryIds,
 			sourceEventIds: input.sourceEventIds,
@@ -1103,6 +1571,170 @@ async function upsertChapterMemoryNode(input: {
 			updatedAt: input.now,
 		},
 	});
+}
+
+async function createChapterCharacterReferenceProposals(input: {
+	storyId: string;
+	chapter: typeof chapters.$inferSelect;
+	digest: ChapterMemoryDigest;
+	events: StoryEventRow[];
+	sourceEntryIds: string[];
+	serverVersion: number;
+	now: string;
+}): Promise<Record<string, unknown>> {
+	const db = getDb();
+	const candidates = chapterCharacterReferenceCandidates({ digest: input.digest, events: input.events });
+	let created = 0;
+	let skipped = 0;
+
+	for (const candidate of candidates) {
+		if (isCharacterTitleOnlyName(candidate.name)) {
+			skipped += 1;
+			continue;
+		}
+		const targetRecordId = stableId('unresolved_character', [candidate.name]);
+		const resolution = await resolveEntityIdentity({
+			storyId: input.storyId,
+			candidate: {
+				type: 'character',
+				name: candidate.name,
+				description: candidate.description,
+				sourceEntryIds: input.sourceEntryIds,
+				sourceEventIds: candidate.sourceEventIds,
+			},
+			includeSemantic: false,
+		});
+		if (shouldReuseResolvedEntity(resolution) || resolution.decision === 'ask') {
+			skipped += 1;
+			continue;
+		}
+
+		const [existingProposal] = await db.select({ id: patchProposals.id }).from(patchProposals).where(and(
+			eq(patchProposals.storyId, input.storyId),
+			eq(patchProposals.proposalType, 'character_reference_review'),
+			eq(patchProposals.targetRecordId, targetRecordId),
+			inArray(patchProposals.status, ['pending', 'needs_review']),
+		)).limit(1);
+		if (existingProposal) {
+			skipped += 1;
+			continue;
+		}
+
+		const [inserted] = await db.insert(patchProposals).values({
+			id: stableId('proposal_auto_character', [input.storyId, candidate.name]),
+			storyId: input.storyId,
+			proposalType: 'character_reference_review',
+			targetTable: 'entities',
+			targetRecordId,
+			proposedBy: 'chapter_scribe',
+			operations: [{
+				op: 'review',
+				path: '/entities/character',
+				value: {
+					storyId: input.storyId,
+					type: 'character',
+					name: candidate.name,
+					description: candidate.description,
+					status: 'active',
+					visibility: 'player_known',
+					state: {
+						type: 'character',
+						firstSeenChapterId: input.chapter.id,
+						firstSeenChapterNumber: input.chapter.number,
+						eventMemory: { did: [], saw: [], knew: [] },
+					},
+				},
+			}],
+			reason: candidate.reason,
+			suggestion: 'Review this chapter-important character before creating canon.',
+			status: 'pending',
+			affectedEntityIds: [],
+			confidence: candidate.confidence,
+			sourceEntryIds: input.sourceEntryIds,
+			sourceEventIds: candidate.sourceEventIds,
+			sourcePatchIds: [],
+			metadata: {
+				sourceType: 'chapter_character_reference',
+				sourceName: candidate.name,
+				chapterId: input.chapter.id,
+				chapterNumber: input.chapter.number,
+			},
+			serverVersion: input.serverVersion,
+			createdAt: input.now,
+			updatedAt: input.now,
+		}).onConflictDoNothing().returning({ id: patchProposals.id });
+		created += inserted ? 1 : 0;
+		skipped += inserted ? 0 : 1;
+	}
+
+	return { candidates: candidates.length, created, skipped };
+}
+
+async function createChapterCharacterContextUpdateProposals(input: {
+	storyId: string;
+	chapter: typeof chapters.$inferSelect;
+	digest: ChapterMemoryDigest;
+	events: StoryEventRow[];
+	sourceEntryIds: string[];
+	serverVersion: number;
+	now: string;
+}): Promise<Record<string, unknown>> {
+	const db = getDb();
+	const ids = eventEntityIds(input.events);
+	if (!ids.length) return { candidates: 0, created: 0, skipped: 0 };
+
+	const rows = await db.select().from(entities).where(and(
+		eq(entities.storyId, input.storyId),
+		eq(entities.type, 'character'),
+		eq(entities.status, 'active'),
+		inArray(entities.id, ids),
+	)).limit(12);
+	let created = 0;
+	let updated = 0;
+	let skipped = 0;
+
+	for (const entity of rows) {
+		const patch = chapterCharacterContextPatch({
+			entityId: entity.id,
+			currentState: asRecord(entity.state),
+			digest: input.digest,
+			events: input.events,
+		});
+		if (!patch) {
+			skipped += 1;
+			continue;
+		}
+		const values = chapterCharacterContextProposalValues({
+			storyId: input.storyId,
+			entityId: entity.id,
+			entityName: entity.name,
+			chapterId: input.chapter.id,
+			chapterNumber: input.chapter.number,
+			chapterTitle: input.chapter.title,
+			patch,
+			sourceEntryIds: input.sourceEntryIds,
+			serverVersion: input.serverVersion,
+			now: input.now,
+		});
+		const [existingProposal] = await db.select().from(patchProposals).where(and(
+			eq(patchProposals.storyId, input.storyId),
+			eq(patchProposals.proposalType, 'character_context_update'),
+			eq(patchProposals.targetRecordId, entity.id),
+			inArray(patchProposals.status, ['pending', 'needs_review']),
+		)).limit(1);
+		if (existingProposal) {
+			await db.update(patchProposals).set(refreshChapterCharacterContextProposalValues(existingProposal, values))
+				.where(eq(patchProposals.id, existingProposal.id));
+			updated += 1;
+			continue;
+		}
+
+		const [inserted] = await db.insert(patchProposals).values(values).onConflictDoNothing().returning({ id: patchProposals.id });
+		created += inserted ? 1 : 0;
+		skipped += inserted ? 0 : 1;
+	}
+
+	return { candidates: rows.length, created, updated, skipped };
 }
 
 async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
@@ -1136,15 +1768,18 @@ async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingReco
 	}, () => loadEventsForEntries(job.storyId, sourceEntryIds));
 	const sourceEventIds = events.map((event) => event.id);
 	const threadIds = uniqueStrings(events.flatMap((event) => asStringArray(event.threadIds)));
+	const entityIds = eventEntityIds(events);
 	const number = (previousChapter?.number ?? 0) + 1;
 	const chapterId = stableId('chapter', [first.id, last.id]);
-	const { title, summary } = timePhaseSync(recorder, 'job.summarize_chapter.build_summary', {
+	const fallbackDigest = timePhaseSync(recorder, 'job.summarize_chapter.build_summary', {
 		entries: chapterEntries.length,
 		events: events.length,
-	}, () => ({
-		title: deriveChapterTitle(number, chapterEntries, events),
-		summary: buildChapterSummary(chapterEntries, events),
-	}));
+	}, () => buildChapterMemoryDigest(number, chapterEntries, events));
+	const digest = await timePhase(recorder, 'job.summarize_chapter.llm_memory_digest', {
+		entries: chapterEntries.length,
+		events: events.length,
+	}, () => summarizeChapterMemoryWithLlm(chapterEntries, events, fallbackDigest));
+	const { title, summary } = digest;
 	const now = nowIso();
 	const serverVersion = await timePhase(recorder, 'job.summarize_chapter.bump_version', {}, () => bumpStoryVersion(job.storyId));
 	const irreversibleChanges = events
@@ -1169,17 +1804,24 @@ async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingReco
 		discoveredClues: events.filter((event) => event.type === 'clue_discovery').map((event) => event.title),
 		relationshipChanges: events.filter((event) => event.type === 'relationship_shift').map((event) => event.title),
 		factionChanges,
-		openThreads: threadIds,
+		openThreads: digest.plotThreads,
 		sourceEntryIds,
 		sourceEventIds,
 		metadata: {
 			sourceType: 'terminal_chapter_job',
 			jobId: job.id,
+			summarySource: digest.source,
+			summaryModel: digest.model ?? null,
 			entryCount: chapterEntries.length,
 			startPosition: first.position,
 			endPosition: last.position,
 			threshold,
 			postChapterBuffer: buffer,
+			trackedEntityIds: entityIds,
+			legacyKeywords: digest.keywords,
+			legacyCharacters: digest.keyCharacters,
+			legacyLocations: digest.keyLocations,
+			emotionalTone: digest.emotionalTone,
 		},
 		serverVersion,
 		createdAt: now,
@@ -1195,9 +1837,25 @@ async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingReco
 			discoveredClues: events.filter((event) => event.type === 'clue_discovery').map((event) => event.title),
 			relationshipChanges: events.filter((event) => event.type === 'relationship_shift').map((event) => event.title),
 			factionChanges,
-			openThreads: threadIds,
+			openThreads: digest.plotThreads,
 			sourceEntryIds,
 			sourceEventIds,
+			metadata: {
+				sourceType: 'terminal_chapter_job',
+				jobId: job.id,
+				summarySource: digest.source,
+				summaryModel: digest.model ?? null,
+				entryCount: chapterEntries.length,
+				startPosition: first.position,
+				endPosition: last.position,
+				threshold,
+				postChapterBuffer: buffer,
+				trackedEntityIds: entityIds,
+				legacyKeywords: digest.keywords,
+				legacyCharacters: digest.keyCharacters,
+				legacyLocations: digest.keyLocations,
+				emotionalTone: digest.emotionalTone,
+			},
 			serverVersion,
 			updatedAt: now,
 		},
@@ -1208,12 +1866,37 @@ async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingReco
 		chapterId,
 		title,
 		summary,
+		keywords: digest.keywords,
+		entityIds,
 		sourceEntryIds,
 		sourceEventIds,
 		threadIds,
 		serverVersion,
 		now,
 		jobId: job.id,
+	}));
+
+	const characterReferences = await timePhase(recorder, 'job.summarize_chapter.character_references', {
+		keyCharacters: digest.keyCharacters.length,
+	}, () => createChapterCharacterReferenceProposals({
+		storyId: job.storyId,
+		chapter,
+		digest,
+		events,
+		sourceEntryIds,
+		serverVersion,
+		now,
+	}));
+	const characterContextUpdates = await timePhase(recorder, 'job.summarize_chapter.character_context_updates', {
+		entityIds: entityIds.length,
+	}, () => createChapterCharacterContextUpdateProposals({
+		storyId: job.storyId,
+		chapter,
+		digest,
+		events,
+		sourceEntryIds,
+		serverVersion,
+		now,
 	}));
 
 	const chapterScopedJob = {
@@ -1242,6 +1925,8 @@ async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingReco
 		number: chapter.number,
 		entryCount: chapterEntries.length,
 		eventCount: events.length,
+		characterReferences,
+		characterContextUpdates,
 		factionPressure,
 		worldTick,
 		arc,
@@ -1255,23 +1940,111 @@ function arcTitle(number: number, arcChapters: ChapterRow[]): string {
 	return `Arc ${number}: ${first.title ?? `Chapter ${first.number}`} to ${last.title ?? `Chapter ${last.number}`}`;
 }
 
-function arcSummary(arcChapters: ChapterRow[]): string {
-	const first = arcChapters[0];
-	const last = arcChapters[arcChapters.length - 1];
-	return formatMtheriosMemorySummary({
-		beginning: `Terminal arc rollup covering chapters ${first.number}-${last.number}.`,
-		recent: arcChapters.map((chapter) => `Chapter ${chapter.number}${chapter.title ? ` (${chapter.title})` : ''}: ${snippet(chapter.sceneOutcome, 360)}`),
-		charAppearance: 'not established',
-		charDemeanor: 'not established',
-		userAppearance: 'not established',
-		sideCharacters: [],
-		importantStrings: uniqueStrings(arcChapters.flatMap((chapter) => [
-			...asStringArray(chapter.irreversibleChanges),
-			...asStringArray(chapter.promisesDebtsOaths),
-			...asStringArray(chapter.openThreads),
-		])).slice(0, 16),
-		currently: `chapters ${first.number}-${last.number} | time unknown | location unknown | weather unknown, temp°C unknown`,
-	});
+type ArcSummaryChapter = Pick<ChapterRow, 'number' | 'title' | 'sceneOutcome' | 'irreversibleChanges' | 'promisesDebtsOaths' | 'openThreads' | 'metadata'>;
+
+export interface ArcMemoryFields {
+	keyPlotPoints: string[];
+	characterArcs: Array<{ name: string; development: string }>;
+	unresolvedThreads: string[];
+	emotionalProgression: string;
+}
+
+function sectionLines(section: string): string[] {
+	return section
+		.split(/\r?\n/)
+		.map((line) => line.replace(/^[-*]\s+/, '').trim())
+		.filter((line) => line && !/^No (?:new events|character-specific state|durable threats)/i.test(line));
+}
+
+function cleanArcThreadLine(value: string): string {
+	const text = compactWhitespace(value.replace(/^[a-z_]+:\s*/i, ''));
+	const [title, body] = text.split(/\s+-\s+/, 2);
+	if (title && body && body.replace(/\.$/u, '').toLowerCase() === title.toLowerCase()) return title;
+	return text;
+}
+
+function buildCharacterArcFields(arcChapters: ArcSummaryChapter[]): Array<{ name: string; development: string }> {
+	const byName = new Map<string, string[]>();
+	for (const chapter of arcChapters) {
+		const section = extractMtheriosSummarySection(chapter.sceneOutcome, 'CHARACTER STATE');
+		let currentName = '';
+		let currentBullets: string[] = [];
+		const flush = () => {
+			const development = compactWhitespace(currentBullets.join(' '));
+			if (!currentName || !development) return;
+			byName.set(currentName, [
+				...(byName.get(currentName) ?? []),
+				`Chapter ${chapter.number}: ${snippet(development, ARC_ROLLUP_CHARACTER_DEVELOPMENT_CHAR_LIMIT)}`,
+			]);
+		};
+
+		for (const line of sectionLines(section)) {
+			const heading = /^(.+?)(?:\s+\[[^\]]+\])?:$/.exec(line);
+			if (heading) {
+				flush();
+				currentName = heading[1].trim();
+				currentBullets = [];
+			} else {
+				currentBullets.push(line);
+			}
+		}
+		flush();
+	}
+
+	return [...byName.entries()]
+		.map(([name, developments]) => ({
+			name,
+			development: uniqueStrings(developments).slice(0, 4).join(' '),
+		}))
+		.filter((item) => item.name && item.development)
+		.slice(0, 16);
+}
+
+export function buildArcMemoryFields(arcChapters: ArcSummaryChapter[]): ArcMemoryFields {
+	const keyPlotPoints = arcChapters
+		.map((chapter) => {
+			const digest = summarizeMtheriosMemoryForRollup(chapter.sceneOutcome) || snippet(chapter.sceneOutcome, ARC_ROLLUP_KEY_POINT_CHAR_LIMIT);
+			if (!digest) return '';
+			return `Chapter ${chapter.number}${chapter.title ? ` (${chapter.title})` : ''}: ${snippet(digest, ARC_ROLLUP_KEY_POINT_CHAR_LIMIT)}`;
+		})
+		.filter(Boolean);
+	const unresolvedThreads = uniqueStrings(arcChapters.flatMap((chapter) => [
+		...asStringArray(chapter.irreversibleChanges),
+		...asStringArray(chapter.promisesDebtsOaths),
+		...asStringArray(chapter.openThreads),
+		...sectionLines(extractMtheriosSummarySection(chapter.sceneOutcome, 'ACTIVE THREADS')),
+	].map((value) => snippet(cleanArcThreadLine(value), ARC_ROLLUP_THREAD_CHAR_LIMIT)))).slice(0, ARC_ROLLUP_THREAD_LIMIT);
+	const tones = uniqueStrings(arcChapters
+		.map((chapter) => asRecord(chapter.metadata).emotionalTone)
+		.filter((tone): tone is string => typeof tone === 'string' && Boolean(tone.trim()))
+		.map((tone) => tone.trim()));
+
+	return {
+		keyPlotPoints,
+		characterArcs: buildCharacterArcFields(arcChapters),
+		unresolvedThreads,
+		emotionalProgression: tones.length
+			? tones.join(' -> ')
+			: 'Carry forward the arc consequences, unresolved threads, and character pressure established by these chapters.',
+	};
+}
+
+export function buildArcSummary(arcChapters: ArcSummaryChapter[]): string {
+	return buildArcMemoryFields(arcChapters).keyPlotPoints.join('\n\n');
+}
+
+export function selectArcRollupBatches<T extends { id: string }>(
+	chapterRows: T[],
+	arcRows: Array<{ chapterIds: string[] }>,
+	chaptersPerArc: number,
+): T[][] {
+	const covered = new Set(arcRows.flatMap((arc) => asStringArray(arc.chapterIds)));
+	const uncovered = chapterRows.filter((chapter) => !covered.has(chapter.id));
+	const batches: T[][] = [];
+	for (let index = 0; index + chaptersPerArc <= uncovered.length; index += chaptersPerArc) {
+		batches.push(uncovered.slice(index, index + chaptersPerArc));
+	}
+	return batches;
 }
 
 async function upsertArcMemoryNode(input: {
@@ -1333,7 +2106,8 @@ async function rollupArc(job: BackendJobRow, recorder?: TimingRecorder): Promise
 	]));
 	const covered = new Set(arcRows.flatMap((arc) => asStringArray(arc.chapterIds)));
 	const uncovered = chapterRows.filter((chapter) => !covered.has(chapter.id));
-	if (uncovered.length < chaptersPerArc) {
+	const batches = selectArcRollupBatches(chapterRows, arcRows, chaptersPerArc);
+	if (batches.length === 0) {
 		return {
 			created: false,
 			reason: 'arc_threshold_not_met',
@@ -1342,73 +2116,86 @@ async function rollupArc(job: BackendJobRow, recorder?: TimingRecorder): Promise
 		};
 	}
 
-	const arcChapters = uncovered.slice(0, chaptersPerArc);
-	const first = arcChapters[0];
-	const last = arcChapters[arcChapters.length - 1];
-	const chapterIds = arcChapters.map((chapter) => chapter.id);
-	const arcId = stableId('arc', [first.id, last.id]);
-	const [existing] = await db.select().from(arcs).where(and(eq(arcs.storyId, job.storyId), eq(arcs.id, arcId))).limit(1);
-	const number = existing?.number ?? ((arcRows[arcRows.length - 1]?.number ?? 0) + 1);
-	const title = arcTitle(number, arcChapters);
-	const summary = arcSummary(arcChapters);
-	const sourceEventIds = uniqueStrings(arcChapters.flatMap((chapter) => asStringArray(chapter.sourceEventIds)));
-	const openThreadIds = uniqueStrings(arcChapters.flatMap((chapter) => asStringArray(chapter.openThreads)));
-	const now = nowIso();
-	const serverVersion = await timePhase(recorder, 'job.rollup_arc.bump_version', {}, () => bumpStoryVersion(job.storyId));
-
-	const [arc] = await timePhase(recorder, 'job.rollup_arc.persist_arc', {
-		chapterCount: arcChapters.length,
-	}, () => db.insert(arcs).values({
-		id: arcId,
-		storyId: job.storyId,
-		number,
-		title,
-		summary,
-		chapterIds,
-		sourceEventIds,
-		openThreadIds,
-		metadata: {
+	const createdArcs: Array<{ arcId: string; number: number; chapterCount: number }> = [];
+	for (const arcChapters of batches) {
+		const first = arcChapters[0];
+		const last = arcChapters[arcChapters.length - 1];
+		const chapterIds = arcChapters.map((chapter) => chapter.id);
+		const arcId = stableId('arc', [first.id, last.id]);
+		const [existing] = await db.select().from(arcs).where(and(eq(arcs.storyId, job.storyId), eq(arcs.id, arcId))).limit(1);
+		const number = existing?.number ?? ((arcRows[arcRows.length - 1]?.number ?? 0) + createdArcs.length + 1);
+		const title = arcTitle(number, arcChapters);
+		const summary = buildArcSummary(arcChapters);
+		const fields = buildArcMemoryFields(arcChapters);
+		const sourceEventIds = uniqueStrings(arcChapters.flatMap((chapter) => asStringArray(chapter.sourceEventIds)));
+		const openThreadIds = uniqueStrings(arcChapters.flatMap((chapter) => asStringArray(chapter.openThreads)));
+		const now = nowIso();
+		const serverVersion = await timePhase(recorder, 'job.rollup_arc.bump_version', {}, () => bumpStoryVersion(job.storyId));
+		const metadata = {
 			sourceType: 'terminal_arc_job',
 			jobId: job.id,
 			chapterCount: arcChapters.length,
 			startChapterNumber: first.number,
 			endChapterNumber: last.number,
-		},
-		serverVersion,
-		createdAt: existing?.createdAt ?? now,
-		updatedAt: now,
-	}).onConflictDoUpdate({
-		target: arcs.id,
-		set: {
+			keyPlotPoints: fields.keyPlotPoints,
+			characterArcs: fields.characterArcs,
+			unresolvedThreads: fields.unresolvedThreads,
+			emotionalProgression: fields.emotionalProgression,
+		};
+
+		const [arc] = await timePhase(recorder, 'job.rollup_arc.persist_arc', {
+			chapterCount: arcChapters.length,
+		}, () => db.insert(arcs).values({
+			id: arcId,
+			storyId: job.storyId,
 			number,
 			title,
 			summary,
 			chapterIds,
 			sourceEventIds,
 			openThreadIds,
+			metadata,
 			serverVersion,
+			createdAt: existing?.createdAt ?? now,
 			updatedAt: now,
-		},
-	}).returning());
+		}).onConflictDoUpdate({
+			target: arcs.id,
+			set: {
+				number,
+				title,
+				summary,
+				chapterIds,
+				sourceEventIds,
+				openThreadIds,
+				metadata,
+				serverVersion,
+				updatedAt: now,
+			},
+		}).returning());
 
-	await timePhase(recorder, 'job.rollup_arc.persist_memory_node', {}, () => upsertArcMemoryNode({
-		storyId: job.storyId,
-		arcId,
-		title,
-		summary,
-		chapterIds,
-		sourceEventIds,
-		openThreadIds,
-		serverVersion,
-		now,
-		jobId: job.id,
-	}));
+		await timePhase(recorder, 'job.rollup_arc.persist_memory_node', {}, () => upsertArcMemoryNode({
+			storyId: job.storyId,
+			arcId,
+			title,
+			summary,
+			chapterIds,
+			sourceEventIds,
+			openThreadIds,
+			serverVersion,
+			now,
+			jobId: job.id,
+		}));
+		createdArcs.push({ arcId: arc.id, number: arc.number, chapterCount: arcChapters.length });
+	}
 
+	const firstArc = createdArcs[0];
 	return {
 		created: true,
-		arcId: arc.id,
-		number: arc.number,
-		chapterCount: arcChapters.length,
+		arcId: firstArc.arcId,
+		number: firstArc.number,
+		chapterCount: firstArc.chapterCount,
+		arcCount: createdArcs.length,
+		arcs: createdArcs,
 	};
 }
 
@@ -1502,11 +2289,29 @@ export function storyVaultFollowupVersion(
 
 async function indexCanonicalRecordsJob(job: BackendJobRow): Promise<Record<string, unknown>> {
 	const payload = asRecord(job.payload);
-	return indexCanonicalRecords({
+	const maxRecords = Number(payload.maxRecords);
+	const result = await indexCanonicalRecords({
 		storyId: job.storyId,
 		recordTypes: asStringArray(payload.recordTypes),
+		recordId: typeof payload.recordId === 'string' ? payload.recordId : null,
 		recreate: payload.recreate === true,
+		maxRecords: Number.isFinite(maxRecords) ? maxRecords : 40,
 	});
+	if (result.partial === true) {
+		await enqueueBackendJob({
+			storyId: job.storyId,
+			type: 'index_canonical_records',
+			dedupeKey: `canonical-index-cont-${job.id}-${Date.now()}`,
+			payload: {
+				...payload,
+				recreate: false,
+				maxRecords: Number.isFinite(maxRecords) ? maxRecords : 40,
+				continuedFromJobId: job.id,
+			},
+			maxAttempts: 3,
+		});
+	}
+	return result;
 }
 
 async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {

@@ -31,6 +31,8 @@ describe('mtherios MCP engine tools', () => {
 		expect(names).toContain('mtherios_timeline_advance');
 		expect(names).toContain('mtherios_read_campaign_page');
 		expect(names).toContain('mtherios_write_campaign_page');
+		expect(names).toContain('mtherios_update_llm_settings');
+		expect(names).toContain('mtherios_draft_character_update');
 	});
 
 	it('routes generic engine commands to the backend command envelope', async () => {
@@ -149,6 +151,68 @@ describe('mtherios MCP engine tools', () => {
 						sceneEntityIds: ['npc_harbor_queen', 'location_docks'],
 						threadIds: ['thread_alliance'],
 					},
+				},
+			},
+		}]);
+	});
+
+	it('routes LLM setting writes to the terminal settings API', async () => {
+		const requests: Array<{ path: string; method: unknown; body: unknown }> = [];
+		await mcp.callTool('mtherios_update_llm_settings', {
+			settings: [{
+				serviceId: 'narrative',
+				providerType: 'openrouter',
+				model: 'anthropic/claude-sonnet-4',
+			}],
+		}, {
+			requestJson: async (requestPath, options = {}) => {
+				requests.push({
+					path: requestPath,
+					method: options.method,
+					body: JSON.parse(String(options.body)),
+				});
+				return { settings: [] };
+			},
+		});
+
+		expect(requests).toEqual([{
+			path: '/api/settings/llm',
+			method: 'PATCH',
+			body: {
+				settings: [{
+					serviceId: 'narrative',
+					providerType: 'openrouter',
+					model: 'anthropic/claude-sonnet-4',
+				}],
+			},
+		}]);
+	});
+
+	it('routes character draft updates through the shared engine command gateway', async () => {
+		const requests: Array<{ path: string; body: unknown }> = [];
+		await mcp.callTool('mtherios_draft_character_update', {
+			storyId: 'story_alpha',
+			recordId: 'npc_mira',
+			instructions: 'Refresh Mira from recent context.',
+			recentLimit: 24,
+			clientCommandId: 'cmd_mira_update',
+		}, {
+			requestJson: async (requestPath, options = {}) => {
+				requests.push({ path: requestPath, body: JSON.parse(String(options.body)) });
+				return { proposalId: 'proposal_mira', status: 'pending' };
+			},
+		});
+
+		expect(requests).toEqual([{
+			path: '/api/engine/command',
+			body: {
+				storyId: 'story_alpha',
+				command: 'world.character.draftUpdate',
+				clientCommandId: 'cmd_mira_update',
+				args: {
+					recordId: 'npc_mira',
+					instructions: 'Refresh Mira from recent context.',
+					recentLimit: 24,
 				},
 			},
 		}]);

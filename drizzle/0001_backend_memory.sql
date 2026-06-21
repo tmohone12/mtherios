@@ -202,7 +202,7 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
 	source_entry_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
 	source_event_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
 	source_patch_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
-	embedding vector(1536),
+	embedding vector,
 	metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
 	server_version integer NOT NULL DEFAULT 1,
 	created_at timestamptz NOT NULL DEFAULT now(),

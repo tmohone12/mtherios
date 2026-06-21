@@ -21,3 +21,19 @@ export const PATCH: RequestHandler = async (event) => {
 		return apiError(error);
 	}
 };
+
+export const DELETE: RequestHandler = async (event) => {
+	try {
+		if (!event.params.id) return json({ error: 'Missing story id.' }, { status: 400 });
+		if (!event.params.arcId) return json({ error: 'Missing arc id.' }, { status: 400 });
+		return json(await executeLegacyEngineCommand({
+			storyId: event.params.id,
+			command: 'arc.delete',
+			args: {
+				arcId: event.params.arcId,
+			},
+		}));
+	} catch (error) {
+		return apiError(error);
+	}
+};
