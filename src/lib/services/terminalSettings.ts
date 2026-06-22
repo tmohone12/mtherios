@@ -21,7 +21,7 @@ const DEFAULT_KEY_REFS: Partial<Record<ProviderType, string>> = {
 };
 
 function serviceDefaultKey(serviceId: string): 'narrative' | 'classification' {
-	return serviceId === 'classifier' || serviceId === 'worldSimulation'
+	return serviceId === 'classifier' || serviceId === 'worldSimulation' || serviceId === 'smallBrain'
 		? 'classification'
 		: 'narrative';
 }

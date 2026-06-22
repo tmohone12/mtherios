@@ -266,7 +266,7 @@
 			await saveNarrativeSettingsAndSync();
 		}
 		try {
-			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']);
+			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier', 'smallBrain']);
 			testStatus = 'success';
 			testMessage = 'Saved provider and synced terminal runtime settings.';
 		} catch (error) {
@@ -392,7 +392,7 @@
 		settings.uiSettings[key] = clampDial(value, min, max);
 		await settings.saveUISettings();
 		if (key === 'backendMemoryTokenBudget') {
-			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
+			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier', 'smallBrain']).catch((error) => {
 				console.warn('[Settings] Terminal memory setting sync failed:', error);
 			});
 		}
@@ -401,7 +401,7 @@
 	async function saveContextBudgetValue(value: number) {
 		settings.contextBudget = clampDial(value, 0, 200000);
 		await settings.saveContextBudget();
-		await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
+		await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier', 'smallBrain']).catch((error) => {
 			console.warn('[Settings] Terminal context budget sync failed:', error);
 		});
 	}

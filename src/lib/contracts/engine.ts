@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { jsonObjectSchema, memoryVisibilitySchema, storyEventTypeSchema } from './memory';
+import { smallBrainModeSchema, smallBrainResultSchema } from '../services/ai/sdk/schemas/smallBrain';
 
 export const llmServiceSettingSchema = z.object({
 	serviceId: z.string().min(1),
@@ -91,6 +92,38 @@ export const reindexStoryRequestSchema = z.object({
 	recreate: z.boolean().default(false),
 	provider: z.string().nullable().default(null),
 	model: z.string().nullable().default(null),
+});
+
+export const smallBrainRunRequestSchema = z.object({
+	storyId: z.string().min(1),
+	mode: smallBrainModeSchema,
+	entryId: z.string().min(1).optional(),
+	limit: z.coerce.number().int().min(1).max(50).optional(),
+	dryRun: z.boolean().optional(),
+}).strict();
+
+export const smallBrainRunResponseSchema = z.object({
+	ok: z.boolean(),
+	storyId: z.string(),
+	mode: smallBrainModeSchema,
+	model: z.string(),
+	result: smallBrainResultSchema.nullable(),
+	warnings: z.array(z.string()),
+}).strict().superRefine((value, ctx) => {
+	if (value.ok && value.result === null) {
+		ctx.addIssue({
+			code: 'custom',
+			path: ['result'],
+			message: 'Successful small-brain responses must include a result.',
+		});
+	}
+	if (value.result !== null && value.mode !== value.result.mode) {
+		ctx.addIssue({
+			code: 'custom',
+			path: ['mode'],
+			message: 'Small-brain response mode must match result mode.',
+		});
+	}
 });
 
 export const engineRunDueJobsArgsSchema = z.object({
@@ -414,6 +447,8 @@ export const engineCommandResponseSchema = z.object({
 export type LlmServiceSetting = z.infer<typeof llmServiceSettingSchema>;
 export type LlmServiceSettingPatch = z.infer<typeof llmServiceSettingPatchSchema>;
 export type RecordPatchRequest = z.infer<typeof recordPatchRequestSchema>;
+export type SmallBrainRunRequest = z.infer<typeof smallBrainRunRequestSchema>;
+export type SmallBrainRunResponse = z.infer<typeof smallBrainRunResponseSchema>;
 export type EngineWorldRecordDetailArgs = z.infer<typeof engineWorldRecordDetailArgsSchema>;
 export type EngineWorldRecordPatchArgs = z.infer<typeof engineWorldRecordPatchArgsSchema>;
 export type ApiCallLogCreate = z.infer<typeof apiCallLogCreateSchema>;

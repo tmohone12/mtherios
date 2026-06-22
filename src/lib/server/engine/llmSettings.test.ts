@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeLlmServiceSettingPatch } from './llmSettings';
+import { mergeLlmServiceSettingPatch, serviceDefaultKey } from './llmSettings';
 import type { LlmServiceSetting } from '$lib/contracts/engine';
 
 function setting(): LlmServiceSetting {
@@ -23,6 +23,10 @@ function setting(): LlmServiceSetting {
 }
 
 describe('LLM settings patches', () => {
+	it('uses classification provider defaults for small brain', () => {
+		expect(serviceDefaultKey('smallBrain')).toBe('classification');
+	});
+
 	it('changes the model without clearing the existing provider settings', () => {
 		expect(mergeLlmServiceSettingPatch(setting(), {
 			serviceId: 'narrative',

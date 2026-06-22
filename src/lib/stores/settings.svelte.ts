@@ -21,6 +21,7 @@ export interface ServiceConfig {
 export const SERVICE_DEFINITIONS: Record<string, { label: string; description: string; profile: string; defaultTemp: number; defaultMaxTokens: number }> = {
 	narrative: { label: 'Narrative', description: 'Main story generation', profile: 'narrative', defaultTemp: 1.0, defaultMaxTokens: 4096 },
 	classifier: { label: 'Classifier', description: 'Extract world state from narrative', profile: 'worldState', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	smallBrain: { label: 'Small Brain', description: 'Cheap context gathering, canon proposals, and world intent drafts.', profile: 'worldState', defaultTemp: 0.3, defaultMaxTokens: 4096 },
 	suggestions: { label: 'Suggestions', description: 'Generate action suggestions', profile: 'guidance', defaultTemp: 0.8, defaultMaxTokens: 2048 },
 	actionChoices: { label: 'Action Choices', description: 'Generate branching choices', profile: 'guidance', defaultTemp: 0.8, defaultMaxTokens: 2048 },
 	memory: { label: 'Memory', description: 'Chapter summarization & retrieval', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
@@ -49,7 +50,7 @@ export interface ServiceProfile {
 export const SERVICE_PROFILES: ServiceProfile[] = [
 	{ id: 'deepSimulation', label: 'Deep Simulation', description: 'Rare strategic planning for factions, schemes, plots, and arc pressure', icon: 'S', serviceIds: ['strategicWorldBrain'] },
 	{ id: 'narrative', label: 'Narrative', description: 'Main story generation engine', icon: '✍️', serviceIds: ['narrative'] },
-	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, items, living world simulation, and plot momentum', icon: '🌍', serviceIds: ['classifier', 'worldSimulation'] },
+	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, items, living world simulation, and plot momentum', icon: '🌍', serviceIds: ['classifier', 'smallBrain', 'worldSimulation'] },
 	{ id: 'guidance', label: 'Player Guidance', description: 'Suggestions and branching action choices', icon: '🧭', serviceIds: ['suggestions', 'actionChoices'] },
 	{ id: 'memoryContext', label: 'Memory & Context', description: 'Chapter, arc, saga, and procedural memory', icon: '🧠', serviceIds: ['memory', 'arcCondensation', 'sagaCondensation', 'proceduralMemory'] },
 	{ id: 'lorebook', label: 'Lorebook', description: 'Discover, curate, query, and lint lore entries', icon: '📜', serviceIds: ['loreManagement', 'entryRefinement', 'wikiLint'] },

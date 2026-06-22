@@ -160,15 +160,18 @@ function defaultApiKeyRef(providerType: ProviderType, explicit?: string | null):
 	return ref ? `env:${ref}` : null;
 }
 
-function serviceDefaultKey(serviceId: string): keyof ProviderServices {
-	if (serviceId === 'classifier') return 'classification';
-	if (serviceId === 'worldSimulation') return 'classification';
+export function serviceDefaultKey(serviceId: string): keyof ProviderServices {
+	if (serviceId === 'classifier' || serviceId === 'worldSimulation' || serviceId === 'smallBrain') return 'classification';
 	return 'narrative';
 }
 
 function providerServiceDefaults(providerType: ProviderType, serviceId: string) {
 	const provider = PROVIDERS[providerType];
 	return provider.services?.[serviceDefaultKey(serviceId)] ?? provider.services?.narrative;
+}
+
+function fallbackTemperature(serviceId: string): number {
+	return serviceId === 'classifier' || serviceId === 'smallBrain' ? 0.2 : 1;
 }
 
 function serviceConfigFromFile(serviceId: string): {
@@ -222,7 +225,7 @@ function defaultServiceSetting(serviceId: string): LlmServiceSetting | null {
 		global.temperature,
 		envFirst('MTHERIOS_LLM_TEMPERATURE'),
 		defaults?.temperature,
-		serviceId === 'classifier' ? 0.2 : 1,
+		fallbackTemperature(serviceId),
 	);
 	const maxTokens = configNumber(
 		service.maxTokens,
@@ -248,7 +251,7 @@ function defaultServiceSetting(serviceId: string): LlmServiceSetting | null {
 			provider.baseUrl || null,
 		),
 		model,
-		temperature: temperature ?? (serviceId === 'classifier' ? 0.2 : 1),
+		temperature: temperature ?? fallbackTemperature(serviceId),
 		maxTokens: Math.trunc(maxTokens ?? 4096),
 		topP: configNumber(service.topP, service.top_p, global.topP, global.top_p),
 		frequencyPenalty: configNumber(service.frequencyPenalty, service.frequency_penalty, global.frequencyPenalty, global.frequency_penalty),
@@ -277,7 +280,7 @@ function baseSettingFromProvider(patch: LlmServiceSettingPatch): LlmServiceSetti
 		providerType,
 		baseUrl: provider.baseUrl || null,
 		model: defaults?.model ?? provider.fallbackModels[0] ?? null,
-		temperature: defaults?.temperature ?? (patch.serviceId === 'classifier' ? 0.2 : 1),
+		temperature: defaults?.temperature ?? fallbackTemperature(patch.serviceId),
 		maxTokens: Math.trunc(defaults?.maxTokens ?? 4096),
 		topP: null,
 		frequencyPenalty: null,
