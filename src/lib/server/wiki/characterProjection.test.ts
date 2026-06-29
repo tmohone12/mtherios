@@ -62,10 +62,18 @@ describe('character projection markdown service', () => {
 			schema_version: CHARACTER_PROJECTION_SCHEMA_VERSION,
 		});
 		expect(markdown).toContain('## Human Edits');
-		expect(markdown).toContain('## Current State');
-		expect(markdown).toContain('- Current action: holding the bridge bargain together');
-		expect(markdown).toContain('## NPC Event Memory');
-		expect(markdown).toContain('- Knows: Mira knows the bargain has a hidden witness.');
+		expect(markdown).toContain('[Appearance]:');
+		expect(markdown).toContain('[Personality]:');
+		expect(markdown).toContain('[Key History]:');
+		expect(markdown).toContain('[Affiliations]:');
+		expect(markdown).toContain('[bio]:');
+		expect(markdown).toContain('Mira Vey keeps the harbor moving');
+		expect(markdown).toContain('Mira knows the bargain has a hidden witness.');
+		expect(markdown).toContain('Linked to [[Harbor Compact]]');
+		expect(markdown).not.toContain('## Identity');
+		expect(markdown).not.toContain('## Current State');
+		expect(markdown).not.toContain('## NPC Event Memory');
+		expect(markdown).not.toContain('## Canon State');
 	});
 
 	it('does not duplicate character pages by stable ID and preserves human edits during regeneration', async () => {

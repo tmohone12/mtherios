@@ -12,6 +12,7 @@ describe('engine AI orchestrator', () => {
 			'rules_referee',
 			'state_scribe',
 			'lorekeeper',
+			'lore_curator',
 			'faction_simulator',
 			'npc_memory',
 			'continuity_auditor',
@@ -38,6 +39,7 @@ describe('engine AI orchestrator', () => {
 			'rules_referee',
 			'state_scribe',
 			'lorekeeper',
+			'lore_curator',
 			'faction_simulator',
 			'npc_memory',
 			'continuity_auditor',
@@ -74,6 +76,39 @@ describe('engine AI orchestrator', () => {
 				memoryTokenBudget: 640,
 				contextBudget: 8000,
 			},
+		});
+	});
+
+	it('plans a lore curation pass over the linked markdown wiki before proposing edits', () => {
+		const plan = buildEngineOrchestratorPlan({
+			storyId: 'story_alpha',
+			mode: 'lore_curation',
+			goal: 'Connect the harbor marriage pact pages to House Balaerys and NPC memory.',
+			context: {
+				presentNpcIds: ['npc_mira'],
+				sceneEntityIds: ['npc_mira', 'faction_harbor'],
+				memoryTokenBudget: 640,
+				contextBudget: 18000,
+			},
+		});
+
+		expect(plan.roles.map((role) => role.id)).toContain('lore_curator');
+		expect(plan.toolCalls.map((call) => [call.agentRole, call.command])).toEqual([
+			['lore_curator', 'wiki.brief'],
+			['lore_curator', 'wiki.pages'],
+			['lore_curator', 'wiki.lint'],
+			['lorekeeper', 'campaign.status'],
+			['npc_memory', 'memory.retrieve'],
+		]);
+		expect(plan.toolCalls[0].args).toEqual(expect.objectContaining({
+			query: 'Connect the harbor marriage pact pages to House Balaerys and NPC memory.',
+			followDepth: 2,
+			maxChars: 18000,
+		}));
+		expect(plan.toolCalls.find((call) => call.command === 'wiki.pages')?.args).toEqual({
+			orphans: true,
+			limit: 80,
+			sort: 'title',
 		});
 	});
 

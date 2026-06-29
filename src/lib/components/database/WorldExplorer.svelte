@@ -13,6 +13,7 @@
 		Sparkles,
 		Check,
 		X,
+		Plus,
 	} from 'lucide-svelte';
 	import { formatProposalDescription, formatProposalSummary } from '$lib/services/canonProposalDisplay';
 
@@ -77,6 +78,8 @@
 	let isMobile = $state(false);
 	let draftingCharacter = $state(false);
 	let reviewingProposal = $state(false);
+	let newDatabaseTitle = $state('');
+	let creatingDatabase = $state(false);
 	let characterDraftInstructions = $state('Update this NPC from recent story context.');
 	const MAX_CHARACTER_PHOTO_BYTES = 2 * 1024 * 1024;
 
@@ -349,6 +352,29 @@
 		stories = Array.isArray(body.stories) ? body.stories as StorySummary[] : [];
 		if (fixedStoryId) selectedStoryId = fixedStoryId;
 		else if (!selectedStoryId && stories[0]) selectedStoryId = stories[0].id;
+	}
+
+	async function createDatabase() {
+		const title = newDatabaseTitle.trim();
+		if (!title || creatingDatabase || isStoryLocked) return;
+		creatingDatabase = true;
+		status = '';
+		try {
+			const body = await runEngineCommand('__app__', 'story.create', {
+				title,
+				mode: 'adventure',
+			});
+			const storyId = typeof body.storyId === 'string' ? body.storyId : '';
+			newDatabaseTitle = '';
+			await loadStories();
+			if (storyId) selectedStoryId = storyId;
+			await loadSection();
+			status = `Created database ${title}.`;
+		} catch (error) {
+			status = error instanceof Error ? error.message : String(error);
+		} finally {
+			creatingDatabase = false;
+		}
 	}
 
 	async function loadSection(cursor: string | null = null) {
@@ -641,6 +667,23 @@
 					<option value={item.id}>{item.title ?? item.id}</option>
 				{/each}
 			</select>
+			<div class="flex w-full min-w-0 gap-2 sm:w-64">
+				<input
+					bind:value={newDatabaseTitle}
+					onkeydown={(event) => event.key === 'Enter' && createDatabase()}
+					disabled={creatingDatabase}
+					class="h-9 min-w-0 flex-1 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
+					placeholder="New database"
+				/>
+				<button
+					class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--border-primary)] text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-40"
+					onclick={createDatabase}
+					disabled={!newDatabaseTitle.trim() || creatingDatabase}
+					title="Create database"
+				>
+					<Plus class="h-4 w-4" />
+				</button>
+			</div>
 		{/if}
 
 		<div class="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:flex-1 sm:items-center">

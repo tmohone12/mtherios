@@ -187,7 +187,3 @@
 </div>
 
 <SettingsModal open={settingsOpen} onClose={() => settingsOpen = false} />
-
-<style>
-	.app-shell { padding-top: env(safe-area-inset-top, 0px); }
-</style>

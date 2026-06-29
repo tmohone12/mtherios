@@ -28,6 +28,7 @@ describe('mtherios MCP engine tools', () => {
 		expect(names).toContain('mtherios_orchestrator_run');
 		expect(names).toContain('mtherios_timeline_brief');
 		expect(names).toContain('mtherios_timeline_schedule');
+		expect(names).toContain('mtherios_inject_plot_direction');
 		expect(names).toContain('mtherios_timeline_advance');
 		expect(names).toContain('mtherios_read_campaign_page');
 		expect(names).toContain('mtherios_write_campaign_page');
@@ -251,6 +252,50 @@ describe('mtherios MCP engine tools', () => {
 					factionIds: ['faction_harbor', 'faction_mira'],
 					actorNpcEntityIds: ['npc_mira'],
 					targetNpcEntityIds: ['npc_harbor_lord'],
+				},
+			},
+		}]);
+	});
+
+	it('routes MCP plot direction injection through the GM timeline', async () => {
+		const requests: Array<{ path: string; body: unknown }> = [];
+		await mcp.callTool('mtherios_inject_plot_direction', {
+			storyId: 'story_alpha',
+			title: 'The sealed letter reaches court',
+			direction: 'Bring the blackmail letter into the next court scene.',
+			narratorDirective: 'Reveal pressure through servants and glances, not exposition.',
+			urgency: 'immediate',
+			factionIds: ['faction_harbor'],
+			clientCommandId: 'cmd_plot_direction',
+		}, {
+			requestJson: async (requestPath, options = {}) => {
+				requests.push({ path: requestPath, body: JSON.parse(String(options.body)) });
+				return { ok: true };
+			},
+		});
+
+		expect(requests).toEqual([{
+			path: '/api/engine/command',
+			body: {
+				storyId: 'story_alpha',
+				command: 'timeline.schedule',
+				clientCommandId: 'cmd_plot_direction',
+				args: {
+					type: 'scheme',
+					title: 'The sealed letter reaches court',
+					body: 'Bring the blackmail letter into the next court scene.\nNarrator directive: Reveal pressure through servants and glances, not exposition.\nUrgency: immediate',
+					delayTurns: 0,
+					factionIds: ['faction_harbor'],
+					visibility: 'secret',
+					memoryImpact: {
+						plotDirection: true,
+						urgency: 'immediate',
+					},
+					metadata: {
+						source: 'mcp_plot_direction',
+						urgency: 'immediate',
+						narratorDirective: 'Reveal pressure through servants and glances, not exposition.',
+					},
 				},
 			},
 		}]);

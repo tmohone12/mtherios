@@ -230,11 +230,19 @@ export const briefWikiSchema = z.object({
 	exact: z.boolean().optional().default(false),
 });
 
+export const rollCheckToolSchema = z.object({
+	notation: z.string().min(1).default('1d20'),
+	dc: z.number().int().min(1).max(40),
+	ability: z.string().optional().default(''),
+	description: z.string().optional().default(''),
+});
+
 export type WorldStateUpdate = z.infer<typeof worldStateUpdateSchema>;
 export type WorldStateLorebookEntry = z.infer<typeof worldStateLorebookEntrySchema>;
 export type WorldStateTimelineEvent = z.infer<typeof worldStateTimelineEventSchema>;
 export type SearchWikiArgs = z.infer<typeof searchWikiSchema>;
 export type BriefWikiArgs = z.infer<typeof briefWikiSchema>;
+export type RollCheckToolArgs = z.infer<typeof rollCheckToolSchema>;
 
 // ── OpenAI Function-Calling Format ──
 
@@ -312,6 +320,35 @@ export const GM_TOOLS = [
 					},
 				},
 				required: ['task'],
+			},
+		},
+	},
+	{
+		type: 'function' as const,
+		function: {
+			name: 'roll_check',
+			description: 'Roll a D&D-style check when an uncertain action has meaningful success and failure states. Call before narrating the outcome; do not invent the roll in prose.',
+			parameters: {
+				type: 'object',
+				properties: {
+					notation: {
+						type: 'string',
+						description: 'D&D notation, usually 1d20, 1d20+3, 1d20 advantage, or 1d20 disadvantage.',
+					},
+					dc: {
+						type: 'number',
+						description: 'Difficulty class: 10 easy, 15 moderate, 20 hard, 25 very hard.',
+					},
+					ability: {
+						type: 'string',
+						description: 'Short ability or skill label, such as STR, DEX, CHA, Stealth, or Persuasion.',
+					},
+					description: {
+						type: 'string',
+						description: 'Plain-language reason for the roll.',
+					},
+				},
+				required: ['notation', 'dc', 'description'],
 			},
 		},
 	},

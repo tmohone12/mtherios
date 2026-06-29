@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
+import { z } from 'zod';
 import { getDb } from '$lib/server/db/client';
 import { storyEntries, syncOps } from '$lib/server/db/schema';
 import { turnRequestSchema, type RetrievedMemoryPacket, type TurnRequest, type TurnResponse } from '$lib/contracts/memory';
@@ -11,11 +12,12 @@ import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
 import { contextWiki } from '$lib/server/wiki/wikiCore';
 import { loadGmTimelineBrief, promoteDueTimelineEvents } from '$lib/server/events/timeline';
 import { loadTurnContext } from './context';
-import { buildServerTurnPrompt, buildStateExtractionPrompt } from './promptPacket';
+import { buildServerTurnPrompt, buildPromptSectionTrace, buildStateExtractionPrompt, type PromptSectionTrace } from './promptPacket';
 import {
 	ServerGenerationError,
 	generateServerTextWithMetrics,
 	parseJsonFromGeneratedText,
+	type ResponseSchemaOptions,
 	type ServerGenerationResult,
 } from './provider';
 import { applyValidatedTurnUpdate, parseTurnUpdate } from './patchValidator';
@@ -122,6 +124,44 @@ function hashText(value: string): string {
 	return createHash('sha256').update(value).digest('hex');
 }
 
+export function buildProviderPromptCacheKey(input: {
+	providerType: string;
+	model: string | null | undefined;
+	storyId: string;
+	stablePromptHash: string;
+	storyStaticHash?: string | null;
+}): string {
+	return [
+		'mtherios',
+		'v3',
+		input.providerType || 'unknown',
+		input.model || 'default',
+		input.storyId,
+		input.stablePromptHash.slice(0, 16),
+		input.storyStaticHash?.slice(0, 16) || null,
+	].filter(Boolean).join(':');
+}
+
+function stripJsonSchemaMeta(schema: Record<string, unknown>): Record<string, unknown> {
+	const { $schema: _schema, ...rest } = schema;
+	return rest;
+}
+
+export function buildStateExtractionResponseSchema(): ResponseSchemaOptions {
+	return {
+		name: 'mtherios_state_patch',
+		strict: true,
+		schema: {
+			type: 'object',
+			additionalProperties: false,
+			properties: {
+				update: stripJsonSchemaMeta(z.toJSONSchema(worldStateUpdateSchema) as Record<string, unknown>),
+			},
+			required: ['update'],
+		},
+	};
+}
+
 function preparedTurnCacheKey(storyId: string, clientTurnId: string): string {
 	return `${storyId}:${clientTurnId}`;
 }
@@ -198,6 +238,7 @@ interface LoadServerWikiContextCacheOptions {
 }
 
 const DEFAULT_MEMORY_TOKEN_BUDGET = 800;
+const MEMORY_RETRIEVAL_BUDGET_MS = 700;
 const MAX_CLASSIFIER_TOKENS = 2048;
 const WIKI_CONTEXT_LIMIT = 4;
 const WIKI_CONTEXT_PAGE_LIMIT = 6;
@@ -207,6 +248,18 @@ const WIKI_CONTEXT_BUDGET_MS = 700;
 const GM_TIMELINE_BRIEF_BUDGET_MS = 300;
 const PREPARED_TURN_TTL_MS = 120_000;
 const PREPARED_TURN_CACHE_MAX = 48;
+
+function emptyRetrievedMemoryPacket(storyId: string, query: string): RetrievedMemoryPacket {
+	return {
+		storyId,
+		query,
+		packet: '',
+		nodes: [],
+		tokenEstimate: 0,
+		retrievalDebug: ['normal_turn_retrieval=off'],
+		retrievalTrace: [],
+	};
+}
 
 export interface PreparedTurnPromptSummary {
 	systemChars: number;
@@ -404,12 +457,14 @@ interface PreparedServerTurnContext {
 	gmBrief: NonNullable<TurnContext['gmBrief']>;
 	wikiContext: ServerWikiContext | null;
 	prompt: ServerTurnPrompt;
+	promptSectionTrace: PromptSectionTrace[];
 	narrativeService: ResolvedGenerationService;
 	narrativeProfile: ProviderProfile;
 	narrativeGeneration: ResolvedGenerationService['generation'];
 	narrativeSystem: string;
 	narrativeSystemDynamic: string;
 	narrativePrompt: string;
+	narrativePromptCacheKey: string;
 	narrativeDebugPrompt: string;
 	contextCounts: Record<string, number>;
 	engineCacheDebug: EngineCacheDebug | null;
@@ -537,6 +592,22 @@ function sortedTimingSpans(timings: TimingEntry[], thresholdMs = 0, limit = Numb
 function generationDuration(generationTimings: GenerationTiming[], operation: string): number {
 	const timing = generationTimings.find((item) => item.operation === operation);
 	return Math.max(0, Math.trunc(timing?.durationMs ?? 0));
+}
+
+function generationTimeToFirstToken(generationTimings: GenerationTiming[], operation: string): number | null {
+	const timing = generationTimings.find((item) => item.operation === operation);
+	return typeof timing?.timeToFirstTokenMs === 'number'
+		? Math.max(0, Math.trunc(timing.timeToFirstTokenMs))
+		: null;
+}
+
+const DURABLE_STATE_SIGNAL_PATTERN = /\b(accepts?|allies?|arrives?|attacks?|betrays?|burns?|buys?|dead|dies?|discovers?|destroys?|enters?|exits?|finds?|gives?|gave|hands?|injures?|kills?|learns?|leaves?|locks?|moves?|oaths?|opens?|promises?|reveals?|sells?|steals?|takes?|travels?|unlocks?|wounds?)\b/i;
+const EXPLICIT_NO_DURABLE_STATE_PATTERN = /\b(no durable|no lasting|nothing lasting changes|nothing changes|remains unchanged|state does not change|without lasting change)\b/i;
+
+export function shouldExtractDurableState(playerText: string, narration: string): boolean {
+	const text = `${playerText}\n${narration}`;
+	if (DURABLE_STATE_SIGNAL_PATTERN.test(text)) return true;
+	return !EXPLICIT_NO_DURABLE_STATE_PATTERN.test(text);
 }
 
 function emptyServerWikiContext(): ServerWikiContext {
@@ -854,9 +925,9 @@ export function buildTurnPerformanceSummary(input: {
 		recentMessageCount: Math.max(0, Math.trunc(input.recentMessageCount ?? input.prompt.messageCount)),
 		wikiChunkCount: Math.max(0, Math.trunc(input.wikiChunkCount ?? 0)),
 		memoryItemCount: Math.max(0, Math.trunc(input.memoryItemCount ?? 0)),
-		providerTimeToFirstTokenMs: null,
+		providerTimeToFirstTokenMs: generationTimeToFirstToken(input.generationTimings, 'turn.narration'),
 		providerTotalMs: generationDuration(input.generationTimings, 'turn.narration'),
-		providerRetries: 0,
+		providerRetries: input.generationTimings.reduce((sum, timing) => sum + Math.max(0, Math.trunc(timing.retryCount ?? 0)), 0),
 		providerTimeoutHit: false,
 		persistMs: sumTimingMs(input.timings, [
 			'turn.persistence.allocate_position_version',
@@ -925,16 +996,33 @@ function timingFromResult(
 	status: 'success' | 'error',
 ): GenerationTiming {
 	const usage = 'usage' in result ? result.usage : undefined;
+	const finishReason = 'finishReason' in result ? result.finishReason ?? null : null;
 	return {
 		operation,
 		serviceId,
 		model: result.model ?? null,
 		status,
 		durationMs: Math.max(0, Math.trunc(result.durationMs)),
+		timeToFirstTokenMs: 'timeToFirstTokenMs' in result && typeof result.timeToFirstTokenMs === 'number'
+			? Math.max(0, Math.trunc(result.timeToFirstTokenMs))
+			: null,
+		retryCount: Math.max(0, Math.trunc(result.retryCount ?? 0)),
+		finishReason,
 		requestTokens: usage?.requestTokens ?? null,
 		responseTokens: usage?.responseTokens ?? null,
 		totalTokens: usage?.totalTokens ?? null,
 	};
+}
+
+function hitMaxOutputLimit(result: ServerGenerationResult, maxTokens: number | undefined): boolean {
+	const reason = result.finishReason?.trim().toLowerCase();
+	if (reason && ['length', 'max_tokens', 'max_output_tokens', 'token_limit', 'content_filter_length'].includes(reason)) {
+		return true;
+	}
+	const responseTokens = result.usage.responseTokens;
+	if (typeof maxTokens !== 'number' || !Number.isFinite(maxTokens)) return false;
+	if (typeof responseTokens !== 'number' || !Number.isFinite(responseTokens)) return false;
+	return Math.trunc(responseTokens) >= Math.trunc(maxTokens);
 }
 
 async function logGenerationCall(options: {
@@ -1365,33 +1453,32 @@ export async function prepareServerTurnContext(
 		currentFactionId: request.clientContext?.currentFactionId ?? null,
 		tokenBudget: memoryTokenBudget,
 	};
-	const wikiContextTask = recorder.time('turn.wiki_context', {
-		limit: WIKI_CONTEXT_LIMIT,
-		pageLimit: WIKI_CONTEXT_PAGE_LIMIT,
-		maxChars: WIKI_CONTEXT_MAX_CHARS,
-		budgetMs: WIKI_CONTEXT_BUDGET_MS,
-	}, async () => {
-		try {
-			const context = await withBudgetStatus(
-				() => loadServerWikiContext(request.storyId, request.playerText),
-				WIKI_CONTEXT_BUDGET_MS,
-				emptyServerWikiContext(),
-			);
-			return { ok: true as const, ...context };
-		} catch (error) {
-			return { ok: false as const, error };
-		}
-	});
-	const [retrieved, ctx, gmBriefResult, wikiResult] = await recorder.time('turn.context_assembly', {
+	const [retrievalResult, ctx, gmBriefResult, wikiContextResult] = await recorder.time('turn.context_assembly', {
 		parallel: true,
 		memoryTokenBudget,
 	}, () => Promise.all([
 		recorder.time('turn.memory_retrieval', {
-			tokenBudget: memoryTokenBudget,
+			memoryTokenBudget,
 			sceneEntityIds: retrievalRequest.sceneEntityIds.length,
 			presentNpcIds: retrievalRequest.presentNpcIds.length,
-			threadIds: retrievalRequest.threadIds.length,
-		}, () => retrieveMemoryPacket(retrievalRequest)),
+			budgetMs: MEMORY_RETRIEVAL_BUDGET_MS,
+		}, async () => {
+			try {
+				const result = await withBudgetStatus(
+					() => retrieveMemoryPacket(retrievalRequest),
+					MEMORY_RETRIEVAL_BUDGET_MS,
+					emptyRetrievedMemoryPacket(request.storyId, request.playerText),
+				);
+				return { ok: true as const, ...result };
+			} catch (error) {
+				return {
+					ok: false as const,
+					error,
+					value: emptyRetrievedMemoryPacket(request.storyId, request.playerText),
+					budgetExceeded: false,
+				};
+			}
+		}),
 		recorder.time('turn.context_load', {
 			presentNpcIds: request.clientContext?.presentNpcIds?.length ?? 0,
 			sceneEntityIds: retrievalRequest.sceneEntityIds.length,
@@ -1417,8 +1504,38 @@ export async function prepareServerTurnContext(
 				return { ok: false as const, error, value: emptyGmTimelineBrief(request.storyId), budgetExceeded: false };
 			}
 		}),
-		wikiContextTask,
+		recorder.time('turn.wiki_context', {
+			budgetMs: WIKI_CONTEXT_BUDGET_MS,
+			maxChars: WIKI_CONTEXT_MAX_CHARS,
+		}, async () => {
+			try {
+				const result = await withBudgetStatus(
+					() => loadServerWikiContext(request.storyId, request.playerText),
+					WIKI_CONTEXT_BUDGET_MS,
+					emptyServerWikiContext(),
+				);
+				return { ok: true as const, ...result };
+			} catch (error) {
+				return {
+					ok: false as const,
+					error,
+					value: emptyServerWikiContext(),
+					budgetExceeded: false,
+				};
+			}
+		}),
 	]));
+	const retrieved = retrievalResult.value;
+	if (retrievalResult.ok) {
+		if (retrievalResult.budgetExceeded) {
+			contextSkipped.push({ source: 'memory_retrieval', reason: 'budget_exceeded' });
+			warnings.push(`Memory retrieval skipped after ${MEMORY_RETRIEVAL_BUDGET_MS}ms budget.`);
+		}
+	} else {
+		const error = retrievalResult.error;
+		contextSkipped.push({ source: 'memory_retrieval', reason: 'unavailable' });
+		warnings.push(`Memory retrieval unavailable: ${error instanceof Error ? error.message : String(error)}`);
+	}
 	const gmBrief = gmBriefResult.value;
 	if (gmBriefResult.ok) {
 		if (gmBriefResult.budgetExceeded) {
@@ -1431,18 +1548,16 @@ export async function prepareServerTurnContext(
 		warnings.push(`GM timeline brief unavailable: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	const ctxWithTimeline: TurnContext & { gmBrief: NonNullable<TurnContext['gmBrief']> } = { ...ctx, gmBrief };
-	let wikiContext: ServerWikiContext | null = null;
-	if (wikiResult.ok) {
-		wikiContext = wikiResult.value;
-		if (wikiResult.budgetExceeded) {
-			contextSkipped.push({ source: 'wiki', reason: 'budget_exceeded' });
-			warnings.push(`Terminal wiki context skipped after ${WIKI_CONTEXT_BUDGET_MS}ms budget.`);
+	const wikiContext: ServerWikiContext = wikiContextResult.value;
+	if (wikiContextResult.ok) {
+		if (wikiContextResult.budgetExceeded) {
+			contextSkipped.push({ source: 'wiki_context', reason: 'budget_exceeded' });
+			warnings.push(`Wiki context skipped after ${WIKI_CONTEXT_BUDGET_MS}ms budget.`);
 		}
-		if (wikiContext.semanticError) warnings.push(`Terminal wiki semantic search warning: ${wikiContext.semanticError}`);
 	} else {
-		const error = wikiResult.error;
-		contextSkipped.push({ source: 'wiki', reason: 'unavailable' });
-		warnings.push(`Terminal wiki context unavailable: ${error instanceof Error ? error.message : String(error)}`);
+		const error = wikiContextResult.error;
+		contextSkipped.push({ source: 'wiki_context', reason: 'unavailable' });
+		warnings.push(`Wiki context unavailable: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	const contextCounts = turnContextCounts(ctxWithTimeline);
 	const prompt = recorder.timeSync('turn.prompt_assembly', {
@@ -1454,6 +1569,7 @@ export async function prepareServerTurnContext(
 		sceneEntityIds: request.clientContext?.sceneEntityIds ?? [],
 		wikiContextMarkdown: wikiContext?.markdown ?? null,
 	}));
+	const promptSectionTrace = buildPromptSectionTrace(prompt.compiledPrompt);
 	const narrativeSystem = narrativeService.systemPromptOverride?.trim() || prompt.system;
 	const promptBudget = applyPromptContextBudget(prompt.prompt, request.clientContext?.contextBudget ?? 0);
 	if (promptBudget.truncated) {
@@ -1462,6 +1578,14 @@ export async function prepareServerTurnContext(
 	}
 	const narrativeSystemDynamic = promptBudget.value;
 	const narrativePrompt = `Player action:\n${request.playerText}`;
+	const narrativeStablePromptHash = hashText(narrativeSystem);
+	const narrativePromptCacheKey = buildProviderPromptCacheKey({
+		providerType: narrativeProfile.providerType,
+		model: narrativeGeneration.model ?? null,
+		storyId: request.storyId,
+		stablePromptHash: narrativeStablePromptHash,
+		storyStaticHash: prompt.compiledPrompt.stablePrefix[0]?.contentHash ?? null,
+	});
 	const narrativeDebugPrompt = `${narrativeSystemDynamic}\n\n${narrativePrompt}`;
 	const promptMessageChars = prompt.messages.reduce((sum, message) => sum + message.content.length, 0);
 	const promptTotalChars = narrativeSystem.length + narrativeSystemDynamic.length + narrativePrompt.length + promptMessageChars;
@@ -1472,6 +1596,7 @@ export async function prepareServerTurnContext(
 		promptChars: narrativePrompt.length,
 		messageCount: prompt.messages.length,
 		messageChars: promptMessageChars,
+		promptCacheKeyHash: hashText(narrativePromptCacheKey),
 	});
 	let promptCacheStats: { hitCount: number; missCount: number; segments: RecordEngineCacheSegmentResult[] } | null = null;
 	const continuityChapters = chaptersForPromptContinuity(ctxWithTimeline.chapters, ctxWithTimeline.arcs);
@@ -1496,42 +1621,6 @@ export async function prepareServerTurnContext(
 						model: narrativeGeneration.model ?? null,
 						systemPromptOverride: narrativeService.systemPromptOverride ?? null,
 					})],
-				},
-				{
-					kind: 'retrieved_memory',
-					cacheKey: buildEngineCacheKey({
-						storyId: request.storyId,
-						kind: 'retrieved_memory',
-						parts: ['selected-memory-packet'],
-					}),
-					value: retrieved.packet,
-					tokenEstimate: retrieved.tokenEstimate,
-					dependencyHashes: retrieved.nodes.map((node) => engineCacheDependencyHash({
-						id: node.id,
-						type: node.type,
-						updatedAt: node.updatedAt,
-						content: node.content,
-						summary: node.summary,
-					})),
-					metadata: { nodeCount: retrieved.nodes.length },
-				},
-				{
-					kind: 'wiki_context',
-					cacheKey: buildEngineCacheKey({
-						storyId: request.storyId,
-						kind: 'wiki_context',
-						parts: ['selected-markdown-chunks'],
-					}),
-					value: wikiContext?.markdown ?? '',
-					dependencyHashes: [engineCacheDependencyHash({
-						citations: wikiContext?.citations ?? [],
-						pageCount: wikiContext?.pageCount ?? 0,
-						markdown: wikiContext?.markdown ?? '',
-					})],
-					metadata: {
-						citations: wikiContext?.citations ?? [],
-						pageCount: wikiContext?.pageCount ?? 0,
-					},
 				},
 				{
 					kind: 'campaign_continuity',
@@ -1642,12 +1731,14 @@ export async function prepareServerTurnContext(
 		gmBrief,
 		wikiContext,
 		prompt,
+		promptSectionTrace,
 		narrativeService,
 		narrativeProfile,
 		narrativeGeneration,
 		narrativeSystem,
 		narrativeSystemDynamic,
 		narrativePrompt,
+		narrativePromptCacheKey,
 		narrativeDebugPrompt,
 		contextCounts,
 		engineCacheDebug: buildEngineCacheDebug(promptCacheStats) ?? null,
@@ -1717,7 +1808,9 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		narrativeSystem,
 		narrativeSystemDynamic,
 		narrativePrompt,
+		narrativePromptCacheKey,
 		narrativeDebugPrompt,
+		promptSectionTrace,
 		contextCounts,
 		engineCacheDebug,
 		contextReceipt,
@@ -1749,6 +1842,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		system: narrativeSystem,
 		messages: prompt.messages,
 		prompt: narrativeDebugPrompt,
+		promptSectionTrace,
 		retrievedMemory: retrieved,
 		wikiContext,
 		contextCounts,
@@ -1766,21 +1860,35 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 			systemDynamic: narrativeSystemDynamic,
 			messages: prompt.messages,
 			prompt: narrativePrompt,
+			cache: {
+				key: narrativePromptCacheKey,
+				retention: 'in_memory',
+			},
 			onTextDelta: options.onNarrationChunk,
 		});
 		narration = result.text;
+		const maxOutputLimitHit = hitMaxOutputLimit(result, narrativeGeneration.maxTokens);
+		if (maxOutputLimitHit) {
+			warnings.push(`Narrative response hit the ${narrativeGeneration.maxTokens ?? 'configured'} token output limit and may be cut off. Raise narrative maxTokens or continue from the last complete sentence.`);
+		}
 		generationTimings.push(timingFromResult('turn.narration', 'narrative', result, 'success'));
 		recorder.record('turn.llm.narration', result.durationMs, {
 			serviceId: 'narrative',
 			model: result.model,
 			status: 'success',
+			finishReason: result.finishReason ?? null,
 			promptChars: result.promptChars,
 			responseChars: result.responseChars,
+			timeToFirstTokenMs: result.timeToFirstTokenMs ?? null,
 			requestTokens: result.usage.requestTokens,
 			responseTokens: result.usage.responseTokens,
 			totalTokens: result.usage.totalTokens,
+			cachedInputTokens: result.usage.cachedInputTokens,
+			cacheWriteTokens: result.usage.cacheWriteTokens,
+			reasoningTokens: result.usage.reasoningTokens,
 			maxOutputTokens: narrativeGeneration.maxTokens,
-			retryCount: 0,
+			maxOutputLimitHit,
+			retryCount: result.retryCount ?? 0,
 		});
 		await logGenerationCall({
 			storyId: request.storyId,
@@ -1794,6 +1902,12 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				wikiContextPageCount: wikiContext?.pageCount ?? 0,
 				wikiContextSeedCount: wikiContext?.seedCount ?? 0,
 				retrievedMemoryIds: retrieved.nodes.map((node) => node.id),
+				promptCacheKeyHash: hashText(narrativePromptCacheKey),
+				finishReason: result.finishReason ?? null,
+				maxOutputLimitHit,
+				cachedInputTokens: result.usage.cachedInputTokens,
+				cacheWriteTokens: result.usage.cacheWriteTokens,
+				reasoningTokens: result.usage.reasoningTokens,
 				debugSnapshot: buildTurnDebugSnapshot({
 					...narrativeDebugBase,
 					output: narration,
@@ -1814,7 +1928,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				responseTokens: failedResult.usage?.responseTokens ?? null,
 				totalTokens: failedResult.usage?.totalTokens ?? null,
 				maxOutputTokens: narrativeGeneration.maxTokens,
-				retryCount: 0,
+				retryCount: failedResult.retryCount ?? 0,
 				statusCode: failedResult.statusCode ?? null,
 			});
 			await logGenerationCall({
@@ -1839,6 +1953,9 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 	if (!narration.trim()) {
 		throw new Error('Terminal narrative generation returned an empty response. No backend turn was persisted.');
 	}
+	const stateExtractionMode: 'deferred' | 'sync' | 'none' = shouldExtractDurableState(request.playerText, narration)
+		? deferStateExtraction ? 'deferred' : 'sync'
+		: 'none';
 
 	const [position, turnVersion] = await recorder.time('turn.persistence.allocate_position_version', {}, () => Promise.all([
 		nextEntryPosition(request.storyId),
@@ -1881,7 +1998,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				wikiContextSeedCount: wikiContext?.seedCount ?? 0,
 				generationTimings,
 				stateExtraction: {
-					mode: deferStateExtraction ? 'deferred' : 'sync',
+					mode: stateExtractionMode,
 				},
 				memoryTokenBudget,
 				engineCache: engineCacheDebug ?? null,
@@ -1893,7 +2010,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 	]));
 
 	let rawUpdate: unknown = { update: worldStateUpdateSchema.parse({}) };
-	if (classifierProfile && !deferStateExtraction) {
+	if (classifierProfile && stateExtractionMode === 'sync') {
 		const classifierSystem = classifierService.systemPromptOverride?.trim() || 'You extract canonical state changes for a text adventure. Return strict JSON only.';
 		const extractionPrompt = buildStateExtractionPrompt(request.playerText, narration);
 		try {
@@ -1904,7 +2021,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				maxTokens: classifierGeneration.maxTokens,
 				system: classifierSystem,
 				prompt: extractionPrompt,
-				responseFormat: 'json_object',
+				responseSchema: buildStateExtractionResponseSchema(),
 			});
 			generationTimings.push(timingFromResult('turn.state_extraction', 'classifier', extractionResult, 'success'));
 			recorder.record('turn.llm.state_extraction', extractionResult.durationMs, {
@@ -1917,8 +2034,9 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				responseTokens: extractionResult.usage.responseTokens,
 				totalTokens: extractionResult.usage.totalTokens,
 				maxOutputTokens: classifierGeneration.maxTokens,
-				responseFormat: 'json_object',
-				retryCount: 0,
+				responseFormat: 'json_schema',
+				responseSchemaName: 'mtherios_state_patch',
+				retryCount: extractionResult.retryCount ?? 0,
 			});
 			await logGenerationCall({
 				storyId: request.storyId,
@@ -1929,7 +2047,8 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				result: extractionResult,
 				status: 'success',
 				metadata: {
-					responseFormat: 'json_object',
+					responseFormat: 'json_schema',
+					responseSchemaName: 'mtherios_state_patch',
 					debugSnapshot: buildTurnDebugSnapshot({
 						kind: 'state_extraction',
 						playerText: request.playerText,
@@ -1954,8 +2073,9 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 					responseTokens: failedResult.usage?.responseTokens ?? null,
 					totalTokens: failedResult.usage?.totalTokens ?? null,
 					maxOutputTokens: classifierGeneration.maxTokens,
-					responseFormat: 'json_object',
-					retryCount: 0,
+					responseFormat: 'json_schema',
+					responseSchemaName: 'mtherios_state_patch',
+					retryCount: failedResult.retryCount ?? 0,
 					statusCode: failedResult.statusCode ?? null,
 				});
 				await logGenerationCall({
@@ -1968,7 +2088,8 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 					status: 'error',
 					error,
 					metadata: {
-						responseFormat: 'json_object',
+						responseFormat: 'json_schema',
+						responseSchemaName: 'mtherios_state_patch',
 						statusCode: failedResult.statusCode ?? null,
 						debugSnapshot: buildTurnDebugSnapshot({
 							kind: 'state_extraction',
@@ -1999,7 +2120,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		memorySettings,
 	}));
 	warnings.push(...applied.warnings);
-	if (deferStateExtraction) {
+	if (stateExtractionMode === 'deferred') {
 		try {
 			const jobId = await recorder.time('turn.state_extraction.enqueue', {
 				timelineTurn: gmBrief.currentTurn,
@@ -2105,7 +2226,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		totalMs: monotonicNow() - turnStartedAt,
 		model: narrativeGeneration.model ?? null,
 		profile: narrativeProfile.providerType,
-		stateExtractionMode: deferStateExtraction ? 'deferred' : 'sync',
+		stateExtractionMode,
 		stablePromptHash: hashText(narrativeSystem),
 		dynamicContextHash: hashText(narrativeSystemDynamic),
 		recentMessageCount: prompt.messages.length,

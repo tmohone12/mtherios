@@ -231,3 +231,18 @@ describe('executeToolCall update_world_state', () => {
 		);
 	});
 });
+
+describe('executeToolCall roll_check', () => {
+	it('returns a renderable dice marker', async () => {
+		const result = JSON.parse(await executeToolCall('roll_check', {
+			notation: '1d20+3',
+			dc: 15,
+			ability: 'DEX',
+			description: 'Cross the rain-slick roof',
+		}));
+
+		expect(result.ok).toBe(true);
+		expect(result.result.dc).toBe(15);
+		expect(result.diceMarker).toContain('{{dice:1d20+3|');
+	});
+});

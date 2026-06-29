@@ -17,7 +17,7 @@ vi.mock('$lib/server/memory/embeddings', () => ({
 	validateMemoryEmbeddingVector: mocks.validateMemoryEmbeddingVector,
 }));
 
-import { attachEntityAliasesForCanonicalSearch, canonicalSearchEmbeddingText, canonicalSearchRecordText, indexCanonicalRecords, searchCanonicalWorld } from './canonicalSearch';
+import { INDEXABLE_TYPES, attachEntityAliasesForCanonicalSearch, canonicalSearchEmbeddingText, canonicalSearchRecordText, indexCanonicalRecords, searchCanonicalWorld } from './canonicalSearch';
 
 beforeEach(() => {
 	vi.unstubAllGlobals();
@@ -27,6 +27,24 @@ beforeEach(() => {
 });
 
 describe('canonical search indexing', () => {
+	it('keeps repair artifacts and old memory nodes out of default indexing', () => {
+		expect(INDEXABLE_TYPES).toEqual(expect.arrayContaining([
+			'transcript',
+			'entities',
+			'events',
+			'chapters',
+			'arcs',
+			'sagas',
+		]));
+		expect(INDEXABLE_TYPES).not.toEqual(expect.arrayContaining([
+			'facts',
+			'sourceRefs',
+			'patchProposals',
+			'continuityWarnings',
+			'memoryNodes',
+		]));
+	});
+
 	it('keeps short embedding text unchanged', () => {
 		const text = 'Record type: chapters\n\nTitle: The Golden Court\n\nAurion enters Yin.';
 

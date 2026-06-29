@@ -186,6 +186,40 @@ describe('buildTurnDebugSnapshot', () => {
 		expect(snapshot.engineCache?.segments.at(-1)?.kind).toBe('segment_23');
 	});
 
+	it('keeps bounded prompt section trace diagnostics without leaking section content', () => {
+		const snapshot = buildTurnDebugSnapshot({
+			kind: 'narration',
+			playerText: 'Trace this prompt.',
+			promptSectionTrace: Array.from({ length: 30 }, (_, index) => ({
+				id: index === 0 ? 'prompt_system' : `section_${index}`,
+				lane: index === 0 ? 'engine_static' : 'turn_dynamic',
+				priority: 100 - index,
+				maxTokens: 10 + index,
+				tokenEstimate: 10 + index,
+				charCount: 40 + index,
+				contentHash: `hash-${index}`,
+				sourceIds: [`source_${index}`],
+				sourceIdCount: 1,
+				content: `secret section text ${index} must not leak`,
+			})),
+		} as any);
+
+		expect(snapshot.promptSectionTrace).toHaveLength(24);
+		expect(snapshot.promptSectionTrace?.[0]).toEqual({
+			id: 'prompt_system',
+			lane: 'engine_static',
+			priority: 100,
+			maxTokens: 10,
+			tokenEstimate: 10,
+			charCount: 40,
+			contentHash: 'hash-0',
+			sourceIds: ['source_0'],
+			sourceIdCount: 1,
+		});
+		expect(snapshot.promptSectionTrace?.at(-1)?.id).toBe('section_23');
+		expect(JSON.stringify(snapshot.promptSectionTrace)).not.toContain('secret section text');
+	});
+
 	it('maps prompt cache segment results into prompt audit diagnostics', () => {
 		const diagnostics = buildEngineCacheDebug({
 			hitCount: 1,

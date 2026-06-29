@@ -212,22 +212,23 @@ describe('applyValidatedTurnUpdate', () => {
 		]);
 
 		const patchInsert = insertCalls.find(call => call.table === statePatches)?.value as { id: string };
-		const factInsert = (insertCalls.find(call => call.table === facts)?.value as Array<{ id: string; statement: string }>)?.[0];
-		const proposalInsert = (insertCalls.find(call => call.table === patchProposals)?.value as Array<{ id: string; targetRecordId: string; proposalType: string; status: string }>)?.find((proposal) => proposal.proposalType === 'turn_summary');
 		const eventInserts = insertCalls
 			.filter(call => call.table === storyEvents)
 			.map(call => call.value as Record<string, unknown>);
-		const sourceRefInserts = insertCalls
-			.filter(call => call.table === sourceRefs)
-			.flatMap(call => call.value as Array<Record<string, unknown>>);
-		const warningInserts = insertCalls.filter(call => call.table === continuityWarnings);
 		const agreementEvent = eventInserts.find(event => event.type === 'agreement');
 		const linkInsert = insertCalls.find(call => call.table === npcEventLinks)?.value as Array<Record<string, unknown>>;
 		const metadataUpdate = storyUpdates.find(updatePayload => updatePayload.metadata);
 		const turnUpdate = storyUpdates.find(updatePayload => updatePayload.currentTurn === 8);
+		const proposalInserts = insertCalls.filter(call => call.table === patchProposals);
+		const factInserts = insertCalls.filter(call => call.table === facts);
+		const sourceRefInserts = insertCalls.filter(call => call.table === sourceRefs);
+		const warningInserts = insertCalls.filter(call => call.table === continuityWarnings);
+		const memoryInserts = insertCalls.filter(call => call.table === memoryNodes);
 
 		expect(result.eventIds).toEqual(eventInserts.map(event => event.id));
+		expect(result.memoryNodeIds).toEqual([]);
 		expect(eventInserts).toHaveLength(3);
+		expect(memoryInserts).toEqual([]);
 		for (const event of eventInserts) {
 			expect(event).toMatchObject({
 				status: 'committed',
@@ -260,19 +261,11 @@ describe('applyValidatedTurnUpdate', () => {
 			sourcePatchIds: [patchInsert.id],
 			metadata: { significance: 'major' },
 		});
-		expect(factInsert).toMatchObject({
-			statement: expect.stringContaining('Turn update recorded'),
-		});
-		expect(proposalInsert).toBeDefined();
-		expect(proposalInsert).toMatchObject({
-			proposalType: 'turn_summary',
-			targetRecordId: factInsert.id,
-			status: 'pending',
-		});
-		expect(sourceRefInserts.some(ref => ref.targetTable === 'facts' && ref.targetRecordId === factInsert.id)).toBe(true);
-		expect(sourceRefInserts.some(ref => ref.targetTable === 'patch_proposals' && ref.targetRecordId === proposalInsert!.id)).toBe(true);
-		expect(warningInserts).toHaveLength(1);
-		expect(result.warnings).toContain('Character reference "Unknown Envoy" was not created as canon; review the proposal if this should become a character.');
+		expect(factInserts).toEqual([]);
+		expect(proposalInserts).toEqual([]);
+		expect(sourceRefInserts).toEqual([]);
+		expect(warningInserts).toEqual([]);
+		expect(result.warnings).toContain('Character reference "Unknown Envoy" was not created as canon; add it manually if this should become a character.');
 		expect(linkInsert).toEqual([
 			expect.objectContaining({
 				storyId: 'story_1',
@@ -503,7 +496,7 @@ describe('applyValidatedTurnUpdate', () => {
 		});
 	});
 
-	it('keeps unknown agreement parties as reviewable context references', async () => {
+	it('keeps unknown agreement parties out of canon and reports a warning', async () => {
 		const { db, insertCalls } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
 		const update = worldStateUpdateSchema.parse({
@@ -538,11 +531,8 @@ describe('applyValidatedTurnUpdate', () => {
 			.map(call => call.value as Record<string, unknown>);
 		const agreementEvent = eventInserts.find(event => event.type === 'agreement');
 		const agreementRecord = insertCalls.find(call => call.table === agreements)?.value as Record<string, unknown>;
-		const proposals = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
-			.filter((proposal) => proposal.proposalType === 'character_reference_review');
-		const sourceRefInserts = insertCalls
-			.filter(call => call.table === sourceRefs)
-			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const proposalInserts = insertCalls.filter(call => call.table === patchProposals);
+		const sourceRefInserts = insertCalls.filter(call => call.table === sourceRefs);
 
 		expect(entityInserts).toEqual([]);
 		expect(agreementEvent).toMatchObject({
@@ -558,28 +548,12 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(agreementRecord).toMatchObject({
 			parties: ['Valen', 'The Watch', 'Unknown Envoy'],
 		});
-		expect(proposals).toEqual(expect.arrayContaining([
-			expect.objectContaining({
-				targetRecordId: 'unresolved_character_unknown_envoy',
-				status: 'needs_review',
-				metadata: expect.objectContaining({
-					sourceName: 'Unknown Envoy',
-					sourceType: 'unresolved_character_reference',
-					referenceContext: 'agreement_party',
-					agreementCategory: 'oath',
-				}),
-			}),
-		]));
-		expect(sourceRefInserts.some(ref =>
-			ref.targetTable === 'patch_proposals'
-			&& ref.targetRecordId === proposals[0]?.id
-			&& ref.sourceField === 'agreements'
-			&& ref.targetRecordField === 'parties'
-		)).toBe(true);
-		expect(result.warnings).toContain('Character reference "Unknown Envoy" was not created as canon; review the proposal if this should become a character.');
+		expect(proposalInserts).toEqual([]);
+		expect(sourceRefInserts).toEqual([]);
+		expect(result.warnings).toContain('Character reference "Unknown Envoy" was not created as canon; add it manually if this should become a character.');
 	});
 
-	it('persists delayed timeline events with source refs, npc links, and review proposals', async () => {
+	it('persists delayed timeline events with npc links and no review proposals', async () => {
 		const { db, insertCalls } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
 		const update = worldStateUpdateSchema.parse({
@@ -617,11 +591,8 @@ describe('applyValidatedTurnUpdate', () => {
 			.filter(call => call.table === storyEvents)
 			.map(call => call.value as Record<string, unknown>);
 		const scheduled = eventInserts.find(event => event.title === 'Watch blockade matures');
-		const proposalInsert = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
-			.find((proposal) => proposal.targetRecordId === scheduled?.id);
-		const sourceRefInserts = insertCalls
-			.filter(call => call.table === sourceRefs)
-			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const proposalInserts = insertCalls.filter(call => call.table === patchProposals);
+		const sourceRefInserts = insertCalls.filter(call => call.table === sourceRefs);
 		const linkInsert = insertCalls
 			.filter(call => call.table === npcEventLinks)
 			.flatMap(call => call.value as Array<Record<string, unknown>>);
@@ -647,24 +618,8 @@ describe('applyValidatedTurnUpdate', () => {
 			sourcePatchIds: [patchInsert.id],
 			serverVersion: 14,
 		});
-		expect(proposalInsert).toMatchObject({
-			proposalType: 'scheduled_event_upsert',
-			targetTable: 'story_events',
-			targetRecordId: scheduled?.id,
-			status: 'pending',
-			affectedEntityIds: ['entity_valen', 'entity_mira'],
-			confidence: 0.86,
-		});
-		expect(sourceRefInserts.some(ref =>
-			ref.targetTable === 'story_events'
-			&& ref.targetRecordId === scheduled?.id
-			&& ref.sourceField === 'timeline_events'
-		)).toBe(true);
-		expect(sourceRefInserts.some(ref =>
-			ref.targetTable === 'patch_proposals'
-			&& ref.targetRecordId === proposalInsert?.id
-			&& ref.sourceField === 'timeline_events'
-		)).toBe(true);
+		expect(proposalInserts).toEqual([]);
+		expect(sourceRefInserts).toEqual([]);
 		expect(linkInsert).toEqual(expect.arrayContaining([
 			expect.objectContaining({
 				eventId: scheduled?.id,
@@ -681,7 +636,7 @@ describe('applyValidatedTurnUpdate', () => {
 		]));
 	});
 
-	it('keeps unknown timeline event character names as reviewable context references', async () => {
+	it('keeps unknown timeline event character names out of canon and reports warnings', async () => {
 		const { db, insertCalls } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
 		const update = worldStateUpdateSchema.parse({
@@ -720,11 +675,8 @@ describe('applyValidatedTurnUpdate', () => {
 			.filter(call => call.table === storyEvents)
 			.map(call => call.value as Record<string, unknown>);
 		const scheduled = eventInserts.find(event => event.title === 'Oath witness hunted');
-		const proposals = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
-			.filter((proposal) => proposal.proposalType === 'character_reference_review');
-		const sourceRefInserts = insertCalls
-			.filter(call => call.table === sourceRefs)
-			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const proposalInserts = insertCalls.filter(call => call.table === patchProposals);
+		const sourceRefInserts = insertCalls.filter(call => call.table === sourceRefs);
 
 		expect(entityInserts).toEqual([]);
 		expect(scheduled).toMatchObject({
@@ -736,40 +688,15 @@ describe('applyValidatedTurnUpdate', () => {
 				targetNames: ['Valen', 'Oath Witness'],
 			}),
 		});
-		expect(proposals).toEqual(expect.arrayContaining([
-			expect.objectContaining({
-				targetRecordId: 'unresolved_character_hooded_envoy',
-				status: 'needs_review',
-				metadata: expect.objectContaining({
-					sourceName: 'Hooded Envoy',
-					sourceType: 'unresolved_character_reference',
-					referenceContext: 'timeline_actor',
-				}),
-			}),
-			expect.objectContaining({
-				targetRecordId: 'unresolved_character_oath_witness',
-				status: 'needs_review',
-				metadata: expect.objectContaining({
-					sourceName: 'Oath Witness',
-					sourceType: 'unresolved_character_reference',
-					referenceContext: 'timeline_target',
-				}),
-			}),
-		]));
-		for (const proposal of proposals) {
-			expect(sourceRefInserts.some(ref =>
-				ref.targetTable === 'patch_proposals'
-				&& ref.targetRecordId === proposal.id
-				&& ref.sourceField === 'timeline_events'
-			)).toBe(true);
-		}
+		expect(proposalInserts).toEqual([]);
+		expect(sourceRefInserts).toEqual([]);
 		expect(result.warnings).toEqual(expect.arrayContaining([
-			'Character reference "Hooded Envoy" was not created as canon; review the proposal if this should become a character.',
-			'Character reference "Oath Witness" was not created as canon; review the proposal if this should become a character.',
+			'Character reference "Hooded Envoy" was not created as canon; add it manually if this should become a character.',
+			'Character reference "Oath Witness" was not created as canon; add it manually if this should become a character.',
 		]));
 	});
 
-	it('keeps unknown faction members as reviewable context references', async () => {
+	it('keeps unknown faction members out of canon and reports a warning', async () => {
 		const { db, insertCalls } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
 		const update = worldStateUpdateSchema.parse({
@@ -801,11 +728,8 @@ describe('applyValidatedTurnUpdate', () => {
 		const membershipInserts = insertCalls
 			.filter(call => call.table === factionMemberships)
 			.map(call => call.value as Record<string, unknown>);
-		const proposals = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
-			.filter((proposal) => proposal.proposalType === 'character_reference_review');
-		const sourceRefInserts = insertCalls
-			.filter(call => call.table === sourceRefs)
-			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const proposalInserts = insertCalls.filter(call => call.table === patchProposals);
+		const sourceRefInserts = insertCalls.filter(call => call.table === sourceRefs);
 
 		expect(entityInserts.every(entity => entity.type !== 'character')).toBe(true);
 		expect(membershipInserts).toEqual(expect.arrayContaining([
@@ -821,28 +745,12 @@ describe('applyValidatedTurnUpdate', () => {
 				metadata: expect.objectContaining({ memberNameOrId: 'Oath Witness' }),
 			}),
 		]));
-		expect(proposals).toEqual(expect.arrayContaining([
-			expect.objectContaining({
-				targetRecordId: 'unresolved_character_oath_witness',
-				status: 'needs_review',
-				metadata: expect.objectContaining({
-					sourceName: 'Oath Witness',
-					sourceType: 'unresolved_character_reference',
-					referenceContext: 'faction_member',
-					factionName: 'The Watch',
-				}),
-			}),
-		]));
-		expect(sourceRefInserts.some(ref =>
-			ref.targetTable === 'patch_proposals'
-			&& ref.targetRecordId === proposals[0]?.id
-			&& ref.sourceField === 'lorebook_entries'
-			&& ref.targetRecordField === 'known_members'
-		)).toBe(true);
-		expect(result.warnings).toContain('Character reference "Oath Witness" was not created as canon; review the proposal if this should become a character.');
+		expect(proposalInserts).toEqual([]);
+		expect(sourceRefInserts).toEqual([]);
+		expect(result.warnings).toContain('Character reference "Oath Witness" was not created as canon; add it manually if this should become a character.');
 	});
 
-	it('keeps unknown model-extracted characters out of canon and leaves a review proposal', async () => {
+	it('keeps unknown model-extracted characters out of canon and reports a warning', async () => {
 		const { db, insertCalls } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
 		const update = worldStateUpdateSchema.parse({
@@ -870,43 +778,16 @@ describe('applyValidatedTurnUpdate', () => {
 		const entityInserts = insertCalls
 			.filter(call => call.table === entities)
 			.map(call => call.value as Record<string, unknown>);
-		const proposalInsert = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
-			.find((proposal) => proposal.proposalType === 'character_reference_review');
-		const sourceRefInserts = insertCalls
-			.filter(call => call.table === sourceRefs)
-			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const proposalInserts = insertCalls.filter(call => call.table === patchProposals);
+		const sourceRefInserts = insertCalls.filter(call => call.table === sourceRefs);
 
 		expect(entityInserts).toEqual([]);
-		expect(proposalInsert).toMatchObject({
-			targetTable: 'entities',
-			targetRecordId: 'unresolved_character_ser_olyvar',
-			status: 'needs_review',
-			operations: [
-				expect.objectContaining({
-					op: 'review',
-					path: '/entities/character',
-					value: expect.objectContaining({
-						name: 'Ser Olyvar',
-						description: 'A knight mentioned only in passing by the crowd.',
-					}),
-				}),
-			],
-			affectedEntityIds: [],
-			confidence: 0.52,
-			metadata: expect.objectContaining({
-				sourceType: 'unresolved_character_reference',
-				sourceName: 'Ser Olyvar',
-			}),
-		});
-		expect(sourceRefInserts.some(ref =>
-			ref.targetTable === 'patch_proposals'
-			&& ref.targetRecordId === proposalInsert?.id
-			&& ref.sourceField === 'characters'
-		)).toBe(true);
-		expect(result.warnings).toContain('Character reference "Ser Olyvar" was not created as canon; review the proposal if this should become a character.');
+		expect(proposalInserts).toEqual([]);
+		expect(sourceRefInserts).toEqual([]);
+		expect(result.warnings).toContain('Character reference "Ser Olyvar" was not created as canon; add it manually if this should become a character.');
 	});
 
-	it('keeps unknown relationship and conversation characters as reviewable context references', async () => {
+	it('keeps unknown relationship and conversation characters out of canon and reports warnings', async () => {
 		const { db, insertCalls } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
 		const update = worldStateUpdateSchema.parse({
@@ -943,61 +824,19 @@ describe('applyValidatedTurnUpdate', () => {
 		const entityInserts = insertCalls
 			.filter(call => call.table === entities)
 			.map(call => call.value as Record<string, unknown>);
-		const proposals = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
-			.filter((proposal) => proposal.proposalType === 'character_reference_review');
-		const sourceRefInserts = insertCalls
-			.filter(call => call.table === sourceRefs)
-			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const proposalInserts = insertCalls.filter(call => call.table === patchProposals);
+		const sourceRefInserts = insertCalls.filter(call => call.table === sourceRefs);
 
 		expect(entityInserts).toEqual([]);
-		expect(proposals).toEqual(expect.arrayContaining([
-			expect.objectContaining({
-				targetRecordId: 'unresolved_character_ser_olyvar',
-				status: 'needs_review',
-				operations: [
-					expect.objectContaining({
-						value: expect.objectContaining({
-							name: 'Ser Olyvar',
-							description: 'Relationship source in serves link to Valen.',
-						}),
-					}),
-				],
-				metadata: expect.objectContaining({
-					sourceName: 'Ser Olyvar',
-					sourceType: 'unresolved_character_reference',
-				}),
-			}),
-			expect.objectContaining({
-				targetRecordId: 'unresolved_character_lady_nym',
-				status: 'needs_review',
-				operations: [
-					expect.objectContaining({
-						value: expect.objectContaining({
-							name: 'Lady Nym',
-							description: 'NPC belief/conversation subject: She heard the player name the hidden patron.',
-						}),
-					}),
-				],
-				metadata: expect.objectContaining({
-					sourceName: 'Lady Nym',
-					sourceType: 'unresolved_character_reference',
-				}),
-			}),
-		]));
-		for (const proposal of proposals) {
-			expect(sourceRefInserts.some(ref =>
-				ref.targetTable === 'patch_proposals'
-				&& ref.targetRecordId === proposal.id
-				&& ['relationships', 'conversations'].includes(String(ref.sourceField))
-			)).toBe(true);
-		}
+		expect(proposalInserts).toEqual([]);
+		expect(sourceRefInserts).toEqual([]);
 		expect(result.warnings).toEqual(expect.arrayContaining([
-			'Character reference "Ser Olyvar" was not created as canon; review the proposal if this should become a character.',
-			'Character reference "Lady Nym" was not created as canon; review the proposal if this should become a character.',
+			'Character reference "Ser Olyvar" was not created as canon; add it manually if this should become a character.',
+			'Character reference "Lady Nym" was not created as canon; add it manually if this should become a character.',
 		]));
 	});
 
-	it('merges repeated unresolved character references into one review proposal with all sources', async () => {
+	it('reports repeated unresolved character references without creating review debt', async () => {
 		const { db, insertCalls } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
 		const update = worldStateUpdateSchema.parse({
@@ -1039,27 +878,11 @@ describe('applyValidatedTurnUpdate', () => {
 			serverVersion: 17,
 		});
 
-		const proposals = (insertCalls.find(call => call.table === patchProposals)?.value as Array<Record<string, unknown>>)
-			.filter((proposal) => proposal.proposalType === 'character_reference_review'
-				&& proposal.targetRecordId === 'unresolved_character_ser_olyvar');
-		const sourceRefInserts = insertCalls
-			.filter(call => call.table === sourceRefs)
-			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const proposalInserts = insertCalls.filter(call => call.table === patchProposals);
+		const sourceRefInserts = insertCalls.filter(call => call.table === sourceRefs);
 
-		expect(proposals).toHaveLength(1);
-		expect(proposals[0]).toMatchObject({
-			status: 'needs_review',
-			metadata: expect.objectContaining({
-				sourceName: 'Ser Olyvar',
-				sourceType: 'unresolved_character_reference',
-				sourceFields: ['characters', 'relationships', 'conversations'],
-			}),
-		});
-		const proposalSourceFields = [...new Set(sourceRefInserts
-			.filter(ref => ref.targetTable === 'patch_proposals' && ref.targetRecordId === proposals[0].id)
-			.map(ref => ref.sourceField))]
-			.sort();
-		expect(proposalSourceFields).toEqual(['characters', 'conversations', 'relationships']);
+		expect(proposalInserts).toEqual([]);
+		expect(sourceRefInserts).toEqual([]);
 	});
 
 	it('skips title-only character names instead of creating review debt', async () => {
@@ -1096,7 +919,7 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(proposals.some((proposal) => proposal.targetRecordId === 'unresolved_character_consort')).toBe(false);
 	});
 
-	it('adds new unresolved character evidence to the existing review proposal across turns', async () => {
+	it('does not update existing unresolved review proposals during normal turns', async () => {
 		const existingProposal: typeof patchProposals.$inferSelect = {
 			id: 'proposal_existing_olyvar',
 			storyId: 'story_1',
@@ -1160,34 +983,18 @@ describe('applyValidatedTurnUpdate', () => {
 			serverVersion: 17,
 		});
 
-		const patchInsert = insertCalls.find(call => call.table === statePatches)?.value as { id: string };
 		const proposalInserts = insertCalls
 			.filter(call => call.table === patchProposals)
 			.flatMap(call => call.value as Array<Record<string, unknown>>);
 		const proposalUpdate = updateCalls.find(call => call.table === patchProposals)?.value;
-		const sourceRefInserts = insertCalls
-			.filter(call => call.table === sourceRefs)
-			.flatMap(call => call.value as Array<Record<string, unknown>>);
+		const sourceRefInserts = insertCalls.filter(call => call.table === sourceRefs);
 
 		expect(proposalInserts.some(proposal =>
 			proposal.proposalType === 'character_reference_review'
 			&& proposal.targetRecordId === 'unresolved_character_ser_olyvar'
 		)).toBe(false);
-		expect(proposalUpdate).toMatchObject({
-			sourceEntryIds: ['entry_old_assistant', 'entry_assistant'],
-			sourcePatchIds: ['patch_old', patchInsert.id],
-			metadata: expect.objectContaining({
-				sourceName: 'Ser Olyvar',
-				sourceType: 'unresolved_character_reference',
-				sourceFields: ['characters', 'conversations'],
-			}),
-		});
-		expect(sourceRefInserts.some(ref =>
-			ref.targetTable === 'patch_proposals'
-			&& ref.targetRecordId === 'proposal_existing_olyvar'
-			&& ref.sourceField === 'conversations'
-			&& ref.sourceId === 'entry_assistant'
-		)).toBe(true);
+		expect(proposalUpdate).toBeUndefined();
+		expect(sourceRefInserts).toEqual([]);
 	});
 
 	it('keeps persisted transaction results and reports projection enqueue warnings', async () => {

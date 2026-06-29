@@ -1,7 +1,7 @@
 import { countTokens } from '$lib/utils/tokens';
 import type { RetrievedMemoryPacket } from '$lib/contracts/memory';
 import type { TurnContext } from './context';
-import { buildServerTurnPrompt, buildStateExtractionPrompt, type ServerTurnPromptOptions } from './promptPacket';
+import { buildServerTurnPrompt, buildPromptSectionTrace, buildStateExtractionPrompt, type CompiledPrompt, type PromptSectionTrace, type ServerTurnPromptOptions } from './promptPacket';
 
 export interface TurnPromptHarnessScenario {
 	name: string;
@@ -19,6 +19,8 @@ export interface PromptHarnessReport {
 	system: string;
 	prompt: string;
 	messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+	compiledPrompt: CompiledPrompt;
+	promptSectionTrace: PromptSectionTrace[];
 	extractionPrompt: string;
 	tokens: {
 		system: number;
@@ -85,6 +87,8 @@ export function buildPromptHarnessReport(scenario: TurnPromptHarnessScenario): P
 		system: promptPacket.system,
 		prompt: promptPacket.prompt,
 		messages: promptPacket.messages,
+		compiledPrompt: promptPacket.compiledPrompt,
+		promptSectionTrace: buildPromptSectionTrace(promptPacket.compiledPrompt),
 		extractionPrompt,
 		tokens: {
 			system: countTokens(promptPacket.system),

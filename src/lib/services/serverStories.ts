@@ -15,6 +15,7 @@ import {
 	contextCheckpointListResponseSchema,
 	contextCheckpointRevertResponseSchema,
 	createStoryResponseSchema,
+	storyDeleteResponseSchema,
 	entityCommandResponseSchema,
 	entityDeleteResponseSchema,
 	livingMemoryCommandResponseSchema,
@@ -80,12 +81,33 @@ export interface CreateBackendStoryInput {
 	headerPrompt?: string | null;
 	playerReputation?: string | null;
 	clientStoryId?: string;
+	startWorkflow?: {
+		sourceMode?: 'blank' | 'lorebook' | 'character_card' | 'import' | 'transcript' | 'source_notes';
+		sourceCount?: number;
+		requiresCanonReview?: boolean;
+		startingSceneReady?: boolean;
+		notes?: string | null;
+	};
 }
 
 export interface CreateBackendStoryResult {
 	storyId: string;
 	serverVersion: number;
 	createdAt: string;
+}
+
+export interface DeleteBackendStoryOptions {
+	mode?: 'archive' | 'purge';
+	exportBeforeDelete?: boolean;
+}
+
+export interface DeleteBackendStoryResult {
+	ok: boolean;
+	storyId: string;
+	mode: 'archive' | 'purge';
+	canonDeleted: boolean;
+	artifactCleanup: Record<string, unknown> | null;
+	warnings: string[];
 }
 
 export const CONTROL_SURFACE_BOOTSTRAP_LIMITS = {
@@ -162,6 +184,48 @@ export async function createBackendStoryShell(input: CreateBackendStoryInput): P
 
 export async function fetchBackendStoryBootstrap(serverStoryId: string): Promise<BootstrapResponse> {
 	return sendStoryEngineCommandResult(serverStoryId, 'campaign.bootstrap', CONTROL_SURFACE_BOOTSTRAP_LIMITS, bootstrapResponseSchema);
+}
+
+export async function resolveBackendStoryBootstrap(story: Pick<Story, 'id' | 'serverStoryId' | 'title'>): Promise<BootstrapResponse> {
+	const attempted = new Set<string>();
+	let firstError: unknown = null;
+	let lastError: unknown = null;
+	const tryBootstrap = async (candidateId?: string | null): Promise<BootstrapResponse | null> => {
+		const id = String(candidateId ?? '').trim();
+		if (!id || attempted.has(id)) return null;
+		attempted.add(id);
+		try {
+			return await fetchBackendStoryBootstrap(id);
+		} catch (error) {
+			firstError ??= error;
+			lastError = error;
+			return null;
+		}
+	};
+
+	const direct = await tryBootstrap(story.serverStoryId) ?? await tryBootstrap(story.id);
+	if (direct) return direct;
+
+	try {
+		const stories = await listBackendStories();
+		const localIds = new Set([story.id, story.serverStoryId].map((value) => String(value ?? '').trim()).filter(Boolean));
+		const exactIdMatch = stories.find((candidate) =>
+			localIds.has(candidate.id) || (candidate.clientStoryId ? localIds.has(candidate.clientStoryId) : false)
+		);
+		const titleMatches = stories.filter((candidate) => story.title && candidate.title === story.title);
+		const fallbackIds = [
+			exactIdMatch?.id,
+			titleMatches.length === 1 ? titleMatches[0]?.id : null,
+		];
+		for (const candidateId of fallbackIds) {
+			const recovered = await tryBootstrap(candidateId);
+			if (recovered) return recovered;
+		}
+	} catch (error) {
+		lastError = error;
+	}
+
+	throw firstError ?? lastError ?? new Error('Terminal world database story could not be resolved.');
 }
 
 export async function fetchBackendStoryProjection(serverStoryId: string, limit = 80): Promise<CampaignProjection> {
@@ -293,9 +357,13 @@ export async function upsertBackendLivingMemory(
 	return sendStoryEngineCommandResult(serverStoryId, 'livingMemory.upsert', { kind, records }, livingMemoryCommandResponseSchema);
 }
 
-export async function cacheBackendStoryFromBootstrap(bootstrap: BootstrapResponse): Promise<Story> {
+export async function cacheBackendStoryFromBootstrap(
+	bootstrap: BootstrapResponse,
+	preferredLocalStoryId?: string | null,
+): Promise<Story> {
 	return cacheBackendStory({
 		...(bootstrap.story as unknown as BackendStorySummary),
+		clientStoryId: preferredLocalStoryId ?? (bootstrap.story as unknown as BackendStorySummary).clientStoryId ?? null,
 		serverVersion: bootstrap.serverVersion,
 	});
 }
@@ -303,15 +371,41 @@ export async function cacheBackendStoryFromBootstrap(bootstrap: BootstrapRespons
 export async function refreshStoryCatalog(): Promise<Story[]> {
 	const localStories = await getAllStories();
 	let serverStories: Story[] = [];
+	let liveServerIds: Set<string> | null = null;
+	let liveClientStoryIds = new Set<string>();
 
 	try {
-		serverStories = await cacheBackendStories(await listBackendStories());
+		const serverRows = await listBackendStories();
+		liveServerIds = new Set(serverRows.map((row) => row.id).filter(Boolean));
+		liveClientStoryIds = new Set(serverRows.map((row) => row.clientStoryId).filter((id): id is string => Boolean(id)));
+		const localByServerId = new Map(
+			localStories
+				.filter((story) => story.serverStoryId)
+				.map((story) => [story.serverStoryId, story]),
+		);
+		serverStories = [];
+		for (const row of serverRows) {
+			const matchedLocalId = row.clientStoryId ?? localByServerId.get(row.id)?.id ?? null;
+			serverStories.push(await cacheBackendStory({
+				...row,
+				clientStoryId: matchedLocalId,
+			}));
+		}
 	} catch (error) {
 		console.warn('[ServerStories] Backend story catalog unavailable; using local cache:', error);
 	}
 
 	const byId = new Map<string, Story>();
-	for (const story of localStories) byId.set(story.id, story);
+	for (const story of localStories) {
+		if (liveServerIds && story.syncStatus === 'local-only') continue;
+		if (
+			liveServerIds
+			&& story.serverStoryId
+			&& !liveServerIds.has(story.serverStoryId)
+			&& !liveClientStoryIds.has(story.id)
+		) continue;
+		byId.set(story.id, story);
+	}
 	for (const story of serverStories) byId.set(story.id, { ...byId.get(story.id), ...story });
 	return [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -384,18 +478,28 @@ export async function cacheBackendStory(row: BackendStorySummary): Promise<Story
 	return story;
 }
 
-export async function deleteStoryEverywhere(story: Story): Promise<void> {
+export async function deleteStoryEverywhere(
+	story: Story,
+	options: DeleteBackendStoryOptions = {},
+): Promise<DeleteBackendStoryResult | null> {
+	let backendResult: DeleteBackendStoryResult | null = null;
 	if (story.serverStoryId) {
+		const args = {
+			mode: options.mode ?? 'purge',
+			exportBeforeDelete: options.exportBeforeDelete ?? false,
+		};
 		const response = await sendEngineCommand({
 			storyId: story.serverStoryId,
 			command: 'story.delete',
-			args: {},
+			args,
 		});
 		if (response.status !== 'succeeded') {
 			throw new Error(response.error ?? 'Backend delete failed.');
 		}
+		backendResult = storyDeleteResponseSchema.parse(response.result);
 	}
 	await deleteStory(story.id);
+	return backendResult;
 }
 
 function toStoryMode(value: unknown): StoryMode {

@@ -285,6 +285,39 @@ export const tools = [
 		},
 	},
 	{
+		name: 'mtherios_inject_plot_direction',
+		description: 'Inject narrator-facing plot direction by scheduling a secret or visible GM timeline event for an MCP/subagent plan.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId', 'direction'],
+			properties: {
+				storyId: { type: 'string' },
+				direction: { type: 'string' },
+				title: { type: 'string' },
+				narratorDirective: { type: 'string' },
+				urgency: { type: 'string', enum: ['simmer', 'emerging', 'immediate'], default: 'emerging' },
+				delayTurns: { type: 'integer', minimum: 0, default: 0 },
+				currentTurn: { type: 'integer', minimum: 0 },
+				currentWorldTime: { type: ['string', 'null'] },
+				worldTime: { type: ['string', 'null'] },
+				actorEntityIds: { type: 'array', items: { type: 'string' } },
+				targetEntityIds: { type: 'array', items: { type: 'string' } },
+				actorNpcEntityIds: { type: 'array', items: { type: 'string' } },
+				targetNpcEntityIds: { type: 'array', items: { type: 'string' } },
+				locationId: { type: ['string', 'null'] },
+				locationIds: { type: 'array', items: { type: 'string' } },
+				factionIds: { type: 'array', items: { type: 'string' } },
+				threadIds: { type: 'array', items: { type: 'string' } },
+				visibility: { type: 'string', enum: ['secret', 'player_known', 'public'], default: 'secret' },
+				memoryImpact: { type: 'object' },
+				metadata: { type: 'object' },
+				serverVersion: { type: 'integer', minimum: 1 },
+				clientCommandId: { type: 'string' },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
 		name: 'mtherios_timeline_advance',
 		description: 'Advance the campaign turn clock and promote due timeline events through the engine command envelope.',
 		inputSchema: {
@@ -672,6 +705,49 @@ export async function callTool(name, args = {}, options = {}) {
 				sourceEntryIds: stringArray(args.sourceEntryIds),
 				sourcePatchIds: stringArray(args.sourcePatchIds),
 				metadata: optionalRecord(args.metadata),
+				serverVersion: optionalPositiveInteger(args.serverVersion),
+			})),
+			timeoutMs: 60_000,
+		});
+	}
+	if (name === 'mtherios_inject_plot_direction') {
+		const direction = requiredString(args.direction, 'direction');
+		const urgency = optionalString(args.urgency) || 'emerging';
+		const narratorDirective = optionalString(args.narratorDirective);
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'timeline.schedule', {
+				type: 'scheme',
+				title: optionalString(args.title) || 'MCP plot direction',
+				body: [
+					direction,
+					narratorDirective ? `Narrator directive: ${narratorDirective}` : '',
+					`Urgency: ${urgency}`,
+				].filter(Boolean).join('\n'),
+				delayTurns: optionalNonnegativeInteger(args.delayTurns) ?? 0,
+				currentTurn: optionalNonnegativeInteger(args.currentTurn),
+				currentWorldTime: optionalNullableString(args.currentWorldTime),
+				worldTime: optionalNullableString(args.worldTime),
+				actorEntityIds: stringArray(args.actorEntityIds),
+				targetEntityIds: stringArray(args.targetEntityIds),
+				actorNpcEntityIds: stringArray(args.actorNpcEntityIds),
+				targetNpcEntityIds: stringArray(args.targetNpcEntityIds),
+				locationId: optionalNullableString(args.locationId),
+				locationIds: stringArray(args.locationIds),
+				factionIds: stringArray(args.factionIds),
+				threadIds: stringArray(args.threadIds),
+				visibility: optionalString(args.visibility) || 'secret',
+				memoryImpact: {
+					...asRecord(args.memoryImpact),
+					plotDirection: true,
+					urgency,
+				},
+				metadata: {
+					...asRecord(args.metadata),
+					source: 'mcp_plot_direction',
+					urgency,
+					narratorDirective,
+				},
 				serverVersion: optionalPositiveInteger(args.serverVersion),
 			})),
 			timeoutMs: 60_000,

@@ -56,6 +56,7 @@ import {
 	type EntityDeleteResponse,
 	indexedDbImportRequestSchema,
 	createStoryRequestSchema,
+	storyDeleteRequestSchema,
 	entityUpsertRequestSchema,
 	type LivingMemoryCommandResponse,
 	type SagaCommandResponse,
@@ -201,7 +202,7 @@ export interface EngineCommandHandlers {
 	listStories?: () => Promise<JsonRecord[]>;
 	createStory?: (input: unknown) => Promise<JsonRecord>;
 	exportStory?: (storyId: string) => Promise<JsonRecord>;
-	deleteStory?: (storyId: string) => Promise<JsonRecord>;
+	deleteStory?: (storyId: string, options: { mode: 'archive' | 'purge'; exportBeforeDelete: boolean }) => Promise<JsonRecord>;
 	importIndexedDbBundle?: (input: unknown) => Promise<JsonRecord>;
 	upsertEntity?: (storyId: string, entry: JsonRecord) => Promise<EntityCommandResponse>;
 	deleteEntity?: (storyId: string, entityId: string) => Promise<EntityDeleteResponse>;
@@ -269,11 +270,49 @@ function asRecord(value: unknown): JsonRecord {
 	return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
 }
 
+function stringField(value: unknown): string {
+	return typeof value === 'string' ? value.trim() : '';
+}
+
+async function resolveBackendStoryId(
+	storyId: string,
+	listStories: () => Promise<JsonRecord[]>,
+): Promise<string> {
+	const clean = storyId.trim();
+	if (!clean || clean === '__app__') return clean;
+	try {
+		const rows = await listStories();
+		const match = rows.find((row) => stringField(row.id) === clean || stringField(row.clientStoryId) === clean);
+		return stringField(match?.id) || clean;
+	} catch {
+		return clean;
+	}
+}
+
+function asRecordArray(value: unknown): JsonRecord[] {
+	return Array.isArray(value) ? value.map(asRecord).filter((record) => Object.keys(record).length > 0) : [];
+}
+
+function nonnegativeInteger(value: unknown): number {
+	return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
+}
+
+function promptSectionTokenEstimate(section: JsonRecord): number {
+	const tokenEstimate = nonnegativeInteger(section.tokenEstimate);
+	if (tokenEstimate > 0) return tokenEstimate;
+	return nonnegativeInteger(section.maxTokens);
+}
+
+function promptSectionIds(sections: JsonRecord[]): string[] {
+	return sections
+		.map((section) => section.id)
+		.filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+}
+
 export async function executeEngineCommand(
 	request: EngineCommandRequest,
 	handlers: EngineCommandHandlers = {},
 ): Promise<EngineCommandResponse> {
-	const base = responseBase(request);
 	const loadAppStatus = handlers.loadAppStatus ?? getAppStatus;
 	const loadDatabaseHealth = handlers.loadDatabaseHealth ?? getDatabaseHealth;
 	const listApiLogs = handlers.listApiCallLogs ?? listApiCallLogs;
@@ -308,6 +347,8 @@ export async function executeEngineCommand(
 	const draftCharacterUpdate = handlers.draftCharacterUpdate ?? draftCharacterUpdateFromStoryContext;
 	const searchWorld = handlers.searchWorld ?? searchCanonicalWorld;
 	const listStories = handlers.listStories ?? listBackendStories;
+	request = { ...request, storyId: await resolveBackendStoryId(request.storyId, listStories) };
+	const base = responseBase(request);
 	const createStory = handlers.createStory ?? createBackendStory;
 	const exportStory = handlers.exportStory ?? exportBackendStory;
 	const deleteStory = handlers.deleteStory ?? deleteBackendStory;
@@ -522,6 +563,10 @@ export async function executeEngineCommand(
 				const retrieved = asRecord(diagnostics.retrieved);
 				const prompt = asRecord(diagnostics.prompt);
 				const messages = Array.isArray(prompt.messages) ? prompt.messages : [];
+				const compiledPrompt = asRecord(prompt.compiledPrompt);
+				const stableSections = asRecordArray(compiledPrompt.stablePrefix);
+				const dynamicSections = asRecordArray(compiledPrompt.dynamicTail);
+				const promptSections = [...stableSections, ...dynamicSections];
 				const tokenEstimate = typeof diagnostics.tokenEstimate === 'number'
 					? diagnostics.tokenEstimate
 					: typeof retrieved.tokenEstimate === 'number' ? retrieved.tokenEstimate : 0;
@@ -537,6 +582,11 @@ export async function executeEngineCommand(
 							systemChars: typeof prompt.system === 'string' ? prompt.system.length : 0,
 							promptChars: typeof prompt.prompt === 'string' ? prompt.prompt.length : 0,
 							messageCount: messages.length,
+							sectionCount: promptSections.length,
+							stableSectionCount: stableSections.length,
+							dynamicSectionCount: dynamicSections.length,
+							sectionIds: promptSectionIds(promptSections),
+							sectionTokenEstimate: promptSections.reduce((sum, section) => sum + promptSectionTokenEstimate(section), 0),
 						},
 					},
 					updatedAt: nowIso(),
@@ -1071,8 +1121,11 @@ export async function executeEngineCommand(
 				return response;
 			}
 			case 'story.delete': {
-				const result = await deleteStory(request.storyId);
-				const deleted = asRecord(result).ok !== false;
+				const args = storyDeleteRequestSchema.parse(request.args ?? {});
+				const result = await deleteStory(request.storyId, args);
+				const resultRecord = asRecord(result);
+				const deleted = resultRecord.ok !== false;
+				const warnings = Array.isArray(resultRecord.warnings) ? resultRecord.warnings : [];
 				const response = {
 					...base,
 					status: 'succeeded',
@@ -1081,6 +1134,10 @@ export async function executeEngineCommand(
 						story: {
 							storyId: request.storyId,
 							deleted,
+							mode: typeof resultRecord.mode === 'string' ? resultRecord.mode : args.mode,
+							canonDeleted: resultRecord.canonDeleted === true,
+							artifactCleanup: asRecord(resultRecord.artifactCleanup),
+							warningCount: warnings.length,
 						},
 					},
 					updatedAt: nowIso(),
@@ -1143,6 +1200,7 @@ export async function executeEngineCommand(
 							storyId: typeof created.storyId === 'string' ? created.storyId : null,
 							serverVersion: typeof created.serverVersion === 'number' ? created.serverVersion : null,
 							created: true,
+							...(args.startWorkflow ? { startWorkflow: args.startWorkflow } : {}),
 						},
 					},
 					updatedAt: nowIso(),

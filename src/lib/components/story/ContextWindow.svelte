@@ -60,9 +60,8 @@
 		const sceneTokens = tiers?.scene ?? 0;
 		const recentTokens = tiers?.recent ?? 0;
 		const worldTokens = tiers?.world ?? 0;
-		const proceduralTokens = tiers?.procedural ?? 0;
 		const retrievedTokens = tiers?.retrieved ?? 0;
-		const tierTotal = sceneTokens + recentTokens + worldTokens + proceduralTokens + retrievedTokens;
+		const tierTotal = sceneTokens + recentTokens + worldTokens + retrievedTokens;
 
 		// If we have real total from last gen, use it; otherwise estimate
 		const total = story.lastContextTotal > 0
@@ -75,7 +74,6 @@
 			scene: sceneTokens,
 			recent: recentTokens,
 			world: worldTokens,
-			procedural: proceduralTokens,
 			retrieved: retrievedTokens,
 			tierTotal,
 			total,
@@ -99,7 +97,6 @@
 			{ key: 'scene', label: 'Scene', tokens: stats.scene, color: 'bg-amber-500' },
 			{ key: 'recent', label: 'Recent Chapters', tokens: stats.recent, color: 'bg-blue-500' },
 			{ key: 'world', label: 'World/Arcs', tokens: stats.world, color: 'bg-purple-500' },
-			{ key: 'procedural', label: 'Procedural', tokens: stats.procedural, color: 'bg-cyan-500' },
 			{ key: 'retrieved', label: 'Retrieved', tokens: stats.retrieved, color: 'bg-rose-500' },
 		].filter(s => s.tokens > 0);
 	});

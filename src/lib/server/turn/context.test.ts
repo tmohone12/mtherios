@@ -242,40 +242,16 @@ describe('loadTurnContext', () => {
 		expect(beliefConditions.some((condition) => conditionIncludesInArray(condition, npcBeliefs.believerEntityId, requestedIds))).toBe(true);
 	});
 
-	it('keeps pending character reference proposals visible outside the broad proposal recency window', async () => {
-		const { db, patchProposalConditions } = createDbMock();
+	it('keeps repair/audit proposal rows out of normal turn context', async () => {
+		const { db, patchProposalConditions, continuityWarningConditions } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
 
 		const ctx = await loadTurnContext('story_1');
 
-		expect(ctx.patchProposals[0]).toMatchObject({
-			id: 'proposal_pending_ser_olyvar',
-			proposalType: 'character_reference_review',
-			status: 'needs_review',
-			targetRecordId: 'unresolved_character_ser_olyvar',
-		});
-		expect(ctx.patchProposals).toHaveLength(80);
-		expect(new Set(ctx.patchProposals.map((proposal) => proposal.id)).size).toBe(ctx.patchProposals.length);
-		expect(patchProposalConditions.some((condition) =>
-			conditionIncludesInArray(condition, patchProposals.status, ['pending', 'needs_review'])
-		)).toBe(true);
-	});
-
-	it('keeps open continuity warnings visible outside the broad warning recency window', async () => {
-		const { db, continuityWarningConditions } = createDbMock();
-		dbMocks.getDb.mockReturnValue(db);
-
-		const ctx = await loadTurnContext('story_1');
-
-		expect(ctx.continuityWarnings[0]).toMatchObject({
-			id: 'warning_open_ser_olyvar',
-			status: 'open',
-			title: 'Unreviewed character reference',
-		});
-		expect(ctx.continuityWarnings).toHaveLength(80);
-		expect(new Set(ctx.continuityWarnings.map((warning) => warning.id)).size).toBe(ctx.continuityWarnings.length);
-		expect(continuityWarningConditions.some((condition) =>
-			conditionIncludesInArray(condition, continuityWarnings.status, ['open'])
-		)).toBe(true);
+		expect(ctx.facts).toEqual([]);
+		expect(ctx.patchProposals).toEqual([]);
+		expect(ctx.continuityWarnings).toEqual([]);
+		expect(patchProposalConditions).toEqual([]);
+		expect(continuityWarningConditions).toEqual([]);
 	});
 });

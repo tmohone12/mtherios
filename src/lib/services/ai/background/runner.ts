@@ -7,7 +7,6 @@
  * - Chapter creation: every ~20 entries outside a chapter
  * - Arc condensation: every 5 uncovered chapters
  * - Lore management: every LORE_MGMT_CHAPTER_INTERVAL chapters
- * - Procedural memory (CASS): after arc creation
  *
  * World simulation is triggered by time progression in the executor,
  * so it does NOT need a separate entry point here.
@@ -350,15 +349,7 @@ async function runAutoArcCondensation(chapters: Chapter[]): Promise<void> {
 	console.log(`[Background] Auto arc ${arcNumber}: "${arc.title}" (Ch.${arc.chapterRange})`);
 	await runAutoSagaCondensation([...arcs, arc]);
 
-	// CASS reflection — fire and forget (capture storyId before async to prevent null access if user navigates away)
-	const procConfig = settings.getServiceConfig('proceduralMemory');
-	if (procConfig.enabled && story.currentStory) {
-		const storyId = story.currentStory.id;
-		const storyMode = story.storyMode;
-		const loreEntries = [...story.lorebookEntries];
-		ai.proceduralMemory.reflect(chapters, [...arcs, arc], loreEntries, storyId, storyMode)
-			.catch(console.error);
-	}
+	// ponytail: arc/saga summaries are the memory ladder; don't generate a parallel procedural-rules store.
 }
 
 // ══════════════════════════════════════════════════════════════

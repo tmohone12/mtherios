@@ -29,7 +29,7 @@ import { countTokens } from '$lib/utils/tokens';
 import { normalizeRelation } from '$lib/services/ai/tools/helpers';
 import { buildEconomyScaleBlock, buildWorldScaleBlock } from '$lib/services/ai/context/economyScale';
 import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET } from '$lib/services/memorySettings';
-import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, ConceptEntryState, EventEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Saga, Chapter, StoryBeat, Scheme, StoryThread, ProceduralRule } from '$lib/types';
+import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, ConceptEntryState, EventEntryState, EmbeddedImage, Agreement, AgreementCategory, AgreementSecrecy, FactionActionRecord, RumorRecord, Arc, Saga, Chapter, StoryBeat, Scheme, StoryThread } from '$lib/types';
 import { injectSchemes } from '$lib/services/ai/scheme/SchemeService';
 import type { WorldSimulationResult, PlotMomentum } from '$lib/services/ai/sdk/schemas/worldsim';
 import type { SeasonEffect } from '$lib/services/ai/generation/WorldSimulationService';
@@ -72,8 +72,6 @@ export interface StateSnapshot {
 	retrievedChapters: Chapter[];
 	/** Why the episodic memories were selected, for debugging / future UI surfacing. */
 	retrievedChapterReason: string | null;
-	/** Learned narrative rules selected for this turn. */
-	proceduralRules: ProceduralRule[];
 	/** Conversation facts selected for present or referenced NPCs. */
 	relevantConversationMemories: ConversationMemoryEntry[];
 	/** Backend-built compact memory packet. Preferred over ad hoc local retrieval when present. */
@@ -100,7 +98,6 @@ function emptySnapshot(): StateSnapshot {
 		retrievedEntries: [],
 		retrievedChapters: [],
 		retrievedChapterReason: null,
-		proceduralRules: [],
 		relevantConversationMemories: [],
 		backendMemoryPacket: null,
 		backendMemoryIds: [],
@@ -118,7 +115,7 @@ import {
 } from '$lib/services/ai/context/ContextBudgetService';
 import { processBackendTurn, pullBackendChanges, pushPendingBackendOps, queueBackendSyncOp, retrieveBackendMemory } from '$lib/services/backendMemory';
 import { openEngineEventStream, type EngineStreamEvent, type EngineStreamSubscription } from '$lib/services/engineStream';
-import { cacheBackendStoryFromBootstrap, fetchBackendStoryBootstrap, fetchBackendStoryEntriesPage, fetchBackendStoryProjection } from '$lib/services/serverStories';
+import { cacheBackendStoryFromBootstrap, fetchBackendStoryBootstrap, fetchBackendStoryEntriesPage, fetchBackendStoryProjection, resolveBackendStoryBootstrap } from '$lib/services/serverStories';
 import { settings } from '$lib/stores/settings.svelte';
 import type { BootstrapResponse, SyncChange, TurnContextReceipt, TurnPerformanceSummary, TurnRequest, TurnResponse } from '$lib/contracts/memory';
 import type { CampaignProjection } from '$lib/contracts/engine';
@@ -251,6 +248,17 @@ function emptyEngineStreamStatus(): EngineStreamStatus {
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingBackendStoryError(error: unknown): boolean {
+	const message = errorMessage(error).toLowerCase();
+	return message.includes('story not found') || message.includes('story could not be resolved');
+}
+
+function isTransientRuntimeEntry(entry: Pick<StoryEntry, 'type' | 'content'>): boolean {
+	const content = entry.content.trim();
+	return entry.type === 'system'
+		&& (content.startsWith('Terminal agent runtime required:') || content.startsWith('Terminal turn failed:'));
 }
 
 function asTime(value: unknown, fallback = Date.now()): number {
@@ -512,15 +520,20 @@ class StoryStore {
 			if (s.serverStoryId) {
 				try {
 					await pushPendingBackendOps(s);
-					const bootstrap = await fetchBackendStoryBootstrap(s.serverStoryId);
-					const cachedStory = await cacheBackendStoryFromBootstrap(bootstrap);
+					const bootstrap = await resolveBackendStoryBootstrap(s);
+					const cachedStory = await cacheBackendStoryFromBootstrap(bootstrap, s.id);
 					if (this._loadGeneration !== generation) return;
 					await this.applyBackendBootstrap(cachedStory, bootstrap, generation);
 					return;
 				} catch (error) {
-					console.warn('[Story] terminal runtime unavailable; refusing cached story fallback:', error);
-					await this.applyTerminalRuntimeUnavailable(s, generation, error);
-					return;
+					if (!isMissingBackendStoryError(error)) {
+						console.warn('[Story] terminal runtime unavailable; refusing cached story fallback:', error);
+						await this.applyTerminalRuntimeUnavailable(s, generation, error);
+						return;
+					}
+					console.warn('[Story] terminal database binding missing; loading local story without stale backend id:', error);
+					s = { ...s, serverStoryId: null, syncStatus: 'local-only' };
+					await updateStory(storyId, { serverStoryId: null, syncStatus: 'local-only', updatedAt: Date.now() }).catch(() => undefined);
 				}
 			}
 
@@ -1642,7 +1655,7 @@ class StoryStore {
 			: typeof row.createdAt === 'number'
 				? row.createdAt
 				: Date.now();
-		return {
+		const entry: StoryEntry = {
 			id,
 			storyId: this.currentStory.id,
 			type,
@@ -1655,6 +1668,8 @@ class StoryStore {
 				: null,
 			branchId: typeof row.branchId === 'string' ? row.branchId : null,
 		};
+		if (isTransientRuntimeEntry(entry)) return null;
+		return entry;
 	}
 
 	async mirrorBackendEntries(rows: Array<Record<string, unknown>>): Promise<StoryEntry[]> {
@@ -2466,8 +2481,6 @@ class StoryStore {
 		sections.push({ key: 'entryHistory', text: this.#sectionEntryHistoryPreamble(mode) });
 		const plotLedger = this.#sectionPlotLedger(snap);
 		if (plotLedger) sections.push({ key: 'plotLedger', text: plotLedger });
-		const procedural = this.#sectionProceduralMemory(snap);
-		if (procedural) sections.push({ key: 'proceduralMemory', text: procedural });
 		const lw = this.#sectionLivingWorld(snap);
 		if (lw) sections.push({ key: 'livingWorld', text: lw });
 		const schemes = this.#sectionSchemes();
@@ -2572,6 +2585,8 @@ class StoryStore {
 		if (mode === 'adventure') {
 			parts.push(`### Hard Rules\n\nThese six override everything. Re-read before generating:\n\n1. **NEVER write {{user}}'s dialogue, thoughts, decisions, or actions.** The player owns those.\n2. **EVERY TURN ADVANCES THE CLOCK.** The header H2 must show a new time, and the prose must state the time passed plainly ("five minutes later", "by morning", "a moment passes"). Frozen clock = dead world.\n3. **DEFAULT TO INCENTIVE-BASED FRICTION.** Powerful NPCs do not agree for free, but they can sincerely agree when the upside is high, trust is established, and the social risk is acceptable.\n4. **NO OMNISCIENT NPCs.** Each NPC knows only what they saw, heard, were told, found evidence for, or can plausibly infer after enough time.\n5. **NARRATE PROSE ONLY.** State changes are extracted from your text — make outcomes plain. Who moved, what was sworn, who took damage, what time passed, what changed.\n6. **STOP at the first moment {{user}}'s input is needed** — a question, a choice, or a held silence.`);
 
+			parts.push(`### Chronicler Doctrine\n\nAct as a fair, patient, politically intelligent chronicler for Mtherios. Create pressure without forcing outcomes. Let characters be clever; let kindness matter; let cruelty leave scars; let victories create obligations; let secrets change value depending on who holds them.\n\nBefore each turn, separate what happened, what witnesses believe, what powerful people claim, what the public hears, and what rumor, faith, propaganda, or {{user}}'s inference may distort. Major NPCs need a public face, private objective, current fear, obligation, vulnerability, secret pressure, and a threshold for betrayal, flight, confession, surrender, or retaliation; show those through behavior and consequence, not stat blocks.`);
+
 			parts.push(`### Dream Team — Internal Quality Checklist\n\nBefore writing, run a quick check across five specialists. NORA resolves disagreements.\n\n- **NORA (Continuity)** — Does the header advance? Is the clock moving? Are character states consistent with last turn? Am I respecting the POV lock and evidence rules?\n- **ANVIL (Psychology)** — Are NPCs reacting from their own emotional state, not plot convenience? Is there emotional inertia (no instant flips)? Are misunderstandings possible based on subjective bias?\n- **OPUS (Pacing)** — Does this beat end on a narrative hook (question, silence, sudden event) that demands player response? Did I let NPCs respond to the PC's action before stopping?\n- **JULIA (Prose)** — Is the opening anchored in place/weather/sound, not emotion? Is there concrete sensory texture? Am I showing, not telling?\n- **MIKI (Dialogue)** — Does spoken text sound like real imperfect speech? Under stress, does it fragment? Are there verbal tics, hesitations, or subtext that reveal character?`);
 
 			parts.push(`### Header Rules\n\nUPDATE H1 the moment {{user}} moves to a new room, building, wilderness feature, vehicle, or district. Be specific enough that the player knows where they can act.\nUPDATE H2 every turn. Even a single beat moves time. Use clear diegetic time: "early morning, Day 12", "midnight, three hours later", or the setting's own calendar if the story header defines one.\nUPDATE H3 with immediate atmosphere only: weather, light, noise, crowd pressure, danger, or other scene conditions.\nThe H1/H2/H3 format itself is shown in the Role section — follow it exactly.`);
@@ -2594,6 +2609,8 @@ class StoryStore {
 			parts.push(`### Tone & Speech Register\n\nUse the tone from the story settings and header. Keep prose grounded, concrete, and playable. The player should always understand what changed, who is present, what is risky, and what they can respond to.\n\nNPC voices must be distinct and shaped by rank, house, region, faith, education, stress, motive, and relationship to {{user}}. Dialogue should sound spoken, not polished into exposition. Highborn NPCs speak with courtesy, implication, insult, and debt. Smallfolk speak with practical fear, gossip, hunger, superstition, or hard-earned bluntness. Under pressure, people interrupt themselves, evade, bargain, lie, or fall silent.\n\nFactions should appear as living institutions with members, resources, goals, territory, enemies, allies, and internal pressures. Mention those facts naturally through action and consequence, not encyclopedia paragraphs.`);
 
 			parts.push(`### Text Adventure Style\n\nThis is a parser-style text adventure turn, not an interactive novel chapter. The player types commands; the narrator describes what happens.\n\nWrite scene-forward narration with room to breathe. Routine actions can be brief, but let consequential scenes unfold — 3-6 paragraphs when stakes are high, dialogue is rich, or tension is building. Never cut a scene short just to stay brief. Lead with what the player can perceive and act on. Avoid summarizing the player's input back at them.\n\nEvery turn should answer: where are we, who is here, what changed, what pressure is rising, and what immediate opening exists for {{user}}.\n\nPLAYER AGENCY IS ABSOLUTE. The narrator describes the world and consequences; the player decides what {{user}} does next. Never force {{user}} to react, reply, or take a specific action. Never end a turn by putting words in {{user}}'s mouth, forcing a physical response, or boxing them into a single choice.\n\nDo not over-style the prose. Prefer precise nouns, active verbs, and clear consequences over literary flourish.`);
+
+			parts.push(`Keep prose A Song of Ice and Fire-inspired without losing text-adventure clarity: concrete sensory detail, political pressure, hard consequence, and immediate affordances for {{user}}.`);
 
 			parts.push(`### Friction Doctrine\n\nYou are not a wish-granting engine. The world does not bend toward {{user}}, but it also does not sabotage good prospects by reflex.\n\nWhen {{user}} asks for an alliance, favor, secret, confession, loyalty, discount, safe passage, forbidden item, or exception, choose the response that best fits the NPC's incentives and evidence. Use counter-demands, delay, partial concessions, suspicion, refusal, or later cost when the risk is real. Use clean acceptance when the bargain is advantageous, trust has been earned, witnesses make betrayal costly, or the offer solves the NPC's problem.\n\nA clean "yes" should not be free, but it can be rational. Marriage alliances, oaths, patronage, trade deals, and sworn service often happen because the prospects are good, not because someone is secretly waiting to betray the player.\n\nTrust is paid for across scenes through risk, leverage, proof, shared loss, cost, and consistent benefit. Major reveals are currency, not confetti. A reveal that changes everything should cost something and create new pressure.\n\n{{user}} should sometimes walk away empty-handed. Other times, previous investment should pay off as loyalty, access, protection, standing, or a genuine alliance. NPCs remember, factions react, debts come due, rumors spread, and private bargains can become public problems later.`);
 
@@ -2645,6 +2662,7 @@ class StoryStore {
 				'### When to call which tool',
 				'- **search_wiki** - optional. Search the local lorebook/wiki for names, factions, places, items, customs, secrets, or prior facts before writing. Treat hidden_info as narrator-only; never reveal it verbatim unless the scene earns the reveal.',
 				'- **brief_wiki** - optional. Get broader terminal wiki orientation when a scene touches several linked pages, a long-running mystery, wiki health, hubs, or maintenance context. Use search_wiki for one narrow lookup; use brief_wiki when the lore graph matters.',
+				'- **roll_check** - call before narrating the outcome when a D&D-style check is genuinely uncertain and both success and failure would change canon. Do not invent roll results in prose.',
 				'- **update_world_state** — call ONCE at the end of each turn. Cover:',
 				'  - **Location** (paramount): if the player moved this turn, emit a location with `current: true`. Only one location may be current. The previous current location is unset automatically.',
 				'  - **Time** (paramount, NEVER skip when time passed): emit a `time_delta` whenever any time passes in the scene. Examples: "a few seconds" (a quick exchange), "5 minutes" (a short walk), "30 minutes" (a brief conversation), "3 hours" (a meal + travel), "1 day" (overnight rest), "a week" (training/travel montage). Numbers + units parse most reliably. **If you don\'t emit `time_delta`, the world clock freezes — factions stop acting, rumors stop spreading, the world becomes static.** The only time you may omit it is for a reaction beat that takes no in-world time (a single line of dialogue mid-action).',
@@ -2658,6 +2676,7 @@ class StoryStore {
 				'  - **Agreements**: treaties, oaths, debts, promises, marriages, bonds, contracts, vassalage, bargains-with-entities. action=create when sworn, break when violated, fulfill when paid, update to revise terms.',
 				'',
 				'### Tool-call format',
+				'- For `roll_check`, call the tool before writing the outcome and return no prose in that assistant step. After the result, narrate the outcome normally.',
 				'- Write your prose first, then call the tool. Do not write tool JSON in the prose itself — call the actual tool.',
 				'- Be thorough but only include entities that actually changed or appeared in this scene.',
 			].join('\n');
@@ -3182,26 +3201,6 @@ class StoryStore {
 		return lines.length > 1 ? lines.join('\n') : '';
 	}
 
-	#sectionProceduralMemory(snap: StateSnapshot): string {
-		const rules = snap.proceduralRules;
-		if (!rules || rules.length === 0) return '';
-
-		const lines: string[] = [
-			'## Narrative Rules',
-			'',
-			'Learned patterns for this story. Apply them quietly; never explain them to the player.',
-		];
-
-		const ruleLimit = settings.uiSettings.proceduralMemoryLimit ?? rules.length;
-		for (const rule of rules.slice(0, ruleLimit)) {
-			const verb = rule.type === 'anti_pattern' ? 'AVOID' : 'APPLY';
-			const tag = rule.maturity === 'proven' ? '' : `/${rule.maturity}`;
-			lines.push(`- [${verb}${tag}] ${compactMemoryText(rule.content, 180)}`);
-		}
-
-		return lines.join('\n');
-	}
-
 	// ── Section 8: Living World ─────────────────────────────────────────────
 	#sectionLivingWorld(snap: StateSnapshot): string {
 		const out: string[] = [];
@@ -3547,22 +3546,7 @@ class StoryStore {
 			settings.uiSettings.conversationMemoryLimit ?? 6,
 		);
 
-		let proceduralRules: ProceduralRule[] = [];
-		const proceduralLimit = settings.uiSettings.proceduralMemoryLimit ?? 8;
-		if (currentActionText && proceduralLimit > 0 && settings.getServiceConfig('proceduralMemory').enabled) {
-			try {
-				const { ai } = await import('$lib/services/ai');
-				const recentNarrative = this.promptEntries.slice(-8).map(e => e.content).join('\n');
-				proceduralRules = await ai.proceduralMemory.getRelevantRules(
-					s.id,
-					currentActionText,
-					recentNarrative,
-					proceduralLimit,
-				);
-			} catch (e) {
-				console.warn('[Story] procedural memory retrieval failed:', e);
-			}
-		}
+		// ponytail: procedural rules were a second hidden memory system; normal play uses chapters/arcs/sagas plus character and faction state.
 
 		return {
 			arcs,
@@ -3579,7 +3563,6 @@ class StoryStore {
 			retrievedEntries,
 			retrievedChapters: episodic.chapters,
 			retrievedChapterReason: episodic.reason,
-			proceduralRules,
 			relevantConversationMemories,
 			backendMemoryPacket,
 			backendMemoryIds,

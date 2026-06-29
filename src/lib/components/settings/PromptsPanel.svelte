@@ -17,7 +17,6 @@
 		'memory',
 		'arcCondensation',
 		'sagaCondensation',
-		'proceduralMemory',
 		'loreManagement',
 		'entryRefinement',
 		'styleReviewer',

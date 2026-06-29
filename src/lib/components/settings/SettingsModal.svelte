@@ -37,7 +37,6 @@
 		| 'retrievedChapterLimit'
 		| 'retrievedLoreEntryLimit'
 		| 'conversationMemoryLimit'
-		| 'proceduralMemoryLimit'
 		| 'backendMemoryTokenBudget'
 		| 'snapshotTokenCap'>;
 
@@ -266,7 +265,7 @@
 			await saveNarrativeSettingsAndSync();
 		}
 		try {
-			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier', 'smallBrain']);
+			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']);
 			testStatus = 'success';
 			testMessage = 'Saved provider and synced terminal runtime settings.';
 		} catch (error) {
@@ -283,6 +282,7 @@
 			const testModel = model || provider.fallbackModels[0];
 			const baseUrl = customUrl || provider.baseUrl;
 			const isAnthropicShape = editingProvider === 'anthropic' || editingProvider === 'anthropic-proxy';
+			const isZaiShape = editingProvider === 'z-ai';
 			const isOAuth = apiKey.startsWith('sk-ant-oat-');
 
 			if (isAnthropicShape) {
@@ -306,6 +306,22 @@
 						model: testModel,
 						messages: [{ role: 'user', content: 'Hi' }],
 						max_tokens: 1,
+					}),
+				});
+				if (res.ok) { testStatus = 'success'; testMessage = 'Connected!'; }
+				else { const err = await res.text(); testStatus = 'error'; testMessage = `HTTP ${res.status}: ${err.slice(0, 150)}`; }
+			} else if (isZaiShape) {
+				// Z.AI's public OpenAPI surface exposes chat completions, not /models.
+				const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+				if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+				const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+					method: 'POST',
+					headers,
+					body: JSON.stringify({
+						model: testModel,
+						messages: [{ role: 'user', content: 'Hi' }],
+						max_tokens: 1,
+						stream: false,
 					}),
 				});
 				if (res.ok) { testStatus = 'success'; testMessage = 'Connected!'; }
@@ -392,7 +408,7 @@
 		settings.uiSettings[key] = clampDial(value, min, max);
 		await settings.saveUISettings();
 		if (key === 'backendMemoryTokenBudget') {
-			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier', 'smallBrain']).catch((error) => {
+			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
 				console.warn('[Settings] Terminal memory setting sync failed:', error);
 			});
 		}
@@ -401,7 +417,7 @@
 	async function saveContextBudgetValue(value: number) {
 		settings.contextBudget = clampDial(value, 0, 200000);
 		await settings.saveContextBudget();
-		await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier', 'smallBrain']).catch((error) => {
+		await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
 			console.warn('[Settings] Terminal context budget sync failed:', error);
 		});
 	}
@@ -514,7 +530,6 @@
 		{ key: 'retrievedChapterLimit', label: 'Chapter Memories', description: 'Searchable episodic chapters injected for the current action.', min: 0, max: 12, step: 1, suffix: 'chapters', zeroLabel: 'Off' },
 		{ key: 'retrievedLoreEntryLimit', label: 'Lorebook Matches', description: 'Local lore entries pulled by current action when backend retrieval is unavailable.', min: 0, max: 24, step: 1, suffix: 'entries', zeroLabel: 'Off' },
 		{ key: 'conversationMemoryLimit', label: 'NPC Conversation Memory', description: 'NPC-specific remembered exchanges eligible for the current scene.', min: 0, max: 24, step: 1, suffix: 'memories', zeroLabel: 'Off' },
-		{ key: 'proceduralMemoryLimit', label: 'Procedural Rules', description: 'Learned narrative rules and style constraints retrieved for this turn.', min: 0, max: 24, step: 1, suffix: 'rules', zeroLabel: 'Off' },
 	];
 
 	const summaryDials: MemoryDial[] = [
@@ -1330,17 +1345,3 @@
 	</div>
 </div>
 {/if}
-
-<style>
-	.settings-modal-shell {
-		height: 100dvh;
-		max-height: 100dvh;
-	}
-
-	@media (min-width: 640px) {
-		.settings-modal-shell {
-			height: min(92dvh, 800px);
-			max-height: min(92dvh, 800px);
-		}
-	}
-</style>

@@ -4,6 +4,7 @@ import {
 	backendJobStatusEventData,
 	buildArcMemoryFields,
 	buildArcSummary,
+	buildEventMemoryNodeValues,
 	chapterCharacterContextPatch,
 	chapterCharacterContextProposalValues,
 	buildChapterMemoryDigest,
@@ -489,6 +490,76 @@ describe('event memory projection hygiene', () => {
 			title: 'Gate promise',
 			body: 'Arlan promised to open the postern gate.',
 		} as any)).toBe(true);
+	});
+
+	it('projects timeline events with factions, temporal metadata, and memory-impact importance', () => {
+		const values = buildEventMemoryNodeValues({
+			id: 'event_secret_pact',
+			storyId: 'story_balaerys',
+			type: 'agreement',
+			status: 'scheduled',
+			title: 'A secret pact ripens',
+			body: 'The harbor families will reveal their pact when the moon turns.',
+			actorEntityIds: ['npc_xanda'],
+			targetEntityIds: ['npc_aurion'],
+			locationId: 'loc_harbor',
+			locationIds: ['loc_harbor'],
+			factionIds: ['faction_copper_court'],
+			threadIds: ['thread_harbor_pact'],
+			visibility: 'secret',
+			createdTurn: 11,
+			occurredTurn: null,
+			scheduledTurn: 14,
+			worldTime: 'Third night of the moon',
+			memoryImpact: {
+				importance: 0.97,
+				emotionalValence: -0.35,
+				emotions: ['dread', 'anticipation'],
+				durability: 'long_term',
+				requiresReflection: true,
+			},
+			sourceEntryIds: ['entry_11'],
+			sourcePatchIds: ['patch_11'],
+			metadata: { source: 'timeline_test' },
+			serverVersion: 22,
+			createdAt: '2026-06-28T10:00:00.000Z',
+			updatedAt: '2026-06-28T10:05:00.000Z',
+		} as any, {
+			jobId: 'job_memory_projection',
+			updatedAt: '2026-06-28T10:10:00.000Z',
+		});
+
+		expect(values).toMatchObject({
+			id: 'mem_event_event_secret_pact',
+			storyId: 'story_balaerys',
+			type: 'plot_ledger',
+			keywords: ['agreement', 'scheduled', 'long_term', 'requires_reflection'],
+			entityIds: ['npc_xanda', 'npc_aurion'],
+			factionIds: ['faction_copper_court'],
+			threadIds: ['thread_harbor_pact'],
+			locationId: 'loc_harbor',
+			importance: 0.97,
+			sourceEntryIds: ['entry_11'],
+			sourceEventIds: ['event_secret_pact'],
+			sourcePatchIds: ['patch_11'],
+			serverVersion: 22,
+			createdAt: '2026-06-28T10:00:00.000Z',
+			updatedAt: '2026-06-28T10:10:00.000Z',
+		});
+		expect(values.metadata).toMatchObject({
+			sourceType: 'event_projection',
+			jobId: 'job_memory_projection',
+			memoryKind: 'prospective',
+			status: 'scheduled',
+			validFromTurn: 11,
+			occurredTurn: null,
+			scheduledTurn: 14,
+			worldTime: 'Third night of the moon',
+			emotionalValence: -0.35,
+			emotions: ['dread', 'anticipation'],
+			durability: 'long_term',
+			requiresReflection: true,
+		});
 	});
 });
 

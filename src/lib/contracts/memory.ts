@@ -128,7 +128,7 @@ export const syncMetaSchema = z.object({
 	updatedAt: z.string(),
 });
 
-export const storyEventTypeSchema = z.enum([
+const storyEventTypeEnumSchema = z.enum([
 	'promise',
 	'betrayal',
 	'reveal',
@@ -148,7 +148,12 @@ export const storyEventTypeSchema = z.enum([
 	'alliance',
 ]);
 
-export const memoryNodeTypeSchema = z.enum([
+export const storyEventTypeSchema = z.preprocess(
+	(value) => value === 'imported_lore_event' ? 'imported_memory' : value,
+	storyEventTypeEnumSchema,
+);
+
+const memoryNodeTypeEnumSchema = z.enum([
 	'hot',
 	'canonical',
 	'episodic',
@@ -157,6 +162,16 @@ export const memoryNodeTypeSchema = z.enum([
 	'faction',
 	'procedural',
 ]);
+
+const importedLoreMemoryNodeTypes = new Set(['seed_index', 'source_attribution', 'source_digest']);
+const importedLoreProceduralMemoryNodeTypes = new Set(['seed_policy']);
+
+export const memoryNodeTypeSchema = z.preprocess(
+	(value) => typeof value === 'string' && importedLoreProceduralMemoryNodeTypes.has(value)
+		? 'procedural'
+		: typeof value === 'string' && importedLoreMemoryNodeTypes.has(value) ? 'canonical' : value,
+	memoryNodeTypeEnumSchema,
+);
 
 export const storyEventStatusSchema = z.enum(['proposed', 'scheduled', 'due', 'committed', 'cancelled']);
 
@@ -303,6 +318,14 @@ export const retrievedMemoryPacketSchema = z.object({
 	retrievalTrace: z.array(memoryRetrievalTraceItemSchema).default([]),
 });
 
+export const storyStartWorkflowSchema = z.object({
+	sourceMode: z.enum(['blank', 'lorebook', 'character_card', 'import', 'transcript', 'source_notes']).default('blank'),
+	sourceCount: z.number().int().nonnegative().default(0),
+	requiresCanonReview: z.boolean().default(true),
+	startingSceneReady: z.boolean().default(false),
+	notes: z.string().trim().max(2000).nullable().optional(),
+});
+
 export const createStoryRequestSchema = z.object({
 	title: z.string().min(1),
 	description: z.string().nullable().optional(),
@@ -312,12 +335,27 @@ export const createStoryRequestSchema = z.object({
 	headerPrompt: z.string().nullable().optional(),
 	playerReputation: z.string().nullable().optional(),
 	clientStoryId: z.string().optional(),
+	startWorkflow: storyStartWorkflowSchema.optional(),
 });
 
 export const createStoryResponseSchema = z.object({
 	storyId: z.string(),
 	serverVersion: z.number().int().nonnegative(),
 	createdAt: z.string(),
+});
+
+export const storyDeleteRequestSchema = z.object({
+	mode: z.enum(['archive', 'purge']).default('purge'),
+	exportBeforeDelete: z.boolean().default(false),
+});
+
+export const storyDeleteResponseSchema = z.object({
+	ok: z.boolean(),
+	storyId: z.string(),
+	mode: z.enum(['archive', 'purge']).default('purge'),
+	canonDeleted: z.boolean().default(false),
+	artifactCleanup: jsonObjectSchema.nullable().default(null),
+	warnings: z.array(z.string()).default([]),
 });
 
 export const bootstrapResponseSchema = z.object({
@@ -837,6 +875,9 @@ export const turnResponseSchema = z.object({
 		model: z.string().nullable().default(null),
 		status: z.enum(['success', 'error']).default('success'),
 		durationMs: z.number().int().nonnegative(),
+		timeToFirstTokenMs: z.number().int().nonnegative().nullable().default(null),
+		retryCount: z.number().int().nonnegative().default(0),
+		finishReason: z.string().nullable().optional(),
 		requestTokens: z.number().int().nonnegative().nullable().default(null),
 		responseTokens: z.number().int().nonnegative().nullable().default(null),
 		totalTokens: z.number().int().nonnegative().nullable().default(null),

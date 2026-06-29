@@ -45,6 +45,16 @@ describe('WorldExplorer control-surface boundary', () => {
 		expect(source).not.toContain('/api/settings/llm');
 	});
 
+	it('can create a terminal database through the engine boundary', () => {
+		const source = readFileSync(resolve('src/lib/components/database/WorldExplorer.svelte'), 'utf8');
+
+		expect(source).toContain('createDatabase');
+		expect(source).toContain('newDatabaseTitle');
+		expect(source).toContain("'story.create'");
+		expect(source).toContain("runEngineCommand('__app__', 'story.create'");
+		expect(source).not.toContain('/api/stories');
+	});
+
 	it('surfaces chapter-important NPC candidates as reviewable character proposals', () => {
 		const source = readFileSync(resolve('src/lib/components/database/WorldExplorer.svelte'), 'utf8');
 

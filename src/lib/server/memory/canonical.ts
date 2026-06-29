@@ -33,6 +33,7 @@ import { getServerMemoryConfig } from '$lib/server/env';
 import {
 	createStoryRequestSchema,
 	indexedDbImportRequestSchema,
+	storyDeleteRequestSchema,
 	syncOperationSchema,
 	type SyncChange,
 	type SyncOperation,
@@ -383,7 +384,10 @@ export async function createBackendStory(input: unknown) {
 		mode: request.mode,
 		settings: request.settings ?? null,
 		headerPrompt: request.headerPrompt ?? null,
-		metadata: { playerReputation: request.playerReputation ?? null },
+		metadata: {
+			playerReputation: request.playerReputation ?? null,
+			...(request.startWorkflow ? { startWorkflow: request.startWorkflow } : {}),
+		},
 		createdAt,
 		updatedAt: createdAt,
 	}).returning();
@@ -419,8 +423,35 @@ export async function listBackendStories() {
 	}));
 }
 
-export async function deleteBackendStory(storyId: string) {
-	const [deleted] = await getDb()
+export async function deleteBackendStory(storyId: string, input: unknown = {}) {
+	const request = storyDeleteRequestSchema.parse(input);
+	const db = getDb();
+	const now = nowIso();
+	const warnings: string[] = [];
+
+	if (request.mode === 'archive') {
+		const [archived] = await db.update(stories).set({
+			metadata: sql`${stories.metadata} || ${JSON.stringify({
+				archived: true,
+				archivedAt: now,
+				deleteMode: 'archive',
+				exportBeforeDelete: request.exportBeforeDelete,
+			})}::jsonb`,
+			updatedAt: now,
+			serverVersion: sql`${stories.serverVersion} + 1`,
+		}).where(eq(stories.id, storyId)).returning({ id: stories.id, serverVersion: stories.serverVersion });
+		if (!archived) throw new Error(`Story not found: ${storyId}`);
+		return {
+			ok: true,
+			storyId,
+			mode: 'archive' as const,
+			canonDeleted: false,
+			artifactCleanup: null,
+			warnings,
+		};
+	}
+
+	const [deleted] = await db
 		.delete(stories)
 		.where(eq(stories.id, storyId))
 		.returning({ id: stories.id });
@@ -430,15 +461,22 @@ export async function deleteBackendStory(storyId: string) {
 		return {
 			ok: true,
 			storyId,
+			mode: 'purge' as const,
+			canonDeleted: true,
 			artifactCleanup: await deleteStoryVaultArtifacts(storyId),
+			warnings,
 		};
 	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
 		console.warn('[BackendMemory] Failed to clean story vault artifacts:', error);
+		warnings.push(`artifact_cleanup_failed: ${message}`);
 		return {
 			ok: true,
 			storyId,
+			mode: 'purge' as const,
+			canonDeleted: true,
 			artifactCleanup: null,
-			artifactCleanupError: error instanceof Error ? error.message : String(error),
+			warnings,
 		};
 	}
 }

@@ -42,13 +42,16 @@ import {
 } from './helpers';
 import {
 	briefWikiSchema,
+	rollCheckToolSchema,
 	searchWikiSchema,
 	worldStateUpdateSchema,
 	type BriefWikiArgs,
+	type RollCheckToolArgs,
 	type SearchWikiArgs,
 	type WorldStateUpdate,
 	type WorldStateLorebookEntry,
 } from './schemas';
+import { encodeDiceMarker, rollCheck } from '$lib/utils/dice';
 import * as schemeService from '$lib/services/ai/scheme/SchemeService';
 import type { FactionAction, WorldSimulationResult } from '$lib/services/ai/sdk/schemas/worldsim';
 import type { RelationChangeEvent } from '$lib/services/ai/generation/WorldSimulationService';
@@ -157,6 +160,13 @@ export async function executeToolCall(
 			}
 			return JSON.stringify(await briefWiki(parsed.data));
 		}
+		case 'roll_check': {
+			const parsed = rollCheckToolSchema.safeParse(args);
+			if (!parsed.success) {
+				return JSON.stringify({ error: 'Invalid arguments', details: parsed.error.issues });
+			}
+			return JSON.stringify(rollCheckTool(parsed.data));
+		}
 		case 'update_world_state': {
 			const parsed = worldStateUpdateSchema.safeParse(args);
 			if (!parsed.success) {
@@ -224,6 +234,21 @@ export async function executeToolCall(
 // ══════════════════════════════════════════════════════════════
 // update_world_state — replaces ClassifierService + Pipeline Phase 1
 // ══════════════════════════════════════════════════════════════
+
+function rollCheckTool(args: RollCheckToolArgs): Record<string, unknown> {
+	try {
+		const result = rollCheck(args.notation, args.dc, args.ability, args.description);
+		return {
+			ok: true,
+			result,
+			diceMarker: encodeDiceMarker(result),
+			outcome: result.success ? 'success' : 'failure',
+			critical: result.critical,
+		};
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
+}
 
 async function searchWiki(args: SearchWikiArgs): Promise<SearchWikiToolResult> {
 	const query = args.query.trim();

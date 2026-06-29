@@ -92,28 +92,8 @@ export function buildCharacterProjectionMarkdown(
 	const sections: string[] = [
 		`# ${input.canonicalName}`,
 		'',
-		'## Identity',
-		`- Type: character`,
-		`- Status: ${input.status}`,
-		`- First seen entry: ${input.firstSeenEntryId ?? 'unknown'}`,
-		input.aliases.length ? `- Aliases: ${input.aliases.join(', ')}` : '',
+		...renderCompactCharacterLore(input),
 		'',
-		'## Description',
-		input.description || '_No description yet._',
-		'',
-		input.currentStateLines?.length ? `## Current State\n${input.currentStateLines.join('\n')}` : '',
-		input.profileLines.length ? `## Profile\n${input.profileLines.join('\n')}` : '',
-		input.eventMemoryLines?.length ? `## NPC Event Memory\n${input.eventMemoryLines.join('\n')}` : '',
-		input.relatedFactions.length ? `## Factions\n${input.relatedFactions.join('\n')}` : '',
-		input.relationships.length ? `## Relationships\n${input.relationships.join('\n')}` : '',
-		input.beliefsHeld.length ? `## Beliefs Held\n${input.beliefsHeld.join('\n')}` : '',
-		input.beliefsAbout.length ? `## Beliefs About This Entity\n${input.beliefsAbout.join('\n')}` : '',
-		input.relatedEvents.length ? `## Related Events\n${input.relatedEvents.join('\n')}` : '',
-		input.relatedMemory.length ? `## Related Memory\n${input.relatedMemory.join('\n')}` : '',
-		'## Canon State',
-		formatJsonBlock(input.canonState),
-		'',
-		...sourceLinks(input.sourceEntryIds, input.sourceEventIds),
 		renderCharacterHumanEditsSection(existingContent),
 	].filter(Boolean);
 
@@ -121,6 +101,55 @@ export function buildCharacterProjectionMarkdown(
 		renderFrontmatter(frontmatter),
 		sections.join('\n'),
 	].filter(Boolean).join('\n');
+}
+
+function renderCompactCharacterLore(input: CharacterProjectionInput): string[] {
+	const appearance = firstProfileValue(input.profileLines, ['Appearance', 'Looks', 'Visual']) ?? '.';
+	const personality = firstProfileValue(input.profileLines, ['Personality'])
+		?? joinFieldLines(profileValues(input.profileLines, ['Temper', 'Disposition', 'Traits']))
+		?? '.';
+	const keyHistory = joinFieldLines([
+		...(input.currentStateLines ?? []),
+		...(input.eventMemoryLines ?? []),
+		...input.relatedEvents,
+		...input.relatedMemory,
+	]) ?? '.';
+	const affiliations = joinFieldLines([
+		...input.relatedFactions,
+		...input.relationships,
+	]) ?? '.';
+	const bio = input.description?.trim() || '.';
+	return [
+		`[Appearance]: ${appearance}`,
+		`[Personality]: ${personality}`,
+		`[Key History]: ${keyHistory}`,
+		`[Affiliations]: ${affiliations}`,
+		`[bio]: ${bio}`,
+	];
+}
+
+function firstProfileValue(lines: string[], labels: string[]): string | null {
+	return profileValues(lines, labels)[0] ?? null;
+}
+
+function profileValues(lines: string[], labels: string[]): string[] {
+	const wanted = new Set(labels.map((label) => label.toLowerCase()));
+	return lines
+		.map((line) => {
+			const parsed = stripListMarker(line).match(/^([^:]+):\s*(.+)$/);
+			if (!parsed) return null;
+			return wanted.has(parsed[1].trim().toLowerCase()) ? parsed[2].trim() : null;
+		})
+		.filter((value): value is string => Boolean(value));
+}
+
+function joinFieldLines(lines: string[]): string | null {
+	const text = lines.map(stripListMarker).map((line) => line.trim()).filter(Boolean).join('; ');
+	return text || null;
+}
+
+function stripListMarker(value: string): string {
+	return value.replace(/^\s*[-*]\s+/, '').trim();
 }
 
 export function getStoredCharacterHumanEdits(existingContent: string | null): string {
@@ -142,14 +171,6 @@ function renderCharacterHumanEditsSection(existingContent: string | null): strin
 	].join('\n');
 }
 
-function sourceLinks(entryIds: string[], eventIds: string[]): string[] {
-	const lines = [
-		...entryIds.map((id) => `- source entry: ${id}`),
-		...eventIds.map((id) => `- source event: ${id}`),
-	];
-	return lines.length ? ['## Sources', ...lines] : [];
-}
-
 function renderFrontmatter(record: Record<string, unknown>): string {
 	const lines = ['---'];
 	for (const [key, value] of Object.entries(record)) {
@@ -157,10 +178,6 @@ function renderFrontmatter(record: Record<string, unknown>): string {
 	}
 	lines.push('---', '');
 	return lines.join('\n');
-}
-
-function formatJsonBlock(value: unknown): string {
-	return `\`\`\`json\n${JSON.stringify(value ?? {}, null, 2)}\n\`\`\``;
 }
 
 function extractFrontmatterId(markdown: string): string | null {

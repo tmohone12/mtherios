@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { TurnContext } from './context';
 import type { GmTimelineBrief, GmTimelineBriefEvent, RetrievedMemoryPacket } from '$lib/contracts/memory';
 import { buildEconomyScaleBlock, buildWorldScaleBlock } from '$lib/services/ai/context/economyScale';
@@ -11,10 +12,52 @@ export interface ServerTurnPromptOptions {
 	wikiContextMarkdown?: string | null;
 }
 
+export type PromptLane = 'engine_static' | 'genre_static' | 'story_static' | 'turn_dynamic';
+
+export interface PromptSection {
+	id: string;
+	lane: PromptLane;
+	priority: number;
+	maxTokens: number;
+	content: string;
+	sourceIds: string[];
+	contentHash: string;
+}
+
+export interface CompiledPrompt {
+	stablePrefix: PromptSection[];
+	dynamicTail: PromptSection[];
+	manifest: {
+		included: string[];
+		skipped: string[];
+		totalTokens: number;
+		stableTokens: number;
+		dynamicTokens: number;
+	};
+}
+
+export interface PromptSectionTrace {
+	id: string;
+	lane: PromptLane;
+	priority: number;
+	maxTokens: number;
+	tokenEstimate: number;
+	charCount: number;
+	contentHash: string;
+	sourceIds: string[];
+	sourceIdCount: number;
+}
+
+export interface ServerTurnPromptPacket {
+	system: string;
+	prompt: string;
+	messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+	compiledPrompt: CompiledPrompt;
+}
+
 const RECENT_ENTRY_LIMIT = 60;
 const USER_MESSAGE_CHAR_LIMIT = 1000;
 const NARRATION_MESSAGE_CHAR_LIMIT = 6000;
-const WIKI_CONTEXT_CHAR_LIMIT = 4000;
 const PRESENT_ENTITY_LIMIT = 12;
 const DEFAULT_FACTION_LIMIT = 8;
 const FACTION_GOAL_LIMIT = 2;
@@ -25,10 +68,6 @@ const BELIEF_LIMIT = 8;
 const THREAD_LIMIT = 10;
 const AGREEMENT_LIMIT = 8;
 const EVENT_LIMIT = 8;
-const CONTINUITY_FACT_LIMIT = 8;
-const CONTINUITY_PROPOSAL_LIMIT = 8;
-const UNRESOLVED_CHARACTER_REFERENCE_LIMIT = 6;
-const CONTINUITY_WARNING_LIMIT = 6;
 const GM_EVENT_SECTION_LIMIT = 4;
 const GM_NPC_EVENT_LIMIT = 4;
 const CHAPTER_MEMORY_OUTCOME_CHAR_LIMIT = 1800;
@@ -39,6 +78,7 @@ const ARC_MEMORY_CHAR_BUDGET = 7000;
 const SAGA_MEMORY_SUMMARY_CHAR_LIMIT = 2600;
 const SAGA_MEMORY_LIST_CHAR_LIMIT = 900;
 const SAGA_MEMORY_LIMIT = 4;
+const CURRENT_SCENE_CHAR_LIMIT = 1400;
 const PLAYER_DESCRIPTION_CHAR_LIMIT = 2200;
 const PLAYER_REPUTATION_CHAR_LIMIT = 900;
 const PLAYER_CHARACTER_PROMPT_CHAR_LIMIT = 2400;
@@ -51,6 +91,8 @@ const PORTRAYAL_VOICE_CHAR_LIMIT = 220;
 const PORTRAYAL_MANNERISMS_CHAR_LIMIT = 220;
 const PORTRAYAL_SUFFIX_CHAR_LIMIT = 1400;
 const CHARACTER_BLOCK_LIMIT = 2;
+const RETRIEVED_MEMORY_CHAR_LIMIT = 4200;
+const WIKI_CONTEXT_PROMPT_CHAR_LIMIT = 4000;
 const SECRET_TIMELINE_LABEL = '[secret narrator-only]';
 const SECRET_TIMELINE_INSTRUCTION = 'Secret timeline items are narrator-only context; present NPCs must not speak or act on them unless actor beliefs or scene evidence supports it.';
 const STATE_EXTRACTION_NARRATION_LIMIT = 6000;
@@ -61,8 +103,10 @@ const ROLEPLAY_AUTHORITY_BLOCK = [
 ].join('\n');
 const LIVING_FEUDAL_DOCTRINE_BLOCK = [
 	'LIVING FEUDAL GM DOCTRINE: Make the world ancient, hungry, proud, wounded, political, superstitious, sensual, dangerous, and alive. Use ASOIAF-level political realism without imitating any author directly.',
+	'CHRONICLER DISCIPLINE: Create pressure without forcing outcomes. Distinguish what happened, what witnesses believe, what powerful people claim, what the public hears, and what faith, rumor, propaganda, or player inference distort.',
 	'Every major action creates three consequence clocks: immediate scene fallout; political gain, loss, insult, fear, or opportunity; and long-term costs months or years later. No victory is clean; no defeat is total unless the world has paid.',
 	'Every important character wants something. Enemies adapt; allies can love, obey, disagree, scheme, or serve from fear, debt, ambition, ideology, blood, or lack of alternatives.',
+	'Let kindness matter, cruelty scar, victories create obligations, secrets change value by holder, and hope/humor/tenderness sharpen the dark rather than erase it.',
 	'Power is more than armies: food, coin, roads, ships, hostages, marriages, wards, faith, law, reputation, debt, information, legitimacy, ravens, ports, and grain. War is logistics before glory; castles, sieges, armies, harvests, servants, smallfolk, creditors, and religion all create plot.',
 	'Magic is rare, costly, symbolic, and frightening. Dragons alter legitimacy, warfare, economy, religion, and psychology. Prophecy is symbolic and misreadable. News travels imperfectly; major events create favorable, hostile, exaggerated, partially true, and false-but-believable rumors.',
 	'Aegon/Aurion Targaryen-Belaerys is a dynastic weapon shaped by survival, blood magic, Volantene power, Targaryen inheritance, Martell loss, and Tywin Lannister\'s shadow. He is brilliant, not omniscient; feared as foreign, worshipped as dragon reborn, hated as invader, preferred to chaos, and supported when useful.',
@@ -70,19 +114,11 @@ const LIVING_FEUDAL_DOCTRINE_BLOCK = [
 ].join('\n');
 const DEFAULT_CHARACTER_TEMPLATE = [
 	'Character {{id}} / {{name}}',
-	'Aliases:',
-	'{{aliases}}',
-	'Appearance: {{appearance}}',
-	'Background: {{background}}',
-	'Current state:',
-	'{{currentState}}',
-	'Goals:',
-	'{{goals}}',
-	'Speech style: {{speechStyle}}',
-	'Factions:',
-	'{{factions}}',
-	'NPC event memory:',
-	'{{eventMemory}}',
+	'[Appearance]: {{appearance}}',
+	'[Personality]: {{personality}}',
+	'[Key History]: {{keyHistory}}',
+	'[Affiliations]: {{affiliations}}',
+	'[bio]: {{bio}}',
 ].join('\n');
 
 function asStringArray(value: unknown): string[] {
@@ -103,6 +139,64 @@ function compactBlock(value: string | null | undefined, max = 7500): string {
 	const text = toWellFormedText(value ?? '').trim();
 	if (text.length <= max) return text;
 	return `${sliceWellFormedText(text, max - 3).trimEnd()}...`;
+}
+
+function hashText(value: string): string {
+	return createHash('sha256').update(value).digest('hex');
+}
+
+function estimateTokens(value: string): number {
+	return Math.max(0, Math.ceil(value.length / 4));
+}
+
+function uniqueStrings(values: string[]): string[] {
+	return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function promptSection(input: Omit<PromptSection, 'contentHash'>): PromptSection {
+	return {
+		...input,
+		contentHash: hashText(input.content),
+		sourceIds: uniqueStrings(input.sourceIds),
+	};
+}
+
+function compilePromptSections(stablePrefix: PromptSection[], dynamicTail: PromptSection[]): CompiledPrompt {
+	const includedSections = [...stablePrefix, ...dynamicTail].filter((section) => section.content.trim().length > 0);
+	const skippedSections = [...stablePrefix, ...dynamicTail].filter((section) => section.content.trim().length === 0);
+	const stableTokens = stablePrefix.reduce((sum, section) => sum + estimateTokens(section.content), 0);
+	const dynamicTokens = dynamicTail.reduce((sum, section) => sum + estimateTokens(section.content), 0);
+	return {
+		stablePrefix,
+		dynamicTail,
+		manifest: {
+			included: includedSections.map((section) => section.id),
+			skipped: skippedSections.map((section) => section.id),
+			totalTokens: stableTokens + dynamicTokens,
+			stableTokens,
+			dynamicTokens,
+		},
+	};
+}
+
+function sectionTokenEstimate(section: PromptSection): number {
+	return Number.isFinite(section.maxTokens) && section.maxTokens > 0
+		? Math.trunc(section.maxTokens)
+		: estimateTokens(section.content);
+}
+
+export function buildPromptSectionTrace(compiledPrompt: CompiledPrompt): PromptSectionTrace[] {
+	return [...compiledPrompt.stablePrefix, ...compiledPrompt.dynamicTail].map((section) => ({
+		id: section.id,
+		lane: section.lane,
+		priority: section.priority,
+		maxTokens: Math.max(0, Math.trunc(section.maxTokens)),
+		tokenEstimate: sectionTokenEstimate(section),
+		charCount: section.content.length,
+		contentHash: section.contentHash || hashText(section.content),
+		sourceIds: [...section.sourceIds],
+		sourceIdCount: section.sourceIds.length,
+	}));
 }
 
 function compactNarrationBlock(value: string | null | undefined, max = NARRATION_MESSAGE_CHAR_LIMIT): string {
@@ -179,11 +273,7 @@ function renderPlayerCharacter(ctx: TurnContext, entity: TurnContext['entities']
 			: '';
 	const assetsValue = Array.isArray(state.assets) ? state.assets : metadata.assets;
 	const assets = asStringArray(assetsValue).map((item) => item.trim()).filter(Boolean).slice(0, 20);
-	const traits = asStringArray(state.traits).map((item) => item.trim()).filter(Boolean).slice(0, 12);
-	const aliases = Array.from(new Set([...asStringArray(state.aliases), ...asStringArray(metadata.aliases)].map((item) => item.trim()).filter(Boolean))).slice(0, 12);
 	const appearance = characterStringValue(state, metadata, ['appearance'], PORTRAYAL_APPEARANCE_CHAR_LIMIT);
-	const background = characterStringValue(state, metadata, ['background', 'bio'], 520);
-	const speechStyle = characterStringValue(state, metadata, ['speechStyle', 'voice'], PORTRAYAL_VOICE_CHAR_LIMIT);
 	const currentState = entity ? characterCurrentState(entity, state, metadata) : [];
 	const goals = characterGoals(state, metadata);
 	const eventMemory = entity ? eventMemoryLines(state, metadata, null, entity.id) : [];
@@ -191,20 +281,15 @@ function renderPlayerCharacter(ctx: TurnContext, entity: TurnContext['entities']
 	const lines: string[] = ['Player character:'];
 	if (entity) {
 		lines.push(`- Name: ${entity.name}`);
-		if (aliases.length > 0) lines.push(`- Aliases: ${aliases.join(', ')}`);
-		if (entity.description) lines.push(`- Description: ${compact(entity.description, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
-		if (appearance) lines.push(`- Appearance: ${appearance}`);
-		if (background) lines.push(`- Background: ${background}`);
-		if (speechStyle) lines.push(`- Speech style: ${speechStyle}`);
-		if (factions.length > 0) lines.push('- Factions:', ...factions.map((item) => `  - ${compact(item, 220)}`));
-		if (traits.length > 0) lines.push(`- Traits: ${traits.join(', ')}`);
-		if (currentState.length > 0) lines.push('- Current state:', ...currentState.map((item) => `  - ${compact(item, 220)}`));
-		if (goals.length > 0) lines.push('- Goals:', ...goals.map((item) => `  - ${compact(item, 220)}`));
-		if (eventMemory.length > 0) lines.push('- Event memory:', ...eventMemory.map((item) => `  - ${compact(item, 220)}`));
+		lines.push(`[Appearance]: ${appearance || '.'}`);
+		lines.push(`[Personality]: ${characterPersonalityValue(state, metadata)}`);
+		lines.push(`[Key History]: ${inlineList([...currentState, ...goals, ...eventMemory])}`);
+		lines.push(`[Affiliations]: ${inlineList(factions)}`);
+		lines.push(`[bio]: ${characterBioValue(entity, state, metadata, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
 	}
-	if (assets.length > 0) lines.push(`- Assets: ${assets.join(', ')}`);
-	if (reputation.trim()) lines.push(`- Public reputation: ${compact(reputation, PLAYER_REPUTATION_CHAR_LIMIT)}`);
-	if (playerPrompt) lines.push(`- Character prompt: ${compact(playerPrompt, PLAYER_CHARACTER_PROMPT_CHAR_LIMIT)}`);
+	if (assets.length > 0) lines.push(`[Affiliations]: ${inlineList(assets)}`);
+	if (reputation.trim()) lines.push(`[Key History]: ${compact(reputation, PLAYER_REPUTATION_CHAR_LIMIT)}`);
+	if (playerPrompt) lines.push(`[bio]: ${compact(playerPrompt, PLAYER_CHARACTER_PROMPT_CHAR_LIMIT)}`);
 	return lines.join('\n');
 }
 
@@ -273,6 +358,30 @@ function templateText(entity: TurnContext['entities'][number]): string {
 
 function blockList(values: string[], fallback = '- none recorded'): string {
 	return values.length ? values.map((value) => `- ${compact(value, 220)}`).join('\n') : fallback;
+}
+
+function inlineList(values: string[], fallback = '.'): string {
+	const text = values.map((value) => compact(value, 220)).filter(Boolean).join('; ');
+	return text || fallback;
+}
+
+function characterPersonalityValue(state: Record<string, unknown>, metadata: Record<string, unknown>): string {
+	return characterStringValue(state, metadata, ['personality'], PORTRAYAL_PERSONALITY_CHAR_LIMIT)
+		|| stringStateList(state, 'personalityDescriptors', PORTRAYAL_PERSONALITY_CHAR_LIMIT)
+		|| stringStateList(metadata, 'personalityDescriptors', PORTRAYAL_PERSONALITY_CHAR_LIMIT)
+		|| '.';
+}
+
+function characterBioValue(
+	entity: TurnContext['entities'][number],
+	state: Record<string, unknown>,
+	metadata: Record<string, unknown>,
+	max = CHARACTER_DESCRIPTION_CHAR_LIMIT,
+): string {
+	const description = compact(entity.description, max);
+	const background = characterStringValue(state, metadata, ['background', 'bio'], 520);
+	const parts = Array.from(new Set([description, background].filter(Boolean)));
+	return compact(parts.join('; '), max) || '.';
 }
 
 function characterGoals(state: Record<string, unknown>, metadata: Record<string, unknown>): string[] {
@@ -378,7 +487,15 @@ function renderCharacterBlocks(ctx: TurnContext, characters: TurnContext['entiti
 				name: entity.name,
 				aliases: blockList(aliases),
 				description: compact(entity.description, CHARACTER_DESCRIPTION_CHAR_LIMIT),
-				appearance: characterStringValue(state, metadata, ['appearance'], PORTRAYAL_APPEARANCE_CHAR_LIMIT),
+				appearance: characterStringValue(state, metadata, ['appearance'], PORTRAYAL_APPEARANCE_CHAR_LIMIT) || '.',
+				personality: characterPersonalityValue(state, metadata),
+				keyHistory: inlineList([
+					...characterCurrentState(entity, state, metadata),
+					...characterGoals(state, metadata),
+					...eventMemoryLines(state, metadata, ctx.gmBrief, entity.id),
+				]),
+				affiliations: inlineList(factions),
+				bio: characterBioValue(entity, state, metadata),
 				background: characterStringValue(state, metadata, ['background', 'bio'], 520),
 				currentState: blockList(characterCurrentState(entity, state, metadata)),
 				goals: blockList(characterGoals(state, metadata)),
@@ -388,7 +505,7 @@ function renderCharacterBlocks(ctx: TurnContext, characters: TurnContext['entiti
 			};
 			const template = templateText(entity);
 			const rendered = renderSimpleTemplate(template, values);
-			const aliasFooter = aliases.length && !templateHasSlot(template, 'aliases')
+			const aliasFooter = template !== DEFAULT_CHARACTER_TEMPLATE && aliases.length && !templateHasSlot(template, 'aliases')
 				? `\nAliases:\n${values.aliases}`
 				: '';
 			return compactBlock(`${rendered}${aliasFooter}`, 1800);
@@ -425,9 +542,14 @@ function latestNarrationHeader(ctx: TurnContext): string {
 	return firstLine ? compact(firstLine, 900) : '';
 }
 
+function latestNarrationExcerpt(ctx: TurnContext): string {
+	const latestNarration = [...ctx.recentEntries].reverse().find((entry) => entry.type === 'narration');
+	return compactBlock(latestNarration?.content, CURRENT_SCENE_CHAR_LIMIT);
+}
+
 function latestSceneText(ctx: TurnContext): string {
-	const header = latestNarrationHeader(ctx);
-	if (header) return header;
+	const narration = latestNarrationExcerpt(ctx);
+	if (narration) return narration;
 	const latestChapter = ctx.chapters.at(-1);
 	const storyTime = typeof (ctx.story as Record<string, unknown>).currentWorldTime === 'string'
 		? String((ctx.story as Record<string, unknown>).currentWorldTime)
@@ -439,8 +561,8 @@ function latestSceneText(ctx: TurnContext): string {
 }
 
 function renderCurrentScene(ctx: TurnContext): string {
-	const header = latestNarrationHeader(ctx);
-	if (header) return `Current scene from latest narration:\n${header}`;
+	const narration = latestNarrationExcerpt(ctx);
+	if (narration) return `Current scene from latest narration:\n${narration}`;
 	const storyTime = typeof (ctx.story as Record<string, unknown>).currentWorldTime === 'string'
 		? String((ctx.story as Record<string, unknown>).currentWorldTime).trim()
 		: '';
@@ -490,7 +612,7 @@ function selectCharacterBlockEntities(input: {
 	sceneEntityIds: Set<string>;
 	excludeEntityId?: string | null;
 }): TurnContext['entities'] {
-	const lookupText = `${input.retrieved.query} ${input.retrieved.packet}`;
+	const lookupText = input.retrieved.query;
 	const isCharacter = (entity: TurnContext['entities'][number]) =>
 		entity.type === 'character' && entity.id !== input.excludeEntityId;
 	const presentCharacters = input.presentEntities.filter(isCharacter);
@@ -581,82 +703,6 @@ function renderGmTimelineBrief(brief: GmTimelineBrief | null): string {
 		renderGmEventSection('Scheduled future events', brief.scheduledEvents),
 		renderGmNpcEvents(brief),
 	].filter(Boolean).join('\n');
-}
-
-function renderContinuityLedger(ctx: TurnContext): string {
-	const factLines = ctx.facts.slice(0, CONTINUITY_FACT_LIMIT).map((fact) =>
-		`- ${fact.type}/${fact.status} ${fact.title}: ${compact(fact.statement, 180)} (${Math.round(fact.confidence * 100)}%)`
-	);
-	const proposalLines = ctx.patchProposals.slice(0, CONTINUITY_PROPOSAL_LIMIT).map((proposal) => {
-		const affected = proposal.affectedEntityIds.length ? ` entities=${proposal.affectedEntityIds.slice(0, 4).join(',')}` : '';
-		return `- ${proposal.status} ${proposal.proposalType} -> ${proposal.targetTable}/${proposal.targetRecordId}${affected}: ${compact(proposal.reason, 180)} (${Math.round(proposal.confidence * 100)}%)`;
-	});
-	const warningLines = ctx.continuityWarnings.slice(0, CONTINUITY_WARNING_LIMIT).map((warning) =>
-		`- ${warning.level}/${warning.status} ${warning.title}: ${compact(warning.details, 180)}`
-	);
-	const sections = [
-		factLines.length ? `Facts:\n${factLines.join('\n')}` : '',
-		proposalLines.length ? `Patch proposals:\n${proposalLines.join('\n')}` : '',
-		warningLines.length ? `Continuity warnings:\n${warningLines.join('\n')}` : '',
-	].filter(Boolean);
-	return sections.length ? `Continuity ledger:\n${sections.join('\n')}` : '';
-}
-
-function unresolvedCharacterReferenceContextLabel(metadata: Record<string, unknown>): string {
-	const referenceContext = typeof metadata.referenceContext === 'string' ? metadata.referenceContext.trim() : '';
-	if (!referenceContext) return '';
-	const detail = typeof metadata.agreementCategory === 'string' && metadata.agreementCategory.trim()
-		? metadata.agreementCategory.trim()
-		: typeof metadata.factionName === 'string' && metadata.factionName.trim()
-			? metadata.factionName.trim()
-			: typeof metadata.timelineTitle === 'string' && metadata.timelineTitle.trim()
-				? metadata.timelineTitle.trim()
-				: '';
-	return detail ? `${referenceContext}/${compact(detail, 60)}` : referenceContext;
-}
-
-function unresolvedCharacterReferenceDetails(proposal: TurnContext['patchProposals'][number]): { name: string; description: string; contextLabel: string } | null {
-	if (proposal.proposalType !== 'character_reference_review') return null;
-	if (!['pending', 'needs_review'].includes(proposal.status)) return null;
-
-	const metadata = asRecord(proposal.metadata);
-	const operationValue = proposal.operations
-		.map((operation) => asRecord(operation.value))
-		.find((value) => typeof value.name === 'string' && value.name.trim().length > 0);
-	const name = typeof metadata.sourceName === 'string' && metadata.sourceName.trim()
-		? metadata.sourceName.trim()
-		: typeof operationValue?.name === 'string'
-			? operationValue.name.trim()
-			: '';
-	if (!name) return null;
-	const description = typeof operationValue?.description === 'string'
-		? operationValue.description.trim()
-		: proposal.reason;
-	return { name, description, contextLabel: unresolvedCharacterReferenceContextLabel(metadata) };
-}
-
-function renderUnresolvedCharacterReferences(ctx: TurnContext): string {
-	const seen = new Set<string>();
-	const lines: string[] = [];
-	for (const proposal of ctx.patchProposals) {
-		const details = unresolvedCharacterReferenceDetails(proposal);
-		if (!details) continue;
-		const key = normalizeLookup(details.name);
-		if (seen.has(key)) continue;
-		seen.add(key);
-		const source = proposal.sourceEntryIds.length ? ` source=${proposal.sourceEntryIds.slice(0, 3).join(',')}` : '';
-		const context = details.contextLabel ? `, ${details.contextLabel}` : '';
-		lines.push(`- ${details.name} (not yet canon${context}): ${compact(details.description, 180)}${source}`);
-		if (lines.length >= UNRESOLVED_CHARACTER_REFERENCE_LIMIT) break;
-	}
-
-	return lines.length
-		? [
-				'Unresolved character references:',
-				'These are names the story mentioned but the backend has not created as character canon. Keep them available as context, but do not portray them as established characters until reviewed or explicitly approved.',
-				...lines,
-			].join('\n')
-		: '';
 }
 
 function renderEntries(ctx: TurnContext, currentEntryId: string): Array<{ role: 'user' | 'assistant'; content: string }> {
@@ -750,7 +796,7 @@ function selectRelevantFactions(
 	presentEntityIds: Set<string>,
 	options: ServerTurnPromptOptions,
 ) {
-	const tokens = queryTokens(`${retrieved.query} ${retrieved.packet}`);
+	const tokens = queryTokens(retrieved.query);
 	const sceneEntityIds = new Set([...(options.sceneEntityIds ?? []), ...presentEntityIds]);
 	const currentFactionId = options.currentFactionId ?? null;
 	const membershipByFaction = new Map<string, Set<string>>();
@@ -790,13 +836,12 @@ function selectRelevantFactions(
 				faction.entityId === currentFactionId ||
 				normalizeLookup(faction.name) === normalizeLookup(currentFactionId)
 			) ? 60 : 0;
-			const packetScore = retrieved.packet && normalizeLookup(retrieved.packet).includes(normalizeLookup(faction.name)) ? 10 : 0;
 			const pressureScore = Math.min(16, Math.max(0, faction.pressure) / 5);
 			const goalScore = goals ? 4 : 0;
 			return {
 				faction,
 				index,
-				score: currentFactionScore + sceneMemberScore + packetScore + (textScore * 4) + pressureScore + goalScore,
+				score: currentFactionScore + sceneMemberScore + (textScore * 4) + pressureScore + goalScore,
 			};
 		})
 		.sort((a, b) => (b.score - a.score) || (a.index - b.index))
@@ -809,13 +854,12 @@ export function buildServerTurnPrompt(
 	retrieved: RetrievedMemoryPacket,
 	currentEntryId: string,
 	options: ServerTurnPromptOptions = {},
-): { system: string; prompt: string; messages: Array<{ role: 'user' | 'assistant'; content: string }> } {
+): ServerTurnPromptPacket {
 	const storyHeader = ctx.story.headerPrompt?.trim();
 	const metadata = ctx.story.metadata && typeof ctx.story.metadata === 'object' ? ctx.story.metadata as Record<string, unknown> : {};
 	const playerReputation = typeof metadata.playerReputation === 'string' ? metadata.playerReputation : '';
 	const protagonist = selectProtagonistEntity(ctx.entities);
 	const playerCharacter = renderPlayerCharacter(ctx, protagonist, playerReputation);
-	const wikiContextMarkdown = compactBlock(options.wikiContextMarkdown, WIKI_CONTEXT_CHAR_LIMIT);
 	const activeEntities = ctx.entities.filter(isUsableEntity);
 	const currentLocation = activeEntities.find((entity) => entity.type === 'location' && (entity.state as Record<string, unknown> | null)?.current === true);
 	const sceneText = latestSceneText(ctx);
@@ -894,8 +938,6 @@ export function buildServerTurnPrompt(
 	const eventLines = ctx.events.slice(0, EVENT_LIMIT).map((event) =>
 		`- ${event.type}: ${event.title} - ${compact(event.body, 160)}`
 	);
-	const continuityLedger = renderContinuityLedger(ctx);
-	const unresolvedCharacterReferences = renderUnresolvedCharacterReferences(ctx);
 	const gmTimelineBrief = renderGmTimelineBrief(ctx.gmBrief);
 	const sagaMemory = renderSagaMemory(ctx);
 	const arcMemory = renderArcMemory(ctx);
@@ -913,6 +955,22 @@ export function buildServerTurnPrompt(
 		excludeEntityId: protagonist?.id,
 	});
 	const characterBlocks = renderCharacterBlocks(ctx, characterBlockEntities, protagonist?.id);
+	const retrievedMemory = retrieved.packet.trim()
+		? `Retrieved temporal/canonical memory:\n${compactBlock(retrieved.packet, RETRIEVED_MEMORY_CHAR_LIMIT)}`
+		: '';
+	const wikiContextMarkdown = compactBlock(options.wikiContextMarkdown, WIKI_CONTEXT_PROMPT_CHAR_LIMIT);
+	const terminalWikiContext = wikiContextMarkdown
+		? [
+			'Terminal wiki context:',
+			'Use these generated vault notes as navigable lore and supporting context. Canon database, timeline events, and explicit source-linked memories win if a wiki note conflicts.',
+			wikiContextMarkdown,
+		].join('\n')
+		: '';
+	const turnContextSourceIds = [
+		ctx.story.id,
+		...retrieved.nodes.map((node) => node.id),
+		terminalWikiContext ? 'terminal_wiki_context' : '',
+	].filter((sourceId): sourceId is string => Boolean(sourceId));
 
 	const system = [
 		storyHeader ? `Story-specific preamble:\n${storyHeader}` : '',
@@ -922,22 +980,22 @@ export function buildServerTurnPrompt(
 		'This is a mature fictional work intended for adult audiences. All characters are portrayed as adults or in adult contexts. The story contains dark, explicit, and disturbing themes. Do not sanitize, moralize, or soften any of it.',
 		'Sex is raw, political, coercive, or transactional — never romanticized or faded to black. Violence is brutal and consequential. Ambition is common; betrayal is possible, not automatic.',
 		'You are the server-side GM narrator for a dynamic simulationist text RPG, not a writing assistant.',
+		'Keep prose ASOIAF-inspired but clear: concrete sensory detail, political pressure, hard consequence, and immediate affordances for the player.',
 		'Use hybrid POV: third-person limited for NPCs, world, and environment; second-person "you" only for direct sensory experience aimed at the player character. Never write the player character\'s actions, dialogue, decisions, thoughts, feelings, or internal monologue.',
 		'Every narration response must begin with exactly one header line: [ 🕰️ Time HH:MM | 🗓️ Day, Month DD, Year | 📍 Location - Specific Area | [Weather] Weather, Temp ]. Use the best known story calendar, place, weather, and time of day from canon; if exact clock time is unknown, infer a plausible diegetic time and keep it consistent.',
 		'Do not address the user as an author, editor, co-writer, or requester. Do not explain craft choices.',
 		'Resolve the immediate player action, show consequences, and keep the player able to act next.',
+		'For travel, repairs, waiting, and off-screen reports, stop at the next actionable scene boundary. Do not roll weeks, multiple POVs, and arrival into one response unless explicitly asked.',
 		'Do not append ending choices, numbered options, menus, "What do you do?", or OOC prompts. End on an observable in-world situation with room for the player to act.',
 		'TURN BOUNDARY — RESPECT PLAYER AGENCY: The final lines of every turn must describe a stable, observable situation the player can survey and choose from. Do NOT end with an NPC speaking new dialogue, initiating a new action, making a demand, or forcing the player to respond. Do NOT end with unresolved NPC initiative (\"draws his sword,\" \"raises an eyebrow waiting for your answer,\" \"steps forward menacingly\"). Resolve the beat or freeze-frame the scene state instead. Do NOT end with a direct question TO the player from an NPC. Safe endings: the room after the action, the crowd\'s reaction settling, the environment revealed, the consequences plain, an observation that invites choice without demanding it.',
 		'NPC knowledge is limited by senses, access, intelligence, rumor delay, and what they personally learned. They cannot see through doors, know private scenes, or instantly learn distant events.',
 		'NPC AGENCY: Present NPCs are not scenery. They have their own emotions, desires, fears, and conflicts. They act on these impulses even when the player does not prompt them to — initiating conversation, making demands, revealing secrets, picking fights, offering help, or walking away. Let them surprise the player.',
 		'Use narrator truth for narration, but never make a present NPC act on secret canon unless their belief packet or the scene gives them a source.',
-		'Terminal wiki context is compiled Obsidian/Qdrant lore from the terminal process. Use it as durable canon unless fresher backend state in this prompt clearly supersedes it.',
 		buildEconomyScaleBlock('Economy scale'),
 		buildWorldScaleBlock('World scale'),
 		'D&D-style d20 checks: for meaningful uncertainty use DC 10 easy/15 moderate/20 hard/25 very hard and narrate visible consequences; terminal/server-only turns must not emit unresolved {{roll:...}} markers unless roll support is available.',
 		'Bayesian social prior: before choosing betrayal, hidden motive, refusal, alliance, loyalty, or marriage, update from evidence. Weigh baseline temperament, relationship, standing, need, upside, public cost, detection risk, and available alternatives. A high-trust or mutually profitable offer often gets a sincere yes; betrayal needs a stronger cause than genre habit.',
-		'Political pressure should build gradually. Avoid constant twists; prefer slow escalation, debts, rumors, small moves, and delayed consequences.',
-		'HARD TONE RULES: Never soften violence, sex, betrayal, or cruelty when they arise from the story. Rape, incest, torture, slavery, and child death are possible and should be portrayed unflinchingly. NPCs may lie, betray, seduce, use, support, marry, or ally with the protagonist when it serves their interests. Do not insert moral lessons.',
+		'Political pressure builds gradually: slow escalation, debts, rumors, small moves, and delayed consequences.',
 	].filter(Boolean).join('\n\n');
 
 	const prompt = [
@@ -945,27 +1003,55 @@ export function buildServerTurnPrompt(
 		ctx.story.description ? `Setting: ${ctx.story.description}` : '',
 		playerCharacter,
 		currentScene || (currentLocation ? `Current location:\n${currentLocation.name}: ${compact(currentLocation.description, 320)}` : ''),
+		retrievedMemory,
+		terminalWikiContext,
 		characterBlocks,
 		entityLines.length ? `Present or active entities:\n${entityLines.join('\n')}` : '',
 		factionLines.length ? `Faction canon:\n${factionLines.join('\n')}` : '',
 		beliefLines.length ? `Actor belief limits:\n${beliefLines.join('\n')}` : '',
 		agreementLines.length ? `Agreements and obligations:\n${agreementLines.join('\n')}` : '',
-		unresolvedCharacterReferences,
-		continuityLedger,
 		threadLines.length ? `Open plot ledger:\n${threadLines.join('\n')}` : '',
 		sagaMemory,
 		arcMemory,
 		chapterMemory,
 		gmTimelineBrief || (eventLines.length ? `Recent source-linked events:\n${eventLines.join('\n')}` : ''),
-		wikiContextMarkdown ? `Terminal wiki context:\n${wikiContextMarkdown}` : '',
-		retrieved.packet,
 		'Return only GM narration prose for the player action. Do not include JSON, ending choices, numbered options, menus, or OOC notes in this response.',
 	].filter(Boolean).join('\n\n');
+
+	const messages = renderEntries(ctx, currentEntryId);
+	const compiledPrompt = compilePromptSections([
+		promptSection({
+			id: 'prompt_system',
+			lane: 'engine_static',
+			priority: 100,
+			maxTokens: estimateTokens(system),
+			content: system,
+			sourceIds: [ctx.story.id],
+		}),
+	], [
+		promptSection({
+			id: 'turn_context',
+			lane: 'turn_dynamic',
+			priority: 90,
+			maxTokens: estimateTokens(prompt),
+			content: prompt,
+			sourceIds: turnContextSourceIds,
+		}),
+		promptSection({
+			id: 'recent_dialogue',
+			lane: 'turn_dynamic',
+			priority: 80,
+			maxTokens: estimateTokens(messages.map((message) => message.content).join('\n\n')),
+			content: messages.map((message) => message.content).join('\n\n'),
+			sourceIds: messages.map((_, index) => `recent_message_${index}`),
+		}),
+	]);
 
 	return {
 		system,
 		prompt,
-		messages: renderEntries(ctx, currentEntryId),
+		messages,
+		compiledPrompt,
 	};
 }
 

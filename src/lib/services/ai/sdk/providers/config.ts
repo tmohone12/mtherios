@@ -421,6 +421,52 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
     // No service defaults - user must configure models in Generation Settings
   },
 
+  'z-ai': {
+    name: 'Z.AI',
+    description: 'Official Z.AI GLM models via OpenAI-compatible API',
+    baseUrl: 'https://api.z.ai/api/paas/v4',
+    requiresApiKey: true,
+    capabilities: {
+      textGeneration: true,
+      imageGeneration: true,
+      structuredOutput: true,
+      reasoning: 'native',
+      reasoningExtraction: 'sdk-native',
+    },
+    imageDefaults: {
+      defaultModel: 'glm-image',
+      referenceModel: 'glm-image',
+      supportedSizes: ['1280x1280', '1568x1056', '1056x1568', '1728x960', '960x1728'],
+    },
+    fallbackModels: [
+      'glm-5.2',
+      'glm-5.1',
+      'glm-5-turbo',
+      'glm-5',
+      'glm-4.7',
+      'glm-4.7-flash',
+      'glm-4.6',
+      'glm-4.5',
+      'glm-4.5-air',
+    ],
+    services: makeServiceDefaults(
+      {
+        narrative: 'glm-5.2',
+        classification: 'glm-5-turbo',
+        memory: 'glm-5-turbo',
+        suggestions: 'glm-5-turbo',
+        agentic: 'glm-5.2',
+        wizard: 'glm-5-turbo',
+        translation: 'glm-5-turbo',
+      },
+      {
+        suggestions: { reasoningEffort: 'off' },
+        wizard: { reasoningEffort: 'off' },
+        translation: { reasoningEffort: 'off' },
+      },
+    ),
+  },
+
   zhipu: {
     name: 'Zhipu AI',
     description: 'GLM models (Chinese AI provider)',

@@ -9,7 +9,6 @@ import {
 	worldSimulationResultSchema, relationDeltaSchema, plotMomentumSchema,
 } from '../worldsim';
 import { arcSummarySchema } from '../arc';
-import { extractedRuleSchema, reflectionResultSchema, ruleRelevanceSchema } from '../procedural';
 import { entryRefinementResultSchema } from '../entryRefinement';
 import { strategicWorldFrameSchema } from '../strategicWorldBrain';
 import { wikiLintResultSchema, wikiTextFixSchema } from '../wikiLint';
@@ -769,59 +768,7 @@ describe('arcSummarySchema', () => {
 });
 
 // ════════════════════════════════════════════════════════════════
-// Procedural Memory
 // ════════════════════════════════════════════════════════════════
-
-describe('extractedRuleSchema', () => {
-	it('accepts valid rule', () => {
-		const data = {
-			content: 'NPCs flee when outnumbered', category: 'world_rule',
-			type: 'rule', confidence: 0.8,
-			relatedEntities: ['Guard', 'Barracks'], tags: ['combat', 'npc'],
-		};
-		expect(extractedRuleSchema.parse(data)).toBeTruthy();
-	});
-
-	it('accepts anti_pattern type', () => {
-		const data = {
-			content: 'Avoid repeated tavern scenes', category: 'anti_pattern',
-			type: 'anti_pattern', confidence: 0.6,
-			relatedEntities: [], tags: ['pacing'],
-		};
-		expect(extractedRuleSchema.parse(data).type).toBe('anti_pattern');
-	});
-
-	it('rejects confidence outside 0-1', () => {
-		const base = { content: 'x', category: 'world_rule', type: 'rule', relatedEntities: [], tags: [] };
-		expect(() => extractedRuleSchema.parse({ ...base, confidence: 1.1 })).toThrow();
-	});
-
-	it('accepts all categories', () => {
-		const categories = ['character_behavior', 'world_rule', 'narrative_pattern', 'player_preference', 'anti_pattern', 'lore_connection'];
-		for (const category of categories) {
-			expect(extractedRuleSchema.parse({
-				content: 'x', category, type: 'rule', confidence: 0.5, relatedEntities: [], tags: [],
-			})).toBeTruthy();
-		}
-	});
-});
-
-describe('reflectionResultSchema', () => {
-	it('accepts valid reflection result', () => {
-		const data = {
-			rules: [{ content: 'x', category: 'world_rule', type: 'rule', confidence: 0.5, relatedEntities: [], tags: [] }],
-			summary: 'One pattern found',
-		};
-		expect(reflectionResultSchema.parse(data)).toBeTruthy();
-	});
-});
-
-describe('ruleRelevanceSchema', () => {
-	it('accepts valid relevance result', () => {
-		const data = { ruleIds: ['r1', 'r2'], reason: 'Combat context' };
-		expect(ruleRelevanceSchema.parse(data)).toEqual(data);
-	});
-});
 
 // ════════════════════════════════════════════════════════════════
 // Entry Refinement

@@ -36,6 +36,51 @@ describe('timeline contracts', () => {
 		expect(node.metadata).toEqual([]);
 	});
 
+	it('normalizes imported lore memory node types from terminal bootstraps', () => {
+		for (const type of ['seed_index', 'source_attribution', 'source_digest']) {
+			const node = memoryNodeSchema.parse({
+				id: `mem_${type}`,
+				storyId: 'story_1',
+				type,
+				title: 'Imported lore source',
+				content: 'Imported lore source details.',
+				createdAt: '2026-06-14T00:00:00.000Z',
+				updatedAt: '2026-06-14T00:00:00.000Z',
+			});
+
+			expect(node.type).toBe('canonical');
+		}
+	});
+
+	it('normalizes imported lore policy memory nodes from terminal bootstraps', () => {
+		const node = memoryNodeSchema.parse({
+			id: 'memory_pre296_spoiler_boundary_policy',
+			storyId: 'story_1',
+			type: 'seed_policy',
+			title: 'Pre-296 AC spoiler boundary',
+			content: 'Do not use post-cutoff events unless the campaign reaches them organically.',
+			createdAt: '2026-06-25T00:00:00.000Z',
+			updatedAt: '2026-06-25T00:00:00.000Z',
+		});
+
+		expect(node.type).toBe('procedural');
+	});
+
+	it('normalizes imported lore events from terminal bootstraps', () => {
+		const event = storyEventSchema.parse({
+			id: 'event_imported_lore',
+			storyId: 'story_1',
+			type: 'imported_lore_event',
+			title: 'Imported lore event',
+			body: 'A lore import event captured from the terminal database.',
+			serverVersion: 1,
+			createdAt: '2026-06-14T00:00:00.000Z',
+			updatedAt: '2026-06-14T00:00:00.000Z',
+		});
+
+		expect(event.type).toBe('imported_memory');
+	});
+
 	it('parses legacy story events with Task 2 defaults', () => {
 		const event = storyEventSchema.parse({
 			id: 'event_legacy_raven',

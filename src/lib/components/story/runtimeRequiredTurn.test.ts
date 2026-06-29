@@ -16,9 +16,21 @@ describe('runtime-required turn submission boundary', () => {
 
 		expect(source).toContain('terminalRuntimeUnavailable');
 		expect(source).toContain('Terminal agent runtime required. Start the terminal process to use this campaign.');
+		expect(source).toContain('!story.engineStreamStatus.connected');
 		expect(source).toContain('isTerminalReachabilityError');
 		expect(source).toContain('Terminal agent runtime required');
 		expect(source).toContain('Terminal turn failed');
 		expect(source).not.toContain('transcript is available');
+	});
+
+	it('does not persist backend turn failures into the story transcript', () => {
+		const source = readFileSync(resolve('src/lib/components/story/ActionInput.svelte'), 'utf8');
+		const backendTurnBlock = source.slice(
+			source.indexOf('async function submitBackendAuthoritativeTurn'),
+			source.indexOf('function handleStop'),
+		);
+
+		expect(backendTurnBlock).toContain('turnError =');
+		expect(backendTurnBlock).not.toContain("await story.addEntry('system'");
 	});
 });

@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { deleteStory } from '$lib/services/database';
+import { createStory, deleteStory, getAllStories, getStory, updateStory } from '$lib/services/database';
 import {
 	createBackendStoryShell,
 	createContextCheckpoint,
+	cacheBackendStoryFromBootstrap,
 	createBackendArc,
 	createBackendChapter,
 	createBackendLorebookEntry,
@@ -16,7 +17,9 @@ import {
 	fetchBackendStoryProjection,
 	fetchEngineCacheStatus,
 	listBackendStories,
+	refreshStoryCatalog,
 	listContextCheckpoints,
+	resolveBackendStoryBootstrap,
 	revertToContextCheckpoint,
 	upsertBackendArc,
 	upsertBackendChapter,
@@ -135,7 +138,11 @@ describe('server story control-surface client', () => {
 		await expect(deleteStoryEverywhere({
 			id: 'local_1',
 			serverStoryId: 'story_alpha',
-		} as Story)).resolves.toBeUndefined();
+		} as Story, { mode: 'purge', exportBeforeDelete: true })).resolves.toEqual(expect.objectContaining({
+			ok: true,
+			storyId: 'story_alpha',
+			mode: 'purge',
+		}));
 
 		const payloads = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)));
 		expect(payloads).toEqual([
@@ -158,7 +165,7 @@ describe('server story control-surface client', () => {
 			{
 				storyId: 'story_alpha',
 				command: 'story.delete',
-				args: {},
+				args: { mode: 'purge', exportBeforeDelete: true },
 			},
 		]);
 		expect(fetchMock).toHaveBeenCalledWith('/api/engine/command', expect.objectContaining({ method: 'POST' }));
@@ -197,6 +204,79 @@ describe('server story control-surface client', () => {
 				memoryNodeLimit: 80,
 			},
 		});
+	});
+
+	it('recovers a cached story when its backend story id is stale', async () => {
+		const recoveredBootstrap: BootstrapResponse = {
+			...bootstrap,
+			story: { ...bootstrap.story, id: 'story_recovered' },
+		};
+		const fetchMock = vi.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce(jsonResponse({
+				...engineResponse('campaign.bootstrap', 'story_missing', null),
+				status: 'failed',
+				error: 'Story not found',
+			}))
+			.mockResolvedValueOnce(jsonResponse({
+				...engineResponse('campaign.bootstrap', 'local_story', null),
+				status: 'failed',
+				error: 'Story not found',
+			}))
+			.mockResolvedValueOnce(jsonResponse(engineResponse('story.list', '__app__', {
+				stories: [{ id: 'story_recovered', clientStoryId: 'local_story', title: 'Long Campaign', serverVersion: 7 }],
+			})))
+			.mockResolvedValueOnce(jsonResponse(engineResponse('campaign.bootstrap', 'story_recovered', recoveredBootstrap)));
+
+		await expect(resolveBackendStoryBootstrap({
+			id: 'local_story',
+			serverStoryId: 'story_missing',
+			title: 'Long Campaign',
+		} as Story)).resolves.toEqual(recoveredBootstrap);
+
+		expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).storyId)).toEqual([
+			'story_missing',
+			'local_story',
+			'__app__',
+			'story_recovered',
+		]);
+	});
+
+	it('keeps the existing browser story id when rebinding a detached backend story', async () => {
+		vi.mocked(getStory).mockResolvedValueOnce({
+			id: 'local_detached_story',
+			title: 'Detached Local Story',
+			serverStoryId: 'story_missing',
+		} as Story);
+
+		const result = await cacheBackendStoryFromBootstrap(bootstrap, 'local_detached_story');
+
+		expect(result.id).toBe('local_detached_story');
+		expect(vi.mocked(createStory)).not.toHaveBeenCalled();
+		expect(vi.mocked(updateStory)).toHaveBeenCalledWith('local_detached_story', expect.objectContaining({
+			serverStoryId: 'story_alpha',
+			serverVersion: 7,
+			syncStatus: 'synced',
+		}));
+	});
+
+	it('hides stale backend-bound local stories missing from the terminal catalog', async () => {
+		const localStories = [
+			{ id: 'local_only', title: 'Local Draft', serverStoryId: null, updatedAt: 1000 },
+			{ id: 'local_volantis', title: 'Volantis: Black Walls Intrigue', serverStoryId: 'story_missing', updatedAt: 3000 },
+			{ id: 'local_detached', title: 'Detached stale story', serverStoryId: null, syncStatus: 'local-only', updatedAt: 2500 },
+			{ id: 'local_alpha', title: 'Long Campaign', serverStoryId: 'story_alpha', updatedAt: 2000 },
+		] as Story[];
+		vi.mocked(getAllStories).mockResolvedValueOnce(localStories);
+		vi.mocked(getStory).mockImplementation(async (id) => localStories.find((story) => story.id === id));
+		vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(engineResponse('story.list', '__app__', {
+			stories: [{ id: 'story_alpha', title: 'Long Campaign', serverVersion: 7 }],
+		})));
+
+		const catalog = await refreshStoryCatalog();
+
+		expect(catalog.map((story) => story.id)).toEqual(['local_alpha', 'local_only']);
+		expect(catalog.map((story) => story.title)).not.toContain('Volantis: Black Walls Intrigue');
+		expect(catalog.map((story) => story.title)).not.toContain('Detached stale story');
 	});
 
 	it('fetches bounded projections through the engine command gateway', async () => {

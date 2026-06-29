@@ -7,7 +7,6 @@ export type PromptSectionKey =
 	| 'factions'
 	| 'lore'
 	| 'episodicMemory'
-	| 'proceduralMemory'
 	| 'plotLedger'
 	| 'conversationMemory'
 	| 'backendMemory'
@@ -52,7 +51,6 @@ export const DEFAULT_PROMPT_SECTION_BUDGETS: Record<PromptSectionKey, SectionBud
 	factions: { maxTokens: 900, minTokens: 180, priority: 2 },
 	lore: { maxTokens: 1600, minTokens: 300, priority: 4 },
 	episodicMemory: { maxTokens: 1600, minTokens: 260, priority: 5 },
-	proceduralMemory: { maxTokens: 420, minTokens: 100, priority: 3 },
 	plotLedger: { maxTokens: 720, minTokens: 160, priority: 5 },
 	conversationMemory: { maxTokens: 520, minTokens: 120, priority: 4 },
 	backendMemory: { maxTokens: 1200, minTokens: 280, priority: 5 },

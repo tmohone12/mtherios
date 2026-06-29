@@ -22,6 +22,7 @@ import { mapWithConcurrency, readGenerationConcurrency } from '$lib/server/perfo
 import { buildTurnDebugSnapshot } from '$lib/server/turn/debugSnapshot';
 import { applyValidatedTurnUpdate, parseTurnUpdate, turnUpdateOperationCount } from '$lib/server/turn/patchValidator';
 import { buildStateExtractionPrompt } from '$lib/server/turn/promptPacket';
+import { buildStateExtractionResponseSchema, shouldExtractDurableState } from '$lib/server/turn/orchestrator';
 import { isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from '$lib/server/memory/entityResolver';
 import {
 	ServerGenerationError,
@@ -455,9 +456,76 @@ function eventMemoryType(row: StoryEventRow): MemoryNode['type'] {
 }
 
 function eventImportance(row: StoryEventRow): number {
+	const impact = asRecord(row.memoryImpact);
+	const explicitImportance = asNumber(impact.importance, Number.NaN);
+	if (Number.isFinite(explicitImportance)) return clamp(explicitImportance, 0, 1);
 	if (row.type === 'promise' || row.type === 'betrayal' || row.type === 'agreement') return 0.9;
 	if (row.type === 'faction_move' || row.type === 'death' || row.type === 'reveal') return 0.8;
 	return 0.65;
+}
+
+function eventMemoryKind(row: StoryEventRow): 'episodic' | 'prospective' {
+	return row.status === 'scheduled' && row.scheduledTurn !== null ? 'prospective' : 'episodic';
+}
+
+function eventMemoryKeywords(row: StoryEventRow): string[] {
+	const impact = asRecord(row.memoryImpact);
+	return uniqueStrings([
+		row.type,
+		row.status !== 'committed' ? row.status : '',
+		typeof impact.durability === 'string' ? impact.durability : '',
+		impact.requiresReflection === true ? 'requires_reflection' : '',
+	]);
+}
+
+function eventProjectionMetadata(row: StoryEventRow, options: { jobId: string }): Record<string, unknown> {
+	const impact = asRecord(row.memoryImpact);
+	const metadata: Record<string, unknown> = {
+		...asRecord(row.metadata),
+		sourceType: 'event_projection',
+		jobId: options.jobId,
+		memoryKind: eventMemoryKind(row),
+		status: row.status,
+		validFromTurn: row.occurredTurn ?? row.createdTurn,
+		occurredTurn: row.occurredTurn,
+		scheduledTurn: row.scheduledTurn,
+		worldTime: row.worldTime,
+	};
+	for (const key of ['emotionalValence', 'durability', 'decayRate', 'confidence'] as const) {
+		if (impact[key] !== undefined) metadata[key] = impact[key];
+	}
+	const emotions = asStringArray(impact.emotions);
+	if (emotions.length > 0) metadata.emotions = emotions;
+	if (impact.requiresReflection !== undefined) metadata.requiresReflection = Boolean(impact.requiresReflection);
+	return metadata;
+}
+
+export function buildEventMemoryNodeValues(
+	row: StoryEventRow,
+	options: { jobId: string; updatedAt: string },
+): typeof memoryNodes.$inferInsert {
+	return {
+		id: `mem_event_${row.id}`,
+		storyId: row.storyId,
+		type: eventMemoryType(row),
+		title: row.title,
+		content: row.body,
+		summary: row.body.replace(/\s+/g, ' ').slice(0, 360),
+		keywords: eventMemoryKeywords(row),
+		entityIds: uniqueStrings([...asStringArray(row.actorEntityIds), ...asStringArray(row.targetEntityIds)]),
+		factionIds: asStringArray(row.factionIds),
+		threadIds: asStringArray(row.threadIds),
+		locationId: row.locationId ?? null,
+		visibility: row.visibility,
+		importance: eventImportance(row),
+		sourceEntryIds: asStringArray(row.sourceEntryIds),
+		sourceEventIds: [row.id],
+		sourcePatchIds: asStringArray(row.sourcePatchIds),
+		metadata: eventProjectionMetadata(row, { jobId: options.jobId }),
+		serverVersion: row.serverVersion,
+		createdAt: row.createdAt,
+		updatedAt: options.updatedAt,
+	};
 }
 
 export function shouldProjectEventToMemory(row: Pick<StoryEventRow, 'type' | 'title' | 'body'>): boolean {
@@ -490,47 +558,14 @@ async function createMemoryNodesFromEvents(job: BackendJobRow): Promise<number> 
 	let created = 0;
 	for (const row of rows) {
 		if (!shouldProjectEventToMemory(row)) continue;
-		await db.insert(memoryNodes).values({
-			id: `mem_event_${row.id}`,
-			storyId: row.storyId,
-			type: eventMemoryType(row),
-			title: row.title,
-			content: row.body,
-			summary: row.body.replace(/\s+/g, ' ').slice(0, 360),
-			keywords: [row.type],
-			entityIds: [...asStringArray(row.actorEntityIds), ...asStringArray(row.targetEntityIds)],
-			factionIds: [],
-			threadIds: asStringArray(row.threadIds),
-			locationId: row.locationId ?? null,
-			visibility: row.visibility,
-			importance: eventImportance(row),
-			sourceEntryIds: asStringArray(row.sourceEntryIds),
-			sourceEventIds: [row.id],
-			sourcePatchIds: asStringArray(row.sourcePatchIds),
-			metadata: { sourceType: 'event_projection', jobId: job.id },
-			serverVersion: row.serverVersion,
-			createdAt: row.createdAt,
-			updatedAt,
-		}).onConflictDoUpdate({
+		const values = buildEventMemoryNodeValues(row, { jobId: job.id, updatedAt });
+		const { id: _id, storyId: _storyId, createdAt: _createdAt, ...updateValues } = values;
+		void _id;
+		void _storyId;
+		void _createdAt;
+		await db.insert(memoryNodes).values(values).onConflictDoUpdate({
 			target: memoryNodes.id,
-			set: {
-				type: eventMemoryType(row),
-				title: row.title,
-				content: row.body,
-				summary: row.body.replace(/\s+/g, ' ').slice(0, 360),
-				keywords: [row.type],
-				entityIds: [...asStringArray(row.actorEntityIds), ...asStringArray(row.targetEntityIds)],
-				threadIds: asStringArray(row.threadIds),
-				locationId: row.locationId ?? null,
-				visibility: row.visibility,
-				importance: eventImportance(row),
-				sourceEntryIds: asStringArray(row.sourceEntryIds),
-				sourceEventIds: [row.id],
-				sourcePatchIds: asStringArray(row.sourcePatchIds),
-				metadata: { sourceType: 'event_projection', jobId: job.id },
-				serverVersion: row.serverVersion,
-				updatedAt,
-			},
+			set: updateValues,
 		});
 		created += 1;
 	}
@@ -2320,6 +2355,13 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): 
 	const assistantEntryId = requirePayloadString(payload, 'assistantEntryId');
 	const playerText = requirePayloadString(payload, 'playerText');
 	const narration = requirePayloadString(payload, 'narration');
+	if (!shouldExtractDurableState(playerText, narration)) {
+		return {
+			status: 'no_changes',
+			operationCount: 0,
+			skipped: 'deterministic_no_durable_state',
+		};
+	}
 	const clientTurnId = typeof payload.clientTurnId === 'string' && payload.clientTurnId.trim()
 		? payload.clientTurnId
 		: job.id;
@@ -2360,7 +2402,7 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): 
 			maxTokens: Math.min(classifierGeneration.maxTokens ?? 2048, 2048),
 			system: classifierSystem,
 			prompt: extractionPrompt,
-			responseFormat: 'json_object',
+			responseSchema: buildStateExtractionResponseSchema(),
 		}));
 		await timePhase(recorder, 'job.extract_turn_state.log_success', {}, () => logDeferredStateExtractionCall({
 			job,
@@ -2369,7 +2411,8 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): 
 			result: extractionResult,
 			status: 'success',
 			metadata: {
-				responseFormat: 'json_object',
+				responseFormat: 'json_schema',
+				responseSchemaName: 'mtherios_state_patch',
 				debugSnapshot: buildTurnDebugSnapshot({
 					kind: 'state_extraction',
 					playerText,
@@ -2393,7 +2436,8 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): 
 				status: 'error',
 				error,
 				metadata: {
-					responseFormat: 'json_object',
+					responseFormat: 'json_schema',
+					responseSchemaName: 'mtherios_state_patch',
 					statusCode: failedResult.statusCode ?? null,
 					debugSnapshot: buildTurnDebugSnapshot({
 						kind: 'state_extraction',

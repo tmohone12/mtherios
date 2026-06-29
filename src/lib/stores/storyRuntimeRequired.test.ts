@@ -18,6 +18,21 @@ describe('terminal runtime required story store boundary', () => {
 		expect(source).not.toContain('turn_command');
 	});
 
+	it('clears stale missing terminal story bindings instead of showing runtime unavailable', () => {
+		const source = readFileSync(resolve('src/lib/stores/story.svelte.ts'), 'utf8');
+
+		expect(source).toContain('isMissingBackendStoryError');
+		expect(source).toContain("serverStoryId: null, syncStatus: 'local-only'");
+		expect(source).toContain('terminal database binding missing');
+	});
+
+	it('filters persisted transient runtime errors out of backend transcript windows', () => {
+		const source = readFileSync(resolve('src/lib/stores/story.svelte.ts'), 'utf8');
+
+		expect(source).toContain('isTransientRuntimeEntry');
+		expect(source).toContain('if (isTransientRuntimeEntry(entry)) return null;');
+	});
+
 	it('keeps streamed turn diagnostics as control-surface state only', () => {
 		const source = readFileSync(resolve('src/lib/stores/story.svelte.ts'), 'utf8');
 

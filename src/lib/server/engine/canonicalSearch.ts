@@ -12,7 +12,7 @@ import { WORLD_RECORD_TYPES, listWorldRecords } from './worldRecords';
 
 type JsonRecord = Record<string, unknown>;
 
-const INDEXABLE_TYPES = [
+export const INDEXABLE_TYPES = [
 	'transcript',
 	'entities',
 	'factions',
@@ -24,13 +24,9 @@ const INDEXABLE_TYPES = [
 	'threads',
 	'events',
 	'patches',
-	'facts',
-	'sourceRefs',
-	'patchProposals',
-	'continuityWarnings',
-	'memoryNodes',
 	'chapters',
 	'arcs',
+	'sagas',
 ];
 const EMBEDDING_TEXT_LIMIT = 2400;
 const SEARCH_PAYLOAD_VERSION = 2;

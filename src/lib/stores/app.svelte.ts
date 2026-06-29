@@ -4,6 +4,7 @@
  */
 
 import { deleteSetting, getSetting, setSetting } from '$lib/services/database';
+import { refreshStoryCatalog } from '$lib/services/serverStories';
 
 class AppStore {
 	onboardingComplete = $state(false);
@@ -14,10 +15,27 @@ class AppStore {
 	async init() {
 		try {
 			const onboarded = await getSetting('onboardingComplete');
-			this.onboardingComplete = onboarded === 'true';
-
 			const lastStory = await getSetting('lastStoryId');
-			this.currentStoryId = lastStory ?? null;
+			const catalog = await refreshStoryCatalog().catch((error) => {
+				console.warn('[App] Backend story catalog unavailable during startup:', error);
+				return null;
+			});
+			const catalogStoryIds = new Set((catalog ?? []).map((story) => story.id));
+			const recoveredStoryId = lastStory && catalogStoryIds.has(lastStory)
+				? lastStory
+				: catalog?.length === 1
+					? catalog[0]?.id ?? null
+					: catalog === null ? lastStory ?? null : null;
+
+			this.onboardingComplete = onboarded === 'true' || Boolean(recoveredStoryId);
+			this.currentStoryId = recoveredStoryId;
+
+			if (recoveredStoryId) {
+				await setSetting('onboardingComplete', 'true');
+				await setSetting('lastStoryId', recoveredStoryId);
+			} else if (lastStory && catalog !== null) {
+				await deleteSetting('lastStoryId');
+			}
 
 			if (!this.onboardingComplete) {
 				this.showWizard = true;

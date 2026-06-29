@@ -1,8 +1,6 @@
 <script lang="ts">
-	import { ChevronDown, ChevronUp, RotateCcw, Save, Trash2, Loader2, Search } from 'lucide-svelte';
+	import { ChevronDown, ChevronUp, RotateCcw, Save, Search } from 'lucide-svelte';
 	import { settings, SERVICE_DEFINITIONS, SERVICE_PROFILES, type ServiceConfig } from '$lib/stores/settings.svelte';
-	import { story } from '$lib/stores/story.svelte';
-	import { getProceduralRules, deleteProceduralRule } from '$lib/services/database';
 	import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 	import { syncTerminalLlmSettingsFromBrowser } from '$lib/services/terminalSettings';
 	import type { APIProfile, ProviderType } from '$lib/types';
@@ -21,35 +19,6 @@
 	let serviceModelSearch = $state<Record<string, string>>({});
 	let saving = $state(false);
 	let terminalSyncStatus = $state('');
-
-	// ── CASS / Procedural Memory state ──
-	let cassRuleCount = $state<number | null>(null);
-	let cassFlushing = $state(false);
-	let cassStatus = $state('');
-
-	async function loadCassRules() {
-		if (!story.currentStory) { cassRuleCount = 0; return; }
-		const rules = await getProceduralRules(story.currentStory.id);
-		cassRuleCount = rules.length;
-	}
-
-	async function flushCassRules(filter: 'deprecated' | 'all') {
-		if (!story.currentStory) return;
-		cassFlushing = true;
-		cassStatus = filter === 'all' ? 'Flushing all rules...' : 'Flushing deprecated rules...';
-		try {
-			const rules = await getProceduralRules(story.currentStory.id);
-			const toDelete = filter === 'all' ? rules : rules.filter(r => r.maturity === 'deprecated' || r.effectiveScore < 0.2);
-			for (const rule of toDelete) {
-				await deleteProceduralRule(rule.id);
-			}
-			cassStatus = `Flushed ${toDelete.length} rule(s).`;
-			cassRuleCount = (cassRuleCount ?? rules.length) - toDelete.length;
-		} catch (e) {
-			cassStatus = `Failed: ${e instanceof Error ? e.message : String(e)}`;
-		}
-		cassFlushing = false;
-	}
 
 	function getConfig(serviceId: string): ServiceConfig {
 		return editingConfigs[serviceId] ?? settings.getServiceConfig(serviceId);
@@ -444,33 +413,6 @@
 											onclick={() => resetService(serviceId)}>
 											<RotateCcw class="h-3 w-3" /> Reset
 										</button>
-
-										<!-- ── CASS / Procedural Memory extras ── -->
-										{#if serviceId === 'proceduralMemory'}
-											<div class="border-t border-[var(--border-primary)]/50 pt-3 space-y-2">
-												<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Rule Management</span>
-												{#if cassRuleCount === null}
-													<button class="text-xs text-[var(--text-accent)] hover:underline" onclick={loadCassRules}>Load rule count</button>
-												{:else}
-													<p class="text-xs text-[var(--text-muted)]">{cassRuleCount} rule(s) for current story</p>
-												{/if}
-												<div class="flex gap-2">
-													<button class="flex items-center gap-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-1.5 text-[10px] text-amber-400 hover:bg-amber-500/10 disabled:opacity-40"
-														onclick={() => flushCassRules('deprecated')} disabled={cassFlushing || !story.currentStory}>
-														{#if cassFlushing}<Loader2 class="h-3 w-3 animate-spin" />{:else}<Trash2 class="h-3 w-3" />{/if}
-														Flush Bad Rules
-													</button>
-													<button class="flex items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-1.5 text-[10px] text-red-400 hover:bg-red-500/10 disabled:opacity-40"
-														onclick={() => flushCassRules('all')} disabled={cassFlushing || !story.currentStory}>
-														{#if cassFlushing}<Loader2 class="h-3 w-3 animate-spin" />{:else}<Trash2 class="h-3 w-3" />{/if}
-														Flush All
-													</button>
-												</div>
-												{#if cassStatus}
-													<p class="text-[10px] text-[var(--text-muted)]">{cassStatus}</p>
-												{/if}
-											</div>
-										{/if}
 
 									</div>
 								{/if}

@@ -15,6 +15,13 @@ function updateWorldStateParameters() {
 }
 
 describe('GM tool schemas', () => {
+	it('exposes roll_check as a narrator tool', () => {
+		const tool = GM_TOOLS.find((candidate) => candidate.function.name === 'roll_check');
+
+		expect(tool?.function.description ?? '').toContain('Call before narrating the outcome');
+		expect((tool?.function.parameters as any).required).toContain('dc');
+	});
+
 	it('tells world-state extraction not to create character canon', () => {
 		const parameters = updateWorldStateParameters();
 

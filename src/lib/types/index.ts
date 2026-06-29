@@ -1083,6 +1083,7 @@ export type ProviderType =
   | 'google' // @ai-sdk/google
   | 'xai' // @ai-sdk/xai (Grok)
   | 'groq' // @ai-sdk/groq
+  | 'z-ai' // Z.AI official GLM API, OpenAI-compatible
   | 'zhipu' // zhipu-ai-provider (Z.AI/GLM)
   | 'deepseek' // @ai-sdk/deepseek
   | 'mistral' // @ai-sdk/mistral
@@ -1169,7 +1170,6 @@ export interface UISettings {
   retrievedChapterLimit: number
   retrievedLoreEntryLimit: number
   conversationMemoryLimit: number
-  proceduralMemoryLimit: number
   backendMemoryTokenBudget: number
   snapshotTokenCap: number // 0 = unlimited (context window is the limit)
   /** @deprecated Bound server stories always route turns through the terminal engine. */
@@ -1192,6 +1192,7 @@ export type ImageProviderType =
   | 'chutes'
   | 'pollinations'
   | 'google'
+  | 'z-ai'
   | 'zhipu'
   | 'comfyui'
 

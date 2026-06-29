@@ -172,6 +172,22 @@
    ATMOSPHERIC EFFECTS
    ============================================= */
 @layer utilities {
+	.app-shell {
+		padding-top: env(safe-area-inset-top, 0px);
+	}
+
+	.settings-modal-shell {
+		height: 100dvh;
+		max-height: 100dvh;
+	}
+
+	@media (min-width: 640px) {
+		.settings-modal-shell {
+			height: min(92dvh, 800px);
+			max-height: min(92dvh, 800px);
+		}
+	}
+
 	/* Grain texture overlay */
 	.grain-overlay {
 		position: fixed;

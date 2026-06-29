@@ -10,21 +10,16 @@ import {
 	factionMemberships,
 	factionProjects,
 	factionResources,
-	facts,
-	continuityWarnings,
 	patchProposals,
-	memoryNodes,
 	npcEventLinks,
 	npcBeliefs,
 	relationships,
-	sourceRefs,
 	statePatches,
 	stories,
 	storyEvents,
 } from '$lib/server/db/schema';
 import { buildNpcEventLinksForEvent } from '$lib/server/events/timeline';
 import { enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
-import { summarizeTurnContinuity } from '$lib/server/memory/continuity';
 import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from '$lib/server/memory/entityResolver';
 import { worldStateUpdateSchema, type WorldStateTimelineEvent, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
 
@@ -115,11 +110,9 @@ function mergeEntityState(existing: Record<string, unknown>, patch: Record<strin
 }
 
 type TurnContinuityProposalRow = typeof patchProposals.$inferInsert;
-type TurnSourceRefRow = typeof sourceRefs.$inferInsert;
 
 interface TurnContinuityLedgerBundle {
 	patchProposals: Array<TurnContinuityProposalRow>;
-	sourceRefs: Array<TurnSourceRefRow>;
 }
 
 function queueTurnContinuityProposal(
@@ -145,50 +138,9 @@ function queueTurnContinuityProposal(
 		metadata: Record<string, unknown>;
 	},
 ) {
-	const proposalId = id('proposal_turn');
-	const sourceEntryIds = sourceIds(...input.sourceEntryIds);
-	const sourceEventIds = sourceIds(...(input.sourceEventIds ?? []));
-	const sourcePatchIds = sourceIds(...(input.sourcePatchIds ?? []));
-	const proposal: TurnContinuityProposalRow = {
-		id: proposalId,
-		storyId: input.storyId,
-		proposalType: input.proposalType,
-		targetTable: input.targetTable,
-		targetRecordId: input.targetRecordId,
-		proposedBy: 'narration',
-		operations: input.operations,
-		reason: input.reason,
-		suggestion: input.suggestion,
-		status: input.requiresReview ? 'needs_review' : 'pending',
-		decision: null,
-		validatedBy: null,
-		affectedEntityIds: sourceIds(...input.affectedEntityIds),
-		confidence: input.confidence,
-		sourceEntryIds,
-		sourceEventIds,
-		sourcePatchIds,
-		metadata: input.metadata,
-		serverVersion: input.serverVersion,
-		createdAt: input.now,
-		updatedAt: input.now,
-	};
-
-	ledger.patchProposals.push(proposal);
-	ledger.sourceRefs.push(...buildSourceRefRows({
-		storyId: input.storyId,
-		targetTable: 'patch_proposals',
-		targetRecordId: proposalId,
-		targetRecordField: input.sourceRecordField ?? null,
-		sourceField: input.sourceField,
-		sourceEntryIds,
-		sourceEventIds,
-		sourcePatchIds,
-		confidence: input.confidence,
-		rationale: input.reason,
-		notes: input.suggestion,
-		serverVersion: input.serverVersion,
-		now: input.now,
-	}));
+	void ledger;
+	void input;
+	// ponytail: normal turns apply validated updates directly; review queues belong in explicit repair tools.
 }
 
 function queueUnresolvedEntityReference(
@@ -233,21 +185,6 @@ function queueUnresolvedEntityReference(
 			sourceFields: sourceIds(...stringList(existingMetadata.sourceFields), input.sourceField),
 		};
 		existingProposal.updatedAt = input.now;
-		appendUniqueSourceRefs(ledger, buildSourceRefRows({
-			storyId: input.storyId,
-			targetTable: 'patch_proposals',
-			targetRecordId: existingProposal.id,
-			targetRecordField: input.sourceRecordField ?? 'state',
-			sourceField: input.sourceField,
-			sourceEntryIds,
-			sourceEventIds,
-			sourcePatchIds,
-			confidence: 0.52,
-			rationale: reason,
-			notes: suggestion,
-			serverVersion: input.serverVersion,
-			now: input.now,
-		}));
 		return;
 	}
 	queueTurnContinuityProposal(ledger, {
@@ -290,7 +227,7 @@ function queueUnresolvedEntityReference(
 }
 
 function unresolvedCharacterWarning(name: string): string {
-	return `Character reference "${name}" was not created as canon; review the proposal if this should become a character.`;
+	return `Character reference "${name}" was not created as canon; add it manually if this should become a character.`;
 }
 
 function relationshipEndpointLooksCharacter(
@@ -323,69 +260,6 @@ function agreementPartyLooksCharacter(
 	return normalized.split(/\s+/).length >= 2;
 }
 
-function buildSourceRefRows(input: {
-	storyId: string;
-	targetTable: string;
-	targetRecordId: string;
-	targetRecordField?: string | null;
-	sourceField?: string | null;
-	sourceEntryIds?: string[];
-	sourceEventIds?: string[];
-	sourcePatchIds?: string[];
-	confidence?: number;
-	rationale?: string | null;
-	notes?: string | null;
-	serverVersion: number;
-	now: string;
-}) {
-	const confidence = typeof input.confidence === 'number' && Number.isFinite(input.confidence)
-		? Math.max(0, Math.min(1, input.confidence))
-		: 1;
-	const buildRows = (sourceType: string, ids: string[]) => ids.map((sourceId) => ({
-		id: id('sourceref'),
-		storyId: input.storyId,
-		sourceType,
-		sourceId,
-		targetTable: input.targetTable,
-		targetRecordId: input.targetRecordId,
-		targetRecordField: input.targetRecordField ?? null,
-		sourceField: input.sourceField ?? null,
-		confidence,
-		rationale: input.rationale ?? null,
-		notes: input.notes ?? null,
-		serverVersion: input.serverVersion,
-		createdAt: input.now,
-		updatedAt: input.now,
-	}));
-
-	return [
-		...buildRows('story_entry', sourceIds(...(input.sourceEntryIds ?? []))),
-		...buildRows('story_event', sourceIds(...(input.sourceEventIds ?? []))),
-		...buildRows('state_patch', sourceIds(...(input.sourcePatchIds ?? []))),
-	];
-}
-
-function sourceRefKey(ref: TurnSourceRefRow): string {
-	return [
-		ref.targetTable,
-		ref.targetRecordId,
-		ref.targetRecordField ?? '',
-		ref.sourceType,
-		ref.sourceId,
-		ref.sourceField ?? '',
-	].join('\u001f');
-}
-
-function appendUniqueSourceRefs(ledger: TurnContinuityLedgerBundle, refs: TurnSourceRefRow[]): void {
-	const existingKeys = new Set(ledger.sourceRefs.map(sourceRefKey));
-	for (const ref of refs) {
-		const key = sourceRefKey(ref);
-		if (existingKeys.has(key)) continue;
-		existingKeys.add(key);
-		ledger.sourceRefs.push(ref);
-	}
-}
-
 function recordValue(value: unknown): Record<string, unknown> {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
 	return value as Record<string, unknown>;
@@ -400,18 +274,6 @@ function unresolvedReferenceProposalKey(proposal: {
 	if (proposal.targetTable !== 'entities') return null;
 	if (!proposal.targetRecordId.startsWith('unresolved_')) return null;
 	return [proposal.proposalType, proposal.targetTable, proposal.targetRecordId].join('\u001f');
-}
-
-function uniqueSourceRefs(refs: TurnSourceRefRow[]): TurnSourceRefRow[] {
-	const seen = new Set<string>();
-	const unique: TurnSourceRefRow[] = [];
-	for (const ref of refs) {
-		const key = sourceRefKey(ref);
-		if (seen.has(key)) continue;
-		seen.add(key);
-		unique.push(ref);
-	}
-	return unique;
 }
 
 async function mergeExistingUnresolvedReferenceProposals(
@@ -472,23 +334,15 @@ async function mergeExistingUnresolvedReferenceProposals(
 			updatedAt: input.now,
 		}).where(eq(patchProposals.id, existing.id));
 
-		for (const ref of input.bundle.sourceRefs) {
-			if (ref.targetTable !== 'patch_proposals' || ref.targetRecordId !== proposal.id) continue;
-			ref.targetRecordId = existing.id;
-			ref.serverVersion = input.serverVersion;
-			ref.updatedAt = input.now;
-		}
 	}
 
 	input.bundle.patchProposals.splice(0, input.bundle.patchProposals.length, ...keptProposals);
-	const refs = uniqueSourceRefs(input.bundle.sourceRefs);
-	input.bundle.sourceRefs.splice(0, input.bundle.sourceRefs.length, ...refs);
 }
 
-async function insertSourceRefs(db: TurnPersistenceDb, input: Parameters<typeof buildSourceRefRows>[0]): Promise<void> {
-	const rows = buildSourceRefRows(input);
-	if (rows.length === 0) return;
-	await db.insert(sourceRefs).values(rows).onConflictDoNothing();
+async function insertSourceRefs(db: TurnPersistenceDb, input: unknown): Promise<void> {
+	void db;
+	void input;
+	// ponytail: normal turns keep the state patch as evidence; per-field source refs are repair-tool work.
 }
 
 export function parseTurnUpdate(input: unknown): { update: WorldStateUpdate; warnings: string[] } {
@@ -809,7 +663,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 	const affectedEntityIds: string[] = [];
 	const warnings = [...input.parseWarnings];
 	const operations = makeOperations(input.update);
-	const continuityLedger: TurnContinuityLedgerBundle = { patchProposals: [], sourceRefs: [] };
+	const continuityLedger: TurnContinuityLedgerBundle = { patchProposals: [] };
 	const isSupplemental = input.mode === 'supplemental';
 	const shouldPersistPatch = !isSupplemental || operations.length > 0 || input.parseWarnings.length > 0;
 	const patchId = shouldPersistPatch ? id('patch') : null;
@@ -1881,24 +1735,8 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			eventIds.push(eventId);
 		}
 
-		const continuityBundle = summarizeTurnContinuity({
-			storyId: input.storyId,
-			assistantEntryId: input.assistantEntryId,
-			playerEntryId: input.playerEntryId,
-			narration: input.narration,
-			update: input.update,
-			affectedEntityIds,
-			sourceEventIds: eventIds,
-			sourcePatchIds: patchIds,
-			parseWarnings: warnings,
-			serverVersion: input.serverVersion,
-			now: createdAt,
-		});
 		const continuityBundleCombined = {
-			facts: continuityBundle.facts,
-			patchProposals: [...continuityBundle.patchProposals, ...continuityLedger.patchProposals],
-			continuityWarnings: continuityBundle.continuityWarnings,
-			sourceRefs: [...continuityBundle.sourceRefs, ...continuityLedger.sourceRefs],
+			patchProposals: continuityLedger.patchProposals,
 		};
 		await mergeExistingUnresolvedReferenceProposals(tx, {
 			storyId: input.storyId,
@@ -1907,45 +1745,11 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			now: createdAt,
 		});
 
-		if (continuityBundleCombined.facts.length > 0) {
-			await tx.insert(facts).values(continuityBundleCombined.facts).onConflictDoNothing();
-		}
 		if (continuityBundleCombined.patchProposals.length > 0) {
 			await tx.insert(patchProposals).values(continuityBundleCombined.patchProposals).onConflictDoNothing();
 		}
-		if (continuityBundleCombined.continuityWarnings.length > 0) {
-			await tx.insert(continuityWarnings).values(continuityBundleCombined.continuityWarnings).onConflictDoNothing();
-		}
-		if (continuityBundleCombined.sourceRefs.length > 0) {
-			await tx.insert(sourceRefs).values(continuityBundleCombined.sourceRefs).onConflictDoNothing();
-		}
 
 		if (!isSupplemental) {
-			const memoryId = id('mem');
-			await tx.insert(memoryNodes).values({
-				id: memoryId,
-				storyId: input.storyId,
-				type: 'episodic',
-				title: 'Recent turn',
-				content: input.narration,
-				summary: input.narration.replace(/\s+/g, ' ').slice(0, 1200),
-				keywords: [],
-				entityIds: [],
-				factionIds: [],
-				threadIds: [],
-				locationId: null,
-				visibility: 'player_known',
-				importance: 0.55,
-				sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
-				sourceEventIds: eventIds,
-				sourcePatchIds: patchIds,
-				metadata: { retrievedMemoryIds: input.retrievedMemoryIds },
-				serverVersion: input.serverVersion,
-				createdAt,
-				updatedAt: createdAt,
-			});
-			memoryNodeIds.push(memoryId);
-
 			await tx.update(stories).set({
 				currentTurn: currentTurn + 1,
 				currentWorldTime: nextWorldTime,

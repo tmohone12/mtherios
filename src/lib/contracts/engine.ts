@@ -389,6 +389,7 @@ export const engineOrchestratorAgentRoleSchema = z.enum([
 	'rules_referee',
 	'state_scribe',
 	'lorekeeper',
+	'lore_curator',
 	'faction_simulator',
 	'npc_memory',
 	'continuity_auditor',
@@ -399,6 +400,7 @@ export const engineOrchestratorModeSchema = z.enum([
 	'world_tick',
 	'audit',
 	'memory',
+	'lore_curation',
 	'custom',
 ]);
 

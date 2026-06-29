@@ -31,6 +31,7 @@
 	let actionType = $state<ActionType>('do');
 	let isGenerating = $state(false);
 	let abortController = $state<AbortController | null>(null);
+	let turnError = $state<string | null>(null);
 
 	// ── Player scheme declaration (Declare Plan modal) ──
 	let showPlanModal = $state(false);
@@ -71,7 +72,8 @@
 
 	const terminalRuntimeUnavailable = $derived(Boolean(
 		story.currentStory?.serverStoryId &&
-		story.currentStory.syncStatus === 'offline',
+		story.currentStory.syncStatus === 'offline' &&
+		!story.engineStreamStatus.connected,
 	));
 
 	function buildBackendClientContext() {
@@ -301,6 +303,7 @@
 		if (!inputValue.trim() || isGenerating || !story.currentStory || story.hydratingWorld || terminalRuntimeUnavailable) return;
 
 		const rawInput = inputValue.trim();
+		turnError = null;
 
 		// Check for /roll command first
 		if (rawInput.match(/^\/roll\s/i)) {
@@ -422,7 +425,6 @@
 				scene: (promptUsage.characters ?? 0) + (promptUsage.playerReputation ?? 0),
 				recent: (promptUsage.arcs ?? 0) + (promptUsage.chapters ?? 0) + (promptUsage.chapterIntro ?? 0),
 				world: (promptUsage.factions ?? 0) + (promptUsage.livingWorld ?? 0) + (promptUsage.schemes ?? 0) + (promptUsage.plotMomentum ?? 0) + (promptUsage.plotLedger ?? 0),
-				procedural: promptUsage.proceduralMemory ?? 0,
 				retrieved: (promptUsage.lore ?? 0) + (promptUsage.episodicMemory ?? 0) + (promptUsage.conversationMemory ?? 0) + (promptUsage.backendMemory ?? 0),
 			};
 			story.lastContextTotal = estimateTokens(systemStable) + estimateTokens(systemDynamic) + historyTokens + estimateTokens(userPrompt);
@@ -571,18 +573,18 @@
 				await story.addEntry('narration', fullResponse);
 
 				const worldUpdateErrors: string[] = [];
-				if (inlineToolCalls.length > 0) {
+				const usedRollCheck = inlineToolCalls.some((tc) => tc.name === 'roll_check');
+				const inlineStateToolCalls = usedRollCheck ? [] : inlineToolCalls.filter((tc) => tc.name === 'update_world_state');
+				if (inlineStateToolCalls.length > 0) {
 					// Inline path: dispatch each tool call the narrator emitted —
 					// unless we already applied them in the prose-retry path above.
 					let worldStateArgs: WorldStateUpdate | null = null;
 					if (!toolCallsApplied) {
-						for (const tc of inlineToolCalls) {
+						for (const tc of inlineStateToolCalls) {
 							try {
 								await executeToolCall(tc.name, tc.arguments);
-								if (tc.name === 'update_world_state') {
-									const parsed = worldStateUpdateSchema.safeParse(tc.arguments);
-									if (parsed.success) worldStateArgs = parsed.data;
-								}
+								const parsed = worldStateUpdateSchema.safeParse(tc.arguments);
+								if (parsed.success) worldStateArgs = parsed.data;
 							} catch (e) {
 								const msg = `Tool ${tc.name}: ${e instanceof Error ? e.message : e}`;
 								worldUpdateErrors.push(msg);
@@ -591,11 +593,9 @@
 						}
 					} else {
 						// Re-parse from prior tool calls for scheme evaluation gating.
-						for (const tc of inlineToolCalls) {
-							if (tc.name === 'update_world_state') {
-								const parsed = worldStateUpdateSchema.safeParse(tc.arguments);
-								if (parsed.success) worldStateArgs = parsed.data;
-							}
+						for (const tc of inlineStateToolCalls) {
+							const parsed = worldStateUpdateSchema.safeParse(tc.arguments);
+							if (parsed.success) worldStateArgs = parsed.data;
 						}
 					}
 					// Reactive scheme evaluation — gated on story beats / deaths / agreement breaks.
@@ -663,9 +663,9 @@
 			console.warn(runtimeUnavailable
 				? '[BackendTurn] Terminal runtime unavailable; refusing local turn queue:'
 				: '[BackendTurn] Terminal turn failed; refusing local turn queue:', error);
-			await story.addEntry('system', runtimeUnavailable
+			turnError = runtimeUnavailable
 				? `Terminal agent runtime required: ${message}`
-				: `Terminal turn failed: ${message}`);
+				: `Terminal turn failed: ${message}`;
 			onStreamClear?.();
 			onStreamEnd?.('');
 			return true;
@@ -852,6 +852,9 @@
 				Memory load had trouble; context may be thin.
 			{/if}
 		</div>
+	{/if}
+	{#if turnError}
+		<div class="px-1 text-[11px] text-amber-300">{turnError}</div>
 	{/if}
 
 	<!-- Input area -->

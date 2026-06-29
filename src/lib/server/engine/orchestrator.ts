@@ -98,6 +98,14 @@ export const ORCHESTRATOR_AGENT_ROLES: EngineOrchestratorAgentDefinition[] = [
 		],
 	},
 	{
+		id: 'lore_curator',
+		name: 'Lore Curator Agent',
+		responsibilities: [
+			'Explore the generated markdown/wiki graph with search, context packs, and backlinks before proposing edits.',
+			'Curate source-linked lore pages for roleplay agents without treating unsupported drafts as canon.',
+		],
+	},
+	{
 		id: 'faction_simulator',
 		name: 'Faction Simulator Agent',
 		responsibilities: [
@@ -293,6 +301,40 @@ function buildMemoryToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOr
 	];
 }
 
+function buildLoreCurationToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrchestratorToolCall[] {
+	const context = input.context;
+	const query = input.playerText ?? input.goal;
+	return [
+		makeToolCall(0, 'lore_curator', 'wiki.brief', {
+			query,
+			limit: 8,
+			followDepth: 2,
+			pageLimit: 24,
+			maxChars: context.contextBudget ?? 36000,
+		}, 'Explore the linked markdown wiki around the lore question and collect a bounded roleplay context pack.'),
+		makeToolCall(1, 'lore_curator', 'wiki.pages', {
+			orphans: true,
+			limit: 80,
+			sort: 'title',
+		}, 'Find orphaned or thin lore pages that a curator should connect before agents rely on them.'),
+		makeToolCall(2, 'lore_curator', 'wiki.lint', {
+			orphanLayer: 'derived',
+		}, 'Run wiki lint so curation work is driven by concrete graph and markdown diagnostics.'),
+		makeToolCall(3, 'lorekeeper', 'campaign.status', {
+			entryLimit: context.entryLimit ?? 80,
+		}, 'Compare wiki lore against bounded canonical campaign state before proposing any durable page edit.'),
+		makeToolCall(4, 'npc_memory', 'memory.retrieve', {
+			query,
+			sceneEntityIds: cleanStringArray(context.sceneEntityIds),
+			presentNpcIds: cleanStringArray(context.presentNpcIds),
+			locationId: context.locationId ?? null,
+			threadIds: cleanStringArray(context.threadIds),
+			currentFactionId: context.currentFactionId ?? null,
+			tokenBudget: context.memoryTokenBudget,
+		}, 'Check source-linked memory nodes so wiki curation does not overwrite temporal or perspectival memory.'),
+	];
+}
+
 function buildToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrchestratorToolCall[] {
 	switch (input.mode) {
 		case 'world_tick':
@@ -301,6 +343,8 @@ function buildToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrchestr
 			return buildAuditToolCalls(input);
 		case 'memory':
 			return buildMemoryToolCalls(input);
+		case 'lore_curation':
+			return buildLoreCurationToolCalls(input);
 		case 'custom':
 			return buildAuditToolCalls(input);
 		case 'turn':

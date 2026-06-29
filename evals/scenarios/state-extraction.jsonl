@@ -1,0 +1,1 @@
+{"id":"state-letter-delivery-001","storyFixture":"court-intrigue","playerAction":"Give Mara the sealed letter.","mustIncludeFactIds":["mara_present"],"mustNotRevealFactIds":["poisoner_identity"],"expectedStatePatch":{"newCanonicalFacts":["mara_has_letter"]},"maxCostUsd":0.02}

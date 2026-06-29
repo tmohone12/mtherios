@@ -306,6 +306,46 @@ describe('engine command envelope', () => {
 						system: 'system',
 						prompt: 'dynamic prompt',
 						messages: [{ role: 'user', content: 'recent turn' }],
+						compiledPrompt: {
+							stablePrefix: [
+								{
+									id: 'prompt_system',
+									lane: 'engine_static',
+									priority: 100,
+									maxTokens: 2,
+									content: 'secret stable text',
+									sourceIds: ['story_alpha'],
+									contentHash: 'hash-system',
+								},
+							],
+							dynamicTail: [
+								{
+									id: 'turn_context',
+									lane: 'turn_dynamic',
+									priority: 90,
+									maxTokens: 3,
+									content: 'secret dynamic text',
+									sourceIds: ['story_alpha', 'mem_1'],
+									contentHash: 'hash-context',
+								},
+								{
+									id: 'recent_dialogue',
+									lane: 'turn_dynamic',
+									priority: 80,
+									maxTokens: 1,
+									content: 'recent turn',
+									sourceIds: ['recent_message_0'],
+									contentHash: 'hash-dialogue',
+								},
+							],
+							manifest: {
+								included: ['prompt_system', 'turn_context', 'recent_dialogue'],
+								skipped: [],
+								totalTokens: 6,
+								stableTokens: 2,
+								dynamicTokens: 4,
+							},
+						},
 					},
 					tokenEstimate: input.tokenBudget,
 				};
@@ -324,6 +364,7 @@ describe('engine command envelope', () => {
 				system: 'system',
 				prompt: 'dynamic prompt',
 				messages: [{ role: 'user', content: 'recent turn' }],
+				compiledPrompt: expect.any(Object),
 			},
 			tokenEstimate: 777,
 		});
@@ -335,8 +376,15 @@ describe('engine command envelope', () => {
 				systemChars: 6,
 				promptChars: 14,
 				messageCount: 1,
+				sectionCount: 3,
+				stableSectionCount: 1,
+				dynamicSectionCount: 2,
+				sectionIds: ['prompt_system', 'turn_context', 'recent_dialogue'],
+				sectionTokenEstimate: 6,
 			},
 		});
+		expect(JSON.stringify(result.projectionChanges)).not.toContain('secret stable text');
+		expect(JSON.stringify(result.projectionChanges)).not.toContain('secret dynamic text');
 		expect(calls).toEqual([{
 			storyId: 'story_alpha',
 			query: 'marriage',
@@ -626,6 +674,43 @@ describe('engine command envelope', () => {
 			type: 'entities',
 			limit: 5,
 			includeSemantic: false,
+		}]);
+	});
+
+	it('resolves client story ids before listing world records', async () => {
+		const listCalls: unknown[] = [];
+		const result = await executeEngineCommand({
+			command: 'world.records',
+			storyId: 'local_story',
+			clientCommandId: 'cmd_world_records_local',
+			args: {
+				type: 'entities',
+			},
+		}, {
+			listStories: async () => [
+				{ id: 'story_alpha', clientStoryId: 'local_story', title: 'Long Campaign' },
+			],
+			listWorldRecords: async (storyId, options) => {
+				listCalls.push({ storyId, options });
+				return {
+					types: ['entities'],
+					storyId,
+					type: options?.type ?? 'entities',
+					records: [{ id: 'npc_mira' }],
+					nextCursor: null,
+					limit: options?.limit ?? 50,
+				};
+			},
+		});
+
+		expect(result.status).toBe('succeeded');
+		expect(result.result).toEqual(expect.objectContaining({
+			storyId: 'story_alpha',
+			records: [{ id: 'npc_mira' }],
+		}));
+		expect(listCalls).toEqual([{
+			storyId: 'story_alpha',
+			options: expect.objectContaining({ type: 'entities' }),
 		}]);
 	});
 
@@ -2139,11 +2224,18 @@ describe('engine command envelope', () => {
 			command: 'story.delete',
 			storyId: 'story_alpha',
 			clientCommandId: 'cmd_story_delete',
-			args: {},
+			args: { mode: 'purge', exportBeforeDelete: true },
 		}, {
-			deleteStory: async (storyId) => {
-				calls.push(`delete:${storyId}`);
-				return { ok: true, storyId, artifactCleanup: { filesDeleted: 2 } };
+			deleteStory: async (storyId, options) => {
+				calls.push(`delete:${storyId}:${options.mode}:${options.exportBeforeDelete}`);
+				return {
+					ok: true,
+					storyId,
+					mode: options.mode,
+					canonDeleted: true,
+					artifactCleanup: { filesDeleted: 2 },
+					warnings: [],
+				};
 			},
 		});
 
@@ -2160,14 +2252,25 @@ describe('engine command envelope', () => {
 			},
 		});
 		expect(deleted.status).toBe('succeeded');
-		expect(deleted.result).toEqual({ ok: true, storyId: 'story_alpha', artifactCleanup: { filesDeleted: 2 } });
-		expect(deleted.projectionChanges).toEqual({
-			story: {
+		expect(deleted.result).toEqual({
+				ok: true,
 				storyId: 'story_alpha',
-				deleted: true,
-			},
-		});
-		expect(calls).toEqual(['export:story_alpha', 'delete:story_alpha']);
+				mode: 'purge',
+				canonDeleted: true,
+				artifactCleanup: { filesDeleted: 2 },
+				warnings: [],
+			});
+		expect(deleted.projectionChanges).toEqual({
+				story: {
+					storyId: 'story_alpha',
+					deleted: true,
+					mode: 'purge',
+					canonDeleted: true,
+					artifactCleanup: { filesDeleted: 2 },
+					warningCount: 0,
+				},
+			});
+		expect(calls).toEqual(['export:story_alpha', 'delete:story_alpha:purge:true']);
 	});
 
 	it('routes IndexedDB imports through the shared backend command surface', async () => {
@@ -2254,6 +2357,12 @@ describe('engine command envelope', () => {
 				genre: 'fantasy',
 				mode: 'adventure',
 				clientStoryId: 'local_1',
+				startWorkflow: {
+					sourceMode: 'lorebook',
+					sourceCount: 3,
+					requiresCanonReview: true,
+					startingSceneReady: false,
+				},
 			},
 		}, {
 			createStory: async (input) => {
@@ -2285,12 +2394,18 @@ describe('engine command envelope', () => {
 			createdAt: '2026-06-06T00:00:00.000Z',
 		});
 		expect(created.projectionChanges).toEqual({
-			story: {
-				storyId: 'story_new',
-				serverVersion: 1,
-				created: true,
-			},
-		});
+				story: {
+					storyId: 'story_new',
+					serverVersion: 1,
+					created: true,
+					startWorkflow: {
+						sourceMode: 'lorebook',
+						sourceCount: 3,
+						requiresCanonReview: true,
+						startingSceneReady: false,
+					},
+				},
+			});
 		expect(calls).toEqual([
 			{ kind: 'list' },
 			{
@@ -2301,6 +2416,12 @@ describe('engine command envelope', () => {
 					genre: 'fantasy',
 					mode: 'adventure',
 					clientStoryId: 'local_1',
+					startWorkflow: {
+						sourceMode: 'lorebook',
+						sourceCount: 3,
+						requiresCanonReview: true,
+						startingSceneReady: false,
+					},
 				},
 			},
 		]);

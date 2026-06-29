@@ -196,7 +196,7 @@ describe('turn prompt harness', () => {
 		expect(prompt).toContain('timeline_events, agreements, faction known_members, conversations, or relationships');
 	});
 
-	it('builds a Balaerys nameday prompt with Volantene context', () => {
+	it('builds a Balaerys nameday prompt with retrieved temporal memory', () => {
 		const oldBlood = memoryNode('mem_old_blood', 'Old Blood Etiquette', 'Invitations, seating, and marriage memory are weapons inside the Black Walls.');
 		const household = memoryNode('mem_household', 'Volantene Household Hierarchy', 'Family elders, slave scribes, guards, and informants shape every great manse.');
 		const report = buildPromptHarnessReport({
@@ -235,6 +235,7 @@ describe('turn prompt harness', () => {
 				'The Crimson Spire',
 				'Balaerys Heir',
 				'House Balaerys',
+				'Retrieved temporal/canonical memory:',
 				'Old Blood Etiquette',
 				'Volantene Household Hierarchy',
 			],
@@ -242,13 +243,70 @@ describe('turn prompt harness', () => {
 				'Balaerys Heir': 3,
 			},
 			maxMessageCount: 24,
-			maxTotalBeforeGenerationTokens: 2600,
+			maxTotalBeforeGenerationTokens: 3600,
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
 		expect(report.system).not.toContain('skilled fiction writer');
 		expect(report.system).not.toContain("author's directions");
+		expect(report.prompt).toContain('Retrieved temporal/canonical memory:');
+		expect(report.prompt).toContain('Old Blood Etiquette');
+		expect(report.prompt).toContain('Volantene Household Hierarchy');
 		expect(report.retrievedMemoryIds).toEqual(['mem_old_blood', 'mem_household']);
+		});
+
+	it('exposes stable and dynamic prompt sections for cache inspection', () => {
+		const oldBlood = memoryNode('mem_old_blood', 'Old Blood Etiquette', 'Invitations and seating are political weapons.');
+		const report = buildPromptHarnessReport({
+			name: 'prompt-section-manifest',
+			playerText: 'I watch who arrives first for my nameday.',
+			ctx: baseContext(),
+			retrieved: packet('nameday arrivals House Balaerys Black Walls etiquette', [oldBlood]),
+			options: {
+				currentFactionId: 'faction_balaerys',
+				sceneEntityIds: ['pc_balaerys', 'npc_vaelar'],
+			},
+		});
+
+		expect(report.compiledPrompt.stablePrefix.map((section) => section.id)).toEqual(['prompt_system']);
+		expect(report.compiledPrompt.dynamicTail.map((section) => section.id)).toEqual([
+			'turn_context',
+			'recent_dialogue',
+		]);
+		expect(report.compiledPrompt.manifest.included).toContain('prompt_system');
+		expect(report.compiledPrompt.manifest.stableTokens).toBeGreaterThan(0);
+		expect(report.compiledPrompt.manifest.dynamicTokens).toBeGreaterThan(0);
+		expect(report.promptSectionTrace.map(({ id, lane, priority }) => ({ id, lane, priority }))).toEqual([
+			{ id: 'prompt_system', lane: 'engine_static', priority: 100 },
+			{ id: 'turn_context', lane: 'turn_dynamic', priority: 90 },
+			{ id: 'recent_dialogue', lane: 'turn_dynamic', priority: 80 },
+		]);
+		for (const section of report.promptSectionTrace) {
+			expect(section.contentHash).toMatch(/^[a-f0-9]{64}$/);
+			expect(section.charCount).toBeGreaterThan(0);
+			expect(section.tokenEstimate).toBeGreaterThan(0);
+			expect(section.sourceIdCount).toBe(section.sourceIds.length);
+			expect(section).not.toHaveProperty('content');
+		}
+		expect(report.promptSectionTrace.find((section) => section.id === 'prompt_system')?.sourceIds).toEqual(['story_balaerys']);
+		expect(report.promptSectionTrace.find((section) => section.id === 'turn_context')?.sourceIds).toEqual(['story_balaerys', 'mem_old_blood']);
+		expect(report.promptSectionTrace.find((section) => section.id === 'recent_dialogue')?.sourceIds).toEqual(['recent_message_0', 'recent_message_1']);
+	});
+
+	it('injects terminal wiki context into the narration prompt', () => {
+		const report = buildPromptHarnessReport({
+			name: 'wiki-context-not-injected',
+			playerText: 'I ask what the old vault says.',
+			ctx: baseContext(),
+			options: {
+				sceneEntityIds: ['pc_balaerys'],
+				wikiContextMarkdown: 'Vault-only wiki detail that should stay in search/debug surfaces.',
+			},
+		});
+
+		expect(report.prompt).toContain('Terminal wiki context');
+		expect(report.prompt).toContain('Vault-only wiki detail');
+		expect(report.promptSectionTrace.find((section) => section.id === 'turn_context')?.sourceIds).toContain('terminal_wiki_context');
 	});
 
 	it('recognizes relationship.status player_character as the protagonist', () => {
@@ -332,8 +390,8 @@ describe('turn prompt harness', () => {
 				'Player character:',
 				'Character npc_saera / Lady Saera Balaerys',
 				'Character npc_vaelar / Triarch Vaelar Balaerys',
-				'- action: testing the harbor terms',
-				'- action: watching the family benches for weakness',
+				'action: testing the harbor terms',
+				'action: watching the family benches for weakness',
 			],
 			promptExcludes: ['Character pc_balaerys / Balaerys Heir'],
 			maxTotalBeforeGenerationTokens: 2600,
@@ -749,21 +807,19 @@ describe('turn prompt harness', () => {
 		});
 
 		expect(report.prompt).toContain('The long-description sentinel');
-		expect(report.prompt).toContain('Second Cradle');
-		expect(report.prompt).toContain('- Aliases: Aegon Targaryen, Golden Dragon');
-		expect(report.prompt).toContain('- Appearance: silver-gold hair and a controlled court mask');
-		expect(report.prompt).toContain('- Background: raised as Aurion Balaerys while hidden Targaryen blood made him a dynastic weapon');
-		expect(report.prompt).toContain('- Speech style: bright, careful, and dangerous when pressed');
-		expect(report.prompt).toContain('- Factions:');
-		expect(report.prompt).toContain('  - House Balaerys (role=hidden heir; rank=family; status=active)');
-		expect(report.prompt).toContain('  - Hidden Dragon Claim');
-		expect(report.prompt).toContain('- Current state:');
-		expect(report.prompt).toContain('  - action: weighing the envoy from the balcony');
-		expect(report.prompt).toContain('- Goals:');
-		expect(report.prompt).toContain('  - survive the nameday politics without revealing his bloodline');
-		expect(report.prompt).toContain('- Event memory:');
-		expect(report.prompt).toContain('  - did: accepted exile to Yi Ti rather than fracture House Balaerys');
-		expect(report.prompt).toContain('  - knows: his public name and true bloodline are both political weapons');
+		expect(report.prompt).toContain('Player character:');
+		expect(report.prompt).toContain('[Appearance]: silver-gold hair and a controlled court mask');
+		expect(report.prompt).toContain('[Personality]: .');
+		expect(report.prompt).toContain('[Key History]: present in the current scene; action: weighing the envoy from the balcony');
+		expect(report.prompt).toContain('did: accepted exile to Yi Ti rather than fracture House Balaerys');
+		expect(report.prompt).toContain('[Affiliations]: House Balaerys (role=hidden heir; rank=family; status=active); Hidden Dragon Claim');
+		expect(report.prompt).toContain('[bio]: Aegon Targaryen, hidden as Aurion Balaerys');
+		expect(report.prompt).not.toContain('Aliases:');
+		expect(report.prompt).not.toContain('Background:');
+		expect(report.prompt).not.toContain('Current state:');
+		expect(report.prompt).not.toContain('Goals:');
+		expect(report.prompt).not.toContain('Speech style:');
+		expect(report.prompt).not.toContain('NPC event memory:');
 	});
 
 	it('renders editable character templates with factions and event memory', () => {
@@ -868,9 +924,9 @@ describe('turn prompt harness', () => {
 			},
 		});
 
-		expect(report.prompt).toContain('- did: freshly challenged Aurion over the honeyed locusts');
-		expect(report.prompt).toContain('- saw: freshly saw Aurion eat despite the warning');
-		expect(report.prompt).toContain('- knows: freshly knows his exile wound still bites');
+		expect(report.prompt).toContain('did: freshly challenged Aurion over the honeyed locusts');
+		expect(report.prompt).toContain('saw: freshly saw Aurion eat despite the warning');
+		expect(report.prompt).toContain('knows: freshly knows his exile wound still bites');
 		expect(report.prompt).not.toContain('old checkpoint 1');
 		expect(report.prompt).not.toContain('old checkpoint 2');
 	});
@@ -908,7 +964,7 @@ describe('turn prompt harness', () => {
 			},
 		});
 
-		expect(report.prompt).toContain('- knows: Mira knows the ledger names Zhen.');
+		expect(report.prompt).toContain('knows: Mira knows the ledger names Zhen.');
 	});
 
 	it('uses metadata character current state in prompt cards', () => {
@@ -947,16 +1003,16 @@ describe('turn prompt harness', () => {
 			},
 		});
 
-		expect(report.prompt).toContain('- status: wanted by the guard captain');
-		expect(report.prompt).toContain('- action: guarding the ledger room');
-		expect(report.prompt).toContain('- emotional state: controlled fear under court composure');
-		expect(report.prompt).toContain('- relationship: reluctant ally, level 62');
-		expect(report.prompt).toContain('- protect Aurion');
-		expect(report.prompt).toContain('- expose the harbor witness');
-		expect(report.prompt).toContain('- pressure: the guard captain is searching for the ledger');
+		expect(report.prompt).toContain('status: wanted by the guard captain');
+		expect(report.prompt).toContain('action: guarding the ledger room');
+		expect(report.prompt).toContain('emotional state: controlled fear under court composure');
+		expect(report.prompt).toContain('relationship: reluctant ally, level 62');
+		expect(report.prompt).toContain('protect Aurion');
+		expect(report.prompt).toContain('expose the harbor witness');
+		expect(report.prompt).toContain('pressure: the guard captain is searching for the ledger');
 	});
 
-	it('renders character aliases in prompt cards to prevent duplicate identities', () => {
+	it('keeps default character cards to the compact lore fields without alias clutter', () => {
 		const report = buildPromptHarnessReport({
 			name: 'character-card-aliases',
 			playerText: 'I ask whether the Golden Dragon is the same man as Aurion.',
@@ -975,9 +1031,10 @@ describe('turn prompt harness', () => {
 			},
 		});
 
-		expect(report.prompt).toContain('Aliases:');
-		expect(report.prompt).toContain('- Golden Dragon');
-		expect(report.prompt).toContain('- Aegon Targaryen');
+		expect(report.prompt).toContain('[bio]: A young exile trying to rise in Yi Ti.');
+		expect(report.prompt).not.toContain('Aliases:');
+		expect(report.prompt).not.toContain('- Golden Dragon');
+		expect(report.prompt).not.toContain('- Aegon Targaryen');
 	});
 
 	it('includes exact query-named character cards even when the character is not present', () => {
@@ -1008,8 +1065,8 @@ describe('turn prompt harness', () => {
 		});
 
 		expect(report.prompt).toContain('Character npc_xanda / Xanda');
-		expect(report.prompt).toContain('- not currently visible');
-		expect(report.prompt).toContain('- knows: Aurion ate the honeyed locusts despite the warning');
+		expect(report.prompt).toContain('not currently visible');
+		expect(report.prompt).toContain('knows: Aurion ate the honeyed locusts despite the warning');
 	});
 
 	it('keeps inactive merged character rows out of prompt entity surfaces', () => {
@@ -1083,7 +1140,7 @@ describe('turn prompt harness', () => {
 		expect(failedLabels(findings)).toEqual([]);
 	});
 
-	it('renders continuity ledger facts, proposals, and warnings into the prompt', () => {
+	it('keeps continuity repair artifacts out of the narration prompt', () => {
 		const report = buildPromptHarnessReport({
 			name: 'continuity-ledger-rendering',
 			playerText: 'I ask what changed in the ledger.',
@@ -1158,13 +1215,13 @@ describe('turn prompt harness', () => {
 			},
 		});
 
-		expect(report.prompt).toContain('Continuity ledger');
-		expect(report.prompt).toContain('Mara now carries the black key.');
-		expect(report.prompt).toContain('fact_upsert -> facts/fact_mara_key');
-		expect(report.prompt).toContain('Missing witness');
+		expect(report.prompt).not.toContain('Continuity ledger');
+		expect(report.prompt).not.toContain('Mara now carries the black key.');
+		expect(report.prompt).not.toContain('fact_upsert -> facts/fact_mara_key');
+		expect(report.prompt).not.toContain('Missing witness');
 	});
 
-	it('keeps unresolved character references in prompt context without treating them as canon', () => {
+	it('keeps unresolved character repair proposals out of prompt context', () => {
 		const report = buildPromptHarnessReport({
 			name: 'unresolved-character-reference',
 			playerText: 'I ask whether anyone knows the knight whose name was whispered.',
@@ -1209,9 +1266,9 @@ describe('turn prompt harness', () => {
 			},
 		});
 
-		expect(report.prompt).toContain('Unresolved character references');
-		expect(report.prompt).toContain('Ser Olyvar');
-		expect(report.prompt).toContain('not yet canon');
+		expect(report.prompt).not.toContain('Unresolved character references');
+		expect(report.prompt).not.toContain('Ser Olyvar');
+		expect(report.prompt).not.toContain('not yet canon');
 		expect(report.prompt).not.toContain('- character: Ser Olyvar');
 	});
 
@@ -1325,9 +1382,9 @@ describe('turn prompt harness', () => {
 			},
 		});
 
-		expect(report.prompt).toContain('Unknown Envoy (not yet canon, agreement_party/oath)');
-		expect(report.prompt).toContain('Oath Witness (not yet canon, faction_member/The Watch)');
-		expect(report.prompt).toContain('Hooded Envoy (not yet canon, timeline_actor/Oath witness hunted)');
+		expect(report.prompt).not.toContain('Unknown Envoy');
+		expect(report.prompt).not.toContain('Oath Witness');
+		expect(report.prompt).not.toContain('Hooded Envoy');
 	});
 
 	it('ranks scene-relevant factions instead of keeping arbitrary insertion order', () => {
@@ -1470,10 +1527,10 @@ describe('turn prompt harness', () => {
 				'Recent events',
 				'Scheduled future events',
 				'NPC event memory',
-				'- location: The Crimson Spire nameday hall',
-				'- action: measuring the harbor pact before giving advice',
-				'- emotional state: watchful and dryly amused',
-				'- linked: Saera has tracked the harbor pact, its ring-gift price, and who benefits if House Balaerys accepts.',
+				'location: The Crimson Spire nameday hall',
+				'action: measuring the harbor pact before giving advice',
+				'emotional state: watchful and dryly amused',
+				'linked: Saera has tracked the harbor pact, its ring-gift price, and who benefits if House Balaerys accepts.',
 				'Appearance: silver-streaked black hair',
 				'Personality: controlled; cutting; protective when House Balaerys benefits',
 				'Voice: low, precise, and dryly amused',
@@ -1712,7 +1769,8 @@ describe('turn prompt harness', () => {
 		expect(report.prompt).toContain('Current scene from latest narration');
 		expect(report.prompt).toContain('Golden Parrot tavern');
 		expect(report.prompt).toContain('Aurion Balaerys');
-		expect(report.prompt).toContain('Moira of the Sweet Lotus Vale');
+		expect(report.prompt).toContain('Moira watches the tavern door');
+		expect(report.prompt).not.toContain('Moira of the Sweet Lotus Vale');
 		expect(report.prompt).not.toContain('- character: Vermillion Zhen Lian');
 		expect(report.prompt).not.toContain('- character: Daemon Sand');
 		expect(report.prompt).not.toContain('- character: Xanda of Qarth');

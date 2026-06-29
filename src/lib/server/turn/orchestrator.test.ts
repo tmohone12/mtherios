@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createMemoryEngineCacheRepository } from '$lib/server/engine/cache';
-import { applyPromptContextBudget, buildCampaignContinuityCachePayload, buildTurnContextReceipt, buildTurnPerformanceSummary, chaptersForPromptContinuity, loadServerWikiContextWithCache, logSlowTurn, withBudget } from './orchestrator';
+import { applyPromptContextBudget, buildCampaignContinuityCachePayload, buildStateExtractionResponseSchema, buildTurnContextReceipt, buildTurnPerformanceSummary, chaptersForPromptContinuity, loadServerWikiContextWithCache, logSlowTurn, shouldExtractDurableState, withBudget } from './orchestrator';
 
 describe('turn orchestrator prompt budgeting', () => {
 	it('counts only chapters not already rolled into arcs for prompt continuity', () => {
@@ -184,6 +184,41 @@ describe('turn orchestrator prompt budgeting', () => {
 		}
 	});
 
+	it('builds a strict state extraction response schema', () => {
+		const responseSchema = buildStateExtractionResponseSchema();
+
+		expect(responseSchema).toMatchObject({
+			name: 'mtherios_state_patch',
+			strict: true,
+			schema: {
+				type: 'object',
+				additionalProperties: false,
+				required: ['update'],
+				properties: {
+					update: {
+						type: 'object',
+						properties: {
+							characters: { type: 'array' },
+							timeline_events: { type: 'array' },
+						},
+					},
+				},
+			},
+		});
+		expect(responseSchema.schema).not.toHaveProperty('$schema');
+	});
+
+	it('skips extraction only for explicit durable no-op turns', () => {
+		expect(shouldExtractDurableState(
+			'I wait and watch.',
+			'Nothing lasting changes; the hall remains as it was.',
+		)).toBe(false);
+		expect(shouldExtractDurableState(
+			'I hand Mara the sealed letter.',
+			'Mara accepts the letter and promises to carry it to the harbor.',
+		)).toBe(true);
+	});
+
 	it('builds turn waterfall diagnostics for generation speed debugging', () => {
 		const summary = buildTurnPerformanceSummary({
 			turnId: 'turn-1',
@@ -213,8 +248,8 @@ describe('turn orchestrator prompt budgeting', () => {
 				],
 			},
 			generationTimings: [
-				{ operation: 'turn.narration', serviceId: 'narrative', model: 'gpt-test', status: 'success', durationMs: 900, requestTokens: 1000, responseTokens: 150, totalTokens: 1150 },
-				{ operation: 'turn.state_extraction', serviceId: 'classifier', model: 'gpt-test-mini', status: 'success', durationMs: 320, requestTokens: 300, responseTokens: 40, totalTokens: 340 },
+				{ operation: 'turn.narration', serviceId: 'narrative', model: 'gpt-test', status: 'success', durationMs: 900, timeToFirstTokenMs: 123, retryCount: 2, requestTokens: 1000, responseTokens: 150, totalTokens: 1150 },
+				{ operation: 'turn.state_extraction', serviceId: 'classifier', model: 'gpt-test-mini', status: 'success', durationMs: 320, timeToFirstTokenMs: null, retryCount: 0, requestTokens: 300, responseTokens: 40, totalTokens: 340 },
 			],
 			timings: [
 				{ phase: 'turn.service_config.narrative', durationMs: 40 },
@@ -273,9 +308,9 @@ describe('turn orchestrator prompt budgeting', () => {
 				recentMessageCount: 8,
 				wikiChunkCount: 2,
 				memoryItemCount: 3,
-				providerTimeToFirstTokenMs: null,
+				providerTimeToFirstTokenMs: 123,
 				providerTotalMs: 900,
-				providerRetries: 0,
+				providerRetries: 2,
 				providerTimeoutHit: false,
 				persistMs: 80,
 				stateExtractionMode: 'deferred',
@@ -492,7 +527,7 @@ describe('turn orchestrator prompt budgeting', () => {
 			},
 			cache: null,
 			generationTimings: [
-				{ operation: 'turn.narration', serviceId: 'narrative', model: 'gpt-test', status: 'success', durationMs: 5_100, requestTokens: 800, responseTokens: 200, totalTokens: 1000 },
+				{ operation: 'turn.narration', serviceId: 'narrative', model: 'gpt-test', status: 'success', durationMs: 5_100, timeToFirstTokenMs: null, retryCount: 0, requestTokens: 800, responseTokens: 200, totalTokens: 1000 },
 			],
 			timings: [
 				{ phase: 'turn.wiki_context', durationMs: 700 },

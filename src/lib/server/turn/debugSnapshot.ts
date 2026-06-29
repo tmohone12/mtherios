@@ -1,4 +1,5 @@
 import type { RetrievedMemoryPacket } from '$lib/contracts/memory';
+import type { PromptSectionTrace } from './promptPacket';
 import { sliceWellFormedText, toWellFormedText } from './wellFormedText';
 
 const LONG_TEXT_LIMIT = 12_000;
@@ -92,6 +93,7 @@ export type TurnDebugSnapshot = {
 	system?: string;
 	prompt?: string;
 	messages?: PromptMessage[];
+	promptSectionTrace?: PromptSectionTrace[];
 	retrievedMemory?: {
 		packet: string;
 		retrievalDebug: string[];
@@ -104,10 +106,11 @@ export type TurnDebugSnapshot = {
 	output?: string;
 };
 
-type BuildTurnDebugSnapshotInput = Omit<TurnDebugSnapshot, 'retrievedMemory' | 'wikiContext' | 'system' | 'prompt' | 'messages' | 'engineCache' | 'output'> & {
+type BuildTurnDebugSnapshotInput = Omit<TurnDebugSnapshot, 'retrievedMemory' | 'wikiContext' | 'system' | 'prompt' | 'messages' | 'promptSectionTrace' | 'engineCache' | 'output'> & {
 	system?: string | null;
 	prompt?: string | null;
 	messages?: PromptMessage[] | null;
+	promptSectionTrace?: PromptSectionTrace[] | null;
 	retrievedMemory?: Partial<RetrievedMemoryPacket> | null;
 	wikiContext?: WikiDebugContext | null;
 	engineCache?: EngineCacheDebug | null;
@@ -167,6 +170,21 @@ function nonnegativeInteger(value: unknown): number {
 	return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
 }
 
+function promptSectionTraceSnapshot(trace: PromptSectionTrace[] | null | undefined): PromptSectionTrace[] | undefined {
+	if (!Array.isArray(trace)) return undefined;
+	return trace.slice(0, 24).map((section) => ({
+		id: section.id,
+		lane: section.lane,
+		priority: nonnegativeInteger(section.priority),
+		maxTokens: nonnegativeInteger(section.maxTokens),
+		tokenEstimate: nonnegativeInteger(section.tokenEstimate),
+		charCount: nonnegativeInteger(section.charCount),
+		contentHash: section.contentHash,
+		sourceIds: stringArray(section.sourceIds),
+		sourceIdCount: nonnegativeInteger(section.sourceIdCount),
+	}));
+}
+
 function engineCacheSnapshot(cache: EngineCacheDebug | null | undefined): EngineCacheDebug | undefined {
 	if (!cache) return undefined;
 	return {
@@ -222,6 +240,7 @@ export function buildTurnDebugSnapshot(input: BuildTurnDebugSnapshotInput): Turn
 			role: message.role,
 			content: clip(message.content, SOURCE_TEXT_LIMIT),
 		})),
+		promptSectionTrace: promptSectionTraceSnapshot(input.promptSectionTrace),
 		retrievedMemory: input.retrievedMemory
 			? {
 				packet: clip(input.retrievedMemory.packet, SOURCE_TEXT_LIMIT),
