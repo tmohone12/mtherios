@@ -627,8 +627,11 @@ export interface CharacterEntryState extends BaseEntryState {
   personalOpinion?: string | null
   // Character enrichment (populated by lore management)
   bio?: string | null
+  rank?: string | null
+  role?: string | null
   motivations?: string[] | null
   personality?: string | null
+  traits?: string[]
   // Active pressures — circumstances tightening around this NPC that they
   // will act on even when the player isn't watching. Short sentences.
   // Examples: "being courted by a wealthy older merchant", "father has gambling debts",
@@ -646,8 +649,6 @@ export interface CharacterEntryState extends BaseEntryState {
   mannerisms?: string[]
   personalityDescriptors?: string[]
   factionName?: string | null
-  rank?: string | null
-  role?: string | null
   /** Knowledge boundary note, for example public, player-known, or secret context. */
   visibilityNote?: string | null
 }

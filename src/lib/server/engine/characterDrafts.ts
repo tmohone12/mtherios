@@ -42,10 +42,10 @@ function compactJson(value: unknown, max = 300): string {
 	return !text || text === '[]' || text === '{}' ? '' : compact(text, max);
 }
 
-function characterSearchTerms(name: string, state: JsonRecord): string[] {
+function characterSearchTerms(name: string, state: JsonRecord, metadata: JsonRecord): string[] {
 	const fullName = name.trim();
 	const firstName = fullName.split(/\s+/).find((part) => part.length > 2) ?? '';
-	const terms = [fullName, ...stringArray(state.aliases), firstName].filter((term) => term.length > 2);
+	const terms = [fullName, ...stringArray(state.aliases), ...stringArray(metadata.localAliases), ...stringArray(metadata.sourceKeys), firstName].filter((term) => term.length > 2);
 	return [...new Map(terms.map((term) => [term.toLowerCase(), term])).values()].slice(0, 4);
 }
 
@@ -69,51 +69,36 @@ function renderEntryContext(entry: typeof storyEntries.$inferSelect): string {
 
 function metadataStateSeed(metadata: JsonRecord): JsonRecord {
 	const seed: JsonRecord = {};
-	for (const key of ['appearance', 'background', 'currentLocation', 'currentAction', 'emotionalState', 'relationship', 'status', 'speechStyle', 'voice']) {
+	for (const key of ['bio', 'rank', 'appearance', 'personality', 'currentDisposition']) {
 		const value = metadata[key];
 		if (typeof value === 'string' && value.trim()) seed[key] = value.trim();
 	}
-	if (!seed.relationship && asRecord(metadata.relationship).status) seed.relationship = metadata.relationship;
-	for (const key of ['aliases', 'goals', 'factionTags', 'traits', 'personalityDescriptors', 'mannerisms', 'pressures']) {
+	if (asRecord(metadata.relationship).status) seed.relationship = metadata.relationship;
+	for (const key of ['knownFacts', 'factionTags', 'motivations']) {
 		const values = stringArray(metadata[key]);
 		if (values.length) seed[key] = values;
 	}
-	const memory = asRecord(metadata.eventMemory ?? metadata.npcEventMemory);
-	const eventMemory: JsonRecord = {};
-	for (const key of ['did', 'saw', 'knew', 'knows']) {
-		const values = stringArray(memory[key]);
-		if (values.length) eventMemory[key] = values;
-	}
-	if (Object.keys(eventMemory).length) seed.eventMemory = eventMemory;
 	return seed;
 }
 
 function coerceDraft(value: unknown): JsonRecord {
 	const draft = asRecord(value);
-	const eventMemory = asRecord(draft.eventMemory);
+	const relationship = asRecord(draft.relationship);
+	const affinity = typeof draft.affinity === 'number'
+		? draft.affinity
+		: typeof relationship.level === 'number'
+			? relationship.level
+			: null;
 	return {
+		bio: typeof draft.bio === 'string' ? draft.bio : '',
+		rank: typeof draft.rank === 'string' ? draft.rank : '',
 		appearance: typeof draft.appearance === 'string' ? draft.appearance : '',
-		background: typeof draft.background === 'string' ? draft.background : '',
-		currentLocation: typeof draft.currentLocation === 'string' ? draft.currentLocation : '',
-		currentAction: typeof draft.currentAction === 'string' ? draft.currentAction : '',
-		emotionalState: typeof draft.emotionalState === 'string' ? draft.emotionalState : '',
-		relationship: typeof draft.relationship === 'string' ? draft.relationship : '',
-		status: typeof draft.status === 'string' ? draft.status : '',
-		aliases: stringArray(draft.aliases),
-		goals: stringArray(draft.goals),
+		personality: typeof draft.personality === 'string' ? draft.personality : '',
+		currentDisposition: typeof draft.currentDisposition === 'string' ? draft.currentDisposition : '',
+		affinity: affinity == null ? null : Math.min(100, Math.max(-100, affinity)),
+		motivations: stringArray(draft.motivations ?? draft.goals),
 		factionTags: stringArray(draft.factionTags),
-		traits: stringArray(draft.traits),
-		pressures: stringArray(draft.pressures),
-		personalityDescriptors: stringArray(draft.personalityDescriptors ?? draft.personality),
-		voice: typeof draft.voice === 'string' ? draft.voice : '',
-		mannerisms: stringArray(draft.mannerisms),
-		speechStyle: typeof draft.speechStyle === 'string' ? draft.speechStyle : '',
-		eventMemory: {
-			did: stringArray(eventMemory.did),
-			saw: stringArray(eventMemory.saw),
-			knew: stringArray(eventMemory.knew),
-			knows: stringArray(eventMemory.knows),
-		},
+		knownFacts: stringArray(draft.knownFacts),
 	};
 }
 
@@ -131,57 +116,60 @@ function mergeStringLists(previous: unknown, next: string[], max = 12): string[]
 }
 
 function hasUsefulDraft(draft: JsonRecord): boolean {
-	for (const key of ['appearance', 'background', 'currentLocation', 'currentAction', 'emotionalState', 'relationship', 'speechStyle', 'voice']) {
+	for (const key of ['bio', 'rank', 'appearance', 'personality', 'currentDisposition']) {
 		if (typeof draft[key] === 'string' && draft[key].trim()) return true;
 	}
-	if (typeof draft.status === 'string' && draft.status.trim() && draft.status.trim().toLowerCase() !== 'active') return true;
-	for (const key of ['aliases', 'goals', 'factionTags', 'traits', 'personalityDescriptors', 'mannerisms', 'pressures']) {
+	if (typeof draft.affinity === 'number') return true;
+	for (const key of ['knownFacts', 'factionTags', 'motivations']) {
 		if (stringArray(draft[key]).length) return true;
 	}
-	const memory = asRecord(draft.eventMemory);
-	return ['did', 'saw', 'knew', 'knows'].some((key) => stringArray(memory[key]).length > 0);
+	return false;
 }
 
 function mergeDraftIntoState(currentState: JsonRecord, draft: JsonRecord): JsonRecord {
 	const next = { ...currentState };
-	for (const key of ['appearance', 'background', 'currentLocation', 'currentAction', 'emotionalState', 'relationship', 'status', 'speechStyle', 'voice']) {
+	for (const key of ['bio', 'rank', 'appearance', 'personality', 'currentDisposition']) {
 		const value = typeof draft[key] === 'string' ? draft[key].trim() : '';
 		if (value) next[key] = value;
 	}
-	for (const key of ['aliases', 'goals', 'factionTags', 'traits', 'personalityDescriptors', 'mannerisms', 'pressures']) {
+	if (typeof draft.affinity === 'number') {
+		next.relationship = { status: 'unknown', history: [], ...asRecord(currentState.relationship), level: draft.affinity };
+	}
+	for (const key of ['knownFacts', 'factionTags', 'motivations']) {
 		const values = stringArray(draft[key]);
 		if (values.length) next[key] = mergeStringLists(currentState[key], values);
 	}
-
-	const previousMemory = asRecord(currentState.eventMemory ?? currentState.npcEventMemory);
-	const draftMemory = asRecord(draft.eventMemory);
-	const memory = { ...previousMemory };
-	let hasMemoryPatch = false;
-	for (const key of ['did', 'saw', 'knew', 'knows']) {
-		const values = stringArray(draftMemory[key]);
-		if (!values.length) continue;
-		memory[key] = mergeStringLists(previousMemory[key], values, 16);
-		hasMemoryPatch = true;
-	}
-	if (hasMemoryPatch) next.eventMemory = memory;
 	return next;
 }
 
 function currentStateWithMetadataSeed(state: JsonRecord, metadata: JsonRecord): JsonRecord {
 	const seed = metadataStateSeed(metadata);
-	const next = { ...seed, ...state };
-	for (const key of ['aliases', 'goals', 'factionTags', 'traits', 'personalityDescriptors', 'mannerisms', 'pressures']) {
+	const merged = { ...seed, ...state };
+	const relationship = asRecord(merged.relationship);
+	const relationshipStatus = typeof merged.relationship === 'string' && merged.relationship.trim()
+		? merged.relationship.trim()
+		: typeof relationship.status === 'string' && relationship.status.trim()
+			? relationship.status.trim()
+			: 'unknown';
+	const next: JsonRecord = {
+		type: 'character',
+		isPresent: typeof merged.isPresent === 'boolean' ? merged.isPresent : false,
+		relationship: {
+			level: typeof relationship.level === 'number' ? Math.min(100, Math.max(-100, relationship.level)) : 0,
+			status: relationshipStatus,
+			history: Array.isArray(relationship.history) ? relationship.history : [],
+		},
+		knownFacts: stringArray(merged.knownFacts),
+	};
+	for (const key of ['bio', 'rank', 'appearance', 'personality', 'currentDisposition']) {
+		const value = merged[key];
+		if (typeof value === 'string' && value.trim()) next[key] = value.trim();
+		else if (value === null) next[key] = null;
+	}
+	for (const key of ['knownFacts', 'factionTags', 'motivations']) {
 		const values = mergeStringLists(state[key], stringArray(seed[key]));
 		if (values.length) next[key] = values;
 	}
-	const seedMemory = asRecord(seed.eventMemory);
-	const stateMemory = asRecord(state.eventMemory ?? state.npcEventMemory);
-	const eventMemory: JsonRecord = {};
-	for (const key of ['did', 'saw', 'knew', 'knows']) {
-		const values = mergeStringLists(seedMemory[key], stringArray(stateMemory[key]), 16);
-		if (values.length) eventMemory[key] = values;
-	}
-	if (Object.keys(eventMemory).length) next.eventMemory = eventMemory;
 	return next;
 }
 
@@ -192,8 +180,9 @@ export async function draftCharacterUpdateFromStoryContext(storyId: string, args
 		throw new Error(`Character not found: ${args.recordId}`);
 	}
 
-	const currentState = currentStateWithMetadataSeed(asRecord(character.state), asRecord(character.metadata));
-	const searchTerms = characterSearchTerms(character.name, currentState);
+	const metadata = asRecord(character.metadata);
+	const currentState = currentStateWithMetadataSeed(asRecord(character.state), metadata);
+	const searchTerms = characterSearchTerms(character.name, currentState, metadata);
 	const searchTerm = searchTerms[0] ?? character.name;
 	const likes = (searchTerms.length ? searchTerms : [character.name || character.id]).map((term) => `%${term}%`);
 	const recentLimit = Math.min(Math.max(0, args.recentLimit), 8);
@@ -283,8 +272,8 @@ export async function draftCharacterUpdateFromStoryContext(storyId: string, args
 		`Instructions: ${args.instructions}`,
 		'Story context:',
 		context || '(no recent transcript)',
-		'Return JSON with keys: appearance, background, aliases, currentLocation, currentAction, emotionalState, relationship, status, goals, factionTags, traits, personalityDescriptors, voice, mannerisms, pressures, speechStyle, eventMemory.did, eventMemory.saw, eventMemory.knew, eventMemory.knows.',
-		'Do not return placeholders like status=active, present=true, empty arrays, or null relationship. If the evidence has no update, return {}.',
+		'Return JSON with only these character state keys: bio, appearance, personality, rank, currentDisposition, affinity, motivations, factionTags, knownFacts.',
+		'Use motivations for goals. Use affinity as a -100..100 number. If the evidence has no update, return {}.',
 		'Use only supported facts. Empty string or empty array is better than guessing. For list fields, include durable current facts the reviewer should keep.',
 	].join('\n\n');
 	const result = await generateServerTextWithMetrics({

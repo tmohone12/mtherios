@@ -11,8 +11,7 @@
 	import { declarePlayerScheme } from '$lib/services/ai/scheme/SchemeService';
 	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
 	import { isTerminalReachabilityError } from '$lib/services/backendMemory';
-	import { normalizeBackendContextBudget } from '$lib/services/backendTurnContext';
-	import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET } from '$lib/services/memorySettings';
+	import { buildBackendClientContext as buildBackendClientContextHint } from '$lib/services/backendClientContext';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
 	import { shouldUseTerminalEngineTurn } from './engineTurnRouting';
 
@@ -76,18 +75,19 @@
 		!story.engineStreamStatus.connected,
 	));
 
-	function buildBackendClientContext() {
-		return {
-			sceneEntityIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
-			presentNpcIds: story.characters.filter((character) => character.status === 'active').map((character) => character.id),
-			locationId: story.locations.find((location) => location.current)?.id ?? null,
-			threadIds: [],
-			memoryTokenBudget: settings.uiSettings.backendMemoryTokenBudget || DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET,
-			contextBudget: normalizeBackendContextBudget(settings.contextBudget),
-			chapterThreshold: settings.uiSettings.chapterThreshold || 20,
-			postChapterBuffer: settings.uiSettings.postChapterBuffer ?? 10,
-			chaptersPerArc: settings.uiSettings.chaptersPerArc || 5,
-		};
+	function buildBackendClientContext(currentActionText: string) {
+		return buildBackendClientContextHint({
+			characters: story.characters,
+			locations: story.locations,
+			entries: story.entries,
+			promptEntries: story.promptEntries,
+			currentActionText,
+			backendMemoryTokenBudget: settings.uiSettings.backendMemoryTokenBudget,
+			contextBudget: settings.contextBudget,
+			chapterThreshold: settings.uiSettings.chapterThreshold,
+			postChapterBuffer: settings.uiSettings.postChapterBuffer,
+			chaptersPerArc: settings.uiSettings.chaptersPerArc,
+		});
 	}
 
 	const actionConfig: Record<ActionType, {
@@ -639,7 +639,7 @@
 
 	async function submitBackendAuthoritativeTurn(content: string): Promise<boolean> {
 		if (!story.currentStory?.serverStoryId) return false;
-		const clientContext = buildBackendClientContext();
+		const clientContext = buildBackendClientContext(content);
 		const clientTurnId = crypto.randomUUID();
 
 		isGenerating = true;
@@ -864,9 +864,8 @@
 			bind:value={inputValue}
 			onkeydown={handleKeydown}
 			placeholder={isCreativeMode ? 'Describe what happens next...' : actionConfig[actionType].placeholder}
-			rows="1"
-			class="max-h-32 min-h-[24px] flex-1 resize-none bg-transparent text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none"
-			style="field-sizing: content;"
+			rows="2"
+			class="max-h-32 min-h-11 flex-1 resize-none overflow-y-auto bg-transparent text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none md:min-h-[24px] md:[field-sizing:content]"
 		></textarea>
 
 		{#if isGenerating}

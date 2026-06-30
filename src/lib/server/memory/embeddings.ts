@@ -19,7 +19,9 @@ export function memoryEmbeddingConfig(): MemoryEmbeddingConfig | null {
 	if (!config.embeddingProvider || !config.embeddingModel) return null;
 	const provider = config.embeddingProvider;
 	const baseUrl = config.embeddingBaseUrl
-		?? (provider === 'ollama' ? 'http://127.0.0.1:11434' : 'http://127.0.0.1:1234/v1');
+		?? (provider === 'openrouter'
+			? 'https://openrouter.ai/api/v1'
+			: provider === 'ollama' ? 'http://127.0.0.1:11434' : 'http://127.0.0.1:1234/v1');
 	return {
 		provider,
 		model: config.embeddingModel,
@@ -61,7 +63,7 @@ export async function embedMemoryTexts(
 	if (!config) throw new Error('Memory embeddings are not configured.');
 	if (texts.length === 0) return [];
 	if (config.customUrl) return embedCustom(texts, config);
-	if (config.provider === 'openai' || config.provider === 'openai-compatible') {
+	if (config.provider === 'openai' || config.provider === 'openai-compatible' || config.provider === 'openrouter') {
 		return embedOpenAiCompatible(texts, config);
 	}
 	if (config.provider === 'ollama') return embedOllama(texts, config);

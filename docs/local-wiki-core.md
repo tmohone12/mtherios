@@ -132,11 +132,10 @@ Qdrant listens on `http://127.0.0.1:6333`.
 
 ## Start A Local Embedding Model
 
-The scripts default to Ollama:
+The scripts default to OpenRouter-compatible embeddings:
 
 ```sh
-ollama pull nomic-embed-text
-ollama serve
+export OPENROUTER_API_KEY=...
 ```
 
 Useful environment variables:
@@ -144,9 +143,10 @@ Useful environment variables:
 ```sh
 set QDRANT_URL=http://127.0.0.1:6333
 set QDRANT_COLLECTION=mtherios_wiki
-set WIKI_EMBED_PROVIDER=ollama
-set WIKI_EMBED_MODEL=nomic-embed-text
-set OLLAMA_URL=http://127.0.0.1:11434
+set WIKI_EMBED_PROVIDER=openrouter
+set WIKI_EMBED_MODEL=openai/text-embedding-3-small
+set WIKI_EMBED_BASE_URL=https://openrouter.ai/api/v1
+set OPENROUTER_API_KEY=...
 ```
 
 For an OpenAI-compatible local server such as LM Studio:
@@ -377,9 +377,9 @@ Database memory-node embeddings are optional and separate from the Qdrant wiki i
 
 ```json
 {
-  "memoryEmbeddingProvider": "openai-compatible",
-  "memoryEmbeddingModel": "text-embedding-3-small",
-  "memoryEmbeddingBaseUrl": "http://127.0.0.1:1234/v1",
+  "memoryEmbeddingProvider": "openrouter",
+  "memoryEmbeddingModel": "openai/text-embedding-3-small",
+  "memoryEmbeddingBaseUrl": "https://openrouter.ai/api/v1",
   "memoryEmbeddingDimensions": 1536
 }
 ```

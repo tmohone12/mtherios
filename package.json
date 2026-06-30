@@ -6,7 +6,7 @@
 	"scripts": {
 		"start": "node server.js",
 		"app": "npm run app:dev",
-		"app:dev": "npm run ollama:up && npm run backend:up && npm run backend:migrate && node server.js --dev",
+		"app:dev": "npm run backend:up && npm run backend:migrate && node server.js --dev",
 		"app:start": "node server.js",
 		"app:build": "npm run build && node server.js",
 		"engine": "npm run app:dev",
@@ -28,7 +28,6 @@
 		"backend:down": "docker compose -p mtherios-factions down",
 		"backend:migrate": "node scripts/db-migrate.mjs",
 		"backend:health": "node scripts/db-health.mjs",
-		"ollama:up": "node scripts/ollama-up.mjs",
 		"dev:backend": "npm run backend:up && npm run backend:migrate && vite dev --host 127.0.0.1",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "node scripts/db-migrate.mjs",

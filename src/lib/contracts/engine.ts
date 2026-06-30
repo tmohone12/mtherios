@@ -238,6 +238,7 @@ export const campaignProjectionSchema = z.object({
 	mode: z.literal('control_surface'),
 	story: jsonObjectSchema,
 	entries: z.array(jsonObjectSchema).default([]),
+	entities: z.array(jsonObjectSchema).default([]),
 	chapters: z.array(jsonObjectSchema).default([]),
 	arcs: z.array(jsonObjectSchema).default([]),
 	sagas: z.array(jsonObjectSchema).default([]),
@@ -263,6 +264,7 @@ export const engineCommandRequestSchema = z.object({
 
 export const engineCampaignStatusArgsSchema = z.object({
 	entryLimit: z.number().int().min(1).max(200).optional(),
+	entityLimit: z.number().int().min(0).max(200).optional(),
 	chapterLimit: z.number().int().min(1).max(200).optional(),
 	arcLimit: z.number().int().min(1).max(200).optional(),
 	sagaLimit: z.number().int().min(1).max(200).optional(),

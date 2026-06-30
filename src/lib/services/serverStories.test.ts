@@ -65,6 +65,7 @@ const projection: CampaignProjection = {
 	mode: 'control_surface',
 	story: { id: 'story_alpha', title: 'Long Campaign', serverVersion: 7 },
 	entries: [{ id: 'entry_1', position: 1 }],
+	entities: [],
 	chapters: [],
 	arcs: [],
 	sagas: [],
@@ -290,7 +291,7 @@ describe('server story control-surface client', () => {
 		expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
 			storyId: 'story_alpha',
 			command: 'campaign.status',
-			args: { entryLimit: 120 },
+			args: { entryLimit: 120, entityLimit: 200 },
 		});
 	});
 

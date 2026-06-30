@@ -13,20 +13,25 @@ describe('WorldExplorer control-surface boundary', () => {
 		expect(source).toContain('/api/engine/command');
 	});
 
-	it('exposes character canon fields and draft-first context updates', () => {
+	it('exposes only lorebook character-state fields and draft-first context updates', () => {
 		const source = readFileSync(resolve('src/lib/components/database/WorldExplorer.svelte'), 'utf8');
 
-		expect(source).toContain('Character Canon');
-		expect(source).toContain('accept="image/*"');
-		expect(source).toContain('photoUrl');
-		expect(source).toContain('handleCharacterPhotoUpload');
-		expect(source).toContain('promptTemplate');
-		expect(source).toContain('eventMemory');
-		expect(source).toContain('currentLocation');
-		expect(source).toContain('currentAction');
-		expect(source).toContain('emotionalState');
+		expect(source).toContain('Character State');
+		for (const label of ['Bio', 'Appearance', 'Personality', 'Rank', 'Disposition', 'Affinity', 'Goals', 'Faction Tags', 'Known Facts']) {
+			expect(source).toContain(`<span>${label}</span>`);
+		}
 		expect(source).toContain('factionTags');
-		expect(source).toContain("updateCharacterEventMemory('knows'");
+		expect(source).toContain('AI Refinement');
+		for (const label of ['Voice', 'Role', 'Species', 'Personal Opinion', 'Mannerisms', 'Conversation Topics', 'Revealed Secrets', 'Visibility Note', 'Player Prompt']) {
+			expect(source).not.toContain(`<span>${label}</span>`);
+		}
+		expect(source).not.toContain('accept="image/*"');
+		expect(source).not.toContain('photoUrl');
+		expect(source).not.toContain('promptTemplate');
+		expect(source).not.toContain('eventMemory');
+		expect(source).not.toContain('currentLocation');
+		expect(source).not.toContain('currentAction');
+		expect(source).not.toContain('emotionalState');
 		expect(source).toContain('world.character.draftUpdate');
 		expect(source).toContain("body.status === 'skipped'");
 		expect(source).toContain('No supported character changes found.');

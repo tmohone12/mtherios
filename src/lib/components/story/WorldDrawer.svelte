@@ -495,20 +495,15 @@
 	let protagonistSavedAt = $state<number | null>(null);
 	let protagonistDraftKey = $state<string | null>(null);
 	let characterNameDraft = $state('');
-	let characterDescriptionDraft = $state('');
-	let characterStatusDraft = $state<Character['status']>('active');
-	let characterRelationshipDraft = $state('neutral');
-	let characterAliasesDraft = $state('');
-	let characterTraitsDraft = $state('');
+	let characterBioDraft = $state('');
 	let characterAppearanceDraft = $state('');
-	let characterVoiceDraft = $state('');
-	let characterMannerismsDraft = $state('');
 	let characterPersonalityDraft = $state('');
-	let characterLocationDraft = $state('');
-	let characterFactionDraft = $state('');
 	let characterRankDraft = $state('');
-	let characterRoleDraft = $state('');
-	let characterVisibilityDraft = $state('');
+	let characterDispositionDraft = $state('neutral');
+	let characterAffinityDraft = $state('0');
+	let characterGoalsDraft = $state('');
+	let characterFactionTagsDraft = $state('');
+	let characterKnownFactsDraft = $state('');
 	let characterSaving = $state(false);
 	let characterCreateError = $state<string | null>(null);
 	let characterCreatedAt = $state<number | null>(null);
@@ -570,20 +565,15 @@
 
 	function resetCharacterDraft() {
 		characterNameDraft = '';
-		characterDescriptionDraft = '';
-		characterStatusDraft = 'active';
-		characterRelationshipDraft = 'neutral';
-		characterAliasesDraft = '';
-		characterTraitsDraft = '';
+		characterBioDraft = '';
 		characterAppearanceDraft = '';
-		characterVoiceDraft = '';
-		characterMannerismsDraft = '';
 		characterPersonalityDraft = '';
-		characterLocationDraft = '';
-		characterFactionDraft = '';
 		characterRankDraft = '';
-		characterRoleDraft = '';
-		characterVisibilityDraft = '';
+		characterDispositionDraft = 'neutral';
+		characterAffinityDraft = '0';
+		characterGoalsDraft = '';
+		characterFactionTagsDraft = '';
+		characterKnownFactsDraft = '';
 	}
 
 	async function createCharacterFromDrawer() {
@@ -596,22 +586,19 @@
 		characterSaving = true;
 		characterCreateError = null;
 		try {
+			const affinity = Number(characterAffinityDraft);
+			if (!Number.isFinite(affinity)) throw new Error('Affinity must be a number.');
 			await story.createCharacter({
 				name,
-				description: characterDescriptionDraft,
-				status: characterStatusDraft,
-				relationship: characterRelationshipDraft,
-				aliases: splitDraftLines(characterAliasesDraft),
-				traits: splitDraftLines(characterTraitsDraft),
+				bio: characterBioDraft,
 				appearance: characterAppearanceDraft,
-				voice: characterVoiceDraft,
-				mannerisms: splitDraftLines(characterMannerismsDraft),
-				personalityDescriptors: splitDraftLines(characterPersonalityDraft),
-				currentLocation: characterLocationDraft,
-				factionName: characterFactionDraft,
+				personality: characterPersonalityDraft,
 				rank: characterRankDraft,
-				role: characterRoleDraft,
-				visibilityNote: characterVisibilityDraft,
+				currentDisposition: characterDispositionDraft,
+				affinity: Math.max(-100, Math.min(100, Math.round(affinity))),
+				motivations: splitDraftLines(characterGoalsDraft),
+				factionTags: splitDraftLines(characterFactionTagsDraft),
+				knownFacts: splitDraftLines(characterKnownFactsDraft),
 			});
 			characterCreatedAt = Date.now();
 			resetCharacterDraft();
@@ -1063,70 +1050,42 @@
 							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterNameDraft} placeholder="Character name" />
 						</label>
 						<label class="block space-y-1.5">
-							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Description</span>
-							<textarea class="min-h-20 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterDescriptionDraft} placeholder="Role, background, visible state, and current situation"></textarea>
-						</label>
-						<div class="grid grid-cols-2 gap-2">
-							<label class="block space-y-1.5">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Status</span>
-								<select class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterStatusDraft}>
-									<option value="active">Active</option>
-									<option value="inactive">Inactive</option>
-									<option value="deceased">Deceased</option>
-								</select>
-							</label>
-							<label class="block space-y-1.5">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Relationship</span>
-								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterRelationshipDraft} placeholder="neutral, ally, rival" />
-							</label>
-						</div>
-						<label class="block space-y-1.5">
-							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Aliases</span>
-							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterAliasesDraft} placeholder="Comma or line separated" />
-						</label>
-						<label class="block space-y-1.5">
-							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Traits</span>
-							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterTraitsDraft} placeholder="ambitious, cautious, proud" />
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Bio</span>
+							<textarea class="min-h-20 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterBioDraft} placeholder="Short public character summary"></textarea>
 						</label>
 						<label class="block space-y-1.5">
 							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Appearance</span>
 							<textarea class="min-h-16 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterAppearanceDraft} placeholder="Face, clothes, build, scars, weapons, heraldry"></textarea>
 						</label>
-						<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-							<label class="block space-y-1.5">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Voice</span>
-								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterVoiceDraft} placeholder="Soft, clipped, courtly" />
-							</label>
-							<label class="block space-y-1.5">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Location</span>
-								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterLocationDraft} placeholder="Current location" />
-							</label>
-						</div>
-						<label class="block space-y-1.5">
-							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Mannerisms</span>
-							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterMannerismsDraft} placeholder="Comma or line separated" />
-						</label>
 						<label class="block space-y-1.5">
 							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Personality</span>
-							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterPersonalityDraft} placeholder="Comma or line separated" />
+							<textarea class="min-h-16 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterPersonalityDraft} placeholder="Temperament, values, social style"></textarea>
+						</label>
+						<label class="block space-y-1.5">
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Known Facts</span>
+							<textarea class="min-h-16 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterKnownFactsDraft} placeholder="Comma or line separated"></textarea>
 						</label>
 						<div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
-							<label class="block space-y-1.5">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Faction</span>
-								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterFactionDraft} />
-							</label>
 							<label class="block space-y-1.5">
 								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Rank</span>
 								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterRankDraft} />
 							</label>
 							<label class="block space-y-1.5">
-								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Role</span>
-								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterRoleDraft} />
+								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Disposition</span>
+								<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterDispositionDraft} placeholder="neutral, ally, rival" />
+							</label>
+							<label class="block space-y-1.5">
+								<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Affinity</span>
+								<input type="number" min="-100" max="100" step="1" class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterAffinityDraft} />
 							</label>
 						</div>
 						<label class="block space-y-1.5">
-							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Visibility Note</span>
-							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterVisibilityDraft} placeholder="public, player-known, secret context note" />
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Goals</span>
+							<textarea class="min-h-16 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterGoalsDraft} placeholder="Comma or line separated"></textarea>
+						</label>
+						<label class="block space-y-1.5">
+							<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Faction Tags</span>
+							<input class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2.5 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={characterFactionTagsDraft} placeholder="Comma or line separated" />
 						</label>
 						<div class="flex items-center justify-between gap-3">
 							<div class="min-h-5 text-[10px]">

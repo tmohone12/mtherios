@@ -22,6 +22,42 @@ const MAX_INPUT_TOKENS = 16000;
 /** Max previous chapter summaries to include for context */
 const MAX_PREV_CHAPTERS = 5;
 
+export function formatEntryForSummary(entry: StoryEntry): string {
+	return `[${entry.type}]: ${entry.content}\n\n`;
+}
+
+function entryImportance(entry: StoryEntry): string | null {
+	const metadata = entry.metadata && typeof entry.metadata === 'object' ? entry.metadata as Record<string, unknown> : {};
+	const importance = metadata.importance ?? metadata.significance;
+	return typeof importance === 'string' ? importance : null;
+}
+
+function isImportantMemoryEntry(entry: StoryEntry): boolean {
+	const importance = entryImportance(entry);
+	return importance === 'major'
+		|| importance === 'critical'
+		|| (entry.type as string) === 'world_event'
+		|| Boolean((entry as StoryEntry & { worldStateDelta?: unknown }).worldStateDelta);
+}
+
+export function selectEntriesForChapterMemory(entries: StoryEntry[], maxTokens = MAX_INPUT_TOKENS): StoryEntry[] {
+	const selected = new Map<string, StoryEntry>();
+	let tokens = 0;
+	const tryAdd = (entry: StoryEntry): void => {
+		if (selected.has(entry.id)) return;
+		const lineTokens = countTokens(formatEntryForSummary(entry));
+		if (tokens + lineTokens > maxTokens) return;
+		selected.set(entry.id, entry);
+		tokens += lineTokens;
+	};
+
+	for (const entry of entries.slice(0, 3)) tryAdd(entry);
+	for (const entry of entries.filter(isImportantMemoryEntry)) tryAdd(entry);
+	for (const entry of entries.slice(-24)) tryAdd(entry);
+
+	return [...selected.values()].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+}
+
 export class MemoryService extends BaseAIService {
 	constructor() {
 		super('memory');
@@ -40,16 +76,10 @@ export class MemoryService extends BaseAIService {
 	): Promise<ChapterSummaryResult> {
 		log('summarizeChapter', { entryCount: entries.length, beats: enrichment?.storyBeats?.length ?? 0, priorArcs: previousArcs?.length ?? 0 });
 
-		// Truncate entries to fit within input budget
-		let entriesText = '';
-		let tokensSoFar = 0;
-		for (const e of entries) {
-			const line = `[${e.type}]: ${e.content}\n\n`;
-			const lineTokens = countTokens(line);
-			if (tokensSoFar + lineTokens > MAX_INPUT_TOKENS) break;
-			entriesText += line;
-			tokensSoFar += lineTokens;
-		}
+		// Select entries to fit the input budget without dropping chapter endings.
+		const entriesText = selectEntriesForChapterMemory(entries, MAX_INPUT_TOKENS)
+			.map(formatEntryForSummary)
+			.join('');
 
 		// Only include last N chapter summaries for context
 		const chapterCap = maxPrevChapters ?? MAX_PREV_CHAPTERS;
@@ -196,23 +226,24 @@ Respond with JSON:
 	): Promise<ChapterAnalysis> {
 		log('analyzeForChapter', { entryCount: entries.length, tokensOutsideBuffer });
 
-		// Truncate entries to fit within input budget — use 0-based indices
+		// Truncate entries to fit within input budget — use 0-based indices and skip oversized lines
+		// instead of stopping before later chapter-ending material.
 		let entriesText = '';
 		let tokensSoFar = 0;
-		let entryCount = 0;
+		let lastShownIndex = -1;
 		for (let i = 0; i < entries.length; i++) {
 			const line = `[Entry ${i}] [${entries[i].type}]: ${entries[i].content}\n\n`;
 			const lineTokens = countTokens(line);
-			if (tokensSoFar + lineTokens > MAX_INPUT_TOKENS) break;
+			if (tokensSoFar + lineTokens > MAX_INPUT_TOKENS) continue;
 			entriesText += line;
 			tokensSoFar += lineTokens;
-			entryCount = i + 1;
+			lastShownIndex = i;
 		}
 
 		const system = `You analyze ${mode} story entries (${pov} person, ${tense} tense) to determine whether a chapter boundary should be created.
 
 The story has ${tokensOutsideBuffer} tokens outside the active context buffer. Chapter boundaries help manage memory by summarizing older content.
-There are ${entries.length} unchaptered entries (${entryCount} shown below, labelled Entry 0 through Entry ${entryCount - 1}).
+There are ${entries.length} unchaptered entries shown below by original 0-based entry index${lastShownIndex >= 0 ? `, up through Entry ${lastShownIndex}` : ''}.
 
 ═══ WHEN TO CREATE A CHAPTER ═══
 
@@ -238,7 +269,7 @@ Respond with JSON:
   "reason": string
 }
 
-- optimalEndIndex: The 0-based index of the LAST entry to include in the chapter (e.g. if entries 0-12 form a natural chapter, return 12). Must be between 0 and ${entryCount - 1}.
+- optimalEndIndex: The 0-based index of the LAST entry to include in the chapter (e.g. if entries 0-12 form a natural chapter, return 12). Must be between 0 and ${Math.max(0, entries.length - 1)}.
 - keywords: 5-10 terms capturing this chapter's key content for future retrieval
 - reason: Brief explanation of why this is (or isn't) a good chapter boundary`;
 

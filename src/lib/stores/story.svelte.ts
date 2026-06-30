@@ -761,6 +761,33 @@ class StoryStore {
 		this.promptEntries = mergePromptEntryWindow(this.promptEntries, entries);
 		this.entryCount = Math.max(projection.counts.entries, this.entries.length);
 		this.oldestLoadedEntryPosition = this.entries[0]?.position ?? null;
+		const storyRow = asRecord(projection.story);
+		const currentLocationId = asNullableString(storyRow.currentLocationId);
+		const entityRows = projection.entities.map(asRecord);
+		if (entityRows.length > 0) {
+			const projectedLoreEntries = entityRows
+				.map((row) => this.serverEntityToLorebookEntry(row))
+				.filter((entry): entry is Entry => Boolean(entry));
+			const projectedCharacters = entityRows
+				.map((row) => this.serverEntityToCharacter(row))
+				.filter((character): character is Character => Boolean(character));
+			const projectedLocations = entityRows
+				.map((row) => this.serverEntityToLocation(row, currentLocationId))
+				.filter((location): location is Location => Boolean(location));
+			const projectedItems = entityRows
+				.map((row) => this.serverEntityToItem(row))
+				.filter((item): item is Item => Boolean(item));
+			await Promise.all([
+				...projectedLoreEntries.map((entry) => putLorebookEntry(entry)),
+				...projectedCharacters.map((character) => putCharacter(character)),
+				...projectedLocations.map((location) => putLocation(location)),
+				...projectedItems.map((item) => putItem(item)),
+			]);
+			for (const entry of projectedLoreEntries) this.upsertProjectedLoreEntry(entry);
+			for (const character of projectedCharacters) this.upsertProjectedCharacter(character.id, character);
+			for (const location of projectedLocations) this.upsertProjectedLocation(location);
+			for (const item of projectedItems) this.upsertProjectedItem(item);
+		}
 		const chapters = projection.chapters
 			.map((row) => this.serverChapterToLocal(row))
 			.filter((chapter): chapter is Chapter => Boolean(chapter));
@@ -952,8 +979,14 @@ class StoryStore {
 		const metadata = {
 			...asRecord(asRecord(row.metadata).originalMetadata),
 			...asRecord(row.metadata),
+			...(typeof state.present === 'boolean' ? { present: state.present } : {}),
+			...(typeof state.isPresent === 'boolean' ? { isPresent: state.isPresent } : {}),
+			...(typeof state.currentLocation === 'string' ? { currentLocation: state.currentLocation } : {}),
+			...(typeof state.lastSeenLocation === 'string' ? { lastSeenLocation: state.lastSeenLocation } : {}),
+			...(typeof state.location === 'string' ? { location: state.location } : {}),
 			...(typeof state.playerPrompt === 'string' ? { playerPrompt: state.playerPrompt } : {}),
 			...(Array.isArray(state.assets) ? { assets: state.assets } : {}),
+			...(Array.isArray(state.aliases) ? { aliases: state.aliases } : {}),
 		};
 		return {
 			id,
@@ -2033,6 +2066,18 @@ class StoryStore {
 			: [...this.characters, character];
 	}
 
+	private upsertProjectedLocation(location: Location): void {
+		this.locations = this.locations.some((existing) => existing.id === location.id)
+			? this.locations.map((existing) => existing.id === location.id ? location : existing)
+			: [...this.locations, location];
+	}
+
+	private upsertProjectedItem(item: Item): void {
+		this.items = this.items.some((existing) => existing.id === item.id)
+			? this.items.map((existing) => existing.id === item.id ? item : existing)
+			: [...this.items, item];
+	}
+
 	async addCharacter(name: string, description?: string, relationship?: string): Promise<Character> {
 		if (!this.currentStory) throw new Error('No story loaded');
 		const char: Character = {
@@ -2057,34 +2102,31 @@ class StoryStore {
 
 	async createCharacter(input: {
 		name: string;
-		description?: string | null;
-		status?: Character['status'];
-		relationship?: string | null;
-		traits?: string[];
-		aliases?: string[];
+		bio?: string | null;
 		appearance?: string | null;
-		voice?: string | null;
-		mannerisms?: string[];
-		personalityDescriptors?: string[];
-		currentLocation?: string | null;
-		factionName?: string | null;
+		personality?: string | null;
 		rank?: string | null;
-		role?: string | null;
-		visibilityNote?: string | null;
+		currentDisposition?: string | null;
+		affinity?: number | null;
+		motivations?: string[];
+		factionTags?: string[];
+		knownFacts?: string[];
 	}): Promise<Character> {
 		if (!this.currentStory) throw new Error('No story loaded');
 		const name = input.name.trim();
 		if (!name) throw new Error('Name is required.');
+		const bio = input.bio?.trim() || null;
+		const disposition = input.currentDisposition?.trim() || 'neutral';
 		const metadata = {
+			bio,
 			appearance: input.appearance?.trim() || null,
-			voice: input.voice?.trim() || null,
-			mannerisms: input.mannerisms ?? [],
-			personalityDescriptors: input.personalityDescriptors ?? [],
-			lastSeenLocation: input.currentLocation?.trim() || null,
-			factionName: input.factionName?.trim() || null,
+			personality: input.personality?.trim() || null,
 			rank: input.rank?.trim() || null,
-			role: input.role?.trim() || null,
-			visibilityNote: input.visibilityNote?.trim() || null,
+			currentDisposition: disposition,
+			affinity: typeof input.affinity === 'number' ? input.affinity : 0,
+			motivations: input.motivations ?? [],
+			factionTags: input.factionTags ?? [],
+			knownFacts: input.knownFacts ?? [],
 			createdFrom: 'world_drawer_character_tab',
 		};
 		const char: Character = {
@@ -2092,10 +2134,10 @@ class StoryStore {
 			storyId: this.currentStory.id,
 			branchId: this.currentStory.currentBranchId ?? null,
 			name,
-			description: input.description?.trim() || null,
-			traits: input.traits ?? [],
-			relationship: input.relationship?.trim() || 'neutral',
-			status: input.status ?? 'active',
+			description: bio,
+			traits: [],
+			relationship: disposition,
+			status: 'active',
 			metadata,
 			visualDescriptors: input.appearance?.trim() ? { distinguishing: input.appearance.trim() } : {},
 			portrait: null,
@@ -2104,12 +2146,6 @@ class StoryStore {
 		this.applyCanonicalVersion(result.serverVersion);
 		this.upsertProjectedLoreEntry(result.entry);
 		this.upsertProjectedCharacter(char.id, result.character);
-		const aliases = [...new Set((input.aliases ?? []).map((alias) => alias.trim()).filter(Boolean))];
-		if (aliases.length > 0) {
-			const patched = await patchCanonicalLorebookEntry(result.character.id, { aliases, updatedAt: Date.now() });
-			this.applyCanonicalVersion(patched.serverVersion);
-			if (patched.entry) this.upsertProjectedLoreEntry(patched.entry);
-		}
 		return result.character;
 	}
 

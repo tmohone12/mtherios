@@ -44,15 +44,14 @@ function buildCharacterStateSnapshot(state: CharacterEntryState | undefined): st
 	if (!state) return [];
 	return [
 		state.bio ? `Bio: ${state.bio}` : null,
-		state.motivations?.length ? `Motivations: ${formatList(state.motivations)}` : null,
+		state.appearance ? `Appearance: ${state.appearance}` : null,
 		state.personality ? `Personality: ${state.personality}` : null,
+		state.rank ? `Rank: ${state.rank}` : null,
 		state.currentDisposition ? `Current disposition: ${state.currentDisposition}` : null,
-		state.personalOpinion ? `Personal opinion of player: ${state.personalOpinion}` : null,
-		state.relationship ? `Relationship: ${state.relationship.status}, level ${state.relationship.level}` : null,
-		state.pressures?.length ? `Pressures: ${formatList(state.pressures)}` : null,
+		typeof state.relationship?.level === 'number' ? `Affinity: ${state.relationship.level}` : null,
+		state.motivations?.length ? `Goals: ${formatList(state.motivations)}` : null,
 		state.factionTags?.length ? `Faction tags: ${formatList(state.factionTags)}` : null,
 		state.knownFacts?.length ? `Known facts: ${formatList(state.knownFacts)}` : null,
-		state.revealedSecrets?.length ? `Revealed secrets: ${formatList(state.revealedSecrets)}` : null,
 	].filter(Boolean) as string[];
 }
 
@@ -88,21 +87,22 @@ export class EntryRefinementService extends BaseAIService {
 			`Type: ${entry.type}`,
 			`Description (current, full):`,
 			entry.description || '(empty)',
-			entry.hiddenInfo ? `\nHidden info (narrator-only): ${entry.hiddenInfo}` : null,
+			!isCharacter && entry.hiddenInfo ? `\nHidden info (narrator-only): ${entry.hiddenInfo}` : null,
 			entry.aliases?.length ? `Aliases: ${entry.aliases.join(', ')}` : null,
 			entry.injection?.keywords?.length ? `Keywords: ${entry.injection.keywords.join(', ')}` : null,
 			...buildCharacterStateSnapshot(cs),
 			...buildFactionStateSnapshot(fs),
 		].filter(Boolean).join('\n');
 
+		const hiddenInfoField = isCharacter ? '' : ',\n  "hiddenInfo": string | null';
 		const stateFieldsBlock = isCharacter
-			? `,\n  "bio": string | null,                    // FULL new bio if revised, else null\n  "motivations": string[] | null,           // FULL list if revised, else null\n  "personality": string | null,             // FULL new personality if revised, else null\n  "currentDisposition": string | null,\n  "personalOpinion": string | null,\n  "pressures": string[] | null,             // FULL list if revised, else null\n  "factionTags": string[] | null,           // FULL list if revised, else null\n  "knownFacts": string[] | null,            // FULL list if revised, else null\n  "revealedSecrets": string[] | null,       // FULL list if revised, else null\n  "relationshipLevel": number | null,       // -100..100 if revised, else null\n  "relationshipStatus": string | null`
+			? `,\n  "bio": string | null,\n  "appearance": string | null,\n  "personality": string | null,\n  "rank": string | null,\n  "currentDisposition": string | null,\n  "affinity": number | null,\n  "motivations": string[] | null,           // Goals. Return the FULL list if revised, else null\n  "factionTags": string[] | null,\n  "knownFacts": string[] | null`
 			: isFaction
 				? `,\n  "playerStanding": number | null,         // -100..100 if revised, else null\n  "factionStatus": "allied"|"neutral"|"hostile"|"unknown"|null,\n  "knownMembers": string[] | null,          // FULL list if revised, else null\n  "goals": array | null,                    // FULL goal list if revised, else null\n  "resources": object | null,               // military/wealth/influence/information/morale 0..100\n  "disposition": "aggressive"|"defensive"|"scheming"|"neutral"|"desperate"|null,\n  "territory": string[] | null              // FULL list if revised, else null`
 				: '';
 
 		const typeRule = isCharacter
-			? '5. For this CHARACTER entry: you may revise bio, motivations, personality, disposition, personal opinion, pressures, faction tags, known facts, revealed secrets, and relationship state when the instruction implies it. For array fields, return the FULL combined list, not just additions.'
+			? '5. For this CHARACTER entry: use only bio, appearance, personality, rank, currentDisposition, affinity, motivations (goals), factionTags, and knownFacts. Do not output voice, role, species, personalOpinion, mannerisms, conversationTopics, background, currentLocation, currentAction, emotionalState, speechStyle, promptTemplate, eventMemory, hiddenInfo, or photo fields. For array fields, return the FULL combined list, not just additions.'
 			: isFaction
 				? '5. For this FACTION entry: you may revise playerStanding, factionStatus, knownMembers, goals, resources, disposition, and territory when the instruction implies it. For goals, members, and territory, return the FULL combined list, not just additions. Goals must be concrete objectives with priority 1-10, progress 0-100, type, and optional deadline.'
 				: '5. This entry type has no supported operational state fields in the refinement editor. Do not output character or faction state fields.';
@@ -133,8 +133,8 @@ ${typeRule}
 {
   "description": string | null,             // FULL new description (existing prose + appended additions), or null if unchanged
   "keywords": string[] | null,              // FULL new keyword list, or null if unchanged
-  "aliases": string[] | null,               // FULL new alias list, or null if unchanged
-  "hiddenInfo": string | null${stateFieldsBlock},
+  "aliases": string[] | null                // FULL new alias list, or null if unchanged
+${hiddenInfoField}${stateFieldsBlock},
   "reasoning": string                       // REQUIRED. One or two sentences describing what changed.
 }`;
 

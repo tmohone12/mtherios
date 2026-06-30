@@ -231,7 +231,7 @@ function buildSimContext(
 		allThreads, characterArcs,
 		tacticalBlock, conversationBlock, factionBlock, characterBlock, hasFactions,
 		season, recentFactionActions: recentFactionActions.slice(-5),
-		relationChangeLog: relationChangeLog.slice(0, 8),
+		relationChangeLog: relationChangeLog.slice(-8),
 		threadRegistry, schemeBlock: schemes, agreementBlock,
 		worldEventBlock, locationBlock: locationName,
 		strategicFrameBlock: buildStrategicWorldSimBlock(strategicWorldFrame),
@@ -254,6 +254,10 @@ function compactText(value: string | null | undefined): string {
 	return (value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function escapeRegex(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function recordFrom(value: unknown): Record<string, unknown> {
 	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -269,7 +273,23 @@ function normalizeForMatch(value: string): string {
 function containsName(text: string, name: string): boolean {
 	const normalized = normalizeForMatch(name);
 	if (normalized.length < 3) return false;
-	return normalizeForMatch(text).includes(normalized);
+	return new RegExp(`\\b${escapeRegex(normalized)}\\b`, 'i').test(normalizeForMatch(text));
+}
+
+function isDeletedEntry(entry: Entry): boolean {
+	return Boolean(entry.deleted);
+}
+
+function goalDescriptionsFrom(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return value
+		.map((goal) => {
+			if (typeof goal === 'string') return goal;
+			const record = recordFrom(goal);
+			return typeof record.description === 'string' ? record.description : '';
+		})
+		.map(compactText)
+		.filter((item) => item.length > 0);
 }
 
 function factionMatchTerms(faction: Entry): string[] {
@@ -300,6 +320,7 @@ function selectChapterRelevantFactions(input: {
 		...input.recentEntries.slice(-12).map((entry) => entry.content),
 	].join('\n');
 	return input.factionEntries
+		.filter((faction) => !isDeletedEntry(faction))
 		.filter((faction) => {
 			const terms = factionMatchTerms(faction);
 			if (explicit.length > 0 && terms.some((term) => explicit.includes(normalizeForMatch(term)))) return true;
@@ -310,7 +331,7 @@ function selectChapterRelevantFactions(input: {
 
 function factionPromptLine(faction: Entry): string {
 	const state = recordFrom(faction.state);
-	const goals = stringArrayFrom(state.goals).slice(0, 2);
+	const goals = goalDescriptionsFrom(state.goals).slice(0, 2);
 	const resources = recordFrom(state.resources);
 	const resourceKeys = Object.entries(resources)
 		.filter(([, value]) => value !== null && value !== undefined && value !== '')
@@ -480,7 +501,7 @@ function buildEarnedPayoffBlock(
 		}
 	}
 
-	for (const shift of relationChangeLog.filter(e => e.delta > 0).slice(0, 8)) {
+	for (const shift of relationChangeLog.filter(e => e.delta > 0).slice(-8)) {
 		lines.push(
 			`- [Ch.${shift.chapter} relation +${shift.delta}] ${shift.source} and ${shift.target}: ${truncateText(shift.event, 150)}. This can mature as trust, loyalty, access, aid, or a warning.`,
 		);
@@ -566,6 +587,7 @@ function selectFactionsForTick(
 	schemes: string,
 ): Entry[] {
 	return factionEntries
+		.filter((entry) => !isDeletedEntry(entry))
 		.map((entry, index) => ({ entry, index, score: scoreFactionForTick(entry, recentFactionActions, schemes) }))
 		.sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name) || a.index - b.index)
 		.slice(0, MAX_FACTIONS_PER_TICK)

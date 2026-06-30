@@ -39,8 +39,10 @@ async function resolveOptions(argv) {
 	const qdrantUrl = String(flags['qdrant-url'] ?? process.env.QDRANT_URL ?? fileConfig.qdrantUrl ?? 'http://127.0.0.1:6333');
 	const qdrantCollection = String(flags.collection ?? process.env.QDRANT_COLLECTION ?? fileConfig.qdrantCollection ?? 'mtherios_wiki');
 	const ollamaUrl = String(flags['ollama-url'] ?? process.env.OLLAMA_URL ?? fileConfig.ollamaUrl ?? 'http://127.0.0.1:11434');
-	const wikiEmbedProvider = String(flags['wiki-embed-provider'] ?? process.env.WIKI_EMBED_PROVIDER ?? fileConfig.wikiEmbedProvider ?? 'ollama');
-	const wikiEmbedModel = String(flags['wiki-embed-model'] ?? process.env.WIKI_EMBED_MODEL ?? fileConfig.wikiEmbedModel ?? 'nomic-embed-text');
+	const wikiEmbedProvider = String(flags['wiki-embed-provider'] ?? process.env.WIKI_EMBED_PROVIDER ?? fileConfig.wikiEmbedProvider ?? 'openrouter');
+	const wikiEmbedModel = String(flags['wiki-embed-model'] ?? process.env.WIKI_EMBED_MODEL ?? fileConfig.wikiEmbedModel ?? 'openai/text-embedding-3-small');
+	const wikiEmbedBaseUrl = String(flags['wiki-embed-base-url'] ?? process.env.WIKI_EMBED_BASE_URL ?? fileConfig.wikiEmbedBaseUrl ?? 'https://openrouter.ai/api/v1');
+	const wikiEmbedApiKey = String(flags['wiki-embed-api-key'] ?? process.env.WIKI_EMBED_API_KEY ?? fileConfig.wikiEmbedApiKey ?? process.env.OPENROUTER_API_KEY ?? fileConfig.llmApiKeys?.OPENROUTER_API_KEY ?? '');
 	const wikiAutoIndexStoryVaults = booleanOption(flags['wiki-auto-index'], process.env.MTHERIOS_WIKI_AUTO_INDEX, fileConfig.wikiAutoIndexStoryVaults, false);
 	const wikiAutoLintStoryVaults = booleanOption(flags['wiki-auto-lint'], process.env.MTHERIOS_WIKI_AUTO_LINT, fileConfig.wikiAutoLintStoryVaults, false);
 	const databaseUrl = String(flags['database-url'] ?? process.env.DATABASE_URL ?? fileConfig.databaseUrl ?? DEFAULT_DATABASE_URL);
@@ -55,7 +57,7 @@ async function resolveOptions(argv) {
 	const memoryEmbeddingProvider = String(flags['memory-embedding-provider'] ?? process.env.MEMORY_EMBEDDING_PROVIDER ?? fileConfig.memoryEmbeddingProvider ?? '');
 	const memoryEmbeddingModel = String(flags['memory-embedding-model'] ?? process.env.MEMORY_EMBEDDING_MODEL ?? fileConfig.memoryEmbeddingModel ?? '');
 	const memoryEmbeddingBaseUrl = String(flags['memory-embedding-base-url'] ?? process.env.MEMORY_EMBEDDING_BASE_URL ?? fileConfig.memoryEmbeddingBaseUrl ?? '');
-	const memoryEmbeddingApiKey = String(flags['memory-embedding-api-key'] ?? process.env.MEMORY_EMBEDDING_API_KEY ?? fileConfig.memoryEmbeddingApiKey ?? '');
+	const memoryEmbeddingApiKey = String(flags['memory-embedding-api-key'] ?? process.env.MEMORY_EMBEDDING_API_KEY ?? fileConfig.memoryEmbeddingApiKey ?? (memoryEmbeddingProvider === 'openrouter' ? process.env.OPENROUTER_API_KEY ?? fileConfig.llmApiKeys?.OPENROUTER_API_KEY : '') ?? '');
 	const memoryEmbeddingUrl = String(flags['memory-embedding-url'] ?? process.env.MEMORY_EMBEDDING_URL ?? fileConfig.memoryEmbeddingUrl ?? '');
 	const memoryEmbeddingBatch = Math.max(1, Number(flags['memory-embedding-batch'] ?? process.env.MEMORY_EMBEDDING_BATCH ?? fileConfig.memoryEmbeddingBatch ?? 8));
 	const memoryEmbeddingDimensions = Math.max(1, Number(flags['memory-embedding-dimensions'] ?? process.env.MEMORY_EMBEDDING_DIMENSIONS ?? fileConfig.memoryEmbeddingDimensions ?? 1536));
@@ -73,6 +75,8 @@ async function resolveOptions(argv) {
 		ollamaUrl,
 		wikiEmbedProvider,
 		wikiEmbedModel,
+		wikiEmbedBaseUrl,
+		wikiEmbedApiKey,
 		wikiAutoIndexStoryVaults,
 		wikiAutoLintStoryVaults,
 		databaseUrl,
@@ -194,6 +198,8 @@ function buildRuntimeEnv(options) {
 		MEMORY_EMBEDDING_DIMENSIONS: String(options.memoryEmbeddingDimensions),
 		WIKI_EMBED_PROVIDER: options.wikiEmbedProvider,
 		WIKI_EMBED_MODEL: options.wikiEmbedModel,
+		WIKI_EMBED_BASE_URL: options.wikiEmbedBaseUrl,
+		WIKI_EMBED_API_KEY: options.wikiEmbedApiKey,
 	};
 }
 

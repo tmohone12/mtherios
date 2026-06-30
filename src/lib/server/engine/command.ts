@@ -805,6 +805,7 @@ export async function executeEngineCommand(
 				const args = engineCampaignStatusArgsSchema.parse(request.args ?? {});
 				const projection = await loadCampaignProjection(request.storyId, {
 					entryLimit: args.entryLimit,
+					entityLimit: args.entityLimit,
 					chapterLimit: args.chapterLimit,
 					arcLimit: args.arcLimit,
 					sagaLimit: args.sagaLimit,

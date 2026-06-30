@@ -12,6 +12,8 @@ export interface MtheriosAppConfig {
 	ollamaUrl: string;
 	wikiEmbedProvider: string;
 	wikiEmbedModel: string;
+	wikiEmbedBaseUrl: string;
+	wikiEmbedApiKey: string;
 	wikiAutoIndexStoryVaults: boolean;
 	wikiAutoLintStoryVaults: boolean;
 	jobWorkerEnabled: boolean;
@@ -31,8 +33,10 @@ export function getMtheriosAppConfig(): MtheriosAppConfig {
 		qdrantUrl: env.QDRANT_URL || 'http://127.0.0.1:6333',
 		qdrantCollection: env.QDRANT_COLLECTION || 'mtherios_wiki',
 		ollamaUrl: env.OLLAMA_URL || 'http://127.0.0.1:11434',
-		wikiEmbedProvider: env.WIKI_EMBED_PROVIDER || 'ollama',
-		wikiEmbedModel: env.WIKI_EMBED_MODEL || 'nomic-embed-text',
+		wikiEmbedProvider: env.WIKI_EMBED_PROVIDER || 'openrouter',
+		wikiEmbedModel: env.WIKI_EMBED_MODEL || 'openai/text-embedding-3-small',
+		wikiEmbedBaseUrl: env.WIKI_EMBED_BASE_URL || 'https://openrouter.ai/api/v1',
+		wikiEmbedApiKey: env.WIKI_EMBED_API_KEY || env.OPENROUTER_API_KEY || '',
 		wikiAutoIndexStoryVaults: env.MTHERIOS_WIKI_AUTO_INDEX === 'true',
 		wikiAutoLintStoryVaults: env.MTHERIOS_WIKI_AUTO_LINT === 'true',
 		jobWorkerEnabled: env.MTHERIOS_JOB_WORKER !== 'false',
@@ -80,6 +84,8 @@ export function wikiRuntimeEnv(config = getMtheriosAppConfig()): NodeJS.ProcessE
 		OLLAMA_URL: config.ollamaUrl,
 		WIKI_EMBED_PROVIDER: config.wikiEmbedProvider,
 		WIKI_EMBED_MODEL: config.wikiEmbedModel,
+		WIKI_EMBED_BASE_URL: config.wikiEmbedBaseUrl,
+		WIKI_EMBED_API_KEY: config.wikiEmbedApiKey,
 		MTHERIOS_JOB_WORKER: config.jobWorkerEnabled ? 'true' : 'false',
 		MTHERIOS_JOB_INTERVAL_MS: String(config.jobIntervalMs),
 		MTHERIOS_WIKI_AUTO_INDEX: config.wikiAutoIndexStoryVaults ? 'true' : 'false',

@@ -1567,6 +1567,7 @@ export async function prepareServerTurnContext(
 	}, () => buildServerTurnPrompt(ctxWithTimeline, retrieved, playerEntryId, {
 		currentFactionId: request.clientContext?.currentFactionId ?? null,
 		sceneEntityIds: request.clientContext?.sceneEntityIds ?? [],
+		presentNpcIds: request.clientContext?.presentNpcIds ?? [],
 		wikiContextMarkdown: wikiContext?.markdown ?? null,
 	}));
 	const promptSectionTrace = buildPromptSectionTrace(prompt.compiledPrompt);

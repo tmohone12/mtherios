@@ -1037,7 +1037,7 @@ buildSystemPrompt() function (private):
 9. **Time tracking:** Deterministic in-story time progression enables season/holiday effects
 10. **Relationship graph:** Tier 2 system tracks connections between entities for query optimization
 11. **Agent-maintained wiki export:** Obsidian exports are structured as a three-layer knowledge base: immutable `raw/` transcript sources, compiled wiki/synthesis pages, and an `AGENTS.md` maintainer schema that tells future LLM sessions how to ingest, query, lint, cite, and update the vault.
-12. **Terminal wiki core:** `scripts/wiki-core/` provides the first terminal-first lore layer: materialize backend-bound stories into generated Obsidian vaults, index exported or generated vaults into Qdrant, use local embeddings for semantic search, and traverse Obsidian links/backlinks outside the browser sandbox.
+12. **Terminal wiki core:** `scripts/wiki-core/` provides the first terminal-first lore layer: materialize backend-bound stories into generated Obsidian vaults, index exported or generated vaults into Qdrant, use OpenRouter-compatible embeddings for semantic search, and traverse Obsidian links/backlinks outside the browser sandbox.
 
 ---
 

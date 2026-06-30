@@ -398,7 +398,7 @@ describe('engine command envelope', () => {
 			command: 'campaign.status',
 			storyId: 'story_alpha',
 			clientCommandId: 'cmd_1',
-			args: { entryLimit: 42 },
+			args: { entryLimit: 42, entityLimit: 77 },
 		}, {
 			loadCampaignProjection: async (storyId, options) => {
 				projectionCalls.push(options);
@@ -406,6 +406,7 @@ describe('engine command envelope', () => {
 				mode: 'control_surface',
 				story: { id: storyId, title: 'Long Campaign', serverVersion: 3 },
 				entries: [],
+				entities: [],
 				chapters: [],
 				arcs: [],
 				sagas: [],
@@ -425,7 +426,7 @@ describe('engine command envelope', () => {
 		expect(result.result).toEqual(expect.objectContaining({
 			mode: 'control_surface',
 		}));
-		expect(projectionCalls).toEqual([{ entryLimit: 42 }]);
+		expect(projectionCalls).toEqual([{ entryLimit: 42, entityLimit: 77, chapterLimit: undefined, arcLimit: undefined, sagaLimit: undefined }]);
 	});
 
 	it('routes campaign bootstrap through the shared backend command surface', async () => {
@@ -468,6 +469,7 @@ describe('engine command envelope', () => {
 						mode: 'control_surface',
 						story: { id: storyId, title: 'Long Campaign', serverVersion: 7 },
 						entries: [],
+						entities: [],
 						chapters: [],
 						arcs: [],
 						sagas: [],

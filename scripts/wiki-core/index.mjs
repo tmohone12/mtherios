@@ -11,10 +11,10 @@ const usage = `Usage:
 Environment:
   QDRANT_URL=http://127.0.0.1:6333
   QDRANT_COLLECTION=mtherios_wiki
-  WIKI_EMBED_PROVIDER=ollama|openai-compatible
-  WIKI_EMBED_MODEL=nomic-embed-text
+  WIKI_EMBED_PROVIDER=openrouter|openai-compatible|ollama
+  WIKI_EMBED_MODEL=openai/text-embedding-3-small
   OLLAMA_URL=http://127.0.0.1:11434
-  WIKI_EMBED_BASE_URL=http://127.0.0.1:1234/v1
+  WIKI_EMBED_BASE_URL=https://openrouter.ai/api/v1
   WIKI_EMBED_API_KEY=...`;
 
 const { flags, positional } = parseArgs(process.argv.slice(2));

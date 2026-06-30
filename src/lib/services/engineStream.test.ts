@@ -13,6 +13,7 @@ const projection = {
 	mode: 'control_surface',
 	story: { id: 'story_alpha', title: 'Long Campaign', serverVersion: 5 },
 	entries: [{ id: 'entry_5', position: 5, type: 'assistant', content: 'The court waits.' }],
+	entities: [],
 	chapters: [],
 	arcs: [],
 	sagas: [],

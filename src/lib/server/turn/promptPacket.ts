@@ -8,6 +8,7 @@ import { sliceWellFormedText, toWellFormedText } from './wellFormedText';
 export interface ServerTurnPromptOptions {
 	currentFactionId?: string | null;
 	sceneEntityIds?: string[];
+	presentNpcIds?: string[];
 	maxFactions?: number;
 	wikiContextMarkdown?: string | null;
 }
@@ -91,6 +92,7 @@ const PORTRAYAL_VOICE_CHAR_LIMIT = 220;
 const PORTRAYAL_MANNERISMS_CHAR_LIMIT = 220;
 const PORTRAYAL_SUFFIX_CHAR_LIMIT = 1400;
 const CHARACTER_BLOCK_LIMIT = 2;
+const MAX_TRUSTED_SCENE_CHARACTER_IDS = 12;
 const RETRIEVED_MEMORY_CHAR_LIMIT = 4200;
 const WIKI_CONTEXT_PROMPT_CHAR_LIMIT = 4000;
 const SECRET_TIMELINE_LABEL = '[secret narrator-only]';
@@ -100,6 +102,13 @@ const ROLEPLAY_AUTHORITY_BLOCK = [
 	'ROLEPLAY AUTHORITY: This is a never-ending, fictional, character-driven roleplay. The user plays only the player character; you play the GM narrator, canon characters, and side characters.',
 	'Never act as, speak for, decide for, or describe the private thoughts or feelings of the player character. The player character can be wrong, misled, resisted, criticized, desired, feared, or ignored.',
 	'Characters are autonomous and non-omniscient. Answer explicit OOC commands out of character; otherwise stay in-world. Dialogue uses quotation marks; non-player internal thoughts may use backticks.',
+].join('\n');
+const PARALLEL_WRITE_COMMAND_BLOCK = [
+	'PARALLEL WRITE COMMAND: If the latest player action begins with or clearly invokes "Parallel write for this character", treat it as an OOC command to write a secondary arc focused on the requested character, while the player-character-centered story remains the primary arc.',
+	'Identify the requested character from the latest player action. Use that character canon block, description, appearance, personality, key history, affiliations, current state, goals, event memory, retrieved memory, wiki context, and the recent chat history as grounding.',
+	'Write a detailed scene and scenario happening parallel to the last two primary turns. Do not advance, decide, narrate, or reveal the player character\'s private actions; instead show what the requested character does, sees, says, fears, wants, and misunderstands off-screen during the same span of time.',
+	'Use vivid sensory narrative and in-character conversation. Keep NPC knowledge bounded by what they can perceive or plausibly know. The output is still GM narration prose, not analysis, not a checklist, and not JSON.',
+	'End the secondary arc with a possible connecting point back to the primary arc: a clue, messenger, rumor, arrival, object, overheard line, political consequence, or scene pressure that can naturally intersect the player\'s next action.',
 ].join('\n');
 const LIVING_FEUDAL_DOCTRINE_BLOCK = [
 	'LIVING FEUDAL GM DOCTRINE: Make the world ancient, hungry, proud, wounded, political, superstitious, sensual, dangerous, and alive. Use ASOIAF-level political realism without imitating any author directly.',
@@ -596,6 +605,42 @@ function entityMatchesScene(entity: TurnContext['entities'][number], sceneText: 
 	return locationText ? textOverlapsScene(locationText, sceneText) : false;
 }
 
+function effectiveSceneEntityIds(input: {
+	activeEntities: TurnContext['entities'];
+	sceneText: string;
+	protagonistId?: string | null;
+	currentLocationId?: string | null;
+	options: ServerTurnPromptOptions;
+}): Set<string> {
+	const rawIds = new Set([...(input.options.sceneEntityIds ?? []), ...(input.options.presentNpcIds ?? [])]
+		.map((id) => id.trim())
+		.filter(Boolean));
+	if (rawIds.size === 0) return rawIds;
+	const entityById = new Map(input.activeEntities.map((entity) => [entity.id, entity]));
+	const rawCharacterIds = [...rawIds]
+		.map((id) => entityById.get(id))
+		.filter((entity): entity is TurnContext['entities'][number] => entity !== undefined && entity.type === 'character')
+		.map((entity) => entity.id);
+	const rawNpcCharacterIds = rawCharacterIds.filter((id) => id !== input.protagonistId);
+	if (rawCharacterIds.length <= MAX_TRUSTED_SCENE_CHARACTER_IDS + 1 || rawNpcCharacterIds.length <= MAX_TRUSTED_SCENE_CHARACTER_IDS) return rawIds;
+
+	const filtered = new Set<string>();
+	for (const id of rawIds) {
+		const entity = entityById.get(id);
+		if (!entity) continue;
+		if (entity.id === input.protagonistId || entity.id === input.currentLocationId) {
+			filtered.add(id);
+			continue;
+		}
+		if (entity.type !== 'character') {
+			filtered.add(id);
+			continue;
+		}
+		if (entityMatchesScene(entity, input.sceneText)) filtered.add(id);
+	}
+	return filtered;
+}
+
 function uniqueEntities(entities: TurnContext['entities']): TurnContext['entities'] {
 	const seen = new Set<string>();
 	return entities.filter((entity) => {
@@ -703,6 +748,11 @@ function renderGmTimelineBrief(brief: GmTimelineBrief | null): string {
 		renderGmEventSection('Scheduled future events', brief.scheduledEvents),
 		renderGmNpcEvents(brief),
 	].filter(Boolean).join('\n');
+}
+
+function renderParallelWriteCommand(query: string): string {
+	if (!/^\s*parallel\s+write\s+for\s+this\s+character\b/i.test(query)) return '';
+	return PARALLEL_WRITE_COMMAND_BLOCK;
 }
 
 function renderEntries(ctx: TurnContext, currentEntryId: string): Array<{ role: 'user' | 'assistant'; content: string }> {
@@ -864,7 +914,13 @@ export function buildServerTurnPrompt(
 	const currentLocation = activeEntities.find((entity) => entity.type === 'location' && (entity.state as Record<string, unknown> | null)?.current === true);
 	const sceneText = latestSceneText(ctx);
 	const currentScene = renderCurrentScene(ctx);
-	const sceneEntityIds = new Set(options.sceneEntityIds ?? []);
+	const sceneEntityIds = effectiveSceneEntityIds({
+		activeEntities,
+		sceneText,
+		protagonistId: protagonist?.id,
+		currentLocationId: currentLocation?.id,
+		options,
+	});
 	const presentEntities = activeEntities
 		.map((entity, index) => {
 			const state = entity.state as Record<string, unknown> | null;
@@ -888,7 +944,11 @@ export function buildServerTurnPrompt(
 		.map((item) => item.entity);
 	const presentEntityIds = new Set(presentEntities.map((entity) => entity.id));
 	const entityNameById = new Map(activeEntities.map((entity) => [entity.id, entity.name]));
-	const relevantFactions = selectRelevantFactions(ctx, retrieved, presentEntityIds, options);
+	const relevantFactions = selectRelevantFactions(ctx, retrieved, presentEntityIds, {
+		...options,
+		sceneEntityIds: [...sceneEntityIds],
+		presentNpcIds: [],
+	});
 
 	const factionLines = relevantFactions.map((faction) => {
 		const normalizedGoals = ctx.factionGoals
@@ -998,9 +1058,12 @@ export function buildServerTurnPrompt(
 		'Political pressure builds gradually: slow escalation, debts, rumors, small moves, and delayed consequences.',
 	].filter(Boolean).join('\n\n');
 
+	const parallelWriteCommand = renderParallelWriteCommand(retrieved.query);
+
 	const prompt = [
 		`Story: ${ctx.story.title}`,
 		ctx.story.description ? `Setting: ${ctx.story.description}` : '',
+		parallelWriteCommand,
 		playerCharacter,
 		currentScene || (currentLocation ? `Current location:\n${currentLocation.name}: ${compact(currentLocation.description, 320)}` : ''),
 		retrievedMemory,

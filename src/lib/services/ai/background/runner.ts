@@ -60,6 +60,11 @@ function applyCurrentStoryServerVersion(serverVersion: number | null): void {
 	};
 }
 
+function getBeatSignificance(beat: { significance?: string | null; metadata?: Record<string, unknown> | null }): string {
+	const metadataSignificance = beat.metadata?.significance;
+	return beat.significance ?? (typeof metadataSignificance === 'string' ? metadataSignificance : undefined) ?? 'minor';
+}
+
 function normalizeWorldSimUrgency(value: string | null | undefined): FactionActionRecord['urgency'] {
 	if (value === 'critical') return 'critical';
 	if (value === 'emerging') return 'high';
@@ -262,7 +267,7 @@ async function runChapterCheck(): Promise<void> {
 		storyBeats: relevantBeats.map(b => ({
 			title: b.title,
 			description: b.description ?? '',
-			significance: (b.metadata?.significance as string) ?? 'moderate',
+			significance: getBeatSignificance(b),
 		})),
 	} : undefined;
 
@@ -283,7 +288,7 @@ async function runChapterCheck(): Promise<void> {
 		keywords: summaryResult.keywords, characters: summaryResult.keyCharacters,
 		locations: summaryResult.keyLocations,
 		plotThreads: relevantBeats
-			.filter(b => ['critical', 'major'].includes((b.metadata?.significance as string) ?? ''))
+			.filter(b => ['critical', 'major'].includes(getBeatSignificance(b)))
 			.map(b => b.title),
 		emotionalTone: summaryResult.emotionalTone,
 		branchId: story.currentStory.currentBranchId ?? null,

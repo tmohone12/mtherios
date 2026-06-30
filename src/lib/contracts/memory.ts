@@ -383,6 +383,7 @@ export const bootstrapResponseSchema = z.object({
 		mode: z.literal('control_surface'),
 		story: jsonObjectSchema,
 		entries: z.array(jsonObjectSchema).default([]),
+		entities: z.array(jsonObjectSchema).default([]),
 		chapters: z.array(jsonObjectSchema).default([]),
 		arcs: z.array(jsonObjectSchema).default([]),
 		sagas: z.array(jsonObjectSchema).default([]),

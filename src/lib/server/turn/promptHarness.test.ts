@@ -255,6 +255,82 @@ describe('turn prompt harness', () => {
 		expect(report.retrievedMemoryIds).toEqual(['mem_old_blood', 'mem_household']);
 		});
 
+	it('teaches the narrator the parallel write secondary-arc command', () => {
+		const report = buildPromptHarnessReport({
+			name: 'parallel-write-secondary-arc-command',
+			playerText: 'Parallel write for this character: Xanda',
+			ctx: baseContext({
+				recentEntries: [
+					row({
+						id: 'entry_turn_one',
+						storyId: 'story_balaerys',
+						type: 'user_action',
+						content: 'I refuse the envoy until the house ledgers are opened.',
+						position: 20,
+						parentId: null,
+						branchId: null,
+						metadata: {},
+					}),
+					row({
+						id: 'narration_turn_one',
+						storyId: 'story_balaerys',
+						type: 'narration',
+						content: 'The envoy stiffens while the ledgers are brought into the hall.',
+						position: 21,
+						parentId: 'entry_turn_one',
+						branchId: null,
+						metadata: {},
+					}),
+					row({
+						id: 'entry_turn_two',
+						storyId: 'story_balaerys',
+						type: 'user_action',
+						content: 'I send a quiet servant to watch the east arcade.',
+						position: 22,
+						parentId: null,
+						branchId: null,
+						metadata: {},
+					}),
+					row({
+						id: 'narration_turn_two',
+						storyId: 'story_balaerys',
+						type: 'narration',
+						content: 'The servant vanishes into red shadow as footsteps gather beyond the lattice.',
+						position: 23,
+						parentId: 'entry_turn_two',
+						branchId: null,
+						metadata: {},
+					}),
+				],
+				entities: [
+					entity('loc_yin', 'location', 'Yin', 'The imperial city of Yi Ti.', { current: true }),
+					entity('pc_aurion', 'character', 'Aurion Balaerys', 'The player-centered primary arc character.', {
+						present: true,
+						relationship: { status: 'self', level: 100 },
+					}),
+					entity('npc_xanda', 'character', 'Xanda', 'A courtier moving through a parallel web of private tests.', {
+						present: false,
+						currentLocation: 'east arcade',
+						goals: ['learn who controls the ledgers before Aurion does'],
+					}),
+				],
+			}),
+			retrieved: packet('Parallel write for this character: Xanda', []),
+			options: {
+				sceneEntityIds: ['pc_aurion'],
+			},
+		});
+
+		expect(report.prompt).toContain('PARALLEL WRITE COMMAND');
+		expect(report.prompt).toContain('secondary arc');
+		expect(report.prompt).toContain('primary arc');
+		expect(report.prompt).toContain('last two primary turns');
+		expect(report.prompt).toContain('possible connecting point');
+		expect(report.prompt).toContain('Character npc_xanda / Xanda');
+		expect(report.prompt).toContain('learn who controls the ledgers before Aurion does');
+		expect(report.messages.map((message) => message.content).join('\n')).toContain('The servant vanishes into red shadow');
+	});
+
 	it('exposes stable and dynamic prompt sections for cache inspection', () => {
 		const oldBlood = memoryNode('mem_old_blood', 'Old Blood Etiquette', 'Invitations and seating are political weapons.');
 		const report = buildPromptHarnessReport({

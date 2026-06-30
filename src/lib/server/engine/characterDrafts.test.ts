@@ -39,22 +39,18 @@ function createDbMock() {
 		status: 'active',
 		visibility: 'player_known',
 		state: {
-			background: 'Existing harbor broker background.',
-			aliases: ['Mira'],
-			goals: ['protect Aurion'],
+			bio: 'Existing harbor broker bio.',
+			relationship: { level: 0, status: 'unknown', history: [] },
+			knownFacts: ['Mira knew the market code.'],
+			revealedSecrets: [],
 			factionTags: ['Old Guild'],
-			eventMemory: {
-				saw: ['Mira saw the old oath sworn.'],
-				knew: ['Mira knew the market code.'],
-			},
+			pressures: [],
 		},
 		metadata: {
-			status: 'wanted by the guard captain',
-			aliases: ['The Harbor Broker'],
+			localAliases: ['The Harbor Broker'],
+			currentDisposition: 'wanted by the guard captain',
 			pressures: ['the guard captain is searching for the ledger'],
-			eventMemory: {
-				knows: ['Mira knows the old quay password.'],
-			},
+			knownFacts: ['Mira knows the old quay password.'],
 		},
 		sourceEntryIds: [],
 		sourceEventIds: [],
@@ -183,24 +179,11 @@ beforeEach(() => {
 	mocks.generateServerTextWithMetrics.mockImplementation(async () => ({
 		text: JSON.stringify({
 			appearance: 'Ink-stained silk gloves and a salt-dark cloak.',
-			background: '',
-			currentLocation: 'Yin harbor counting room',
-			currentAction: 'guarding the ledger and blocking the quay',
-			emotionalState: 'controlled fear under professional calm',
-			relationship: 'cautiously loyal to Aurion',
-			aliases: ['Mira', 'The Harbor Broker'],
-			goals: ['protect Aurion', 'expose the harbor witness'],
+			currentDisposition: 'guarding the ledger and blocking the quay',
+			affinity: 35,
+			motivations: ['protect Aurion', 'expose the harbor witness'],
+			knownFacts: ['the ledger names Zhen'],
 			factionTags: ['Old Guild', 'Balaerys Trading Post'],
-			traits: ['calculating'],
-			personalityDescriptors: ['calculating', 'risk-aware under pressure'],
-			voice: 'Precise, clipped, and transactional.',
-			mannerisms: ['checks exits before naming a price'],
-			pressures: ['court scrutiny'],
-			speechStyle: 'Precise, clipped, and transactional.',
-			eventMemory: {
-				did: ['barred the quay during the coup'],
-				knows: ['the ledger names Zhen'],
-			},
 		}),
 		model: 'test-model',
 		endpoint: 'mock',
@@ -212,7 +195,7 @@ beforeEach(() => {
 });
 
 describe('draftCharacterUpdateFromStoryContext', () => {
-	it('drafts current character state without erasing existing event memory', async () => {
+	it('drafts current lorebook character state without erasing existing facts', async () => {
 		const { db, insertCalls } = createDbMock();
 		mocks.getDb.mockReturnValue(db);
 
@@ -225,9 +208,11 @@ describe('draftCharacterUpdateFromStoryContext', () => {
 		const generationArgs = mocks.generateServerTextWithMetrics.mock.calls[0][0] as { prompt: string; responseFormat: string };
 		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(1, 'memory');
 		expect(generationArgs.responseFormat).toBe('json_object');
-		expect(generationArgs.prompt).toContain('aliases, currentLocation, currentAction, emotionalState, relationship');
-		expect(generationArgs.prompt).toContain('personalityDescriptors, voice, mannerisms');
-		expect(generationArgs.prompt).toContain('eventMemory.did, eventMemory.saw, eventMemory.knew, eventMemory.knows');
+		expect(generationArgs.prompt).toContain('bio, appearance, personality, rank, currentDisposition, affinity, motivations, factionTags, knownFacts');
+		expect(generationArgs.prompt).toContain('Use motivations for goals.');
+		expect(generationArgs.prompt).not.toContain('personalOpinion');
+		expect(generationArgs.prompt).not.toContain('mannerisms');
+		expect(generationArgs.prompt).not.toContain('eventMemory.did');
 		expect(generationArgs.prompt).toContain('=== SELECTED STORY MEMORY ===');
 		expect(generationArgs.prompt).toContain('Chapter 7: The Quay Ledger');
 		expect(generationArgs.prompt).toContain('Arc 2: Harbor Knives');
@@ -257,38 +242,24 @@ describe('draftCharacterUpdateFromStoryContext', () => {
 		});
 		expect(state).toMatchObject({
 			appearance: 'Ink-stained silk gloves and a salt-dark cloak.',
-			background: 'Existing harbor broker background.',
-			currentLocation: 'Yin harbor counting room',
-			currentAction: 'guarding the ledger and blocking the quay',
-			emotionalState: 'controlled fear under professional calm',
-			relationship: 'cautiously loyal to Aurion',
-			status: 'wanted by the guard captain',
-			aliases: ['Mira', 'The Harbor Broker'],
-			goals: ['protect Aurion', 'expose the harbor witness'],
+			bio: 'Existing harbor broker bio.',
+			currentDisposition: 'guarding the ledger and blocking the quay',
+			relationship: { level: 35, status: 'unknown', history: [] },
+			knownFacts: ['Mira knew the market code.', 'Mira knows the old quay password.', 'the ledger names Zhen'],
 			factionTags: ['Old Guild', 'Balaerys Trading Post'],
-			traits: ['calculating'],
-			personalityDescriptors: ['calculating', 'risk-aware under pressure'],
-			voice: 'Precise, clipped, and transactional.',
-			mannerisms: ['checks exits before naming a price'],
-			pressures: ['the guard captain is searching for the ledger', 'court scrutiny'],
-			speechStyle: 'Precise, clipped, and transactional.',
-			eventMemory: {
-				saw: ['Mira saw the old oath sworn.'],
-				knew: ['Mira knew the market code.'],
-				did: ['barred the quay during the coup'],
-				knows: ['Mira knows the old quay password.', 'the ledger names Zhen'],
-			},
+			motivations: ['protect Aurion', 'expose the harbor witness'],
 		});
+		expect(state).not.toHaveProperty('personalOpinion');
+		expect(state).not.toHaveProperty('mannerisms');
+		expect(state).not.toHaveProperty('conversationTopics');
 	});
 
-	it('skips empty active-only drafts instead of creating useless proposals', async () => {
+	it('skips empty drafts instead of creating useless proposals', async () => {
 		const { db, insertCalls } = createDbMock();
 		mocks.getDb.mockReturnValue(db);
 		mocks.generateServerTextWithMetrics.mockResolvedValueOnce({
 			text: JSON.stringify({
-				status: 'active',
 				traits: [],
-				present: true,
 				pressures: [],
 				relationship: null,
 			}),

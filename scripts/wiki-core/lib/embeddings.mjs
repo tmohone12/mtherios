@@ -1,10 +1,11 @@
 export function embeddingConfig(overrides = {}) {
+	const provider = overrides.provider ?? process.env.WIKI_EMBED_PROVIDER ?? 'openrouter';
 	return {
-		provider: overrides.provider ?? process.env.WIKI_EMBED_PROVIDER ?? 'ollama',
-		model: overrides.model ?? process.env.WIKI_EMBED_MODEL ?? process.env.EMBED_MODEL ?? 'nomic-embed-text',
+		provider,
+		model: overrides.model ?? process.env.WIKI_EMBED_MODEL ?? process.env.EMBED_MODEL ?? (provider === 'openrouter' ? 'openai/text-embedding-3-small' : 'nomic-embed-text'),
 		ollamaUrl: overrides.ollamaUrl ?? process.env.OLLAMA_URL ?? 'http://127.0.0.1:11434',
-		openAiBaseUrl: overrides.openAiBaseUrl ?? process.env.WIKI_EMBED_BASE_URL ?? process.env.OPENAI_BASE_URL ?? 'http://127.0.0.1:1234/v1',
-		openAiApiKey: overrides.openAiApiKey ?? process.env.WIKI_EMBED_API_KEY ?? process.env.OPENAI_API_KEY ?? '',
+		openAiBaseUrl: overrides.openAiBaseUrl ?? process.env.WIKI_EMBED_BASE_URL ?? process.env.OPENAI_BASE_URL ?? (provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'http://127.0.0.1:1234/v1'),
+		openAiApiKey: overrides.openAiApiKey ?? process.env.WIKI_EMBED_API_KEY ?? (provider === 'openrouter' ? process.env.OPENROUTER_API_KEY : '') ?? process.env.OPENAI_API_KEY ?? '',
 		customUrl: overrides.customUrl ?? process.env.WIKI_EMBED_URL ?? '',
 		batchSize: Number(overrides.batchSize ?? process.env.WIKI_EMBED_BATCH ?? 8),
 	};
@@ -18,7 +19,7 @@ export async function embedText(text, config = embeddingConfig()) {
 export async function embedMany(texts, config = embeddingConfig()) {
 	if (texts.length === 0) return [];
 	if (config.customUrl) return embedCustom(texts, config);
-	if (config.provider === 'openai' || config.provider === 'openai-compatible') return embedOpenAi(texts, config);
+	if (config.provider === 'openai' || config.provider === 'openai-compatible' || config.provider === 'openrouter') return embedOpenAi(texts, config);
 	return embedOllama(texts, config);
 }
 

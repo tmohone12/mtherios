@@ -10,6 +10,7 @@ type JsonRecord = Record<string, unknown>;
 export interface BuildCampaignProjectionInput {
 	story: JsonRecord;
 	entries: JsonRecord[];
+	entities?: JsonRecord[];
 	chapters: JsonRecord[];
 	arcs: JsonRecord[];
 	sagas: JsonRecord[];
@@ -31,13 +32,17 @@ function clampLimit(value: number | null | undefined, fallback = 80): number {
 
 export function buildCampaignProjection(
 	input: BuildCampaignProjectionInput,
-	options: { entryLimit?: number | null; chapterLimit?: number | null; arcLimit?: number | null; sagaLimit?: number | null } = {},
+	options: { entryLimit?: number | null; entityLimit?: number | null; chapterLimit?: number | null; arcLimit?: number | null; sagaLimit?: number | null } = {},
 ): CampaignProjection {
 	const entryLimit = clampLimit(options.entryLimit, 80);
+	const entityLimit = typeof options.entityLimit === 'number' && Number.isFinite(options.entityLimit)
+		? Math.max(0, Math.min(200, Math.trunc(options.entityLimit)))
+		: 200;
 	const chapterLimit = clampLimit(options.chapterLimit, 200);
 	const arcLimit = clampLimit(options.arcLimit, 80);
 	const sagaLimit = clampLimit(options.sagaLimit, 40);
 	const entries = (input.entries ?? []).slice(-entryLimit);
+	const entityRows = (input.entities ?? []).slice(0, entityLimit);
 	const chapterRows = (input.chapters ?? []).slice(-chapterLimit);
 	const arcRows = (input.arcs ?? []).slice(-arcLimit);
 	const sagaRows = (input.sagas ?? []).slice(-sagaLimit);
@@ -45,6 +50,7 @@ export function buildCampaignProjection(
 		mode: 'control_surface',
 		story: input.story,
 		entries,
+		entities: entityRows,
 		chapters: chapterRows,
 		arcs: arcRows,
 		sagas: sagaRows,
@@ -64,10 +70,13 @@ export function buildCampaignProjection(
 
 export async function getCampaignProjection(
 	storyId: string,
-	options: { entryLimit?: number | null; chapterLimit?: number | null; arcLimit?: number | null; sagaLimit?: number | null } = {},
+	options: { entryLimit?: number | null; entityLimit?: number | null; chapterLimit?: number | null; arcLimit?: number | null; sagaLimit?: number | null } = {},
 ): Promise<CampaignProjection> {
 	const db = getDb();
 	const entryLimit = clampLimit(options.entryLimit, 80);
+	const entityLimit = typeof options.entityLimit === 'number' && Number.isFinite(options.entityLimit)
+		? Math.max(0, Math.min(200, Math.trunc(options.entityLimit)))
+		: 200;
 	const chapterLimit = clampLimit(options.chapterLimit, 200);
 	const arcLimit = clampLimit(options.arcLimit, 80);
 	const sagaLimit = clampLimit(options.sagaLimit, 40);
@@ -76,6 +85,7 @@ export async function getCampaignProjection(
 
 	const [
 		entryRows,
+		entityRows,
 		entryCountRows,
 		chapterRows,
 		chapterCountRows,
@@ -95,6 +105,14 @@ export async function getCampaignProjection(
 			.where(eq(storyEntries.storyId, storyId))
 			.orderBy(desc(storyEntries.position))
 			.limit(entryLimit),
+		entityLimit > 0
+			? db
+				.select()
+				.from(entities)
+				.where(eq(entities.storyId, storyId))
+				.orderBy(desc(entities.updatedAt))
+				.limit(entityLimit)
+			: Promise.resolve([] as Array<typeof entities.$inferSelect>),
 		db.select({ count: sql<number>`count(*)::int` }).from(storyEntries).where(eq(storyEntries.storyId, storyId)),
 		db
 			.select()
@@ -127,6 +145,7 @@ export async function getCampaignProjection(
 	return buildCampaignProjection({
 		story,
 		entries: [...entryRows].sort((a, b) => a.position - b.position),
+		entities: entityRows,
 		chapters: [...chapterRows].sort((a, b) => a.number - b.number),
 		arcs: [...arcRows].sort((a, b) => a.number - b.number),
 		sagas: [...sagaRows].sort((a, b) => a.number - b.number),
@@ -139,5 +158,5 @@ export async function getCampaignProjection(
 		memoryNodeCount: Number(memoryNodeCountRows[0]?.count ?? 0),
 		vaultStatus,
 		cacheStatus,
-	}, { entryLimit, chapterLimit, arcLimit, sagaLimit });
+	}, { entryLimit, entityLimit, chapterLimit, arcLimit, sagaLimit });
 }

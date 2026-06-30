@@ -21,6 +21,9 @@ mtherios.config.json
 
 # Local terminal-app data
 /data/
+/.cache-backups/
+/exports/
+/lore/
 
 # Vite
 vite.config.js.timestamp-*

@@ -44,6 +44,15 @@ const PRESSURE_CLIMAX_THRESHOLD = 70;
 const PRESSURE_VISIBLE_OVERRIDE = 70; // pressure ≥ this leaks the scheme even when secret
 const INJECT_CAP = 4; // narrator gets at most this many schemes
 const TIME_STAGE_DEFAULT_DAYS = 3;
+const SCHEME_RELEVANT_TIMELINE_EVENTS = new Set([
+	'betrayal',
+	'faction_move',
+	'death',
+	'agreement',
+	'scheme',
+	'marriage',
+	'alliance',
+]);
 
 function applyCurrentStoryServerVersion(serverVersion: number | null): void {
 	if (!serverVersion || !story.currentStory) return;
@@ -67,9 +76,16 @@ export function shouldEvaluate(args: WorldStateUpdate | null | undefined): boole
 		);
 		if (hasReal) return true;
 	}
+	if (args.timeline_events && args.timeline_events.some(event => SCHEME_RELEVANT_TIMELINE_EVENTS.has(event.type ?? 'scheme'))) return true;
 	if (args.characters && args.characters.some(c => c.status === 'deceased')) return true;
 	if (args.agreements && args.agreements.some(a => a.action === 'break')) return true;
 	return false;
+}
+
+export function findUniqueSchemeByIdOrPrefix(schemes: Scheme[], idOrPrefix: string): Scheme | null {
+	if (!idOrPrefix || idOrPrefix.length < 8) return null;
+	const matches = schemes.filter(scheme => scheme.id === idOrPrefix || scheme.id.startsWith(idOrPrefix));
+	return matches.length === 1 ? matches[0] : null;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -201,9 +217,9 @@ async function applyManageSchemes(args: ManageSchemesArgs, errors: string[]): Pr
 	if (created.length > 0) story.schemes = [...story.schemes, ...created];
 
 	for (const e of args.escalate) {
-		const target = story.schemes.find(s => s.id === e.id || s.id.startsWith(e.id));
+		const target = findUniqueSchemeByIdOrPrefix(story.schemes, e.id);
 		if (!target) {
-			errors.push(`scheme.escalate id not found: ${e.id}`);
+			errors.push(`scheme.escalate id missing or ambiguous: ${e.id}`);
 			continue;
 		}
 		const next: Partial<Scheme> = { updatedAt: now };
@@ -236,9 +252,9 @@ async function applyManageSchemes(args: ManageSchemesArgs, errors: string[]): Pr
 	}
 
 	for (const r of args.resolve) {
-		const target = story.schemes.find(s => s.id === r.id || s.id.startsWith(r.id));
+		const target = findUniqueSchemeByIdOrPrefix(story.schemes, r.id);
 		if (!target) {
-			errors.push(`scheme.resolve id not found: ${r.id}`);
+			errors.push(`scheme.resolve id missing or ambiguous: ${r.id}`);
 			continue;
 		}
 		const next: Partial<Scheme> = { status: r.outcome, updatedAt: now };

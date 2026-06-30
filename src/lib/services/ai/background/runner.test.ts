@@ -265,4 +265,47 @@ describe('runBackgroundJobs lore management', () => {
 			unresolvedKnownMembers: ['Unnamed Scout'],
 		});
 	});
+
+	it('uses direct story-beat significance for chapter enrichment and plot threads', async () => {
+		databaseMocks.getStoryBeats.mockResolvedValue([
+			{
+				id: 'beat-1',
+				storyId: 'story-1',
+				title: 'The Gate Betrayal',
+				description: 'The gate captain betrays the pact.',
+				type: 'event',
+				significance: 'critical',
+				status: 'active',
+				triggeredAt: 5,
+				resolvedAt: null,
+				metadata: null,
+				branchId: null,
+			},
+		]);
+
+		const errors = await runBackgroundJobs();
+
+		expect(errors).toEqual([]);
+		expect(aiMock.memory.summarizeChapter).toHaveBeenCalledWith(
+			expect.any(Array),
+			expect.any(Array),
+			'adventure',
+			'second',
+			'present',
+			expect.objectContaining({
+				storyBeats: [expect.objectContaining({
+					title: 'The Gate Betrayal',
+					significance: 'critical',
+				})],
+			}),
+			expect.any(Array),
+			5,
+		);
+		expect(canonicalMocks.saveCanonicalChapter).toHaveBeenCalledWith(
+			expect.objectContaining({
+				plotThreads: ['The Gate Betrayal'],
+			}),
+			'create',
+		);
+	});
 });

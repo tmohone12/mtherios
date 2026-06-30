@@ -19,6 +19,7 @@ describe('campaign projections', () => {
 				currentWorldTime: 'Year 12',
 			},
 			entries,
+			entities: [{ id: 'entity_player', type: 'character', name: 'Aurion Belaerys', state: { relationship: 'self' } }],
 			entryCount: 10000,
 			entityCount: 500,
 			eventCount: 1200,
@@ -44,6 +45,7 @@ describe('campaign projections', () => {
 		expect(projection.entries[0].id).toBe('entry_120');
 		expect(projection.counts.entries).toBe(10000);
 		expect(projection.counts.entities).toBe(500);
+		expect(projection.entities).toEqual([{ id: 'entity_player', type: 'character', name: 'Aurion Belaerys', state: { relationship: 'self' } }]);
 		expect(projection.cache.hitCount).toBe(100);
 	});
 

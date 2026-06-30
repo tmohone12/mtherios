@@ -787,21 +787,20 @@ describe('entryRefinementResultSchema', () => {
 		const data = {
 			description: 'Old text + new text.',
 			bio: 'Born in Pyke, raised at sea.',
-			motivations: ['Reclaim her birthright', 'Avenge her father'],
+			appearance: 'Salt-stiff cloak.',
 			personality: 'Steely and quiet.',
+			rank: 'princess',
 			currentDisposition: 'wary but loyal',
-			personalOpinion: 'Trusts the player after the ransom was paid.',
-			pressures: ['father has gambling debts'],
+			affinity: 35,
+			motivations: ['Reclaim her birthright', 'Avenge her father'],
 			factionTags: ['House Greyjoy'],
 			knownFacts: ['The player spared her brother.'],
-			relationshipLevel: 35,
-			relationshipStatus: 'trusted ally',
 			reasoning: 'Character context expanded.',
 		};
 		const parsed = entryRefinementResultSchema.parse(data);
 		expect(parsed.bio).toBe('Born in Pyke, raised at sea.');
 		expect(parsed.motivations).toHaveLength(2);
-		expect(parsed.relationshipLevel).toBe(35);
+		expect(parsed.affinity).toBe(35);
 	});
 
 	it('accepts faction operational state fields', () => {

@@ -231,6 +231,7 @@ export async function resolveBackendStoryBootstrap(story: Pick<Story, 'id' | 'se
 export async function fetchBackendStoryProjection(serverStoryId: string, limit = 80): Promise<CampaignProjection> {
 	return sendStoryEngineCommandResult(serverStoryId, 'campaign.status', {
 		entryLimit: Math.max(1, Math.trunc(limit)),
+		entityLimit: 200,
 	}, campaignProjectionSchema);
 }
 

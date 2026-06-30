@@ -95,6 +95,15 @@ function stringFrom(value: unknown): string | null {
 	return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+function stringListFrom(value: unknown): string[] | null {
+	if (!Array.isArray(value)) return null;
+	return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
+function numberFrom(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 function entryWithResolvedEntity(entry: Entry, entity: Record<string, unknown> | undefined): Entry {
 	if (!entity) return entry;
 	const resolvedId = stringFrom(entity.id);
@@ -127,6 +136,8 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 	const previousStateRecord = previousState as unknown as Record<string, unknown> | null;
 	const isSelf = character.relationship === 'self';
 	const relationship = previousState?.relationship ?? { level: isSelf ? 100 : 0, status: isSelf ? 'self' : 'neutral', history: [] };
+	const affinity = numberFrom(metadata.affinity) ?? relationship.level;
+	const currentDisposition = stringFrom(metadata.currentDisposition) ?? character.relationship ?? previousState?.currentDisposition ?? null;
 	const lastSeenLocation = stringFrom(metadata.lastSeenLocation) ?? previousState?.lastSeenLocation ?? null;
 	const playerPrompt = stringFrom(metadata.playerPrompt) ?? stringFrom(previousStateRecord?.playerPrompt);
 	const assets = Array.isArray(metadata.assets)
@@ -135,6 +146,7 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 			? (previousStateRecord.assets as unknown[]).filter((asset): asset is string => typeof asset === 'string' && asset.trim().length > 0)
 			: [];
 	const appearance = stringFrom(metadata.appearance) ?? stringFrom(previousStateRecord?.appearance);
+	const bio = stringFrom(metadata.bio) ?? previousState?.bio ?? character.description ?? null;
 	const voice = stringFrom(metadata.voice) ?? stringFrom(previousStateRecord?.voice);
 	const mannerisms = Array.isArray(metadata.mannerisms)
 		? metadata.mannerisms.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
@@ -146,18 +158,26 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 		: Array.isArray(previousStateRecord?.personalityDescriptors)
 			? (previousStateRecord.personalityDescriptors as unknown[]).filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
 			: [];
+	const personality = stringFrom(metadata.personality)
+		?? previousState?.personality
+		?? (personalityDescriptors.length > 0 ? personalityDescriptors.join(', ') : null);
+	const motivations = stringListFrom(metadata.motivations) ?? previousState?.motivations ?? null;
+	const knownFacts = stringListFrom(metadata.knownFacts) ?? previousState?.knownFacts ?? [];
+	const factionName = stringFrom(metadata.factionName) ?? stringFrom(previousStateRecord?.factionName);
+	const factionTags = stringListFrom(metadata.factionTags) ?? previousState?.factionTags ?? (factionName ? [factionName] : []);
 	const visibilityNote = stringFrom(metadata.visibilityNote) ?? stringFrom(previousStateRecord?.visibilityNote);
 	const state = {
 		...(previousState ?? {}),
 		type: 'character',
 		isPresent: previousState?.isPresent ?? (isSelf || Boolean(lastSeenLocation)),
 		lastSeenLocation,
-		currentDisposition: character.relationship ?? previousState?.currentDisposition ?? null,
+		currentDisposition,
 		relationship: {
 			...relationship,
-			status: character.relationship ?? relationship.status,
+			level: affinity,
+			status: currentDisposition ?? relationship.status,
 		},
-		knownFacts: previousState?.knownFacts ?? [],
+		knownFacts,
 		revealedSecrets: previousState?.revealedSecrets ?? [],
 		pressures: previousState?.pressures ?? [],
 		traits: character.traits,
@@ -166,11 +186,15 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 		status: character.status,
 		playerPrompt,
 		assets,
+		bio,
 		appearance,
+		personality,
+		motivations,
+		factionTags,
 		voice,
 		mannerisms,
 		personalityDescriptors,
-		factionName: stringFrom(metadata.factionName) ?? stringFrom(previousStateRecord?.factionName),
+		factionName,
 		rank: stringFrom(metadata.rank) ?? stringFrom(previousStateRecord?.rank),
 		role: stringFrom(metadata.role) ?? stringFrom(previousStateRecord?.role),
 		visibilityNote,

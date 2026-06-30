@@ -26,12 +26,13 @@ function readNonNegativeInt(value: string | undefined, fallback: number): number
 }
 
 export function getServerMemoryConfig(): ServerMemoryConfig {
+	const embeddingProvider = env.MEMORY_EMBEDDING_PROVIDER?.trim() || null;
 	return {
 		databaseUrl: env.DATABASE_URL?.trim() || null,
-		embeddingProvider: env.MEMORY_EMBEDDING_PROVIDER?.trim() || null,
+		embeddingProvider,
 		embeddingModel: env.MEMORY_EMBEDDING_MODEL?.trim() || null,
 		embeddingBaseUrl: env.MEMORY_EMBEDDING_BASE_URL?.trim() || null,
-		embeddingApiKey: env.MEMORY_EMBEDDING_API_KEY?.trim() || null,
+		embeddingApiKey: env.MEMORY_EMBEDDING_API_KEY?.trim() || (embeddingProvider === 'openrouter' ? env.OPENROUTER_API_KEY?.trim() : '') || null,
 		embeddingCustomUrl: env.MEMORY_EMBEDDING_URL?.trim() || null,
 		embeddingBatchSize: readPositiveInt(env.MEMORY_EMBEDDING_BATCH, 8),
 		embeddingDimensions: readPositiveInt(env.MEMORY_EMBEDDING_DIMENSIONS, 1536),

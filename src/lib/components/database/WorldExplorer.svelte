@@ -81,7 +81,6 @@
 	let newDatabaseTitle = $state('');
 	let creatingDatabase = $state(false);
 	let characterDraftInstructions = $state('Update this NPC from recent story context.');
-	const MAX_CHARACTER_PHOTO_BYTES = 2 * 1024 * 1024;
 
 	const visibleSections = $derived.by(() => {
 		return sections.filter((section) => !section.isAdvanced || showDiagnostics);
@@ -121,8 +120,7 @@
 		}
 	});
 	const characterState = $derived.by(() => asRecord(editorRecord?.state) ?? {});
-	const characterEventMemory = $derived.by(() => asRecord(characterState.eventMemory) ?? {});
-	const characterPhotoUrl = $derived.by(() => typeof characterState.photoUrl === 'string' ? characterState.photoUrl : '');
+	const characterRelationship = $derived.by(() => asRecord(characterState.relationship) ?? {});
 	const isReviewablePatch = $derived(isReviewSection()
 		&& Boolean(selectedRecord?.id)
 		&& ['pending', 'needs_review'].includes(String((editorRecord?.status ?? selectedRecord?.status) ?? '')));
@@ -280,43 +278,15 @@
 		});
 	}
 
-	function updateCharacterEventMemory(key: string, value: string) {
+	function updateCharacterRelationship(key: string, value: unknown) {
 		updateEditor((record) => {
 			const state = asRecord(record.state) ?? {};
-			const eventMemory = asRecord(state.eventMemory) ?? {};
+			const relationship = asRecord(state.relationship) ?? {};
 			record.state = {
 				...state,
-				eventMemory: {
-					...eventMemory,
-					[key]: lineArray(value),
-				},
+				relationship: { level: 0, status: 'unknown', history: [], ...relationship, [key]: value },
 			};
 		});
-	}
-
-	async function handleCharacterPhotoUpload(event: Event) {
-		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
-		if (!file) return;
-		if (!file.type.startsWith('image/')) {
-			status = 'Choose an image file.';
-			input.value = '';
-			return;
-		}
-		if (file.size > MAX_CHARACTER_PHOTO_BYTES) {
-			status = 'Photo must be under 2 MB.';
-			input.value = '';
-			return;
-		}
-		const photoUrl = await new Promise<string>((resolve, reject) => {
-			const reader = new FileReader();
-			reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Could not read photo.'));
-			reader.onerror = () => reject(reader.error ?? new Error('Could not read photo.'));
-			reader.readAsDataURL(file);
-		});
-		updateCharacterState('photoUrl', photoUrl);
-		status = 'Photo loaded. Save the record to persist it.';
-		input.value = '';
 	}
 
 	function setActiveSection(sectionId: string) {
@@ -1162,99 +1132,64 @@
 						{#if editorRecord?.type === 'character' || selectedRecord?.type === 'character'}
 							<div class="space-y-3 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
 								<div class="flex items-center justify-between gap-3">
-									<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Character Canon</div>
+									<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Character State</div>
 									<button
 										class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-50"
 										onclick={draftCharacterUpdate}
 										disabled={draftingCharacter}
-										title="Draft From Context"
+										title="AI refinement"
 									>
 										<Sparkles class="h-4 w-4" />
 									</button>
 								</div>
 
-								<div class="grid gap-3 sm:grid-cols-[96px_minmax(0,1fr)]">
-									<div class="h-24 w-24 overflow-hidden rounded-md border border-[var(--border-secondary)] bg-[var(--bg-secondary)]">
-										{#if characterPhotoUrl}
-											<img src={characterPhotoUrl} alt="Character portrait" class="h-full w-full object-cover" />
-										{:else}
-											<div class="flex h-full w-full items-center justify-center text-[10px] uppercase tracking-wide text-[var(--text-muted)]">No Photo</div>
-										{/if}
-									</div>
-									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Photo</span>
-										<input type="file" accept="image/*" onchange={handleCharacterPhotoUpload} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
-									</label>
-								</div>
-
 								<div class="grid gap-2 sm:grid-cols-2">
 									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Bio</span>
+										<textarea value={stringValue(characterState.bio)} oninput={(event) => updateCharacterState('bio', nullableTextValue(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
 										<span>Appearance</span>
-										<textarea value={stringValue(characterState.appearance)} oninput={(event) => updateCharacterState('appearance', textValue(event))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+										<textarea value={stringValue(characterState.appearance)} oninput={(event) => updateCharacterState('appearance', nullableTextValue(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
 									</label>
 									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Background</span>
-										<textarea value={stringValue(characterState.background)} oninput={(event) => updateCharacterState('background', textValue(event))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+										<span>Personality</span>
+										<textarea value={stringValue(characterState.personality)} oninput={(event) => updateCharacterState('personality', nullableTextValue(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
 									</label>
 									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Goals</span>
-										<textarea value={linesValue(characterState.goals)} oninput={(event) => updateCharacterState('goals', lineArray(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
-									</label>
-									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Speech Style</span>
-										<textarea value={stringValue(characterState.speechStyle)} oninput={(event) => updateCharacterState('speechStyle', textValue(event))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+										<span>Known Facts</span>
+										<textarea value={linesValue(characterState.knownFacts)} oninput={(event) => updateCharacterState('knownFacts', lineArray(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
 									</label>
 								</div>
 
 								<div class="grid gap-2 sm:grid-cols-3">
 									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Current Location</span>
-										<input value={stringValue(characterState.currentLocation)} oninput={(event) => updateCharacterState('currentLocation', textValue(event))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+										<span>Rank</span>
+										<input value={stringValue(characterState.rank)} oninput={(event) => updateCharacterState('rank', nullableTextValue(textValue(event)))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
 									</label>
 									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Current Action</span>
-										<input value={stringValue(characterState.currentAction)} oninput={(event) => updateCharacterState('currentAction', textValue(event))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+										<span>Disposition</span>
+										<input value={stringValue(characterState.currentDisposition)} oninput={(event) => updateCharacterState('currentDisposition', nullableTextValue(textValue(event)))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
 									</label>
 									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Emotional State</span>
-										<input value={stringValue(characterState.emotionalState)} oninput={(event) => updateCharacterState('emotionalState', textValue(event))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+										<span>Affinity</span>
+										<input type="number" min="-100" max="100" step="1" value={Number(characterRelationship.level ?? 0)} oninput={(event) => updateCharacterRelationship('level', numberInputValue(event, Number(characterRelationship.level ?? 0), -100, 100, true))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+									</label>
+								</div>
+
+								<div class="grid gap-2 sm:grid-cols-2">
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Goals</span>
+										<textarea value={linesValue(characterState.motivations)} oninput={(event) => updateCharacterState('motivations', lineArray(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
 									</label>
 									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Relationship</span>
-										<input value={stringValue(characterState.relationship)} oninput={(event) => updateCharacterState('relationship', textValue(event))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
-									</label>
-									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)] sm:col-span-2">
 										<span>Faction Tags</span>
-										<input value={linesValue(characterState.factionTags)} oninput={(event) => updateCharacterState('factionTags', lineArray(textValue(event)))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
-									</label>
-								</div>
-
-								<div class="grid gap-2 sm:grid-cols-4">
-									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Did</span>
-										<textarea value={linesValue(characterEventMemory.did)} oninput={(event) => updateCharacterEventMemory('did', textValue(event))} class="h-20 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
-									</label>
-									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Saw</span>
-										<textarea value={linesValue(characterEventMemory.saw)} oninput={(event) => updateCharacterEventMemory('saw', textValue(event))} class="h-20 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
-									</label>
-									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Knew</span>
-										<textarea value={linesValue(characterEventMemory.knew)} oninput={(event) => updateCharacterEventMemory('knew', textValue(event))} class="h-20 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
-									</label>
-									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Knows</span>
-										<textarea value={linesValue(characterEventMemory.knows)} oninput={(event) => updateCharacterEventMemory('knows', textValue(event))} class="h-20 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+										<textarea value={linesValue(characterState.factionTags)} oninput={(event) => updateCharacterState('factionTags', lineArray(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
 									</label>
 								</div>
 
 								<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-									<span>promptTemplate</span>
-									<textarea value={stringValue(characterState.promptTemplate)} oninput={(event) => updateCharacterState('promptTemplate', textValue(event))} class="h-28 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
-								</label>
-
-								<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-									<span>Draft From Context</span>
+									<span>AI Refinement</span>
 									<textarea bind:value={characterDraftInstructions} class="h-16 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
 								</label>
 							</div>

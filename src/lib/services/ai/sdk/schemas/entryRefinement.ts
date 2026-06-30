@@ -21,18 +21,16 @@ export const entryRefinementResultSchema = z.object({
 	keywords: z.array(z.string()).nullable().optional(),
 	aliases: z.array(z.string()).nullable().optional(),
 	hiddenInfo: z.string().nullable().optional(),
-	// Character-only state enrichment. Omit/null for other entry types.
+	// Character-only lorebook state. Omit/null for other entry types.
 	bio: z.string().nullable().optional(),
+	rank: z.string().nullable().optional(),
+	appearance: z.string().nullable().optional(),
 	motivations: z.array(z.string()).nullable().optional(),
 	personality: z.string().nullable().optional(),
 	currentDisposition: z.string().nullable().optional(),
-	personalOpinion: z.string().nullable().optional(),
-	pressures: z.array(z.string()).nullable().optional(),
+	affinity: z.number().min(-100).max(100).nullable().optional(),
 	factionTags: z.array(z.string()).nullable().optional(),
 	knownFacts: z.array(z.string()).nullable().optional(),
-	revealedSecrets: z.array(z.string()).nullable().optional(),
-	relationshipLevel: z.number().min(-100).max(100).nullable().optional(),
-	relationshipStatus: z.string().nullable().optional(),
 	// Faction-only operational state. Omit/null for other entry types.
 	playerStanding: z.number().min(-100).max(100).nullable().optional(),
 	factionStatus: z.enum(['allied', 'neutral', 'hostile', 'unknown']).nullable().optional(),
