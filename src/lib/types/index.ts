@@ -37,6 +37,8 @@ export interface Meter {
 
 export interface Story {
   id: string
+  /** Shelf/library workspace this story belongs to. Shared canon can live at shelf scope. */
+  shelfId?: string | null
   title: string
   description: string | null
   genre: string | null
@@ -1017,6 +1019,144 @@ export interface WorldEventSuggestion {
   confidence: number
 }
 
+export type PlotBrainTensionKind =
+  | 'debt'
+  | 'oath'
+  | 'rivalry'
+  | 'resource_shortage'
+  | 'succession'
+  | 'secret'
+  | 'romantic_pressure'
+  | 'faction_goal_conflict'
+  | 'wounded_pride'
+  | 'mystery'
+  | 'threat'
+  | 'moral_contradiction'
+  | 'earned_goodwill'
+  | 'location_pressure'
+  | 'other'
+
+export interface PlotBrainTensionSeed {
+  id: string
+  title: string
+  kind: PlotBrainTensionKind
+  involvedEntityIds: string[]
+  involvedFactionIds: string[]
+  involvedLocationIds: string[]
+  pressure: number
+  volatility: number
+  playerRelevance: number
+  canonConfidence: number
+  unresolvedQuestion: string
+  whyItMatters: string
+  evidenceRefs: StrategicEvidenceRef[]
+}
+
+export type PlotBrainActorRole =
+  | 'primary_antagonist'
+  | 'subplot_antagonist'
+  | 'rival'
+  | 'pressure_actor'
+  | 'false_antagonist'
+  | 'tragic_opponent'
+  | 'hidden_patron'
+  | 'unwitting_catalyst'
+
+export interface PlotBrainAntagonistCandidate {
+  id: string
+  actorEntityId?: string | null
+  actorFactionId?: string | null
+  name: string
+  role: PlotBrainActorRole
+  tensionSeedIds: string[]
+  motive: string
+  fear: string
+  woundOrNeed: string
+  method: string
+  lineTheyWillNotCross: string
+  escalationTrigger: string
+  hesitationTrigger: string
+  plausibilityScore: number
+  dramaticScore: number
+  agencyRisk: number
+  evidenceRefs: StrategicEvidenceRef[]
+}
+
+export type PlotBrainPlotKind = StrategicPlotLine['kind']
+  | 'romantic_complication'
+  | 'moral_dilemma'
+  | 'social_pressure'
+  | 'economic_pressure'
+
+export type PlotBrainLifecycleStage =
+  | 'seed'
+  | 'simmer'
+  | 'reveal'
+  | 'escalate'
+  | 'crisis'
+  | 'fallout'
+  | 'resolved'
+  | 'dormant'
+
+export interface PlotBrainClue {
+  clue: string
+  delivery: 'rumor' | 'scene_detail' | 'npc_behavior' | 'document' | 'found_object' | 'absence' | 'price_or_resource' | 'direct_confession' | 'other'
+  truth: string
+  visibility: 'subtle' | 'obvious'
+  evidenceRefs: StrategicEvidenceRef[]
+}
+
+export interface PlotBrainPressureBeat {
+  delayTurns: number
+  title: string
+  body: string
+  urgency: 'simmer' | 'emerging' | 'immediate'
+  visibility: 'secret' | 'player_known' | 'public'
+  actorEntityIds: string[]
+  targetEntityIds: string[]
+  locationIds: string[]
+  factionIds: string[]
+  memoryImpact: Record<string, unknown>
+}
+
+export interface PlotBrainPlotCard {
+  id: string
+  title: string
+  logline: string
+  kind: PlotBrainPlotKind
+  lifecycleStage: PlotBrainLifecycleStage
+  pressure: number
+  urgency: 'dormant' | 'simmer' | 'emerging' | 'immediate'
+  visibility: 'secret' | 'rumored' | 'player_known' | 'public'
+  actorEntityIds: string[]
+  actorFactionIds: string[]
+  antagonistCandidateIds: string[]
+  targetEntityIds: string[]
+  targetFactionIds: string[]
+  locationIds: string[]
+  goal: string
+  motive: string
+  method: string
+  stakes: string
+  playerTouchpoints: string[]
+  clueTrail: PlotBrainClue[]
+  pressureBeats: PlotBrainPressureBeat[]
+  ignoredOutcome: string
+  successOutcome: string
+  failureOutcome: string
+  partialOutcome: string
+  sourceRefs: StrategicEvidenceRef[]
+  continuityRisks: string[]
+  antiRailroadNotes: string[]
+}
+
+export interface PlotBrainActivationPlan {
+  activateNow: string[]
+  keepDormant: string[]
+  retireOrMerge: string[]
+  rationale: string
+}
+
 export type StrategicCanonPatch =
   | { type: 'faction_goal_add'; factionName: string; goal: Partial<FactionGoal>; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
   | { type: 'faction_goal_update'; factionName: string; goalRef: string; progressDelta: number; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
@@ -1027,6 +1167,13 @@ export type StrategicCanonPatch =
   | { type: 'rumor_seed'; rumor: Partial<RumorRecord>; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
   | { type: 'thread_create'; thread: Partial<StoryThread>; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
   | { type: 'custom'; label: string; payload: Record<string, unknown>; reason: string; confidence: number; evidenceRefs: StrategicEvidenceRef[] }
+
+export interface PlotBrainWritePlan {
+  storyThreadCreates: Array<Partial<StoryThread> & { title?: string | null; sourceRefs?: StrategicEvidenceRef[] }>
+  storyThreadUpdates: Array<{ threadId: string; status?: StoryThread['status']; significance?: StoryThread['significance']; description?: string; reason: string }>
+  timelineEvents: Array<PlotBrainPressureBeat & { plotCardId: string; threadId?: string | null; sourceRefs: StrategicEvidenceRef[] }>
+  patchProposals: StrategicCanonPatch[]
+}
 
 export interface StrategicWorldFrame {
   id: string
@@ -1062,6 +1209,11 @@ export interface StrategicWorldFrame {
   fastWorldSimInstructions: string
   narratorPromptCard: string
   canonPatchSuggestions: StrategicCanonPatch[]
+  tensionSeeds: PlotBrainTensionSeed[]
+  antagonistCandidates: PlotBrainAntagonistCandidate[]
+  plotCards: PlotBrainPlotCard[]
+  activationPlan: PlotBrainActivationPlan
+  plotBrainWritePlan: PlotBrainWritePlan
   reconcilerResult?: {
     applied: number
     rejected: string[]

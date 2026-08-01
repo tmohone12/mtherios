@@ -20,6 +20,7 @@ export { LoreManagementService } from './lorebook/LoreManagementService';
 export { EntryRefinementService } from './lorebook/EntryRefinementService';
 export { ImageGenerationService } from './image/ImageGenerationService';
 export { WorldSimulationService } from './generation/WorldSimulationService';
+export { StorySetupAssistService } from './generation/StorySetupAssistService';
 export { StrategicWorldBrainService } from './generation/StrategicWorldBrainService';
 export { ArcCondensationService } from './generation/ArcCondensationService';
 export { SagaCondensationService } from './generation/SagaCondensationService';
@@ -37,6 +38,7 @@ import { LoreManagementService } from './lorebook/LoreManagementService';
 import { EntryRefinementService } from './lorebook/EntryRefinementService';
 import { ImageGenerationService } from './image/ImageGenerationService';
 import { WorldSimulationService } from './generation/WorldSimulationService';
+import { StorySetupAssistService } from './generation/StorySetupAssistService';
 import { StrategicWorldBrainService } from './generation/StrategicWorldBrainService';
 import { ArcCondensationService } from './generation/ArcCondensationService';
 import { SagaCondensationService } from './generation/SagaCondensationService';
@@ -53,6 +55,7 @@ let _loreManagement: LoreManagementService;
 let _entryRefinement: EntryRefinementService;
 let _imageGen: ImageGenerationService;
 let _worldSim: WorldSimulationService;
+let _storySetupAssist: StorySetupAssistService;
 let _strategicWorldBrain: StrategicWorldBrainService;
 let _arcCondensation: ArcCondensationService;
 let _sagaCondensation: SagaCondensationService;
@@ -70,6 +73,7 @@ export const ai = {
 	get entryRefinement() { return _entryRefinement ??= new EntryRefinementService(); },
 	get imageGen() { return _imageGen ??= new ImageGenerationService(); },
 	get worldSim() { return _worldSim ??= new WorldSimulationService(); },
+	get storySetupAssist() { return _storySetupAssist ??= new StorySetupAssistService(); },
 	get strategicWorldBrain() { return _strategicWorldBrain ??= new StrategicWorldBrainService(); },
 	get arcCondensation() { return _arcCondensation ??= new ArcCondensationService(); },
 	get sagaCondensation() { return _sagaCondensation ??= new SagaCondensationService(); },

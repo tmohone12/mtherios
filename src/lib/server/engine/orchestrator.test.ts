@@ -112,6 +112,27 @@ describe('engine AI orchestrator', () => {
 		});
 	});
 
+	it('uses the active strategic frame during world ticks without regenerating it', () => {
+		const plan = buildEngineOrchestratorPlan({
+			storyId: 'story_alpha',
+			mode: 'world_tick',
+			goal: 'Advance off-screen pressure.',
+			context: {
+				currentTurn: 12,
+				currentWorldTime: 'Dusk of the Glass Moon',
+				includeSecret: true,
+				contextBudget: 12000,
+			},
+		});
+
+		expect(plan.toolCalls.map((call) => [call.agentRole, call.command])).toEqual([
+			['lorekeeper', 'timeline.brief'],
+			['faction_simulator', 'jobs.worldSim'],
+			['continuity_auditor', 'campaign.status'],
+		]);
+		expect(plan.toolCalls.some((call) => call.command === 'plotBrain.plan')).toBe(false);
+	});
+
 	it('executes planned tool calls through the supplied backend command runner', async () => {
 		const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 		const result = await runEngineOrchestrator({

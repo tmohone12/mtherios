@@ -3,6 +3,7 @@ import {
 	processBackendTurn,
 	pullBackendChanges,
 	retrieveBackendMemory,
+	runBackendPlotBrainPlan,
 	runBackendWorldSimTick,
 	TerminalRequestError,
 } from './backendMemory';
@@ -215,6 +216,47 @@ describe('backend memory turn client', () => {
 			args: {
 				localVersion: 12,
 				force: true,
+			},
+		});
+	});
+
+	it('routes strategic plot-brain planning through the shared engine command gateway', async () => {
+		const planResult = { ok: true, storyId: 'story_alpha', frameId: 'frame_1', plotCardCount: 2 };
+		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+			commandId: 'cmd_plot_brain',
+			clientCommandId: null,
+			storyId: 'story_alpha',
+			command: 'plotBrain.plan',
+			status: 'succeeded',
+			result: planResult,
+			projectionChanges: { plotBrain: { ok: true, storyId: 'story_alpha', frameId: 'frame_1', plotCardCount: 2 } },
+			error: null,
+			createdAt: '2026-06-05T12:00:00.000Z',
+			updatedAt: '2026-06-05T12:00:01.000Z',
+		}));
+
+		const result = await runBackendPlotBrainPlan({
+			id: 'local_story',
+			serverStoryId: 'story_alpha',
+			serverVersion: 12,
+		} as Story, {
+			trigger: 'manual',
+			execute: true,
+			currentTurn: 17,
+			currentWorldTime: 'Day 12, midnight',
+		});
+
+		expect(result).toEqual(planResult);
+		const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+		expect(payload).toEqual({
+			storyId: 'story_alpha',
+			command: 'plotBrain.plan',
+			args: {
+				trigger: 'manual',
+				execute: true,
+				currentTurn: 17,
+				currentWorldTime: 'Day 12, midnight',
+				includeSecret: true,
 			},
 		});
 	});

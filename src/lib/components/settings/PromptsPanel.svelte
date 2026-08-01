@@ -13,6 +13,7 @@
 	const SERVICE_ORDER = [
 		'narrative',
 		'classifier',
+		'characterUpdate',
 		'worldSimulation',
 		'memory',
 		'arcCondensation',
@@ -141,7 +142,7 @@
 				/>
 			</div>
 			<button
-				class="rounded-lg border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-50"
+				class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--border-primary)] text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-50 sm:h-9 sm:w-9"
 				onclick={reload}
 				disabled={loading || saving}
 				title="Reload terminal prompts"
@@ -150,7 +151,7 @@
 			</button>
 		</div>
 
-		<div class="max-h-[52vh] overflow-y-auto rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)]">
+		<div class="max-h-[40dvh] overflow-y-auto overscroll-contain rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] sm:max-h-[52vh]">
 			{#if loading && rows.length === 0}
 				<div class="px-3 py-4 text-xs text-[var(--text-muted)]">Loading prompts...</div>
 			{:else if orderedRows.length === 0}
@@ -192,7 +193,7 @@
 					</div>
 					<div class="flex shrink-0 gap-2">
 						<button
-							class="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-50"
+							class="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-50"
 							onclick={() => setDraft(selectedRow.serviceId, '')}
 							disabled={saving}
 						>
@@ -200,7 +201,7 @@
 							Use Built-in
 						</button>
 						<button
-							class="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-gold-400)]/20 px-3 py-2 text-xs font-semibold text-[var(--text-accent)] hover:bg-[var(--color-gold-400)]/30 disabled:opacity-50"
+							class="inline-flex min-h-11 items-center gap-1.5 rounded-lg bg-[var(--color-gold-400)]/20 px-3 py-2 text-xs font-semibold text-[var(--text-accent)] hover:bg-[var(--color-gold-400)]/30 disabled:opacity-50"
 							onclick={save}
 							disabled={saving || changedRows.length === 0}
 						>

@@ -9,7 +9,14 @@ function row<T extends Record<string, unknown>>(value: T): T & { serverVersion: 
 	return { serverVersion: 1, createdAt: now, updatedAt: now, ...value } as T & { serverVersion: number; createdAt: string; updatedAt: string };
 }
 
-function entity(id: string, type: string, name: string, description: string, state: Record<string, unknown> = {}) {
+function entity(
+	id: string,
+	type: string,
+	name: string,
+	description: string,
+	state: Record<string, unknown> = {},
+	metadata: Record<string, unknown> = {},
+) {
 	return row({
 		id,
 		storyId: 'story_test',
@@ -19,7 +26,7 @@ function entity(id: string, type: string, name: string, description: string, sta
 		status: 'active',
 		visibility: 'player_known',
 		state,
-		metadata: {},
+		metadata,
 		sourceEntryIds: [],
 		sourceEventIds: [],
 		sourcePatchIds: [],
@@ -116,5 +123,46 @@ describe('server turn prompt character context', () => {
 		expect(prompt.prompt).toContain('Player character:');
 		expect(prompt.prompt).not.toContain('Addam Velaryon');
 		expect(prompt.prompt).not.toContain('Aegon 0 Targaryen');
+	});
+
+	it('keeps stored context subordinate to the current scene and drops generated placeholder noise', () => {
+		const ctx = context();
+		ctx.entities.push(entity(
+			'npc_first_self_stub',
+			'character',
+			'First Self',
+			'First Self is important in this chapter checkpoint.',
+			{ present: true, eventMemory: { did: ['Turn resolved'] } },
+			{ createdFrom: 'character_reference_review' },
+		));
+		ctx.events = [
+			row({ id: 'event_generic', storyId: 'story_test', type: 'scene', title: 'Turn resolved', body: 'Turn resolved.', status: 'resolved', metadata: {} }),
+			row({ id: 'event_signal', storyId: 'story_test', type: 'political', title: 'The harbor pact fractures', body: 'Maera receives proof that the pact was altered.', status: 'active', metadata: {} }),
+		] as TurnContext['events'];
+
+		const prompt = buildServerTurnPrompt(ctx, packet('I ask Maera about the altered pact'), 'entry_1', {
+			sceneEntityIds: ['pc_aurion', 'npc_maera', 'npc_first_self_stub'],
+			presentNpcIds: ['npc_maera', 'npc_first_self_stub'],
+		});
+
+		expect(prompt.system.startsWith('ROLEPLAY AUTHORITY:')).toBe(true);
+		expect(prompt.system).toContain('SOURCE PRIORITY: latest player action > current scene/clock');
+		expect(prompt.prompt).toContain('<context_data>');
+		expect(prompt.prompt).toContain('</context_data>');
+		expect(prompt.prompt).not.toContain('First Self is important in this chapter checkpoint');
+		expect(prompt.prompt).toContain('The harbor pact fractures');
+		expect(prompt.prompt).not.toContain('Turn resolved.');
+	});
+
+	it('uses the story currentLocationId before stale entity current flags', () => {
+		const ctx = context();
+		ctx.recentEntries = ctx.recentEntries.filter((entry) => entry.type !== 'narration');
+		ctx.entities[0] = entity('loc_study', 'location', 'Maera Belaerys private study', 'The authoritative room.', { current: false });
+		ctx.entities.unshift(entity('loc_stale', 'location', 'Old Harbor', 'A stale location.', { current: true }));
+
+		const prompt = buildServerTurnPrompt(ctx, packet(), 'entry_1');
+
+		expect(prompt.prompt).toContain('Current location:\nMaera Belaerys private study');
+		expect(prompt.prompt).not.toContain('Current location:\nOld Harbor');
 	});
 });

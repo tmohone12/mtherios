@@ -20,7 +20,10 @@ export interface ServiceConfig {
 
 export const SERVICE_DEFINITIONS: Record<string, { label: string; description: string; profile: string; defaultTemp: number; defaultMaxTokens: number }> = {
 	narrative: { label: 'Narrative', description: 'Main story generation', profile: 'narrative', defaultTemp: 1.0, defaultMaxTokens: 4096 },
+	storySetupAssist: { label: 'Story Setup Assist', description: 'Helps draft new-story titles, worlds, protagonists, and lore seeds', profile: 'narrative', defaultTemp: 0.8, defaultMaxTokens: 2048 },
 	classifier: { label: 'Classifier', description: 'Extract world state from narrative', profile: 'worldState', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	smallBrain: { label: 'Lore Master', description: 'Read-only cited context synthesis and canon review', profile: 'worldState', defaultTemp: 0.3, defaultMaxTokens: 1200 },
+	characterUpdate: { label: 'Character Update', description: 'Refresh known character continuity from completed chapters', profile: 'worldState', defaultTemp: 0.2, defaultMaxTokens: 4096 },
 	suggestions: { label: 'Suggestions', description: 'Generate action suggestions', profile: 'guidance', defaultTemp: 0.8, defaultMaxTokens: 2048 },
 	actionChoices: { label: 'Action Choices', description: 'Generate branching choices', profile: 'guidance', defaultTemp: 0.8, defaultMaxTokens: 2048 },
 	memory: { label: 'Memory', description: 'Chapter summarization & retrieval', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
@@ -47,8 +50,8 @@ export interface ServiceProfile {
 
 export const SERVICE_PROFILES: ServiceProfile[] = [
 	{ id: 'deepSimulation', label: 'Deep Simulation', description: 'Rare strategic planning for factions, schemes, plots, and arc pressure', icon: 'S', serviceIds: ['strategicWorldBrain'] },
-	{ id: 'narrative', label: 'Narrative', description: 'Main story generation engine', icon: '✍️', serviceIds: ['narrative'] },
-	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, living world simulation, and plot momentum', icon: '🌍', serviceIds: ['classifier', 'worldSimulation'] },
+	{ id: 'narrative', label: 'Narrative', description: 'Main story generation and new-story writing assistance', icon: '✍️', serviceIds: ['narrative', 'storySetupAssist'] },
+	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, living world simulation, and plot momentum', icon: '🌍', serviceIds: ['classifier', 'smallBrain', 'characterUpdate', 'worldSimulation'] },
 	{ id: 'guidance', label: 'Player Guidance', description: 'Suggestions and branching action choices', icon: '🧭', serviceIds: ['suggestions', 'actionChoices'] },
 	{ id: 'memoryContext', label: 'Memory & Context', description: 'Chapter, arc, and saga memory', icon: '🧠', serviceIds: ['memory', 'arcCondensation', 'sagaCondensation'] },
 	{ id: 'lorebook', label: 'Lorebook', description: 'Discover, curate, query, and lint lore entries', icon: '📜', serviceIds: ['loreManagement', 'entryRefinement', 'wikiLint'] },

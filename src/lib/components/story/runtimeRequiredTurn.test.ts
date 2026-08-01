@@ -33,4 +33,22 @@ describe('runtime-required turn submission boundary', () => {
 		expect(backendTurnBlock).toContain('turnError =');
 		expect(backendTurnBlock).not.toContain("await story.addEntry('system'");
 	});
+
+	it('clears a submitted draft immediately and restores it only after an untouched failed send', () => {
+		const source = readFileSync(resolve('src/lib/components/story/ActionInput.svelte'), 'utf8');
+		const submitBlock = source.slice(
+			source.indexOf('async function handleSubmit'),
+			source.indexOf('async function submitBackendAuthoritativeTurn'),
+		);
+		const backendTurnBlock = source.slice(
+			source.indexOf('async function submitBackendAuthoritativeTurn'),
+			source.indexOf('function handleStop'),
+		);
+
+		expect(submitBlock.indexOf("setInputDraft('')")).toBeLessThan(submitBlock.indexOf('submitBackendAuthoritativeTurn'));
+		expect(submitBlock.indexOf("setInputDraft('')")).toBeLessThan(submitBlock.indexOf("story.addEntry('user_action'"));
+		expect(submitBlock).toContain('submitBackendAuthoritativeTurn(content, submittedInput)');
+		expect(backendTurnBlock).toContain('draftStoryId === submittedStoryId && draftRevision === submittedDraftRevision');
+		expect(backendTurnBlock).toContain('setInputDraft(submittedInput)');
+	});
 });

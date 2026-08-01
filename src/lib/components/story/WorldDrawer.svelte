@@ -2,7 +2,7 @@
 	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search, Database, RefreshCw, AlertTriangle, User, Save } from 'lucide-svelte';
 	import { WORLD_SIM_DAY_INTERVAL, normalizeRelation } from '$lib/services/ai/tools/helpers';
 	import { maybeRunWorldSim } from '$lib/services/ai/tools/executor';
-	import { runBackendWorldSimTick } from '$lib/services/backendMemory';
+	import { runBackendPlotBrainPlan, runBackendWorldSimTick } from '$lib/services/backendMemory';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { getChapters, getArcs, getSyncOpsForStory } from '$lib/services/database';
@@ -356,6 +356,57 @@
 		}
 		catch (e) { console.error('[WorldDrawer] manual world sim failed:', e); }
 		runningWorldSim = false;
+	}
+
+	let runningPlotBrain = $state(false);
+	let pendingPlotFrameId = $state<string | null>(null);
+	let plotBrainResult = $state<Record<string, unknown> | null>(null);
+	let plotBrainError = $state('');
+	let plotBrainStoryId = '';
+	$effect(() => {
+		const currentStoryId = story.currentStory?.serverStoryId ?? '';
+		if (currentStoryId !== plotBrainStoryId) {
+			plotBrainStoryId = currentStoryId;
+			pendingPlotFrameId = null;
+			plotBrainResult = null;
+		}
+		const projectionStory = story.campaignProjection?.story;
+		if (!currentStoryId || projectionStory?.id !== currentStoryId || pendingPlotFrameId) return;
+		const metadata = projectionStory.metadata;
+		if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return;
+		const plotBrain = (metadata as Record<string, unknown>).plotBrain;
+		if (!plotBrain || typeof plotBrain !== 'object' || Array.isArray(plotBrain)) return;
+		const frameId = (plotBrain as Record<string, unknown>).pendingFrameId;
+		if (typeof frameId === 'string' && frameId.trim()) pendingPlotFrameId = frameId;
+	});
+	const plotBrainSummary = $derived.by(() => {
+		if (!plotBrainResult) return '';
+		const count = (key: string) => typeof plotBrainResult?.[key] === 'number' ? plotBrainResult[key] as number : 0;
+		return `${count('plotCardCount')} cards · ${count('threadCount')} threads · ${count('eventCount')} beats`;
+	});
+	async function runPlotBrain(execute: boolean) {
+		const current = story.currentStory;
+		if (runningPlotBrain || !current?.serverStoryId || (execute && !pendingPlotFrameId)) return;
+		runningPlotBrain = true;
+		plotBrainError = '';
+		try {
+			const result = await runBackendPlotBrainPlan(current, {
+				execute,
+				frameId: execute ? pendingPlotFrameId ?? undefined : undefined,
+			});
+			if (!result) throw new Error('Plot brain returned no result.');
+			plotBrainResult = result;
+			if (execute) {
+				await story.pullBackendProjection();
+				pendingPlotFrameId = null;
+			} else {
+				pendingPlotFrameId = typeof result.frameId === 'string' ? result.frameId : null;
+			}
+		} catch (error) {
+			plotBrainError = error instanceof Error ? error.message : String(error);
+		} finally {
+			runningPlotBrain = false;
+		}
 	}
 
 	// ── Meters (player only sees visible meters) ──
@@ -911,7 +962,7 @@
 <div class="fixed inset-0 z-40 flex justify-end" transition:fly={{ x: 0, duration: 0 }}>
 	<button class="absolute inset-0 bg-black/40" aria-label="Close world drawer" onclick={onClose}></button>
 
-	<div class="relative z-10 flex h-full w-full max-w-[26rem] flex-col border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]"
+	<div class="relative z-10 flex h-[100dvh] min-h-0 w-full max-w-[26rem] flex-col border-l border-[var(--border-primary)] bg-[var(--bg-secondary)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
 		transition:fly={{ x: 420, duration: 200 }}>
 
 		<!-- Header -->
@@ -919,11 +970,11 @@
 			<span class="font-display text-sm tracking-wide text-[var(--text-accent)]">World State</span>
 			<div class="flex items-center gap-1">
 				<button onclick={handleExportWiki} disabled={exportingWiki || !story.currentStory}
-					class="rounded p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-amber-400 disabled:opacity-40"
+					class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-amber-400 disabled:opacity-40 sm:h-8 sm:w-8"
 					title="Export agent-maintained Obsidian wiki vault">
 					{#if exportingWiki}<Loader2 class="h-4 w-4 animate-spin" />{:else}<FileArchive class="h-4 w-4" />{/if}
 				</button>
-				<button onclick={onClose} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]" aria-label="Close world drawer">
+				<button onclick={onClose} class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-8 sm:w-8" aria-label="Close world drawer">
 					<X class="h-5 w-5" />
 				</button>
 			</div>
@@ -932,32 +983,32 @@
 		<!-- Tabs -->
 		<div class="flex border-b border-[var(--border-primary)]">
 			<button
-				class="flex-1 px-4 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'player' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				class="min-h-11 flex-1 px-3 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'player' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
 				onclick={() => drawerTab = 'player'}
 			>
 				Player
 			</button>
 			<button
-				class="flex-1 px-4 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'characters' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				class="min-h-11 flex-1 px-3 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'characters' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
 				onclick={() => drawerTab = 'characters'}
 			>
 				Characters
 			</button>
 			<button
-				class="flex-1 px-4 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'story' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				class="min-h-11 flex-1 px-3 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'story' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
 				onclick={() => drawerTab = 'story'}
 			>
 				Story
 			</button>
 			<button
-				class="flex-1 px-4 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'technical' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				class="min-h-11 flex-1 px-3 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'technical' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
 				onclick={() => drawerTab = 'technical'}
 			>
 				Technical
 			</button>
 		</div>
 
-		<div class="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+		<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 space-y-6">
 			{#if drawerTab === 'player'}
 			<div>
 				<div class="mb-2 flex items-center gap-2">
@@ -1910,6 +1961,36 @@
 						<span>{backendWorldSim ? 'Run terminal world tick' : 'Run world sim now'}</span>
 					{/if}
 				</button>
+			</div>
+			{/if}
+
+			{#if backendWorldSim}
+			<div>
+				<div class="mb-2 flex items-center gap-1.5">
+					<Zap class="h-3.5 w-3.5 text-violet-400" />
+					<span class="font-display text-[10px] tracking-wider uppercase text-violet-400">Plot Pulse</span>
+				</div>
+				<div class="grid grid-cols-2 gap-2">
+					<button
+						onclick={() => runPlotBrain(false)}
+						disabled={runningPlotBrain}
+						class="flex items-center justify-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 text-xs text-violet-300 hover:bg-violet-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+						title="Draft a reviewable strategic plot frame"
+					>
+						{#if runningPlotBrain}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Zap class="h-3.5 w-3.5" />{/if}
+						Draft
+					</button>
+					<button
+						onclick={() => runPlotBrain(true)}
+						disabled={runningPlotBrain || !pendingPlotFrameId}
+						class="flex items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+						title="Apply this exact reviewed plot draft"
+					>
+						<Save class="h-3.5 w-3.5" /> Apply
+					</button>
+				</div>
+				{#if plotBrainSummary}<p class="mt-1.5 text-[10px] text-[var(--text-muted)]">{plotBrainSummary}{pendingPlotFrameId ? ' · ready to apply' : ''}</p>{/if}
+				{#if plotBrainError}<p class="mt-1.5 text-[10px] text-rose-400">{plotBrainError}</p>{/if}
 			</div>
 			{/if}
 

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { continuityWarnings, entities, entityAliases, npcBeliefs, patchProposals, stories } from '$lib/server/db/schema';
-import { loadTurnContext } from './context';
+import { continuityWarnings, entities, entityAliases, npcBeliefs, patchProposals, stories, storyEntries } from '$lib/server/db/schema';
+import { loadTurnContext, NARRATOR_RECENT_ENTRY_LIMIT } from './context';
 
 const dbMocks = vi.hoisted(() => ({
 	getDb: vi.fn(),
@@ -39,6 +39,8 @@ function conditionIncludesInArray(value: unknown, left: unknown, expectedValues:
 function createDbMock() {
 	const requestedIds = ['npc_present', 'npc_scene'];
 	const beliefConditions: unknown[] = [];
+	const storyEntryConditions: unknown[] = [];
+	const storyEntryLimits: number[] = [];
 	const patchProposalConditions: unknown[] = [];
 	const continuityWarningConditions: unknown[] = [];
 	const storyRow = {
@@ -46,6 +48,10 @@ function createDbMock() {
 		headerPrompt: null,
 		metadata: {},
 	};
+	const recentEntriesDesc = [
+		{ id: 'entry_2', storyId: 'story_1', type: 'narration', content: 'Second.', position: 2 },
+		{ id: 'entry_1', storyId: 'story_1', type: 'user_action', content: 'First.', position: 1 },
+	];
 	const baseEntities = [
 		{ id: 'loc_hall', storyId: 'story_1', type: 'location', name: 'Great Hall', state: { current: true } },
 		{ id: 'npc_present', storyId: 'story_1', type: 'character', name: 'Present NPC', state: { present: true } },
@@ -177,8 +183,13 @@ function createDbMock() {
 				return chain;
 			}),
 			orderBy: vi.fn(() => chain),
-			limit: vi.fn(() => {
+			limit: vi.fn((limit: number) => {
 				if (selectedTable === stories) return Promise.resolve([storyRow]);
+				if (selectedTable === storyEntries) {
+					storyEntryConditions.push(selectedCondition);
+					storyEntryLimits.push(limit);
+					return Promise.resolve(recentEntriesDesc);
+				}
 				if (selectedTable === entities) {
 					if (conditionIncludesInArray(selectedCondition, entities.id, requestedIds)) return Promise.resolve(requestedEntities);
 					return Promise.resolve(baseEntities);
@@ -212,6 +223,8 @@ function createDbMock() {
 	return {
 		db: { select },
 		beliefConditions,
+		storyEntryConditions,
+		storyEntryLimits,
 		patchProposalConditions,
 		continuityWarningConditions,
 		requestedIds,
@@ -240,6 +253,22 @@ describe('loadTurnContext', () => {
 		});
 		expect(ctx.beliefs.map((belief) => belief.believerEntityId)).toEqual(['npc_present', 'npc_scene']);
 		expect(beliefConditions.some((condition) => conditionIncludesInArray(condition, npcBeliefs.believerEntityId, requestedIds))).toBe(true);
+		expect(dbMocks.desc).toHaveBeenCalledWith(npcBeliefs.updatedAt);
+	});
+
+	it('loads the newest 100 dialogue exchanges in chronological order', async () => {
+		const { db, storyEntryConditions, storyEntryLimits } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+
+		const ctx = await loadTurnContext('story_1');
+
+		expect(ctx.recentEntries.map((entry) => entry.id)).toEqual(['entry_1', 'entry_2']);
+		expect(storyEntryLimits).toEqual([NARRATOR_RECENT_ENTRY_LIMIT]);
+		expect(storyEntryConditions.some((condition) => conditionIncludesInArray(
+			condition,
+			storyEntries.type,
+			['user_action', 'narration'],
+		))).toBe(true);
 	});
 
 	it('keeps repair/audit proposal rows out of normal turn context', async () => {

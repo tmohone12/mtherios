@@ -1,6 +1,6 @@
 import { MAX_BACKEND_CONTEXT_BUDGET, normalizeBackendContextBudget } from './backendTurnContext';
 
-export const DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET = 800;
+export const DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET = 1200;
 
 export const CONTEXT_BUDGET_STEPS = [
 	0,

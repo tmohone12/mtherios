@@ -438,6 +438,16 @@ function resultSummary(command: string, result: unknown): JsonRecord | null {
 			jobId: record.jobId ?? null,
 		};
 	}
+	if (command === 'plotBrain.plan') {
+		return {
+			ok: record.ok !== false,
+			frameId: record.frameId ?? null,
+			plotCardCount: record.plotCardCount ?? 0,
+			threadCount: record.threadCount ?? 0,
+			eventCount: record.eventCount ?? 0,
+			executed: record.executed === true,
+		};
+	}
 	return null;
 }
 

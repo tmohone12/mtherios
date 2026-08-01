@@ -34,14 +34,18 @@ const storyRow = {
 	id: 'story_1',
 	currentTurn: 7,
 	currentWorldTime: 'Twilight of Ashes',
+	currentLocationId: 'entity_bridge',
 	metadata: { campaignTone: 'wary' },
 };
-type TestStoryRow = Omit<typeof storyRow, 'currentWorldTime'> & { currentWorldTime: string | null };
+type TestStoryRow = Omit<typeof storyRow, 'currentWorldTime' | 'currentLocationId'> & {
+	currentWorldTime: string | null;
+	currentLocationId: string | null;
+};
 
 const entityRows = [
 	{ id: 'entity_valen', storyId: 'story_1', type: 'character', name: 'Valen' },
 	{ id: 'entity_mira', storyId: 'story_1', type: 'character', name: 'Mira' },
-	{ id: 'entity_bridge', storyId: 'story_1', type: 'location', name: 'Ash Bridge' },
+	{ id: 'entity_bridge', storyId: 'story_1', type: 'location', name: 'Ash Bridge', state: { current: true } },
 	{ id: 'entity_watch', storyId: 'story_1', type: 'faction', name: 'The Watch' },
 ];
 
@@ -235,7 +239,7 @@ describe('applyValidatedTurnUpdate', () => {
 				createdTurn: 7,
 				occurredTurn: 7,
 				scheduledTurn: null,
-				worldTime: 'Twilight of Ashes; one hour after the oath',
+				worldTime: 'Twilight of Ashes',
 				locationIds: [],
 				memoryImpact: {},
 				serverVersion: 12,
@@ -298,7 +302,8 @@ describe('applyValidatedTurnUpdate', () => {
 		});
 		expect(turnUpdate).toMatchObject({
 			currentTurn: 8,
-			currentWorldTime: 'Twilight of Ashes; one hour after the oath',
+			currentWorldTime: 'Twilight of Ashes',
+			currentLocationId: 'entity_bridge',
 			serverVersion: 12,
 			updatedAt: expect.any(String),
 		});
@@ -393,6 +398,12 @@ describe('applyValidatedTurnUpdate', () => {
 					description: 'A harbor negotiator.',
 					status: 'active',
 					state: {
+						isPresent: false,
+						relationship: {
+							level: 42,
+							status: 'trusted broker',
+							history: [{ description: 'Mira kept the old bargain.', entryId: 'entry_old', timestamp: 1 }],
+						},
 						eventMemory: {
 							did: ['Mira hid the old map.'],
 							saw: ['Mira saw Valen hesitate at the bridge.'],
@@ -411,6 +422,9 @@ describe('applyValidatedTurnUpdate', () => {
 		const update = worldStateUpdateSchema.parse({
 			characters: [{
 				name: 'Mira',
+				aliases: ['The Harbor Broker'],
+				present: true,
+				relationship: 'wary ally',
 				appearance: 'salt-stained blue cloak and ink-dark fingertips',
 				background: 'raised around harbor ledgers and old smuggling routes',
 				currentLocation: 'Ash Bridge counting room',
@@ -444,11 +458,22 @@ describe('applyValidatedTurnUpdate', () => {
 		const memory = state.eventMemory as Record<string, string[]>;
 
 		expect(state).toMatchObject({
+			aliases: ['The Harbor Broker'],
+			isPresent: true,
+			present: true,
+			bio: 'raised around harbor ledgers and old smuggling routes',
 			appearance: 'salt-stained blue cloak and ink-dark fingertips',
 			background: 'raised around harbor ledgers and old smuggling routes',
 			currentLocation: 'Ash Bridge counting room',
 			currentAction: 'holding the bridge bargain together while watching Valen',
 			emotionalState: 'controlled fear under professional calm',
+			currentDisposition: 'wary ally',
+			relationship: {
+				level: 42,
+				status: 'wary ally',
+				history: [{ description: 'Mira kept the old bargain.', entryId: 'entry_old', timestamp: 1 }],
+			},
+			motivations: ['keep the bridge bargain alive'],
 			goals: ['keep the bridge bargain alive'],
 			speechStyle: 'quiet, exact, with clipped harbor idioms',
 		});
@@ -457,9 +482,9 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(memory.knew).toEqual(['Mira knows the bridge bargain has a hidden witness.']);
 	});
 
-	it('uses time_delta as the event and story clock when the story has no current world time', async () => {
+	it('uses the narration header as the event, story clock, and fallback current location', async () => {
 		const { db, insertCalls, storyUpdates } = createDbMock({
-			story: { ...storyRow, currentWorldTime: null },
+			story: { ...storyRow, currentWorldTime: null, currentLocationId: null },
 		});
 		dbMocks.getDb.mockReturnValue(db);
 		const update = worldStateUpdateSchema.parse({
@@ -470,7 +495,7 @@ describe('applyValidatedTurnUpdate', () => {
 			storyId: 'story_1',
 			playerEntryId: 'entry_player',
 			assistantEntryId: 'entry_assistant',
-			narration: 'Ash light finds the courtyard.',
+			narration: '[ 🕰️ Time 06:15 | 🗓️ Day, Ember Moon 8, 299 AC | 📍 Location - Ember Courtyard | [Weather] Clear, 18 C ]\nAsh light finds the courtyard.',
 			update,
 			parseWarnings: [],
 			retrievedMemoryIds: [],
@@ -481,18 +506,163 @@ describe('applyValidatedTurnUpdate', () => {
 			.filter(call => call.table === storyEvents)
 			.map(call => call.value as Record<string, unknown>);
 		const turnUpdate = storyUpdates.find(updatePayload => updatePayload.currentTurn === 8);
+		const locationInsert = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>)
+			.find(value => value.type === 'location' && value.name === 'Ember Courtyard');
 
 		expect(result.eventIds).toEqual(eventInserts.map(event => event.id));
 		expect(eventInserts).toHaveLength(1);
 		expect(eventInserts[0]).toMatchObject({
 			title: 'Turn resolved',
-			worldTime: 'Dawn after the fire',
+			worldTime: 'Day Ember Moon 8, 299 AC | 06:15',
 			createdTurn: 7,
 			occurredTurn: 7,
 		});
 		expect(turnUpdate).toMatchObject({
 			currentTurn: 8,
+			currentWorldTime: 'Day Ember Moon 8, 299 AC | 06:15',
+			currentLocationId: locationInsert?.id,
+		});
+		expect(locationInsert).toMatchObject({
+			state: { current: true },
+			sourceEntryIds: ['entry_assistant'],
+		});
+	});
+
+	it('uses time_delta only to initialize an empty clock and preserves location state without a new anchor', async () => {
+		const { db, insertCalls, storyUpdates } = createDbMock({
+			story: { ...storyRow, currentWorldTime: null },
+			entityRows: [entityRows[2], ...entityRows.filter(row => row.id !== 'entity_bridge')],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Ash light finds the bridge.',
+			update: worldStateUpdateSchema.parse({
+				time_delta: '  Dawn after the fire  ',
+				locations: [{ name: 'Ash Bridge', description: 'The old crossing remains occupied.' }],
+			}),
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 12,
+		});
+
+		const bridgeInsert = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>)
+			.find(value => value.id === 'entity_bridge');
+		expect(bridgeInsert?.state).toMatchObject({ current: true });
+		expect(storyUpdates.find(value => value.currentTurn === 8)).toMatchObject({
 			currentWorldTime: 'Dawn after the fire',
+			currentLocationId: 'entity_bridge',
+		});
+	});
+
+	it('uses a known header location during empty supplemental extraction even when its clock is unknown', async () => {
+		const { db, insertCalls, storyUpdates } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: '[ Time unknown | Day unknown | Location - Lantern Docks | Weather Clear, 17 C ]\nThe lamps burn above the water.',
+			update: worldStateUpdateSchema.parse({}),
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 12,
+			mode: 'supplemental',
+			timelineTurn: 7,
+		});
+
+		const locationInsert = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>)
+			.find(value => value.type === 'location' && value.name === 'Lantern Docks');
+		expect(result).toMatchObject({ eventIds: [], patchIds: [], memoryNodeIds: [] });
+		expect(locationInsert?.state).toMatchObject({ current: true });
+		expect(storyUpdates.find(value => value.currentLocationId === locationInsert?.id)).toMatchObject({
+			currentWorldTime: 'Twilight of Ashes',
+			currentLocationId: locationInsert?.id,
+		});
+		expect(storyUpdates.some(value => 'currentTurn' in value)).toBe(false);
+	});
+
+	it('lets the last extracted current location win and clears stale current flags', async () => {
+		const { db, insertCalls, updateCalls, storyUpdates } = createDbMock({
+			entityRows: [
+				...entityRows,
+				{ id: 'entity_old_gate', storyId: 'story_1', type: 'location', name: 'Old Gate', state: { current: true, marker: 'old-gate' } },
+				{ id: 'entity_hall', storyId: 'story_1', type: 'location', name: 'Moonlit Hall', state: { current: false } },
+				{ id: 'entity_tower', storyId: 'story_1', type: 'location', name: 'North Tower', state: { current: false } },
+			],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+		const update = worldStateUpdateSchema.parse({
+			locations: [
+				{ name: 'Moonlit Hall', current: true },
+				{ name: 'North Tower', current: true },
+			],
+		});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: '[ Time 22:40 | Day 9, Ember Moon, 299 AC | Location - Header Road | Weather Rain, 12 C ]\nThe party reaches the tower.',
+			update,
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 12,
+		});
+
+		const locationInserts = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>)
+			.filter(value => value.type === 'location');
+		const hall = locationInserts.find(value => value.id === 'entity_hall');
+		const tower = locationInserts.find(value => value.id === 'entity_tower');
+		const clearedStates = updateCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value.state as Record<string, unknown>)
+			.filter(state => state?.current === false);
+
+		expect(hall?.state).toMatchObject({ current: false });
+		expect(tower?.state).toMatchObject({ current: true });
+		expect(locationInserts.some(value => value.name === 'Header Road')).toBe(false);
+		expect(clearedStates).toEqual(expect.arrayContaining([
+			expect.objectContaining({ current: false }),
+			expect.objectContaining({ current: false, marker: 'old-gate' }),
+		]));
+		expect(storyUpdates.find(value => value.currentTurn === 8)).toMatchObject({
+			currentWorldTime: 'Day 9, Ember Moon, 299 AC | 22:40',
+			currentLocationId: 'entity_tower',
+		});
+		expect(result.warnings).toContain('Multiple current locations extracted; kept the last one (North Tower).');
+	});
+
+	it('preserves story anchors when narration starts with OOC instead of the required header', async () => {
+		const { db, storyUpdates } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: '[OOC: repairing context]\n[ Time 07:30 | Day 10, Ember Moon, 299 AC | Location - Wrong Place | Weather Clear, 17 C ]',
+			update: worldStateUpdateSchema.parse({ time_delta: 'one day' }),
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 12,
+		});
+
+		expect(storyUpdates.find(value => value.currentTurn === 8)).toMatchObject({
+			currentWorldTime: 'Twilight of Ashes',
+			currentLocationId: 'entity_bridge',
 		});
 	});
 
@@ -1091,7 +1261,7 @@ describe('applyValidatedTurnUpdate', () => {
 			title: 'Ash bridge secured',
 			createdTurn: 7,
 			occurredTurn: 7,
-			worldTime: 'Twilight of Ashes; one hour after the oath',
+			worldTime: 'Twilight of Ashes',
 			sourceEntryIds: ['entry_assistant'],
 			sourcePatchIds: [patchInsert.id],
 			serverVersion: 13,
@@ -1099,11 +1269,7 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(eventInserts.find(event => event.title === 'Turn resolved')).toBeUndefined();
 		expect(memoryInserts).toEqual([]);
 		expect(storyUpdates.find(updatePayload => 'currentTurn' in updatePayload)).toBeUndefined();
-		expect(storyUpdates.find(updatePayload => updatePayload.currentWorldTime)).toMatchObject({
-			currentWorldTime: 'Twilight of Ashes; one hour after the oath',
-			serverVersion: 13,
-			updatedAt: expect.any(String),
-		});
+		expect(storyUpdates.find(updatePayload => updatePayload.currentWorldTime)).toBeUndefined();
 		expect(dbMocks.enqueueTurnProjectionJobs).toHaveBeenCalledWith(expect.objectContaining({
 			storyId: 'story_1',
 			eventIds: result.eventIds,

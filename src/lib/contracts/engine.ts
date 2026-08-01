@@ -98,6 +98,14 @@ export const smallBrainRunRequestSchema = z.object({
 	storyId: z.string().min(1),
 	mode: smallBrainModeSchema,
 	entryId: z.string().min(1).optional(),
+	query: z.string().max(4000).optional(),
+	sceneEntityIds: z.array(z.string()).max(24).optional(),
+	presentNpcIds: z.array(z.string()).max(24).optional(),
+	locationId: z.string().nullable().optional(),
+	threadIds: z.array(z.string()).max(24).optional(),
+	currentFactionId: z.string().nullable().optional(),
+	includeSecret: z.boolean().optional(),
+	tokenBudget: z.coerce.number().int().min(160).max(2400).optional(),
 	limit: z.coerce.number().int().min(1).max(50).optional(),
 	dryRun: z.boolean().optional(),
 }).strict();
@@ -386,6 +394,32 @@ export const engineTimelineAdvanceArgsSchema = z.object({
 	serverVersion: z.number().int().positive().optional(),
 });
 
+export const enginePlotBrainPlanArgsSchema = z.object({
+	trigger: z.enum([
+		'manual',
+		'arc_created',
+		'major_event',
+		'scheme_threshold',
+		'faction_shock',
+		'scheme_exposed',
+		'scheme_completed',
+		'world_tick',
+		'scheduled_refresh',
+		'manual_debug_run',
+	]).default('manual'),
+	execute: z.boolean().default(false),
+	currentTurn: z.number().int().nonnegative().default(0),
+	currentWorldTime: z.string().nullable().default(null),
+	includeSecret: z.boolean().default(true),
+	contextBudget: z.number().int().positive().optional(),
+	serverVersion: z.number().int().positive().optional(),
+	frameId: z.string().trim().min(1).optional(),
+}).superRefine((value, ctx) => {
+	if (value.frameId && !value.execute) {
+		ctx.addIssue({ code: 'custom', path: ['frameId'], message: 'frameId can only be applied with execute=true.' });
+	}
+});
+
 export const engineOrchestratorAgentRoleSchema = z.enum([
 	'dm_narrator',
 	'rules_referee',
@@ -416,6 +450,7 @@ export const engineOrchestratorContextSchema = z.object({
 	contextBudget: z.number().int().min(1).max(1000000).optional(),
 	includeSecret: z.boolean().default(false),
 	currentTurn: z.number().int().nonnegative().optional(),
+	currentWorldTime: z.string().nullable().optional(),
 	entryLimit: z.number().int().min(1).max(200).optional(),
 });
 
@@ -463,6 +498,7 @@ export type EngineCacheSegmentDiagnostics = z.infer<typeof engineCacheSegmentDia
 export type EngineCacheStatus = z.infer<typeof engineCacheStatusSchema>;
 export type EngineCommandRequest = z.infer<typeof engineCommandRequestSchema>;
 export type EngineCommandResponse = z.infer<typeof engineCommandResponseSchema>;
+export type EnginePlotBrainPlanArgs = z.infer<typeof enginePlotBrainPlanArgsSchema>;
 export type EngineCampaignStatusArgs = z.infer<typeof engineCampaignStatusArgsSchema>;
 export type EngineCacheStatusArgs = z.infer<typeof engineCacheStatusArgsSchema>;
 export type EngineCampaignPageReadArgs = z.infer<typeof engineCampaignPageReadArgsSchema>;

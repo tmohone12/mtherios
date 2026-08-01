@@ -72,6 +72,64 @@ describe('buildStrategicWorldBrainUserPrompt', () => {
 		expect(prompt).toContain(STATE_TAXONOMY);
 		expect(prompt).toContain('WAR DOCTRINE');
 		expect(prompt).toContain('warPressureCard');
+		expect(prompt).toContain('tensionSeeds');
+		expect(prompt).toContain('antagonistCandidates');
+		expect(prompt).toContain('plotCards');
+		expect(prompt).toContain('activationPlan');
+		expect(prompt).toContain('plotBrainWritePlan');
+		expect(prompt).toContain('Pressure, not rails');
+		expect(prompt).toContain('at least one main plot and one subplot');
+	});
+
+	it('feeds previous plot cards back as durable plot-brain memory', () => {
+		const prompt = buildStrategicWorldBrainUserPrompt({
+			story: { id: 'story-1', title: 'Bread Ledger', description: 'A city pressure test.' },
+			trigger: 'manual_debug_run',
+			currentArc: null,
+			recentArcs: [],
+			relevantOlderArcs: [],
+			currentArcChapters: [],
+			recentChapters: [],
+			recentEntries: [],
+			factions: [],
+			characters: [],
+			activeSchemes: [],
+			recentlyResolvedSchemes: [],
+			storyThreads: [],
+			worldEvents: [],
+			rumors: [],
+			agreements: [],
+			factionActions: [],
+			playerLedger: null,
+			playerReputation: null,
+			previousStrategicFrame: {
+				arcNumber: 2,
+				publicSummary: 'The bakeries are becoming political.',
+				hiddenStrategicSummary: 'A merchant ring is hiding flour.',
+				fastWorldSimInstructions: 'Let prices rise in small visible increments.',
+				strategicClocks: [],
+				factionOperations: [],
+				plotCards: [{
+					id: 'plot_flour_ring',
+					title: 'The Flour Ring',
+					lifecycleStage: 'simmer',
+					pressure: 66,
+					urgency: 'emerging',
+					visibility: 'rumored',
+					logline: 'Merchants hide flour and blame the watch.',
+					playerTouchpoints: ['bakers complain about identical invoices'],
+				}],
+			} as any,
+			mode: 'adventure',
+			pov: 'second',
+			tense: 'present',
+			timeTracker: null,
+		} as any);
+
+		expect(prompt).toContain('Previous plot cards');
+		expect(prompt).toContain('The Flour Ring');
+		expect(prompt).toContain('simmer/emerging/rumored/66');
+		expect(prompt).toContain('bakers complain about identical invoices');
 	});
 
 	it('keeps unresolved faction member names in strategic context without making them canon', () => {

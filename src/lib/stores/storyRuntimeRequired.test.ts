@@ -40,4 +40,29 @@ describe('terminal runtime required story store boundary', () => {
 		expect(source).toContain('onTurnPerformance');
 		expect(source).not.toContain('putTurnPerformance');
 	});
+
+	it('clears stale runtime errors after a backend projection refresh succeeds', () => {
+		const source = readFileSync(resolve('src/lib/stores/story.svelte.ts'), 'utf8');
+
+		expect(source).toContain('this.worldHydrationError = null;');
+		expect(source).toContain('error: null,');
+	});
+
+	it('does not mislabel schema validation failures as an offline terminal runtime', () => {
+		const source = readFileSync(resolve('src/lib/stores/story.svelte.ts'), 'utf8');
+
+		expect(source).toContain('isRetryableEngineCommandFailure(error)');
+		expect(source).toContain('applyTerminalStoryLoadFailure');
+		expect(source).toContain("syncStatus: 'conflict'");
+		expect(source).toContain('Story data failed validation.');
+	});
+
+	it('hydrates externally edited story fields from campaign projections', () => {
+		const source = readFileSync(resolve('src/lib/stores/story.svelte.ts'), 'utf8');
+
+		expect(source).toContain('title: asString(storyRow.title, this.currentStory.title)');
+		expect(source).toContain('description: asNullableString(storyRow.description)');
+		expect(source).toContain('headerPrompt: asNullableString(storyRow.headerPrompt)');
+		expect(source).toContain('settings: projectedSettings');
+	});
 });

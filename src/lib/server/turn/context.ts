@@ -23,6 +23,8 @@ import {
 	entityAliases,
 } from '$lib/server/db/schema';
 
+export const NARRATOR_RECENT_ENTRY_LIMIT = 200;
+
 export interface TurnContext {
 	story: typeof stories.$inferSelect;
 	recentEntries: Array<typeof storyEntries.$inferSelect>;
@@ -101,7 +103,10 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		sagaRows,
 		aliasRows,
 	] = await Promise.all([
-		db.select().from(storyEntries).where(eq(storyEntries.storyId, storyId)).orderBy(desc(storyEntries.position)).limit(60),
+		db.select().from(storyEntries).where(and(
+			eq(storyEntries.storyId, storyId),
+			inArray(storyEntries.type, ['user_action', 'narration']),
+		)).orderBy(desc(storyEntries.position)).limit(NARRATOR_RECENT_ENTRY_LIMIT),
 		db.select().from(entities).where(eq(entities.storyId, storyId)).limit(160),
 		requestedEntityIds.length
 			? db.select().from(entities).where(and(eq(entities.storyId, storyId), inArray(entities.id, requestedEntityIds))).limit(requestedEntityIds.length)
@@ -115,8 +120,8 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		db.select().from(storyThreads).where(and(eq(storyThreads.storyId, storyId), ne(storyThreads.status, 'closed'))).limit(80),
 		db.select().from(storyEvents).where(eq(storyEvents.storyId, storyId)).orderBy(desc(storyEvents.updatedAt)).limit(80),
 		requestedEntityIds.length
-			? db.select().from(npcBeliefs).where(and(eq(npcBeliefs.storyId, storyId), inArray(npcBeliefs.believerEntityId, requestedEntityIds))).limit(120)
-			: db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).limit(40),
+			? db.select().from(npcBeliefs).where(and(eq(npcBeliefs.storyId, storyId), inArray(npcBeliefs.believerEntityId, requestedEntityIds))).orderBy(desc(npcBeliefs.updatedAt)).limit(120)
+			: db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).orderBy(desc(npcBeliefs.updatedAt)).limit(40),
 		db.select().from(chapters).where(eq(chapters.storyId, storyId)).orderBy(asc(chapters.number)),
 		db.select().from(arcs).where(eq(arcs.storyId, storyId)).orderBy(asc(arcs.number)),
 		db.select().from(sagas).where(eq(sagas.storyId, storyId)).orderBy(asc(sagas.number)),

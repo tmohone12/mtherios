@@ -8,7 +8,7 @@ import {
 	storyEvents,
 	stories,
 } from '$lib/server/db/schema';
-import { canonDriftSourceRefKey, isInvalidSourceRefForRepair, isUnsafeMemoryNodeForRepair, mergeCharacterReferenceState, mergeMergedFromHistory, mergeRecords, reviewPatchProposal, stripMergedIntoMetadata } from './canonRepair';
+import { applyChapterScribeCharacterContextProposals, canonDriftSourceRefKey, isInvalidSourceRefForRepair, isUnsafeMemoryNodeForRepair, mergeCharacterReferenceState, mergeMergedFromHistory, mergeRecords, reviewPatchProposal, stripMergedIntoMetadata } from './canonRepair';
 
 const dbMocks = vi.hoisted(() => ({
 	getDb: vi.fn(),
@@ -130,11 +130,13 @@ const dueFactionProjectProposal: typeof patchProposals.$inferSelect = {
 function createDbMock(options: {
 	patchProposalRows?: Array<typeof patchProposals.$inferSelect>;
 	entityRows?: Array<typeof entities.$inferSelect>;
+	sequentialEntityRows?: Array<typeof entities.$inferSelect>;
 	aliasRows?: Array<typeof entityAliases.$inferSelect>;
 } = {}) {
 	type DbSource = 'root' | 'tx';
 	const insertCalls: Array<{ source: DbSource; table: unknown; value: unknown }> = [];
 	const updateCalls: Array<{ source: DbSource; table: unknown; value: Record<string, unknown> }> = [];
+	let entitySelection = 0;
 
 	function createConnection(source: DbSource) {
 		let selectedTable: unknown;
@@ -150,9 +152,16 @@ function createDbMock(options: {
 			}),
 			limit: vi.fn(() => {
 				if (selectedTable === patchProposals) return Promise.resolve(options.patchProposalRows ?? [characterReferenceProposal]);
+				if (selectedTable === entities && options.sequentialEntityRows) {
+					const row = options.sequentialEntityRows[entitySelection++];
+					return Promise.resolve(row ? [row] : []);
+				}
 				if (selectedTable === entities) return Promise.resolve(options.entityRows ?? []);
 				return Promise.resolve([]);
 			}),
+			for: vi.fn(() => Promise.resolve(selectedTable === patchProposals
+				? options.patchProposalRows ?? [characterReferenceProposal]
+				: [])),
 		};
 		const select = vi.fn(() => selectChain);
 
@@ -746,6 +755,89 @@ describe('reviewPatchProposal', () => {
 				serverVersion: 2,
 			}),
 		}));
+	});
+
+	it('applies chapter-scribe character context proposals in one versioned batch', async () => {
+		const chapterProposal = (id: string, entityId: string): typeof patchProposals.$inferSelect => ({
+			...characterReferenceProposal,
+			id,
+			proposalType: 'character_context_update',
+			targetRecordId: entityId,
+			proposedBy: 'chapter_scribe',
+			operations: [{
+				op: 'replace',
+				path: `/characters/${entityId}/state`,
+				value: { currentAction: `updated from ${id}` },
+			}],
+			affectedEntityIds: [entityId],
+			metadata: { sourceType: 'chapter_character_context', chapterNumber: 2 },
+		});
+		const character = (id: string): typeof entities.$inferSelect => ({
+			id,
+			storyId: 'story_1',
+			type: 'character',
+			name: id,
+			description: null,
+			status: 'active',
+			visibility: 'player_known',
+			state: {},
+			metadata: {},
+			sourceEntryIds: [],
+			sourceEventIds: [],
+			sourcePatchIds: [],
+			serverVersion: 1,
+			createdAt: '2026-06-13T00:00:00.000Z',
+			updatedAt: '2026-06-13T00:00:00.000Z',
+		});
+		const eligibleA = chapterProposal('proposal_chapter_a', 'entity_a');
+		const eligibleB = chapterProposal('proposal_chapter_b', 'entity_b');
+		const ineligible = {
+			...chapterProposal('proposal_manual', 'entity_manual'),
+			proposedBy: 'llm',
+		} satisfies typeof patchProposals.$inferSelect;
+		const { db, updateCalls } = createDbMock({
+			patchProposalRows: [eligibleA, eligibleB, ineligible],
+			sequentialEntityRows: [character('entity_a'), character('entity_b')],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		const result = await applyChapterScribeCharacterContextProposals({
+			storyId: 'story_1',
+			proposalIds: [eligibleA.id, eligibleB.id, ineligible.id],
+			reviewer: 'chapter_scribe',
+			notes: 'Automatic two-chapter character refresh.',
+		});
+
+		expect(result).toMatchObject({
+			storyId: 'story_1',
+			serverVersion: 2,
+			proposalIds: [eligibleA.id, eligibleB.id],
+			appliedCount: 2,
+			affectedEntityIds: ['entity_a', 'entity_b'],
+		});
+		expect(updateCalls.filter((call) => call.table === stories)).toHaveLength(1);
+		const proposalUpdates = updateCalls.filter((call) => call.table === patchProposals);
+		expect(proposalUpdates).toHaveLength(2);
+		expect(proposalUpdates.map((call) => call.value)).toEqual([
+			expect.objectContaining({
+				status: 'applied',
+				decision: 'approved',
+				validatedBy: 'chapter_scribe',
+				serverVersion: 2,
+				metadata: expect.objectContaining({
+					reviewNotes: 'Automatic two-chapter character refresh.',
+					reviewedBy: 'chapter_scribe',
+				}),
+			}),
+			expect.objectContaining({
+				status: 'applied',
+				decision: 'approved',
+				validatedBy: 'chapter_scribe',
+				serverVersion: 2,
+			}),
+		]);
+		expect(dbMocks.enqueueStoryVaultSyncJob).toHaveBeenCalledTimes(1);
+		expect(dbMocks.enqueueBackendJob).toHaveBeenCalledTimes(2);
 	});
 
 	it('applies approved contained-name character references to the existing character', async () => {

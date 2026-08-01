@@ -167,6 +167,51 @@ describe('server generation provider cache hints', () => {
 		expect(result.finishReason).toBe('length');
 	});
 
+	it('enables DeepSeek V4 private reasoning at the requested effort', async () => {
+		stubFetch({
+			choices: [{ message: { reasoning_content: 'private analysis', content: 'The court waits.' } }],
+			usage: { prompt_tokens: 20, completion_tokens: 30, total_tokens: 50 },
+		});
+
+		const result = await generateServerTextWithMetrics({
+			profile: {
+				providerType: 'deepseek',
+				apiKey: 'test-key',
+				baseUrl: 'https://api.deepseek.com/v1',
+			} as any,
+			model: 'deepseek-v4-pro',
+			reasoningEffort: 'max',
+			system: 'Narrate the scene.',
+			prompt: 'Player action:\nListen.',
+		});
+
+		expect(requests[0].body.thinking).toEqual({ type: 'enabled' });
+		expect(requests[0].body.reasoning_effort).toBe('max');
+		expect(result.text).toBe('The court waits.');
+	});
+
+	it('disables NanoGPT reasoning when a structured caller requests off', async () => {
+		stubFetch({
+			choices: [{ message: { content: '{"ok":true}' } }],
+			usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
+		});
+
+		await generateServerTextWithMetrics({
+			profile: {
+				providerType: 'nanogpt',
+				apiKey: 'test-key',
+				baseUrl: 'https://nano-gpt.com/api/v1',
+			} as any,
+			model: 'zai-org/glm-5:thinking',
+			reasoningEffort: 'off',
+			system: 'Return JSON.',
+			prompt: 'Plan.',
+			responseFormat: 'json_object',
+		});
+
+		expect(requests[0].body.reasoning_effort).toBe('none');
+	});
+
 	it('reports provider runtime capabilities from existing provider metadata', () => {
 		expect(getProviderCapabilities({ providerType: 'openai', apiKey: 'test-key' } as any)).toMatchObject({
 			cacheMode: 'openai_implicit',
@@ -232,7 +277,7 @@ describe('server generation provider cache hints', () => {
 		await generateServerTextWithMetrics({
 			profile: {
 				providerType: 'openai',
-				apiKey: 'test-key',
+				apiKey: 'unit-test-key',
 			} as any,
 			model: 'gpt-5-mini',
 			system: 'Extract state.',
@@ -265,6 +310,39 @@ describe('server generation provider cache hints', () => {
 					required: ['update'],
 				},
 			},
+		});
+	});
+
+	it('falls back to JSON object mode for DeepSeek classifiers routed through OpenRouter', async () => {
+		stubFetch({
+			choices: [{ message: { content: '{"update":{}}' } }],
+			usage: { prompt_tokens: 50, completion_tokens: 5, total_tokens: 55 },
+		});
+
+		await generateServerTextWithMetrics({
+			profile: {
+				providerType: 'openrouter',
+				apiKey: 'unit-test-key',
+				baseUrl: 'https://openrouter.ai/api/v1',
+			} as any,
+			model: 'deepseek/deepseek-v3.2',
+			system: 'Extract state.',
+			prompt: 'Narration changed nothing.',
+			responseSchema: {
+				name: 'mtherios_state_patch',
+				strict: true,
+				schema: {
+					type: 'object',
+					additionalProperties: false,
+					properties: { update: { type: 'object' } },
+					required: ['update'],
+				},
+			},
+		});
+
+		expect(requests[0].body.response_format).toEqual({ type: 'json_object' });
+		expect(getProviderCapabilities({ providerType: 'openrouter', apiKey: 'unit-test-key', } as any, 'deepseek/deepseek-v3.2')).toMatchObject({
+			structuredOutputs: false,
 		});
 	});
 

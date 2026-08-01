@@ -160,10 +160,10 @@ function normalizeChapter(value: unknown): NormalizedMemoryCandidate {
 			...asStringArray(record.keywords),
 			...asStringArray(metadata.keywords),
 		],
-		characters: [
+		characters: [...new Set([
 			...asStringArray(record.characters),
-			...asStringArray(metadata.characters),
-		],
+			...relationList(metadata, ['trackedEntityIds', 'legacyCharacters', 'characters']),
+		])],
 		locations: [
 			...asStringArray(record.locations),
 			...asStringArray(metadata.locations),
@@ -207,7 +207,10 @@ function normalizeArc(value: unknown): NormalizedMemoryCandidate {
 		title,
 		body: bodyParts.join(' '),
 		keywords: asStringArray(metadata.keywords),
-		characters: asStringArray(metadata.characters),
+		characters: [...new Set([
+			...asStringArray(record.characters),
+			...relationList(metadata, ['trackedEntityIds', 'legacyCharacters', 'characters']),
+		])],
 		locations: asStringArray(metadata.locations),
 		threads,
 		pinned: Boolean(metadata.pinned),

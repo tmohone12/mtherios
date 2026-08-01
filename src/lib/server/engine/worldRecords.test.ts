@@ -3,17 +3,12 @@ import { listWorldRecords, patchWorldRecord } from './worldRecords';
 
 const dbMocks = vi.hoisted(() => ({
 	getDb: vi.fn(),
-	bumpStoryVersion: vi.fn(),
 	enqueueBackendJob: vi.fn(),
 	enqueueStoryVaultSyncJob: vi.fn(),
 }));
 
 vi.mock('$lib/server/db/client', () => ({
 	getDb: dbMocks.getDb,
-}));
-
-vi.mock('$lib/server/memory/canonical', () => ({
-	bumpStoryVersion: dbMocks.bumpStoryVersion,
 }));
 
 vi.mock('$lib/server/jobs/outbox', () => ({
@@ -23,7 +18,6 @@ vi.mock('$lib/server/jobs/outbox', () => ({
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	dbMocks.bumpStoryVersion.mockResolvedValue(12);
 	dbMocks.enqueueBackendJob.mockResolvedValue('job_index');
 	dbMocks.enqueueStoryVaultSyncJob.mockResolvedValue('job_vault');
 });
@@ -50,6 +44,7 @@ describe('patchWorldRecord', () => {
 				type: 'character',
 				name: 'Mira',
 			}])
+			.mockResolvedValueOnce([{ server_version: 12 }])
 			.mockResolvedValueOnce([{
 				id: 'npc_mira',
 				story_id: 'story_alpha',
@@ -57,13 +52,16 @@ describe('patchWorldRecord', () => {
 				name: 'Mira',
 				state: { currentAction: 'Guarding the quay.' },
 			}]);
-		dbMocks.getDb.mockReturnValue({
+		const tx = {
 			execute,
 			insert: (table: unknown) => ({
 				values: async (value: unknown) => {
 					inserts.push({ table, value });
 				},
 			}),
+		};
+		dbMocks.getDb.mockReturnValue({
+			transaction: (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx),
 		});
 
 		const result = await patchWorldRecord('characters', 'npc_mira', {
@@ -97,5 +95,56 @@ describe('patchWorldRecord', () => {
 				reason: 'manual_record_edit',
 			},
 		}));
+	});
+
+	it('normalizes memory aliases before writing the record and audit trail', async () => {
+		const inserts: Array<{ value: Record<string, unknown> }> = [];
+		const execute = vi.fn()
+			.mockResolvedValueOnce([{
+				id: 'memory_rules',
+				story_id: 'story_alpha',
+				type: 'canonical',
+			}])
+			.mockResolvedValueOnce([{ server_version: 12 }])
+			.mockResolvedValueOnce([{
+				id: 'memory_rules',
+				story_id: 'story_alpha',
+				type: 'canonical',
+				importance: 0.8,
+			}]);
+		const tx = {
+			execute,
+			insert: () => ({
+				values: async (value: Record<string, unknown>) => {
+					inserts.push({ value });
+				},
+			}),
+		};
+		dbMocks.getDb.mockReturnValue({
+			transaction: (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx),
+		});
+
+		await patchWorldRecord('memoryNodes', 'memory_rules', {
+			updates: { type: 'world', importance: 8 },
+			reason: 'MCP memory edit.',
+		});
+
+		const auditedOperations = inserts
+			.flatMap((insert) => Array.isArray(insert.value.operations) ? insert.value.operations : []);
+		expect(auditedOperations).toEqual(expect.arrayContaining([
+			expect.objectContaining({ path: '/memoryNodes/memory_rules/type', value: 'canonical' }),
+			expect.objectContaining({ path: '/memoryNodes/memory_rules/importance', value: 0.8 }),
+		]));
+	});
+
+	it('rejects unknown memory types before opening a write transaction', async () => {
+		const transaction = vi.fn();
+		dbMocks.getDb.mockReturnValue({ transaction });
+
+		await expect(patchWorldRecord('memoryNodes', 'memory_rules', {
+			updates: { type: 'invented_memory_kind' },
+			reason: 'MCP memory edit.',
+		})).rejects.toThrow('Invalid option');
+		expect(transaction).not.toHaveBeenCalled();
 	});
 });

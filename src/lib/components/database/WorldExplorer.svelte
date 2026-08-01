@@ -887,21 +887,21 @@
 
 								{#if apiDebugSnapshot.system}
 									<div class="space-y-1">
-										<div class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">System Prompt</div>
+									<div class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">System Prompt Preview</div>
 										<pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] leading-relaxed text-[var(--text-secondary)]">{stringValue(apiDebugSnapshot.system)}</pre>
 									</div>
 								{/if}
 
 								{#if apiDebugSnapshot.prompt}
 									<div class="space-y-1">
-										<div class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">User Prompt</div>
+									<div class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">Dynamic Context Preview</div>
 										<pre class="max-h-96 overflow-auto whitespace-pre-wrap rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] leading-relaxed text-[var(--text-secondary)]">{stringValue(apiDebugSnapshot.prompt)}</pre>
 									</div>
 								{/if}
 
 								{#if asRecordArray(apiDebugSnapshot.messages).length > 0}
 									<div class="space-y-1">
-										<div class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">Prior Messages</div>
+									<div class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">Prior Messages Preview</div>
 										<div class="max-h-72 space-y-2 overflow-auto rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2">
 											{#each asRecordArray(apiDebugSnapshot.messages) as message}
 												<div class="text-[11px]">

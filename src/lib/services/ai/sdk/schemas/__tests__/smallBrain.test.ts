@@ -87,6 +87,7 @@ describe('smallBrain schemas', () => {
 			relevantFactionIds: [],
 			promptNotes: [],
 			uncertainties: [],
+			evidence: [],
 		});
 
 		expect(smallBrainCanonResultSchema.parse({ mode: 'canon' })).toEqual({
@@ -100,6 +101,20 @@ describe('smallBrain schemas', () => {
 			npcIntents: [],
 			strategicPulse: [],
 			wikiDrafts: [],
+		});
+	});
+
+	it('accepts bounded Lore Master query and scene hints', () => {
+		expect(smallBrainRunRequestSchema.parse({
+			storyId: 'story_1',
+			mode: 'context',
+			query: 'Ask Mira about her father.',
+			sceneEntityIds: ['entity_mira'],
+			tokenBudget: '900',
+		})).toMatchObject({
+			query: 'Ask Mira about her father.',
+			sceneEntityIds: ['entity_mira'],
+			tokenBudget: 900,
 		});
 	});
 

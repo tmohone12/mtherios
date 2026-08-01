@@ -9,6 +9,7 @@ import { refreshStoryCatalog } from '$lib/services/serverStories';
 class AppStore {
 	onboardingComplete = $state(false);
 	currentStoryId = $state<string | null>(null);
+	activeShelfId = $state<string | null>(null);
 	showWizard = $state(false);
 	loading = $state(true);
 
@@ -16,6 +17,7 @@ class AppStore {
 		try {
 			const onboarded = await getSetting('onboardingComplete');
 			const lastStory = await getSetting('lastStoryId');
+			const lastShelf = await getSetting('lastShelfId');
 			const catalog = await refreshStoryCatalog().catch((error) => {
 				console.warn('[App] Backend story catalog unavailable during startup:', error);
 				return null;
@@ -29,6 +31,7 @@ class AppStore {
 
 			this.onboardingComplete = onboarded === 'true' || Boolean(recoveredStoryId);
 			this.currentStoryId = recoveredStoryId;
+			this.activeShelfId = lastShelf ?? catalog?.find((story) => story.id === recoveredStoryId)?.shelfId ?? null;
 
 			if (recoveredStoryId) {
 				await setSetting('onboardingComplete', 'true');
@@ -49,7 +52,9 @@ class AppStore {
 		}
 	}
 
-	startNewStory() {
+	startNewStory(shelfId?: string | null) {
+		this.activeShelfId = shelfId ?? this.activeShelfId;
+		if (this.activeShelfId) setSetting('lastShelfId', this.activeShelfId).catch(e => console.warn('[App] Failed to persist last shelf:', e));
 		this.showWizard = true;
 	}
 
@@ -63,6 +68,12 @@ class AppStore {
 	openStory(storyId: string) {
 		this.currentStoryId = storyId;
 		setSetting('lastStoryId', storyId).catch(e => console.warn('[App] Failed to persist last story:', e));
+	}
+
+	openShelf(shelfId: string | null) {
+		this.activeShelfId = shelfId;
+		if (shelfId) setSetting('lastShelfId', shelfId).catch(e => console.warn('[App] Failed to persist last shelf:', e));
+		else deleteSetting('lastShelfId').catch(e => console.warn('[App] Failed to clear last shelf:', e));
 	}
 
 	closeStory() {

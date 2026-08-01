@@ -66,6 +66,52 @@ describe('timeline contracts', () => {
 		expect(node.type).toBe('procedural');
 	});
 
+	it('normalizes legacy canon policy memory nodes and imported importance scale', () => {
+		const node = memoryNodeSchema.parse({
+			id: 'memory_start_safe_database_policy',
+			storyId: 'story_1',
+			type: 'canon_policy',
+			title: 'Start-safe database policy',
+			content: 'Keep the opening spoiler-safe until play reveals more.',
+			importance: 10,
+			createdAt: '2026-07-06T00:00:00.000Z',
+			updatedAt: '2026-07-06T00:00:00.000Z',
+		});
+
+		expect(node.type).toBe('procedural');
+		expect(node.importance).toBe(1);
+	});
+
+	it('normalizes agent-authored world memory nodes to canonical memory', () => {
+		const node = memoryNodeSchema.parse({
+			id: 'memory_world_contract',
+			storyId: 'story_1',
+			type: 'world',
+			title: 'World rules',
+			content: 'The durable rules of this setting.',
+			importance: 1,
+			createdAt: '2026-07-10T00:00:00.000Z',
+			updatedAt: '2026-07-10T00:00:00.000Z',
+		});
+
+		expect(node.type).toBe('canonical');
+	});
+
+	it('normalizes legacy 1-10 memory importance values', () => {
+		const node = memoryNodeSchema.parse({
+			id: 'memory_legacy_importance',
+			storyId: 'story_1',
+			type: 'canonical',
+			title: 'Legacy importance',
+			content: 'A memory imported with a 1-10 scale.',
+			importance: 7,
+			createdAt: '2026-07-06T00:00:00.000Z',
+			updatedAt: '2026-07-06T00:00:00.000Z',
+		});
+
+		expect(node.importance).toBe(0.7);
+	});
+
 	it('normalizes imported lore events from terminal bootstraps', () => {
 		const event = storyEventSchema.parse({
 			id: 'event_imported_lore',

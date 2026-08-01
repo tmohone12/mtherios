@@ -28,6 +28,7 @@ export interface ServerGenerationOptions {
 	model?: string;
 	temperature?: number;
 	maxTokens?: number;
+	reasoningEffort?: string | null;
 	timeoutMs?: number;
 	maxRetries?: number;
 	system: string;
@@ -92,6 +93,11 @@ function isAnthropicProvider(profile: ProviderProfile): boolean {
 	return profile.providerType === 'anthropic' || profile.providerType === 'anthropic-proxy';
 }
 
+function isDeepSeekRuntimeModel(providerType: ProviderType, model: string | undefined): boolean {
+	if (providerType === 'deepseek') return true;
+	return Boolean(model && /deepseek/i.test(model));
+}
+
 const DEFAULT_SERVER_GENERATION_TIMEOUT_MS = 120_000;
 const DEFAULT_SERVER_GENERATION_RETRIES = 1;
 
@@ -106,6 +112,7 @@ export function getProviderCapabilities(profile: ProviderProfile, model?: string
 	const providerType = profile.providerType as ProviderType;
 	const provider = PROVIDERS[providerType];
 	const isAnthropic = isAnthropicProvider(profile);
+	const isDeepSeekModel = isDeepSeekRuntimeModel(providerType, model);
 	const cacheMode: ProviderRuntimeCapabilities['cacheMode'] = isAnthropic
 		? 'anthropic_breakpoint'
 		: providerType === 'openai'
@@ -117,7 +124,7 @@ export function getProviderCapabilities(profile: ProviderProfile, model?: string
 					: 'none';
 	return {
 		cacheMode,
-		structuredOutputs: !isAnthropic && Boolean(provider?.capabilities.structuredOutput),
+		structuredOutputs: !isAnthropic && !isDeepSeekModel && Boolean(provider?.capabilities.structuredOutput),
 		nativeTokenCounting: ['openai', 'openrouter', 'anthropic', 'anthropic-proxy', 'google', 'google-ai-studio', 'google-vertex', 'google-agent-platform', 'z-ai'].includes(providerType),
 		maxContextTokens: getModelContextWindow(fallbackModelFor(profile, model)),
 	};
@@ -456,6 +463,15 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 	const model = fallbackModelFor(options.profile, options.model);
 	const temperature = options.temperature ?? 1;
 	const maxTokens = options.maxTokens ?? 4096;
+	const requestedReasoningEffort = options.reasoningEffort?.trim().toLowerCase();
+	const providerType = options.profile.providerType as ProviderType;
+	const reasoningControl = requestedReasoningEffort && providerType === 'nanogpt'
+		? { reasoning_effort: requestedReasoningEffort === 'off' ? 'none' : requestedReasoningEffort === 'max' ? 'xhigh' : requestedReasoningEffort }
+		: isDeepSeekRuntimeModel(providerType, model) && requestedReasoningEffort
+			? requestedReasoningEffort === 'off'
+				? { thinking: { type: 'disabled' } }
+				: { thinking: { type: 'enabled' }, reasoning_effort: requestedReasoningEffort === 'max' ? 'max' : 'high' }
+			: {};
 	const useAnthropic = isAnthropicProvider(options.profile);
 	const useGoogleAgentPlatform = isGoogleAgentPlatformProvider(options.profile);
 	const baseUrl = useGoogleAgentPlatform
@@ -496,6 +512,7 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 				{ role: 'user', content: prompt },
 			],
 			...buildOpenAiPromptCacheFields(options.profile, options.cache),
+			...reasoningControl,
 			...(shouldStream ? { stream: true, stream_options: { include_usage: true } } : {}),
 			...buildOpenAiResponseFormat(options),
 		};

@@ -3,12 +3,13 @@ import { createStoryRequestSchema } from '$lib/contracts/memory';
 import { executeLegacyEngineCommand } from '$lib/server/engine/routeCompatibility';
 import { apiError, readJson } from '$lib/server/memory/http';
 
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async ({ url }) => {
 	try {
+		const shelfId = url?.searchParams.get('shelfId')?.trim() || undefined;
 		return json(await executeLegacyEngineCommand({
 			storyId: '__app__',
 			command: 'story.list',
-			args: {},
+			args: shelfId ? { shelfId } : {},
 		}));
 	} catch (error) {
 		return apiError(error);

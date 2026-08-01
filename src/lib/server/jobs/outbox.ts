@@ -14,6 +14,7 @@ export const backendJobTypes = [
 	'sync_story_vault',
 	'extract_turn_state',
 	'continuity_audit',
+	'plan_plot_brain',
 ] as const;
 
 export type BackendJobType = typeof backendJobTypes[number];
@@ -23,6 +24,7 @@ export interface EnqueueBackendJobInput {
 	type: BackendJobType;
 	payload?: Record<string, unknown>;
 	dedupeKey?: string;
+	requeueExisting?: boolean;
 	runAfter?: string;
 	maxAttempts?: number;
 	metadata?: Record<string, unknown>;
@@ -67,7 +69,7 @@ function stableJobId(type: BackendJobType, dedupeKey: string): string {
 export async function enqueueBackendJob(input: EnqueueBackendJobInput): Promise<string> {
 	const createdAt = nowIso();
 	const jobId = input.dedupeKey ? stableJobId(input.type, input.dedupeKey) : id('job');
-	await getDb().insert(backendJobs).values({
+	const insert = getDb().insert(backendJobs).values({
 		id: jobId,
 		storyId: input.storyId,
 		type: input.type,
@@ -82,7 +84,12 @@ export async function enqueueBackendJob(input: EnqueueBackendJobInput): Promise<
 		metadata: input.metadata ?? {},
 		createdAt,
 		updatedAt: createdAt,
-	}).onConflictDoUpdate({
+	});
+	if (input.requeueExisting === false) {
+		await insert.onConflictDoNothing();
+		return jobId;
+	}
+	await insert.onConflictDoUpdate({
 		target: backendJobs.id,
 		set: {
 			payload: input.payload ?? {},
@@ -131,6 +138,7 @@ export async function enqueueTurnStateExtractionJob(input: {
 	narration: string;
 	clientTurnId: string;
 	timelineTurn: number;
+	serverVersion: number;
 	retrievedMemoryIds: string[];
 	memorySettings?: {
 		chapterThreshold?: number;
@@ -149,9 +157,55 @@ export async function enqueueTurnStateExtractionJob(input: {
 			narration: input.narration,
 			clientTurnId: input.clientTurnId,
 			timelineTurn: input.timelineTurn,
+			serverVersion: input.serverVersion,
 			retrievedMemoryIds: input.retrievedMemoryIds,
 			memorySettings: input.memorySettings ?? {},
 		},
+		maxAttempts: 3,
+	});
+}
+
+export async function enqueueChapterSummaryJob(input: {
+	storyId: string;
+	serverVersion: number;
+	eventIds?: string[];
+	patchIds?: string[];
+	dedupeKey?: string;
+	memorySettings?: {
+		chapterThreshold?: number;
+		postChapterBuffer?: number;
+		chaptersPerArc?: number;
+	};
+}): Promise<string> {
+	return enqueueBackendJob({
+		storyId: input.storyId,
+		type: 'summarize_chapter',
+		dedupeKey: input.dedupeKey ?? `chapter-summary-${input.serverVersion}`,
+		payload: {
+			eventIds: input.eventIds ?? [],
+			patchIds: input.patchIds ?? [],
+			serverVersion: input.serverVersion,
+			...(input.memorySettings ?? {}),
+		},
+	});
+}
+
+export async function enqueuePlotBrainJob(input: {
+	storyId: string;
+	trigger: 'scheduled_refresh' | 'arc_created';
+	scopeId: string;
+	skipIfPlanned?: boolean;
+}): Promise<string> {
+	return enqueueBackendJob({
+		storyId: input.storyId,
+		type: 'plan_plot_brain',
+		dedupeKey: `plot-brain-${input.trigger}-${input.scopeId}`,
+		payload: {
+			trigger: input.trigger,
+			execute: true,
+			skipIfPlanned: input.skipIfPlanned === true,
+		},
+		requeueExisting: false,
 		maxAttempts: 3,
 	});
 }
@@ -187,6 +241,7 @@ export async function enqueueTurnProjectionJobs(input: {
 	memoryNodeIds: string[];
 	patchIds: string[];
 	serverVersion: number;
+	chapterDedupeKey?: string;
 	memorySettings?: {
 		chapterThreshold?: number;
 		postChapterBuffer?: number;
@@ -218,11 +273,13 @@ export async function enqueueTurnProjectionJobs(input: {
 		payload: { eventIds: input.eventIds, patchIds: input.patchIds, serverVersion: input.serverVersion },
 		maxAttempts: 3,
 	}));
-	jobs.push(enqueueBackendJob({
+	jobs.push(enqueueChapterSummaryJob({
 		storyId: input.storyId,
-		type: 'summarize_chapter',
-		dedupeKey: `chapter-summary-${input.serverVersion}`,
-		payload: { eventIds: input.eventIds, patchIds: input.patchIds, serverVersion: input.serverVersion, ...memorySettings },
+		serverVersion: input.serverVersion,
+		eventIds: input.eventIds,
+		patchIds: input.patchIds,
+		dedupeKey: input.chapterDedupeKey,
+		memorySettings,
 	}));
 	if (shouldQueueTurnStoryVaultSync(input.serverVersion)) {
 		jobs.push(enqueueBackendJob({

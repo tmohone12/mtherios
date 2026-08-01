@@ -22,6 +22,7 @@ import {
 	relationships,
 	sagas,
 	statePatches,
+	shelves,
 	stories,
 	storyEntries,
 	storyEvents,
@@ -38,7 +39,9 @@ import {
 	type SyncChange,
 	type SyncOperation,
 } from '$lib/contracts/memory';
-import { enqueueImportProjectionJobs, enqueueStoryVaultSyncJob, enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
+import { createShelfRequestSchema, updateShelfRequestSchema } from '$lib/contracts/shelves';
+import { enqueueImportProjectionJobs, enqueuePlotBrainJob, enqueueStoryVaultSyncJob, enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
+import { hasStrategicPlotContent } from '$lib/services/ai/sdk/schemas/strategicWorldBrain';
 import { deleteStoryVaultArtifacts } from '$lib/server/wiki/storyVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
 import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from './entityResolver';
@@ -49,6 +52,7 @@ type LivingMemoryKind = 'conversationMemory' | 'worldEvent' | 'factionAction' | 
 type LivingMemoryWriteMode = 'ignore' | 'upsert';
 type Db = ReturnType<typeof getDb>;
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+const DEFAULT_SHELF_ID = 'shelf_default';
 
 export interface BootstrapProjectionLimits {
 	entryLimit: number;
@@ -374,14 +378,19 @@ export async function createBackendStory(input: unknown) {
 	const db = getDb();
 	const createdAt = nowIso();
 	const storyId = id('story');
+	const shelfId = request.shelfId ?? DEFAULT_SHELF_ID;
+	await ensureShelfExists(db, shelfId, request.genre ?? null, createdAt);
 
 	const [story] = await db.insert(stories).values({
 		id: storyId,
+		shelfId,
 		clientStoryId: request.clientStoryId ?? null,
 		title: request.title,
 		description: request.description ?? null,
 		genre: request.genre ?? null,
 		mode: request.mode,
+		role: request.role,
+		timelineMode: request.timelineMode,
 		settings: request.settings ?? null,
 		headerPrompt: request.headerPrompt ?? null,
 		metadata: {
@@ -395,25 +404,31 @@ export async function createBackendStory(input: unknown) {
 	await queueStoryVaultSync(story.id, story.serverVersion, 'story-created');
 	return {
 		storyId: story.id,
+		shelfId: story.shelfId,
 		serverVersion: story.serverVersion,
 		createdAt: story.createdAt,
 	};
 }
 
-export async function listBackendStories() {
+export async function listBackendStories(options: { shelfId?: string | null } = {}) {
+	const shelfId = typeof options.shelfId === 'string' && options.shelfId.trim() ? options.shelfId.trim() : null;
 	const rows = await getDb()
 		.select()
 		.from(stories)
+		.where(shelfId ? eq(stories.shelfId, shelfId) : sql`true`)
 		.orderBy(desc(stories.updatedAt))
 		.limit(500);
 
 	return rows.map((story) => ({
 		id: story.id,
+		shelfId: story.shelfId,
 		clientStoryId: story.clientStoryId,
 		title: story.title,
 		description: story.description,
 		genre: story.genre,
 		mode: story.mode,
+		role: story.role,
+		timelineMode: story.timelineMode,
 		settings: story.settings,
 		headerPrompt: story.headerPrompt,
 		metadata: story.metadata,
@@ -421,6 +436,148 @@ export async function listBackendStories() {
 		createdAt: story.createdAt,
 		updatedAt: story.updatedAt,
 	}));
+}
+
+function slugifyShelf(value: string): string {
+	const slug = value
+		.toLowerCase()
+		.normalize('NFKD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.replace(/[^a-z0-9]+/g, '_')
+		.replace(/^_+|_+$/g, '')
+		.slice(0, 80);
+	return slug || 'shelf';
+}
+
+async function ensureShelfExists(db: Db, shelfId: string, genre: string | null, createdAt = nowIso()): Promise<void> {
+	const [existing] = await db.select({ id: shelves.id }).from(shelves).where(eq(shelves.id, shelfId)).limit(1);
+	if (existing) return;
+	if (shelfId !== DEFAULT_SHELF_ID) throw new Error(`Shelf not found: ${shelfId}`);
+	await db.insert(shelves).values({
+		id: DEFAULT_SHELF_ID,
+		name: 'Default Shelf',
+		slug: 'default_shelf',
+		description: 'Migrated shelf for existing Mtherios stories.',
+		genre,
+		settings: {},
+		metadata: { createdByCompatibilityPath: true },
+		createdAt,
+		updatedAt: createdAt,
+	}).onConflictDoNothing();
+}
+
+function shelfSummary(row: typeof shelves.$inferSelect, storyCount = 0, canonRecordCount = 0, sourceCount = 0) {
+	return {
+		id: row.id,
+		name: row.name,
+		slug: row.slug,
+		description: row.description,
+		genre: row.genre,
+		coverImageUrl: row.coverImageUrl,
+		settings: row.settings ?? {},
+		metadata: row.metadata ?? {},
+		storyCount,
+		canonRecordCount,
+		sourceCount,
+		serverVersion: row.serverVersion,
+		createdAt: row.createdAt,
+		updatedAt: row.updatedAt,
+	};
+}
+
+export async function listBackendShelves() {
+	const db = getDb();
+	await ensureShelfExists(db, DEFAULT_SHELF_ID, null);
+	const rows = await db.select().from(shelves).orderBy(desc(shelves.updatedAt)).limit(500);
+	const storyCounts = await db
+		.select({ shelfId: stories.shelfId, count: sql<number>`count(*)::int` })
+		.from(stories)
+		.groupBy(stories.shelfId);
+	const storiesByShelf = new Map(storyCounts.map((row) => [row.shelfId, Number(row.count ?? 0)]));
+	const summaries = [];
+	for (const row of rows) {
+		const shelfStoryIds = await db.select({ id: stories.id }).from(stories).where(eq(stories.shelfId, row.id));
+		const ids = shelfStoryIds.map((story) => story.id);
+		let canonRecordCount = 0;
+		let sourceCount = 0;
+		if (ids.length > 0) {
+			const [entityCount] = await db.select({ count: sql<number>`count(*)::int` }).from(entities).where(inArray(entities.storyId, ids));
+			const [entryCount] = await db.select({ count: sql<number>`count(*)::int` }).from(storyEntries).where(and(inArray(storyEntries.storyId, ids), eq(storyEntries.type, 'source_import')));
+			canonRecordCount = Number(entityCount?.count ?? 0);
+			sourceCount = Number(entryCount?.count ?? 0);
+		}
+		summaries.push(shelfSummary(row, storiesByShelf.get(row.id) ?? 0, canonRecordCount, sourceCount));
+	}
+	return summaries;
+}
+
+export async function getBackendShelf(shelfId: string) {
+	const db = getDb();
+	const [row] = await db.select().from(shelves).where(eq(shelves.id, shelfId)).limit(1);
+	if (!row) throw new Error(`Shelf not found: ${shelfId}`);
+	return shelfSummary(row);
+}
+
+export async function createBackendShelf(input: unknown) {
+	const request = createShelfRequestSchema.parse(input);
+	const db = getDb();
+	const createdAt = nowIso();
+	const baseSlug = slugifyShelf(request.name);
+	let slug = baseSlug;
+	let suffix = 2;
+	while ((await db.select({ id: shelves.id }).from(shelves).where(eq(shelves.slug, slug)).limit(1))[0]) {
+		slug = `${baseSlug}_${suffix}`;
+		suffix += 1;
+	}
+	const [shelf] = await db.insert(shelves).values({
+		id: id('shelf'),
+		name: request.name,
+		slug,
+		description: request.description ?? null,
+		genre: request.genre ?? null,
+		coverImageUrl: request.coverImageUrl ?? null,
+		settings: request.settings ?? {},
+		metadata: { tags: request.tags ?? [] },
+		createdAt,
+		updatedAt: createdAt,
+	}).returning();
+	return {
+		shelfId: shelf.id,
+		shelf: shelfSummary(shelf),
+		serverVersion: shelf.serverVersion,
+		createdAt: shelf.createdAt,
+	};
+}
+
+export async function updateBackendShelf(shelfId: string, input: unknown) {
+	const request = updateShelfRequestSchema.parse(input);
+	const now = nowIso();
+	const updates: Partial<typeof shelves.$inferInsert> = { updatedAt: now };
+	const db = getDb();
+	if (request.name !== undefined) updates.name = request.name;
+	if (request.description !== undefined) updates.description = request.description ?? null;
+	if (request.genre !== undefined) updates.genre = request.genre ?? null;
+	if (request.coverImageUrl !== undefined) updates.coverImageUrl = request.coverImageUrl ?? null;
+	if (request.settings !== undefined) updates.settings = request.settings;
+	if (request.metadata !== undefined || request.tags !== undefined) {
+		const [existing] = await db.select({ metadata: shelves.metadata }).from(shelves).where(eq(shelves.id, shelfId)).limit(1);
+		if (!existing) throw new Error(`Shelf not found: ${shelfId}`);
+		updates.metadata = {
+			...asRecord(existing.metadata),
+			...(request.metadata ?? {}),
+			...(request.tags !== undefined ? { tags: request.tags } : {}),
+		};
+	}
+	const [row] = await db.update(shelves).set(updates).where(eq(shelves.id, shelfId)).returning();
+	if (!row) throw new Error(`Shelf not found: ${shelfId}`);
+	return shelfSummary(row);
+}
+
+export async function deleteBackendShelf(shelfId: string) {
+	if (shelfId === DEFAULT_SHELF_ID) throw new Error('Default Shelf cannot be deleted.');
+	const [deleted] = await getDb().delete(shelves).where(eq(shelves.id, shelfId)).returning({ id: shelves.id });
+	if (!deleted) throw new Error(`Shelf not found: ${shelfId}`);
+	return { ok: true as const, shelfId };
 }
 
 export async function deleteBackendStory(storyId: string, input: unknown = {}) {
@@ -533,6 +690,20 @@ export async function getBootstrap(storyId: string, options: EngineCampaignBoots
 		limits.memoryNodeLimit === 0 ? Promise.resolve([]) : db.select().from(memoryNodes).where(eq(memoryNodes.storyId, storyId)).orderBy(desc(memoryNodes.updatedAt)).limit(limits.memoryNodeLimit),
 		getCampaignProjection(storyId, { entryLimit: limits.entryLimit }),
 	]);
+	const metadata = asRecord(story.metadata);
+	const plotBrain = asRecord(metadata.plotBrain);
+	const hasPlotFrame = hasStrategicPlotContent(plotBrain.lastFrame ?? metadata.strategicWorldFrame);
+	const hasPendingPlotFrame = Boolean(plotBrain.pendingFrameId)
+		|| Object.keys(asRecord(plotBrain.pendingFrame)).length > 0;
+	const hasPlotEvidence = Number(entryCountRows[0]?.count ?? 0) > 0 || entityRows.length > 0 || factionRows.length > 0;
+	if (!hasPlotFrame && !hasPendingPlotFrame && hasPlotEvidence) {
+		await enqueuePlotBrainJob({
+			storyId,
+			trigger: 'scheduled_refresh',
+			scopeId: storyId,
+			skipIfPlanned: true,
+		}).catch((error) => console.warn('[plot-brain] Failed to queue story bootstrap plan:', error));
+	}
 
 	return {
 		story,

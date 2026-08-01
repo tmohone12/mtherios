@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMemoryPacket, scoreMemoryNode } from './ranking';
+import { buildMemoryPacket, lookupMentioned, memoryQueryTokens, scoreMemoryNode } from './ranking';
 import type { MemoryNode, MemoryRetrieveRequest } from '$lib/contracts/memory';
 
 function node(overrides: Partial<MemoryNode>): MemoryNode {
@@ -38,6 +38,12 @@ const request: MemoryRetrieveRequest = {
 };
 
 describe('backend memory ranking', () => {
+	it('resolves names inside sentence queries without treating pronouns as lore terms', () => {
+		expect(lookupMentioned('I ask Lady Mara about her father.', 'Lady Mara')).toBe(true);
+		expect(lookupMentioned('I ask her about her father.', 'Lady Mara')).toBe(false);
+		expect(memoryQueryTokens('I ask her about her father')).toEqual(['father']);
+	});
+
 	it('boosts exact action terms, scene entities, location, and open threads', () => {
 		const relevant = node({
 			id: 'relevant',
@@ -251,6 +257,30 @@ describe('backend memory ranking', () => {
 		const packet = buildMemoryPacket([stale], request);
 		expect(packet.retrievalTrace[0].signals).toEqual(expect.arrayContaining([
 			expect.stringMatching(/^age decay /),
+		]));
+	});
+
+	it('uses story-turn distance before file timestamps when temporal metadata exists', () => {
+		const storyRequest = { ...request, currentTurn: 100 };
+		const recentInStory = node({
+			id: 'recent_in_story',
+			updatedAt: '2000-01-01T00:00:00.000Z',
+			metadata: { validFromTurn: 99 },
+		});
+		const ancientInStory = node({
+			id: 'ancient_in_story',
+			updatedAt: new Date().toISOString(),
+			metadata: { validFromTurn: 1 },
+		});
+
+		expect(scoreMemoryNode(recentInStory, storyRequest)).toBeGreaterThan(scoreMemoryNode(ancientInStory, storyRequest));
+
+		const packet = buildMemoryPacket([recentInStory, ancientInStory], storyRequest);
+		expect(packet.retrievalTrace.find((item) => item.id === 'recent_in_story')?.signals).toEqual(expect.arrayContaining([
+			expect.stringMatching(/^story recency /),
+		]));
+		expect(packet.retrievalTrace.find((item) => item.id === 'ancient_in_story')?.signals).toEqual(expect.arrayContaining([
+			expect.stringMatching(/^story age decay /),
 		]));
 	});
 });

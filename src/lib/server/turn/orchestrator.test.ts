@@ -1,23 +1,50 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createMemoryEngineCacheRepository } from '$lib/server/engine/cache';
-import { applyPromptContextBudget, buildCampaignContinuityCachePayload, buildStateExtractionResponseSchema, buildTurnContextReceipt, buildTurnPerformanceSummary, chaptersForPromptContinuity, loadServerWikiContextWithCache, logSlowTurn, shouldExtractDurableState, withBudget } from './orchestrator';
+import { countTokens } from '$lib/utils/tokens';
+import { applyPromptContextBudget, buildCampaignContinuityCachePayload, buildStateExtractionResponseSchema, buildTurnContextReceipt, buildTurnPerformanceSummary, chaptersForPromptContinuity, classifierGenerationMaxTokens, loadServerWikiContextWithCache, logSlowTurn, parseStateExtractionResult, resolveNarrationRoll, shouldExtractDurableState, shouldQueueChapterSummaryWithoutState, shouldUseLegacyClassifierFallback, withBudget } from './orchestrator';
 
 describe('turn orchestrator prompt budgeting', () => {
-	it('counts only chapters not already rolled into arcs for prompt continuity', () => {
+	it('resolves a narrator roll request into the existing dice card format', () => {
+		expect(resolveNarrationRoll('No check is needed.')).toBeNull();
+		const random = vi.spyOn(Math, 'random').mockReturnValue(0.95);
+		try {
+			const resolved = resolveNarrationRoll('The lock resists.\n\n{{roll:1d20+2:15:Dexterity:Pick the lock}}');
+
+			expect(resolved).toMatchObject({
+				preText: 'The lock resists.',
+				rollSummary: expect.stringContaining('SUCCESS'),
+			});
+			expect(resolved?.diceMarker).toBe('{{dice:1d20+2|20|22|15|pass|Dexterity|Pick the lock|crit-success}}');
+		} finally {
+			random.mockRestore();
+		}
+	});
+
+	it('keeps chapter cadence alive when a committed turn has no state patch', () => {
+		expect(shouldQueueChapterSummaryWithoutState('none', { eventIds: 0, memoryNodeIds: 0, patchIds: 0 })).toBe(true);
+		expect(shouldQueueChapterSummaryWithoutState('sync', { eventIds: 0, memoryNodeIds: 0, patchIds: 0 })).toBe(true);
+		expect(shouldQueueChapterSummaryWithoutState('deferred', { eventIds: 0, memoryNodeIds: 0, patchIds: 0 })).toBe(false);
+		expect(shouldQueueChapterSummaryWithoutState('sync', { eventIds: 1, memoryNodeIds: 0, patchIds: 0 })).toBe(false);
+	});
+
+	it('keeps the newest two arc-covered chapters for prompt continuity', () => {
 		const chapters = [
-			{ id: 'chapter_1', title: 'Covered' },
-			{ id: 'chapter_2', title: 'Covered Too' },
-			{ id: 'chapter_3', title: 'Current Loose Chapter' },
+			{ id: 'chapter_1', title: 'Old Covered' },
+			{ id: 'chapter_2', title: 'Recent Covered' },
+			{ id: 'chapter_3', title: 'Newest Covered' },
+			{ id: 'chapter_4', title: 'Current Loose Chapter' },
 		];
 
 		expect(chaptersForPromptContinuity(chapters, [
-			{ chapterIds: ['chapter_1', 'chapter_2'] },
+			{ chapterIds: ['chapter_1', 'chapter_2', 'chapter_3'] },
 		])).toEqual([
-			{ id: 'chapter_3', title: 'Current Loose Chapter' },
+			{ id: 'chapter_2', title: 'Recent Covered' },
+			{ id: 'chapter_3', title: 'Newest Covered' },
+			{ id: 'chapter_4', title: 'Current Loose Chapter' },
 		]);
 	});
 
-	it('builds a compact continuity cache payload from uncovered chapters and bounded arcs', () => {
+	it('builds a compact continuity cache payload with recent covered chapters and bounded arcs', () => {
 		const payload = buildCampaignContinuityCachePayload({
 			chapters: [
 				{
@@ -54,10 +81,11 @@ describe('turn orchestrator prompt budgeting', () => {
 		const serialized = JSON.stringify(payload);
 
 		expect(payload.chapters).toEqual([
+			expect.objectContaining({ id: 'chapter_1', sceneOutcome: 'Covered chapter details should not be serialized.' }),
 			expect.objectContaining({ id: 'chapter_2', sceneOutcome: 'Loose chapter fact survives.' }),
 		]);
 		expect(serialized).toContain('Arc cache opening survives.');
-		expect(serialized).not.toContain('Covered chapter details should not be serialized.');
+		expect(serialized).toContain('Covered chapter details should not be serialized.');
 		expect(serialized).not.toContain('Arc cache tail sentinel');
 		expect(serialized).not.toContain('thread cache tail sentinel');
 		expect(serialized).not.toContain('metadata should not enter cache payload');
@@ -80,17 +108,20 @@ describe('turn orchestrator prompt budgeting', () => {
 	it('bounds dynamic prompt text while preserving the final narration instruction', () => {
 		const finalInstruction = 'Return only GM narration prose for the player action. Do not include JSON, ending choices, numbered options, menus, or OOC notes in this response.';
 		const prompt = [
+			'<context_data>',
 			'Story: Long Campaign',
 			'Faction canon:',
 			'House detail. '.repeat(500),
+			'</context_data>',
 			finalInstruction,
 		].join('\n\n');
 
-		const result = applyPromptContextBudget(prompt, 1200);
+		const result = applyPromptContextBudget(prompt, 300);
 
 		expect(result.truncated).toBe(true);
-		expect(result.value.length).toBeLessThanOrEqual(1200);
+		expect(countTokens(result.value)).toBeLessThanOrEqual(300);
 		expect(result.value).toContain('Backend context budget truncated');
+		expect(result.value).toContain('</context_data>');
 		expect(result.value.endsWith(finalInstruction)).toBe(true);
 	});
 
@@ -206,6 +237,28 @@ describe('turn orchestrator prompt budgeting', () => {
 			},
 		});
 		expect(responseSchema.schema).not.toHaveProperty('$schema');
+	});
+
+	it('rejects empty or malformed classifier output before it can be logged as success', () => {
+		expect(() => parseStateExtractionResult('')).toThrow(/empty state extraction response/i);
+		expect(() => parseStateExtractionResult('{')).toThrow();
+		expect(() => parseStateExtractionResult('{"update":{"characters":"not-an-array"}}'))
+			.toThrow(/invalid state extraction response/i);
+
+		expect(parseStateExtractionResult('{"update":{"characters":[]}}')).toMatchObject({
+			operationCount: 0,
+			warnings: [],
+		});
+	});
+
+	it('uses configured classifier tokens and falls back only when the classifier row is absent', () => {
+		expect(classifierGenerationMaxTokens({ maxTokens: 4096 })).toBe(4096);
+		expect(classifierGenerationMaxTokens({})).toBe(2048);
+		expect(shouldUseLegacyClassifierFallback({ profile: null, setting: null })).toBe(true);
+		expect(shouldUseLegacyClassifierFallback({
+			profile: null,
+			setting: { enabled: false } as any,
+		})).toBe(false);
 	});
 
 	it('skips extraction only for explicit durable no-op turns', () => {

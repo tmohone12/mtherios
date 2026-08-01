@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+	shelves,
+	stories,
 	factionProjects,
 	facts,
 	patchProposals,
@@ -8,6 +10,22 @@ import {
 } from './schema';
 
 describe('canon database schema', () => {
+	it('exposes shelves and shelf-owned story run fields', () => {
+		expect(shelves).toBeDefined();
+		expect(shelves.id).toBeDefined();
+		expect(shelves.name).toBeDefined();
+		expect(shelves.slug).toBeDefined();
+		expect(shelves.description).toBeDefined();
+		expect(shelves.genre).toBeDefined();
+		expect(shelves.coverImageUrl).toBeDefined();
+		expect(shelves.settings).toBeDefined();
+		expect(shelves.metadata).toBeDefined();
+
+		expect(stories.shelfId).toBeDefined();
+		expect(stories.role).toBeDefined();
+		expect(stories.timelineMode).toBeDefined();
+	});
+
 	it('exposes faction projects for delayed resource-backed faction plans', () => {
 		expect(factionProjects).toBeDefined();
 		expect(factionProjects.storyId).toBeDefined();

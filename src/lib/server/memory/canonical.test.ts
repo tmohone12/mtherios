@@ -7,6 +7,7 @@ import {
 	memoryNodes,
 	patchProposals,
 	relationships,
+	shelves,
 	sourceRefs,
 	stories,
 } from '$lib/server/db/schema';
@@ -39,7 +40,7 @@ vi.mock('$lib/server/engine/canonicalSearch', () => ({
 	searchCanonicalWorld: vi.fn().mockResolvedValue({ results: [] }),
 }));
 
-import { assertSyncOpReplayMatches, normalizeBootstrapOptions, revertToContextCheckpoint, upsertBackendChapterFromLocal, upsertBackendEntityFromEntry } from './canonical';
+import { assertSyncOpReplayMatches, normalizeBootstrapOptions, revertToContextCheckpoint, updateBackendShelf, upsertBackendChapterFromLocal, upsertBackendEntityFromEntry } from './canonical';
 
 type PatchProposalRow = typeof patchProposals.$inferSelect;
 
@@ -101,6 +102,7 @@ function createDbMock(options: {
 	patchProposalRows?: PatchProposalRow[];
 	entityRows?: Array<Record<string, unknown>>;
 	chapterRows?: Array<Record<string, unknown>>;
+	shelfRows?: Array<Record<string, unknown>>;
 } = {}) {
 	const insertCalls: Array<{ table: unknown; value: Record<string, unknown> }> = [];
 	const updateCalls: Array<{ table: unknown; value: Record<string, unknown> }> = [];
@@ -112,6 +114,7 @@ function createDbMock(options: {
 		if (table === entityAliases) return [];
 		if (table === relationships) return [];
 		if (table === patchProposals) return options.patchProposalRows ?? [];
+		if (table === shelves) return options.shelfRows ?? [];
 		return [];
 	}
 
@@ -258,6 +261,33 @@ describe('backend bootstrap projection limits', () => {
 			npcBeliefLimit: 0,
 			sagaLimit: 0,
 		}));
+	});
+});
+
+describe('backend shelf updates', () => {
+	it('preserves existing shelf metadata when only tags are patched', async () => {
+		const { db, updateCalls } = createDbMock({
+			shelfRows: [{
+				id: 'shelf_1',
+				name: 'Glassmarket',
+				slug: 'glassmarket',
+				description: null,
+				genre: null,
+				coverImageUrl: null,
+				settings: {},
+				metadata: { source: 'seed', tags: ['old'] },
+				serverVersion: 1,
+				createdAt: '2026-07-06T00:00:00.000Z',
+				updatedAt: '2026-07-06T00:00:00.000Z',
+			}],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		await updateBackendShelf('shelf_1', { tags: ['new'] });
+
+		expect(updateCalls.find((call) => call.table === shelves)?.value).toMatchObject({
+			metadata: { source: 'seed', tags: ['new'] },
+		});
 	});
 });
 
