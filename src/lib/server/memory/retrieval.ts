@@ -1,5 +1,5 @@
 import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
-import { memoryNodes, entityAliases, entities, npcBeliefs, storyEvents } from '$lib/server/db/schema';
+import { memoryNodes, entityAliases, entities, npcBeliefs, stories, storyEntries, storyEvents } from '$lib/server/db/schema';
 import { getDb } from '$lib/server/db/client';
 import {
 	memoryRetrieveRequestSchema,
@@ -13,11 +13,16 @@ import {
 	memoryEmbeddingConfig,
 	validateMemoryEmbeddingVector,
 } from '$lib/server/memory/embeddings';
-import { buildMemoryPacket, normalizeLookup, scoreMemoryNode } from './ranking';
+import { buildMemoryPacket, lookupMentioned, memoryQueryTokens, normalizeLookup, scoreMemoryNode } from './ranking';
 
 type MemoryNodeRow = typeof memoryNodes.$inferSelect;
 type NpcBeliefRow = typeof npcBeliefs.$inferSelect;
 type StoryEventRow = typeof storyEvents.$inferSelect;
+type TranscriptEntryRow = Pick<typeof storyEntries.$inferSelect, 'id' | 'storyId' | 'type' | 'content' | 'position' | 'createdAt' | 'updatedAt'>;
+type EntityLookup = { entityId: string; label: string };
+
+const TRANSCRIPT_RECALL_ENTRY_LIMIT = 200;
+const TRANSCRIPT_EXCERPT_CHAR_LIMIT = 1_400;
 
 function asStringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -102,39 +107,103 @@ function dedupe(nodes: MemoryNode[]): MemoryNode[] {
 	return [...byId.values()];
 }
 
-async function expandSceneEntities(request: MemoryRetrieveRequest): Promise<string[]> {
-	const db = getDb();
-	const query = normalizeLookup(request.query);
-	if (!query) return request.sceneEntityIds;
-
-	const aliasRows = await db
-		.select({ entityId: entityAliases.entityId, alias: entityAliases.alias })
-		.from(entityAliases)
-		.where(and(
-			eq(entityAliases.storyId, request.storyId),
-			ilike(entityAliases.normalizedAlias, `%${query}%`),
-		))
-		.limit(12);
-
-	const entityRows = await db
-		.select({ id: entities.id, name: entities.name })
-		.from(entities)
-		.where(and(
-			eq(entities.storyId, request.storyId),
-			ilike(entities.name, `%${request.query}%`),
-		))
-		.limit(12);
-
-	return [...new Set([
-		...request.sceneEntityIds,
-		...aliasRows.map((row) => row.entityId),
-		...entityRows.map((row) => row.id),
-	])];
+function transcriptExcerpt(value: string, queryTokens: string[]): string {
+	const blocks = value.split(/\r?\n\s*\r?\n/).map((block) => block.replace(/\s+/g, ' ').trim()).filter(Boolean);
+	const best = blocks
+		.map((block, index) => {
+			const blockTokens = memoryQueryTokens(block, 120);
+			const hits = queryTokens.filter((queryToken) => blockTokens.some((blockToken) => blockToken === queryToken
+				|| (Math.min(blockToken.length, queryToken.length) >= 5 && (blockToken.startsWith(queryToken) || queryToken.startsWith(blockToken))))).length;
+			return { block, index, hits };
+		})
+		.sort((a, b) => (b.hits - a.hits) || (b.block.length - a.block.length) || (a.index - b.index))[0]?.block ?? value.replace(/\s+/g, ' ').trim();
+	if (best.length <= TRANSCRIPT_EXCERPT_CHAR_LIMIT) return best;
+	const positions = queryTokens.map((token) => best.toLowerCase().indexOf(token)).filter((position) => position >= 0).sort((a, b) => a - b);
+	const center = positions[Math.floor(positions.length / 2)] ?? 0;
+	const start = Math.max(0, Math.min(best.length - TRANSCRIPT_EXCERPT_CHAR_LIMIT, center - Math.floor(TRANSCRIPT_EXCERPT_CHAR_LIMIT / 3)));
+	return `${start ? '... ' : ''}${best.slice(start, start + TRANSCRIPT_EXCERPT_CHAR_LIMIT).trim()}${start + TRANSCRIPT_EXCERPT_CHAR_LIMIT < best.length ? ' ...' : ''}`;
 }
 
-async function candidateNodes(request: MemoryRetrieveRequest): Promise<MemoryNode[]> {
+async function expandSceneEntities(request: MemoryRetrieveRequest): Promise<{ sceneEntityIds: string[]; entityLookups: EntityLookup[] }> {
 	const db = getDb();
-	const sceneEntityIds = await expandSceneEntities(request);
+	const knownSceneIds = [...request.sceneEntityIds, ...request.presentNpcIds];
+	if (!request.query.trim()) return { sceneEntityIds: [...new Set(knownSceneIds)], entityLookups: [] };
+
+	// ponytail: bounded story-local scan; add normalized entity-name indexing only if this becomes measurable.
+	const [aliasRows, entityRows] = await Promise.all([
+		db.select({ entityId: entityAliases.entityId, alias: entityAliases.alias })
+			.from(entityAliases)
+			.where(eq(entityAliases.storyId, request.storyId))
+			.limit(500),
+		db.select({ id: entities.id, name: entities.name })
+			.from(entities)
+			.where(eq(entities.storyId, request.storyId))
+			.limit(240),
+	]);
+
+	const entityLookups = [
+		...aliasRows.map((row) => ({ entityId: row.entityId, label: row.alias })),
+		...entityRows.map((row) => ({ entityId: row.id, label: row.name })),
+	];
+	return {
+		sceneEntityIds: [...new Set([
+			...knownSceneIds,
+			...entityLookups.filter((row) => lookupMentioned(request.query, row.label)).map((row) => row.entityId),
+		])],
+		entityLookups,
+	};
+}
+
+export function transcriptMemoryCandidates(
+	entries: TranscriptEntryRow[],
+	request: MemoryRetrieveRequest,
+	entityLookups: EntityLookup[],
+): MemoryNode[] {
+	const queryTokens = memoryQueryTokens(request.query);
+	if (queryTokens.length === 0) return [];
+	const sceneEntityIds = new Set(request.sceneEntityIds);
+	const normalizedLookups = entityLookups
+		.map((row) => ({ ...row, label: normalizeLookup(row.label) }))
+		.filter((row) => row.label.length >= 3);
+
+	// ponytail: scan at most 200 dialogue entries (100 exchanges); add transcript FTS only if this is measured slow.
+	const candidates = entries.flatMap((entry): MemoryNode[] => {
+		if (entry.type !== 'user_action' && entry.type !== 'narration') return [];
+		const content = ` ${normalizeLookup(entry.content)} `;
+		const keywords = queryTokens.filter((token) => content.includes(` ${token} `));
+		const entityIds = [...new Set(normalizedLookups
+			.filter((row) => content.includes(` ${row.label} `))
+			.map((row) => row.entityId))];
+		if (keywords.length === 0 && !entityIds.some((id) => sceneEntityIds.has(id))) return [];
+		return [{
+			id: `transcript_${entry.id}`,
+			storyId: entry.storyId,
+			type: 'episodic',
+			title: entry.type === 'user_action' ? 'Earlier player action' : 'Earlier narration',
+			content: transcriptExcerpt(entry.content, queryTokens),
+			summary: null,
+			keywords,
+			entityIds,
+			factionIds: [],
+			threadIds: [],
+			locationId: null,
+			visibility: 'player_known',
+			importance: 0.45,
+			sourceEntryIds: [entry.id],
+			sourceEventIds: [],
+			sourcePatchIds: [],
+			metadata: { retrieval: { source: 'transcript', position: entry.position } },
+			createdAt: entry.createdAt,
+			updatedAt: entry.updatedAt,
+		}];
+	});
+	const lexicalMatches = candidates.filter((node) => node.keywords.length > 0);
+	return lexicalMatches.length > 0 ? lexicalMatches : candidates;
+}
+
+async function candidateNodes(request: MemoryRetrieveRequest): Promise<{ nodes: MemoryNode[]; request: MemoryRetrieveRequest }> {
+	const db = getDb();
+	const { sceneEntityIds, entityLookups } = await expandSceneEntities(request);
 	const sourceTypeFilter = request.sourceTypes?.length
 		? inArray(memoryNodes.type, request.sourceTypes)
 		: undefined;
@@ -211,18 +280,31 @@ async function candidateNodes(request: MemoryRetrieveRequest): Promise<MemoryNod
 			.orderBy(desc(storyEvents.updatedAt))
 			.limit(40);
 
+	const transcriptRows = request.query.trim() && (!request.sourceTypes || request.sourceTypes.includes('episodic'))
+		? await db
+			.select()
+			.from(storyEntries)
+			.where(and(
+				eq(storyEntries.storyId, request.storyId),
+				inArray(storyEntries.type, ['user_action', 'narration']),
+			))
+			.orderBy(desc(storyEntries.position))
+			.limit(TRANSCRIPT_RECALL_ENTRY_LIMIT)
+		: [];
+
 	const nodes = [
 		...broad.map(toMemoryNode),
 		...textMatches.map(toMemoryNode),
 		...vectorMatches,
 		...beliefRows.map(beliefToMemoryNode),
 		...eventRows.map(eventToMemoryNode),
+		...transcriptMemoryCandidates(transcriptRows, expandedRequest, entityLookups),
 	].map((node) => ({
 		...node,
 		score: Math.max(node.score ?? 0, scoreMemoryNode(node, expandedRequest)),
 	}));
 
-	return dedupe(nodes);
+	return { nodes: dedupe(nodes), request: expandedRequest };
 }
 
 async function vectorCandidateNodes(
@@ -261,8 +343,12 @@ async function vectorCandidateNodes(
 
 export async function retrieveMemoryPacket(input: unknown): Promise<RetrievedMemoryPacket> {
 	const request = memoryRetrieveRequestSchema.parse(input);
-	const nodes = await candidateNodes(request);
-	const packet = buildMemoryPacket(nodes, request);
+	const [story] = request.currentTurn === undefined
+		? await getDb().select({ currentTurn: stories.currentTurn }).from(stories).where(eq(stories.id, request.storyId)).limit(1)
+		: [];
+	const rankedRequest = { ...request, currentTurn: request.currentTurn ?? story?.currentTurn };
+	const { nodes, request: expandedRequest } = await candidateNodes(rankedRequest);
+	const packet = buildMemoryPacket(nodes, expandedRequest);
 	return retrievedMemoryPacketSchema.parse({
 		storyId: request.storyId,
 		query: request.query,

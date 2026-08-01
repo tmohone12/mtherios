@@ -2,8 +2,8 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
 import { patchProposals, sourceRefs, statePatches, storyEntries, storyEvents } from '$lib/server/db/schema';
 import { enqueueBackendJob, enqueueStoryVaultSyncJob } from '$lib/server/jobs/outbox';
-import { bumpStoryVersion } from '$lib/server/memory/canonical';
 import type { RecordPatchRequest } from '$lib/contracts/engine';
+import { memoryImportanceSchema, memoryNodeTypeSchema, memoryVisibilitySchema } from '$lib/contracts/memory';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -640,6 +640,14 @@ function editableColumnForKey(spec: RecordSpec, key: string): string | null {
 	return null;
 }
 
+function normalizeEditableValue(recordType: string, column: string, value: unknown): unknown {
+	if (recordType !== 'memoryNodes') return value;
+	if (column === 'type') return memoryNodeTypeSchema.parse(value);
+	if (column === 'importance') return memoryImportanceSchema.parse(value);
+	if (column === 'visibility') return memoryVisibilitySchema.parse(value);
+	return value;
+}
+
 export function listWorldRecordTypes(): string[] {
 	return Object.keys(WORLD_RECORD_TYPES);
 }
@@ -719,23 +727,14 @@ export async function getWorldRecord(type: string, recordId: string) {
 
 export async function patchWorldRecord(type: string, recordId: string, request: RecordPatchRequest) {
 	const spec = specFor(type);
-	const existingRows = await getDb().execute(sql`
-		select *
-		from ${sql.raw(q(spec.table))}
-		where ${sql.raw(q(spec.idColumn))} = ${recordId}
-		limit 1
-	`);
-	const existing = existingRows[0] as JsonRecord | undefined;
-	if (!existing) throw new Error(`Record not found: ${type}/${recordId}`);
-
-	const storyId = String(existing[spec.storyColumn] ?? '');
-	if (!storyId) throw new Error(`Record ${type}/${recordId} is missing story scope.`);
 	const editable = Object.entries(request.updates)
-		.map(([key, value]) => ({ key, value, column: editableColumnForKey(spec, key) }))
+		.map(([key, value]) => {
+			const column = editableColumnForKey(spec, key);
+			return { key, value: column ? normalizeEditableValue(type, column, value) : value, column };
+		})
 		.filter((item): item is { key: string; value: unknown; column: string } => Boolean(item.column));
 	if (editable.length === 0) throw new Error('No editable fields were supplied.');
 
-	const serverVersion = await bumpStoryVersion(storyId);
 	const updatedAt = nowIso();
 	const patchId = id('manual_patch');
 	const proposalId = id('manual_proposal');
@@ -745,100 +744,131 @@ export async function patchWorldRecord(type: string, recordId: string, request: 
 		value,
 		source: 'manual_edit',
 	}));
-	await getDb().insert(statePatches).values({
-		id: patchId,
-		storyId,
-		operations,
-		reason: request.reason || 'Manual explorer edit.',
-		status: 'applied',
-		validationWarnings: [],
-		sourceEntryIds: [],
-		sourceEventIds: [],
-		serverVersion,
-		createdAt: updatedAt,
-		updatedAt,
-	});
-	const affectedEntityIds = inferAffectedEntityIds(type, existing);
-	await getDb().insert(patchProposals).values({
-		id: proposalId,
-		storyId,
-		proposalType: 'manual_edit',
-		targetTable: spec.table,
-		targetRecordId: recordId,
-		proposedBy: 'human',
-		operations,
-		reason: request.reason || 'Manual explorer edit.',
-		suggestion: 'Review the manual edit before treating the record as canonical.',
-		status: 'applied',
-		decision: 'approved',
-		validatedBy: 'human',
-		affectedEntityIds,
-		confidence: 1,
-		sourceEntryIds: [],
-		sourceEventIds: [],
-		sourcePatchIds: [patchId],
-		metadata: {
-			sourceType: 'manual_edit',
-			recordType: type,
-		},
-		serverVersion,
-		createdAt: updatedAt,
-		updatedAt,
-	});
-	await getDb().insert(sourceRefs).values({
-		id: id('sourceref_manual'),
-		storyId,
-		sourceType: 'state_patch',
-		sourceId: patchId,
-		targetTable: 'patch_proposals',
-		targetRecordId: proposalId,
-		targetRecordField: 'operations',
-		sourceField: 'manual_edit',
-		confidence: 1,
-		rationale: request.reason || 'Manual explorer edit.',
-		notes: `Applied to ${type}/${recordId}`,
-		serverVersion,
-		createdAt: updatedAt,
-		updatedAt,
-	});
-	await getDb().insert(sourceRefs).values({
-		id: id('sourceref_manual_target'),
-		storyId,
-		sourceType: 'state_patch',
-		sourceId: patchId,
-		targetTable: spec.table,
-		targetRecordId: recordId,
-		targetRecordField: editable[0]?.column ?? null,
-		sourceField: 'manual_edit',
-		confidence: 1,
-		rationale: request.reason || 'Manual explorer edit.',
-		notes: `Patch proposal ${proposalId}`,
-		serverVersion,
-		createdAt: updatedAt,
-		updatedAt,
-	});
+	const db = getDb();
+	const result = await db.transaction(async (tx) => {
+		const existingRows = await tx.execute(sql`
+			select *
+			from ${sql.raw(q(spec.table))}
+			where ${sql.raw(q(spec.idColumn))} = ${recordId}
+			limit 1
+			for update
+		`);
+		const existing = existingRows[0] as JsonRecord | undefined;
+		if (!existing) throw new Error(`Record not found: ${type}/${recordId}`);
 
-	const setClauses = editable.map(({ column, value }) => {
-		return sql`${sql.raw(q(column))} = ${valueExpression(spec, column, value)}`;
-	});
-	const versionColumn = spec.versionColumn === undefined ? 'server_version' : spec.versionColumn;
-	if (versionColumn) setClauses.push(sql`${sql.raw(q(versionColumn))} = ${serverVersion}`);
-	if (spec.updatedColumn) setClauses.push(sql`${sql.raw(q(spec.updatedColumn))} = ${updatedAt}`);
+		const storyId = String(existing[spec.storyColumn] ?? '');
+		if (!storyId) throw new Error(`Record ${type}/${recordId} is missing story scope.`);
+		const versionRows = await tx.execute(sql`
+			update stories
+			set server_version = server_version + 1,
+				updated_at = ${updatedAt}
+			where id = ${storyId}
+			returning server_version
+		`);
+		const serverVersion = Number((versionRows[0] as JsonRecord | undefined)?.server_version);
+		if (!Number.isFinite(serverVersion)) throw new Error(`Story not found: ${storyId}`);
 
-	const rows = await getDb().execute(sql`
-		update ${sql.raw(q(spec.table))}
-		set ${sql.join(setClauses, sql`, `)}
-		where ${sql.raw(q(spec.idColumn))} = ${recordId}
-		returning *
-	`);
-	await queueManualRecordPatchJobs({ storyId, serverVersion, type, recordId });
-	return {
-		storyId,
+		await tx.insert(statePatches).values({
+			id: patchId,
+			storyId,
+			operations,
+			reason: request.reason || 'Manual explorer edit.',
+			status: 'applied',
+			validationWarnings: [],
+			sourceEntryIds: [],
+			sourceEventIds: [],
+			serverVersion,
+			createdAt: updatedAt,
+			updatedAt,
+		});
+		const affectedEntityIds = inferAffectedEntityIds(type, existing);
+		await tx.insert(patchProposals).values({
+			id: proposalId,
+			storyId,
+			proposalType: 'manual_edit',
+			targetTable: spec.table,
+			targetRecordId: recordId,
+			proposedBy: 'human',
+			operations,
+			reason: request.reason || 'Manual explorer edit.',
+			suggestion: 'Review the manual edit before treating the record as canonical.',
+			status: 'applied',
+			decision: 'approved',
+			validatedBy: 'human',
+			affectedEntityIds,
+			confidence: 1,
+			sourceEntryIds: [],
+			sourceEventIds: [],
+			sourcePatchIds: [patchId],
+			metadata: {
+				sourceType: 'manual_edit',
+				recordType: type,
+			},
+			serverVersion,
+			createdAt: updatedAt,
+			updatedAt,
+		});
+		await tx.insert(sourceRefs).values({
+			id: id('sourceref_manual'),
+			storyId,
+			sourceType: 'state_patch',
+			sourceId: patchId,
+			targetTable: 'patch_proposals',
+			targetRecordId: proposalId,
+			targetRecordField: 'operations',
+			sourceField: 'manual_edit',
+			confidence: 1,
+			rationale: request.reason || 'Manual explorer edit.',
+			notes: `Applied to ${type}/${recordId}`,
+			serverVersion,
+			createdAt: updatedAt,
+			updatedAt,
+		});
+		await tx.insert(sourceRefs).values({
+			id: id('sourceref_manual_target'),
+			storyId,
+			sourceType: 'state_patch',
+			sourceId: patchId,
+			targetTable: spec.table,
+			targetRecordId: recordId,
+			targetRecordField: editable[0]?.column ?? null,
+			sourceField: 'manual_edit',
+			confidence: 1,
+			rationale: request.reason || 'Manual explorer edit.',
+			notes: `Patch proposal ${proposalId}`,
+			serverVersion,
+			createdAt: updatedAt,
+			updatedAt,
+		});
+
+		const setClauses = editable.map(({ column, value }) => {
+			return sql`${sql.raw(q(column))} = ${valueExpression(spec, column, value)}`;
+		});
+		const versionColumn = spec.versionColumn === undefined ? 'server_version' : spec.versionColumn;
+		if (versionColumn) setClauses.push(sql`${sql.raw(q(versionColumn))} = ${serverVersion}`);
+		if (spec.updatedColumn) setClauses.push(sql`${sql.raw(q(spec.updatedColumn))} = ${updatedAt}`);
+
+		const rows = await tx.execute(sql`
+			update ${sql.raw(q(spec.table))}
+			set ${sql.join(setClauses, sql`, `)}
+			where ${sql.raw(q(spec.idColumn))} = ${recordId}
+			returning *
+		`);
+		return {
+			storyId,
+			type,
+			record: rows[0] as JsonRecord,
+			patchId,
+			serverVersion,
+		};
+	});
+	await queueManualRecordPatchJobs({
+		storyId: result.storyId,
+		serverVersion: result.serverVersion,
 		type,
-		record: rows[0] as JsonRecord,
-		patchId,
-		serverVersion,
-	};
+		recordId,
+	});
+	return result;
 }
 
 export async function getStoryEntriesAround(storyId: string, position: number, radius = 40) {

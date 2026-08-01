@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Sword, Feather, ChevronLeft, ChevronRight, Globe, Zap, Play, Plus, X, Upload, Loader2 } from 'lucide-svelte';
+	import { Sword, Feather, ChevronLeft, ChevronRight, Globe, Zap, Play, Plus, X, Upload, Loader2, Sparkles } from 'lucide-svelte';
 	import { fly } from 'svelte/transition';
 	import { onMount } from 'svelte';
 	import { uuid } from '$lib/utils/uuid';
@@ -9,21 +9,26 @@
 	import { importStoryFromJson } from '$lib/services/storySync';
 	import { saveCanonicalCharacter, saveCanonicalLorebookEntry } from '$lib/services/canonicalWrites';
 	import { createBackendStoryShell } from '$lib/services/serverStories';
+	import { ai } from '$lib/services/ai';
 	import { settings } from '$lib/stores/settings.svelte';
+	import { shouldRequireProviderSetup } from './onboardingFlow';
+	import { DEFAULT_ONBOARDING_GENRE_PROMPT_PACK_ID, buildGenrePromptPack, getOnboardingGenreOption, getOnboardingGenreOptions } from './storyPromptPacks';
 	import LorebookImport from '$lib/components/lorebook/LorebookImport.svelte';
 	import type { Story, Character, Entry, StoryMode, APIProfile, ProviderType } from '$lib/types';
 
 	interface Props {
+		shelfId?: string | null;
 		onComplete: (storyId: string) => void;
 		onSkip?: () => void;
 	}
 
-	let { onComplete, onSkip }: Props = $props();
+	let { shelfId = null, onComplete, onSkip }: Props = $props();
 
 	// ── Wizard State ──
 	let currentStep = $state(0);
 	let direction = $state(1);
 	let hasExistingProfile = $state(false);
+	let providerSetupRequired = $state(true);
 
 	// Step 0: Provider
 	let provider = $state<string>('nanogpt');
@@ -32,19 +37,22 @@
 
 	// On mount: check if provider already configured → skip Step 0
 	onMount(async () => {
+		const onboardingComplete = (await getSetting('onboardingComplete')) === 'true';
 		const profilesJson = await getSetting('apiProfiles');
+		let profiles: APIProfile[] = [];
 		if (profilesJson) {
 			try {
-				const profiles: APIProfile[] = JSON.parse(profilesJson);
-				if (profiles.length > 0 && profiles[0].apiKey) {
+				profiles = JSON.parse(profilesJson);
+				const configuredProfile = profiles.find((profile) => Boolean(profile.apiKey?.trim()));
+				if (configuredProfile) {
 					hasExistingProfile = true;
-					provider = profiles[0].providerType;
-					apiKey = profiles[0].apiKey;
-					// Skip to Step 1 (Mode)
-					currentStep = 1;
+					provider = configuredProfile.providerType;
+					apiKey = configuredProfile.apiKey;
 				}
 			} catch { /* start at step 0 */ }
 		}
+		providerSetupRequired = shouldRequireProviderSetup({ onboardingComplete, profiles });
+		if (!providerSetupRequired) currentStep = 1;
 	});
 
 	// Step 1: Story Mode
@@ -52,8 +60,12 @@
 
 	// Step 2: World & Setting
 	let storyTitle = $state('');
-	let genre = $state('fantasy');
+	let genre = $state(DEFAULT_ONBOARDING_GENRE_PROMPT_PACK_ID);
 	let worldDescription = $state('');
+	let storyAssistNotes = $state('');
+	let assistingStorySetup = $state(false);
+	let storyAssistError = $state<string | null>(null);
+	let storyAssistRationale = $state<string | null>(null);
 
 	// Step 3: Character
 	let protagonistName = $state('');
@@ -68,7 +80,7 @@
 	let saveError = $state<string | null>(null);
 
 	// Story file import (from another device)
-	let storyFileInput: HTMLInputElement;
+	let storyFileInput = $state<HTMLInputElement | null>(null);
 	let importingStory = $state(false);
 
 	async function handleStoryFileImport(e: Event) {
@@ -92,16 +104,15 @@
 		}
 	}
 
-	const genres = [
-		{ id: 'fantasy', label: 'Fantasy', emoji: '⚔️' },
-		{ id: 'sci-fi', label: 'Sci-Fi', emoji: '🚀' },
-		{ id: 'horror', label: 'Horror', emoji: '👻' },
-		{ id: 'mystery', label: 'Mystery', emoji: '🔍' },
-		{ id: 'romance', label: 'Romance', emoji: '💕' },
-		{ id: 'historical', label: 'Historical', emoji: '🏛️' },
-		{ id: 'cyberpunk', label: 'Cyberpunk', emoji: '🌆' },
-		{ id: 'post-apocalyptic', label: 'Post-Apocalyptic', emoji: '☢️' },
-	];
+	const genres = getOnboardingGenreOptions();
+
+	function selectedGenreLabel(): string {
+		return getOnboardingGenreOption(genre).label;
+	}
+
+	function selectedGenrePromptPack(): string {
+		return buildGenrePromptPack(genre);
+	}
 
 	const steps = [
 		{ title: 'Connect', subtitle: 'Choose your AI provider' },
@@ -138,10 +149,43 @@
 		lorebookEntries = lorebookEntries.filter((_, i) => i !== index);
 	}
 
+	async function assistStorySetup() {
+		if (assistingStorySetup) return;
+		assistingStorySetup = true;
+		storyAssistError = null;
+		storyAssistRationale = null;
+		try {
+			const promptPack = selectedGenrePromptPack();
+			const result = await ai.storySetupAssist.assist({
+				mode: storyMode,
+				genre: selectedGenreLabel(),
+				title: storyTitle,
+				worldDescription,
+				protagonistName,
+				protagonistDescription,
+				notes: storyAssistNotes,
+				promptPack,
+			});
+			storyTitle = result.title || storyTitle;
+			worldDescription = result.worldDescription || worldDescription;
+			protagonistName = result.protagonistName || protagonistName;
+			protagonistDescription = result.protagonistDescription || protagonistDescription;
+			if (result.lorebookEntries.length > 0) {
+				lorebookEntries = [...lorebookEntries, ...result.lorebookEntries];
+			}
+			storyAssistRationale = result.rationale || 'Drafted a stronger starting point for this story.';
+		} catch (err) {
+			console.error('Story setup assist failed:', err);
+			storyAssistError = err instanceof Error ? err.message : 'AI assist failed. Check your existing provider settings, then try again.';
+		} finally {
+			assistingStorySetup = false;
+		}
+	}
+
 	/** Save story + starting lore, preferring the backend daemon as canon. */
 	async function saveStoryToDb(): Promise<string> {
 		// Only save provider if we don't already have one
-		if (!hasExistingProfile) {
+		if (providerSetupRequired && !hasExistingProfile) {
 			const profileId = uuid();
 			const providerConfig = PROVIDERS[provider as keyof typeof PROVIDERS];
 			const profile: APIProfile = {
@@ -162,29 +206,34 @@
 
 		const storyId = uuid();
 		const now = Date.now();
+		const selectedGenre = selectedGenreLabel();
+		const gmPromptPack = selectedGenrePromptPack();
 		const storySettings: Story['settings'] = {
 			pov: storyMode === 'adventure' ? 'first' : 'third',
 			tense: 'present',
-			tone: genre,
+			tone: selectedGenre,
 			temperature: 1.0,
 			maxTokens: 8192,
 		};
 		let serverStoryId: string | null = null;
+		let resultShelfId: string | null = shelfId ?? null;
 		let serverVersion: number | null = null;
 		let syncStatus: Story['syncStatus'] = 'offline';
 
 		try {
 			const result = await createBackendStoryShell({
+				shelfId,
 				clientStoryId: storyId,
 				title: storyTitle || 'Untitled Chronicle',
 				description: worldDescription || null,
-				genre,
+				genre: selectedGenre,
 				mode: storyMode,
 				settings: storySettings,
-				headerPrompt: null,
+				headerPrompt: gmPromptPack,
 				playerReputation: null,
 			});
 			serverStoryId = result.storyId;
+			resultShelfId = result.shelfId ?? resultShelfId;
 			serverVersion = result.serverVersion;
 			syncStatus = 'synced';
 		} catch (error) {
@@ -193,9 +242,10 @@
 
 		const story: Story = {
 			id: storyId,
+			shelfId: resultShelfId ?? 'shelf_default',
 			title: storyTitle || 'Untitled Chronicle',
 			description: worldDescription || null,
-			genre: genre,
+			genre: selectedGenre,
 			templateId: null,
 			mode: storyMode,
 			createdAt: now,
@@ -213,7 +263,7 @@
 			timeTracker: null,
 			currentBranchId: null,
 			currentBgImage: null,
-			headerPrompt: null,
+			headerPrompt: gmPromptPack,
 			playerReputation: null,
 			serverStoryId,
 			serverVersion,
@@ -327,7 +377,7 @@
 	});
 </script>
 
-<div class="fixed inset-0 z-50 flex flex-col bg-[var(--bg-primary)]">
+<div class="app-shell fixed inset-0 z-50 flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-[var(--bg-primary)]">
 	<div class="grain-overlay"></div>
 	<div class="cathedral-glow"></div>
 
@@ -341,20 +391,24 @@
 			<span class="font-display text-lg font-semibold tracking-wide text-[var(--text-accent)]">Mtherios</span>
 		</div>
 		{#if onSkip}
-			<button class="text-sm text-[var(--text-muted)] hover:text-[var(--text-primary)]" onclick={onSkip}>
+			<button class="flex min-h-11 items-center px-2 text-sm text-[var(--text-muted)] hover:text-[var(--text-primary)]" onclick={onSkip}>
 				Skip for now
 			</button>
 		{/if}
 	</div>
 
 	<!-- Progress dots -->
-	<div class="relative z-10 flex justify-center gap-2 py-2">
+	<div class="relative z-10 flex justify-center gap-1 py-0 sm:gap-2 sm:py-2">
 		{#each steps as s, i}
 			<button
-				class="h-2 rounded-full transition-all duration-300
-					{i === currentStep ? 'w-8 bg-[var(--color-gold-400)]' : i < currentStep ? 'w-2 bg-[var(--color-gold-600)]' : 'w-2 bg-[var(--color-surface-700)]'}"
+				class="flex h-11 w-11 items-center justify-center rounded-lg"
+				aria-label={`Go to ${s.title}`}
+				aria-current={i === currentStep ? 'step' : undefined}
+				disabled={i > currentStep}
 				onclick={() => i <= currentStep ? goTo(i) : null}
-			></button>
+			>
+				<span class="h-2 rounded-full transition-all duration-300 {i === currentStep ? 'w-8 bg-[var(--color-gold-400)]' : i < currentStep ? 'w-2 bg-[var(--color-gold-600)]' : 'w-2 bg-[var(--color-surface-700)]'}"></span>
+			</button>
 		{/each}
 	</div>
 
@@ -365,7 +419,7 @@
 	</div>
 
 	<!-- Content -->
-	<div class="relative z-[1] flex-1 overflow-y-auto px-6 pb-32">
+	<div class="relative z-[1] min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-32 sm:px-6">
 		<div class="mx-auto max-w-lg">
 
 		{#if currentStep === 0}
@@ -391,9 +445,10 @@
 			</div>
 
 			<div class="space-y-2">
-				<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">API Key</label>
+				<label for="onboarding-api-key" class="font-display text-sm tracking-wide text-[var(--text-primary)]">API Key</label>
 				<div class="relative">
 					<input
+						id="onboarding-api-key"
 						type={showKey ? 'text' : 'password'}
 						bind:value={apiKey}
 						placeholder="sk-..."
@@ -415,11 +470,11 @@
 				<div class="h-px flex-1 bg-[var(--border-primary)]"></div>
 			</div>
 
-			<input bind:this={storyFileInput} type="file" accept=".json" class="hidden" onchange={handleStoryFileImport} />
+			<input bind:this={storyFileInput} type="file" accept=".json" class="hidden" aria-label="Import story file" onchange={handleStoryFileImport} />
 			<button
 				class="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--border-primary)] py-4 text-sm text-[var(--text-muted)] transition-colors hover:border-[var(--color-gold-600)] hover:text-[var(--text-accent)]"
 				disabled={importingStory}
-				onclick={() => storyFileInput.click()}
+				onclick={() => storyFileInput?.click()}
 			>
 				<Upload class="h-4 w-4" />
 				{importingStory ? 'Importing...' : 'Import from another device'}
@@ -465,30 +520,64 @@
 		<!-- Step 2: World & Setting -->
 		<div class="space-y-5" in:fly={{ x: direction * 200, duration: 250 }}>
 			<div class="space-y-2">
-				<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Story Title</label>
-				<input type="text" bind:value={storyTitle} placeholder="The Fall of Aetheron"
+				<label for="onboarding-story-title" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Story Title</label>
+				<input id="onboarding-story-title" type="text" bind:value={storyTitle} placeholder="The Fall of Aetheron"
 					class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-4 text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
 			</div>
 
 			<div class="space-y-2">
-				<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Genre</label>
-				<div class="grid grid-cols-4 gap-2">
+				<div class="flex items-end justify-between gap-3">
+					<span class="font-display text-sm tracking-wide text-[var(--text-primary)]">GM Prompt Pack</span>
+					<span class="text-[10px] italic text-[var(--text-muted)] opacity-60">Genre or selection here affects prompting.</span>
+				</div>
+				<div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
 					{#each genres as g}
-						<button class="flex flex-col items-center gap-1 rounded-lg border p-3 transition-all
+						<button class="flex min-h-[5.25rem] flex-col items-center gap-1 rounded-lg border p-3 text-center transition-all
 							{genre === g.id ? 'border-[var(--color-gold-400)] bg-[rgba(212,168,83,0.08)]' : 'border-[var(--border-primary)] hover:border-[var(--color-gold-600)]'}"
+							aria-pressed={genre === g.id}
 							onclick={() => genre = g.id}>
 							<span class="text-lg">{g.emoji}</span>
 							<span class="text-xs text-[var(--text-muted)]">{g.label}</span>
 						</button>
 					{/each}
 				</div>
+				<p class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs leading-relaxed text-[var(--text-muted)] opacity-70">
+					{getOnboardingGenreOption(genre).summary}
+				</p>
 			</div>
 
 			<div class="space-y-2">
-				<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">World Description <span class="text-[var(--text-muted)]">(optional)</span></label>
-				<textarea bind:value={worldDescription} placeholder="A crumbling empire where ancient magic seeps through fractured ley lines..."
+				<label for="onboarding-world-description" class="font-display text-sm tracking-wide text-[var(--text-primary)]">World Description <span class="text-[var(--text-muted)]">(optional)</span></label>
+				<textarea id="onboarding-world-description" bind:value={worldDescription} placeholder="A crumbling empire where ancient magic seeps through fractured ley lines..."
 					rows="4"
 					class="w-full resize-none rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"></textarea>
+			</div>
+
+			<div class="space-y-3 rounded-xl border border-[rgba(212,168,83,0.25)] bg-[rgba(212,168,83,0.06)] p-4">
+				<div class="flex items-start gap-3">
+					<Sparkles class="mt-0.5 h-4 w-4 shrink-0 text-[var(--text-accent)]" />
+					<div>
+						<div class="font-display text-sm tracking-wide text-[var(--text-primary)]">AI Writing Assist</div>
+						<p class="mt-1 text-xs leading-relaxed text-[var(--text-muted)]">
+							Use your existing provider settings to draft or expand this story seed with the selected GM prompt pack. Provider choice stays in first-time onboarding only.
+						</p>
+					</div>
+				</div>
+				<textarea bind:value={storyAssistNotes} placeholder="Optional notes: tone, conflict, themes, inspirations, must-have factions..."
+					rows="3"
+					aria-label="Story assist notes"
+					class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"></textarea>
+				<button type="button" onclick={assistStorySetup} disabled={assistingStorySetup}
+					class="flex w-full items-center justify-center gap-2 rounded-lg bg-[rgba(212,168,83,0.12)] px-3 py-2 font-display text-xs uppercase tracking-wider text-[var(--text-accent)] transition-colors hover:bg-[rgba(212,168,83,0.2)] disabled:opacity-50">
+					{#if assistingStorySetup}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Sparkles class="h-3.5 w-3.5" />{/if}
+					{assistingStorySetup ? 'Drafting...' : 'AI Assist With Writing'}
+				</button>
+				{#if storyAssistRationale}
+					<p class="text-xs text-[var(--text-muted)]">{storyAssistRationale}</p>
+				{/if}
+				{#if storyAssistError}
+					<p class="text-xs text-red-400">{storyAssistError}</p>
+				{/if}
 			</div>
 		</div>
 
@@ -504,14 +593,14 @@
 			</p>
 
 			<div class="space-y-2">
-				<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Name</label>
-				<input type="text" bind:value={protagonistName} placeholder="Kael Ashborne"
+				<label for="onboarding-protagonist-name" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Name</label>
+				<input id="onboarding-protagonist-name" type="text" bind:value={protagonistName} placeholder="Kael Ashborne"
 					class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-4 text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
 			</div>
 
 			<div class="space-y-2">
-				<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Description <span class="text-[var(--text-muted)]">(optional)</span></label>
-				<textarea bind:value={protagonistDescription} placeholder="A wandering scholar with silver-streaked hair and ink-stained fingers, carrying forbidden texts from the old empire..."
+				<label for="onboarding-protagonist-description" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Description <span class="text-[var(--text-muted)]">(optional)</span></label>
+				<textarea id="onboarding-protagonist-description" bind:value={protagonistDescription} placeholder="A wandering scholar with silver-streaked hair and ink-stained fingers, carrying forbidden texts from the old empire..."
 					rows="4"
 					class="w-full resize-none rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"></textarea>
 			</div>
@@ -544,16 +633,16 @@
 				<div class="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
 					<div class="flex items-center justify-between">
 						<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Entry {i + 1}</span>
-						<button class="text-[var(--text-muted)] hover:text-[var(--color-crimson-400)]" onclick={() => removeLorebookEntry(i)}>
+						<button class="text-[var(--text-muted)] hover:text-[var(--color-crimson-400)]" aria-label={`Remove entry ${i + 1}`} onclick={() => removeLorebookEntry(i)}>
 							<X class="h-4 w-4" />
 						</button>
 					</div>
-					<input type="text" bind:value={entry.name} placeholder="Entry name (e.g. The Ashen Court)"
+					<input type="text" bind:value={entry.name} aria-label={`Entry ${i + 1} name`} placeholder="Entry name (e.g. The Ashen Court)"
 						class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
-					<textarea bind:value={entry.content} placeholder="Describe this lore element..."
+					<textarea bind:value={entry.content} aria-label={`Entry ${i + 1} description`} placeholder="Describe this lore element..."
 						rows="3"
 						class="w-full resize-none rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"></textarea>
-					<input type="text" bind:value={entry.keywords} placeholder="Keywords (comma separated): ashen, court, tribunal"
+					<input type="text" bind:value={entry.keywords} aria-label={`Entry ${i + 1} keywords`} placeholder="Keywords (comma separated): ashen, court, tribunal"
 						class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none" />
 				</div>
 			{/each}

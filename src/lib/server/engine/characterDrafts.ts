@@ -3,15 +3,62 @@ import { getDb } from '$lib/server/db/client';
 import { arcs, chapters, entities, patchProposals, storyEntries } from '$lib/server/db/schema';
 import { bumpStoryVersion } from '$lib/server/memory/canonical';
 import { selectStoryMemory } from '$lib/services/ai/context/storyMemorySelector';
+import { recordApiCallLog } from './apiCallLogs';
 import { resolveServiceGeneration } from './llmSettings';
-import { generateServerTextWithMetrics, parseJsonFromGeneratedText } from '$lib/server/turn/provider';
+import {
+	ServerGenerationError,
+	generateServerTextWithMetrics,
+	parseJsonFromGeneratedText,
+	type ServerGenerationResult,
+} from '$lib/server/turn/provider';
 
 type JsonRecord = Record<string, unknown>;
+type ResolvedServiceGeneration = Awaited<ReturnType<typeof resolveServiceGeneration>>;
+type AvailableServiceGeneration = ResolvedServiceGeneration & {
+	profile: NonNullable<ResolvedServiceGeneration['profile']>;
+};
+
+const CHARACTER_UPDATE_SERVICE_ID = 'characterUpdate';
+const CHARACTER_UPDATE_SYSTEM_PROMPT = [
+	'You maintain structured character continuity for a text RPG.',
+	'Use only supplied canon and chapter evidence. Never invent facts or characters.',
+	'Return strict JSON only.',
+].join(' ');
 
 export interface CharacterDraftUpdateArgs {
 	recordId: string;
 	instructions: string;
 	recentLimit: number;
+}
+
+export interface ChapterCharacterUpdateCandidate {
+	entityId: string;
+	name: string;
+	state: JsonRecord;
+}
+
+export interface ChapterCharacterUpdateBatchArgs {
+	storyId: string;
+	chapterWindow: [number, number];
+	chapterEvidence?: Array<{ number: number; title: string; summary: string }>;
+	candidates: ChapterCharacterUpdateCandidate[];
+}
+
+export interface ChapterCharacterUpdateBatchResult {
+	status: 'generated' | 'skipped';
+	reason: string | null;
+	requestedServiceId: typeof CHARACTER_UPDATE_SERVICE_ID;
+	effectiveServiceId: string | null;
+	model: string | null;
+	promptChars: number;
+	responseChars: number;
+	updates: Array<{ entityId: string; state: JsonRecord }>;
+}
+
+interface CharacterUpdateServiceResolution {
+	serviceId: string | null;
+	resolved: AvailableServiceGeneration | null;
+	reason: string | null;
 }
 
 function nowIso(): string {
@@ -40,6 +87,145 @@ function compact(value: string, max = 500): string {
 function compactJson(value: unknown, max = 300): string {
 	const text = JSON.stringify(value);
 	return !text || text === '[]' || text === '{}' ? '' : compact(text, max);
+}
+
+function hasAvailableProfile(resolved: ResolvedServiceGeneration): resolved is AvailableServiceGeneration {
+	return Boolean(resolved.profile);
+}
+
+async function resolveCharacterUpdateService(): Promise<CharacterUpdateServiceResolution> {
+	const primary = await resolveServiceGeneration(CHARACTER_UPDATE_SERVICE_ID);
+	if (hasAvailableProfile(primary)) {
+		return { serviceId: CHARACTER_UPDATE_SERVICE_ID, resolved: primary, reason: null };
+	}
+
+	// A persisted row is an explicit operator choice. Disabled or invalid means skip/fail visibly,
+	// rather than silently spending money on a different model.
+	if (primary.setting !== null) {
+		return {
+			serviceId: CHARACTER_UPDATE_SERVICE_ID,
+			resolved: null,
+			reason: primary.missingReason ?? 'Character Update service is unavailable.',
+		};
+	}
+
+	// Upgrade compatibility for installations that have not saved the new service row yet.
+	const fallback = await resolveServiceGeneration('classifier');
+	if (hasAvailableProfile(fallback)) {
+		return { serviceId: 'classifier', resolved: fallback, reason: primary.missingReason };
+	}
+	return {
+		serviceId: null,
+		resolved: null,
+		reason: primary.missingReason ?? fallback.missingReason ?? 'No character update model is configured.',
+	};
+}
+
+async function logCharacterUpdateCall(input: {
+	storyId: string;
+	operation: string;
+	service: CharacterUpdateServiceResolution & { serviceId: string; resolved: AvailableServiceGeneration };
+	status: 'success' | 'error';
+	result: ServerGenerationResult | ServerGenerationError['result'];
+	error?: unknown;
+	metadata?: JsonRecord;
+}): Promise<void> {
+	const usage = 'usage' in input.result ? input.result.usage : undefined;
+	await recordApiCallLog({
+		storyId: input.storyId,
+		serviceId: CHARACTER_UPDATE_SERVICE_ID,
+		operation: input.operation,
+		providerType: input.service.resolved.profile.providerType,
+		providerName: input.service.resolved.profile.name ?? null,
+		profileId: input.service.resolved.profile.id ?? null,
+		model: input.result.model,
+		endpoint: input.result.endpoint,
+		status: input.status,
+		durationMs: input.result.durationMs,
+		requestTokens: usage?.requestTokens ?? null,
+		responseTokens: usage?.responseTokens ?? null,
+		totalTokens: usage?.totalTokens ?? null,
+		promptChars: input.result.promptChars,
+		responseChars: 'responseChars' in input.result ? input.result.responseChars ?? null : null,
+		error: input.error instanceof Error ? input.error.message : input.error ? String(input.error) : null,
+		metadata: {
+			requestedServiceId: CHARACTER_UPDATE_SERVICE_ID,
+			effectiveServiceId: input.service.serviceId,
+			fallback: input.service.serviceId !== CHARACTER_UPDATE_SERVICE_ID,
+			...(input.metadata ?? {}),
+		},
+	});
+}
+
+async function generateCharacterUpdateText(input: {
+	storyId: string;
+	operation: string;
+	service: CharacterUpdateServiceResolution & { serviceId: string; resolved: AvailableServiceGeneration };
+	prompt: string;
+	maxTokens: number;
+	metadata?: JsonRecord;
+}): Promise<ServerGenerationResult> {
+	const { resolved } = input.service;
+	try {
+		const result = await generateServerTextWithMetrics({
+			profile: resolved.profile,
+			model: resolved.generation.model,
+			temperature: Math.min(resolved.generation.temperature ?? 0.2, 0.4),
+			maxTokens: Math.max(512, Math.min(resolved.generation.maxTokens ?? input.maxTokens, input.maxTokens)),
+			reasoningEffort: 'off',
+			timeoutMs: 90000,
+			system: resolved.systemPromptOverride?.trim() || CHARACTER_UPDATE_SYSTEM_PROMPT,
+			prompt: input.prompt,
+			responseFormat: 'json_object',
+		});
+		return result;
+	} catch (error) {
+		const failed = error instanceof ServerGenerationError ? error.result : null;
+		if (failed) {
+			await logCharacterUpdateCall({
+				storyId: input.storyId,
+				operation: input.operation,
+				service: input.service,
+				status: 'error',
+				result: failed,
+				error,
+				metadata: input.metadata,
+			});
+		}
+		throw error;
+	}
+}
+
+async function parseCharacterUpdateResult(input: {
+	storyId: string;
+	operation: string;
+	service: CharacterUpdateServiceResolution & { serviceId: string; resolved: AvailableServiceGeneration };
+	result: ServerGenerationResult;
+	metadata?: JsonRecord;
+}): Promise<unknown> {
+	try {
+		const parsed = parseJsonFromGeneratedText(input.result.text);
+		await logCharacterUpdateCall({
+			storyId: input.storyId,
+			operation: input.operation,
+			service: input.service,
+			status: 'success',
+			result: input.result,
+			metadata: { parseOutcome: 'parsed', ...(input.metadata ?? {}) },
+		});
+		return parsed;
+	} catch (error) {
+		await logCharacterUpdateCall({
+			storyId: input.storyId,
+			operation: input.operation,
+			service: input.service,
+			status: 'error',
+			result: input.result,
+			error,
+			metadata: { parseOutcome: 'invalid_json', ...(input.metadata ?? {}) },
+		});
+		throw error;
+	}
 }
 
 function characterSearchTerms(name: string, state: JsonRecord, metadata: JsonRecord): string[] {
@@ -173,6 +359,134 @@ function currentStateWithMetadataSeed(state: JsonRecord, metadata: JsonRecord): 
 	return next;
 }
 
+function chapterCharacterPromptState(state: JsonRecord): JsonRecord {
+	const memory = asRecord(state.eventMemory ?? state.npcEventMemory);
+	const next: JsonRecord = {};
+	for (const key of [
+		'bio',
+		'rank',
+		'appearance',
+		'personality',
+		'currentDisposition',
+		'currentLocation',
+		'currentAction',
+		'emotionalState',
+		'relationship',
+	]) {
+		const value = state[key];
+		if (typeof value === 'string' && value.trim()) next[key] = value.trim();
+		else if (key === 'relationship' && Object.keys(asRecord(value)).length) next[key] = value;
+	}
+	for (const key of ['motivations', 'goals', 'factionTags', 'knownFacts', 'traits', 'pressures']) {
+		const values = stringArray(state[key]).slice(-12);
+		if (values.length) next[key] = values;
+	}
+	const eventMemory = Object.fromEntries(
+		['did', 'saw', 'knew', 'knows']
+			.map((key) => [key, stringArray(memory[key]).slice(-8)] as const)
+			.filter(([, values]) => values.length),
+	);
+	if (Object.keys(eventMemory).length) next.eventMemory = eventMemory;
+	return next;
+}
+
+export async function refineChapterCharacterUpdates(
+	args: ChapterCharacterUpdateBatchArgs,
+): Promise<ChapterCharacterUpdateBatchResult> {
+	const candidates = [...new Map(
+		args.candidates
+			.filter((candidate) => candidate.entityId.trim() && candidate.name.trim())
+			.map((candidate) => [candidate.entityId, candidate]),
+	).values()].slice(0, 16);
+	if (candidates.length === 0) {
+		return {
+			status: 'skipped',
+			reason: 'No chapter character candidates were available.',
+			requestedServiceId: CHARACTER_UPDATE_SERVICE_ID,
+			effectiveServiceId: null,
+			model: null,
+			promptChars: 0,
+			responseChars: 0,
+			updates: [],
+		};
+	}
+
+	const service = await resolveCharacterUpdateService();
+	if (!service.serviceId || !service.resolved) {
+		return {
+			status: 'skipped',
+			reason: service.reason ?? 'Character Update service is unavailable.',
+			requestedServiceId: CHARACTER_UPDATE_SERVICE_ID,
+			effectiveServiceId: service.serviceId,
+			model: null,
+			promptChars: 0,
+			responseChars: 0,
+			updates: [],
+		};
+	}
+	const availableService = { ...service, serviceId: service.serviceId, resolved: service.resolved };
+	const candidatePayload = candidates.map((candidate) => ({
+		entityId: candidate.entityId,
+		name: candidate.name,
+		stateAndChapterEvidence: chapterCharacterPromptState(candidate.state),
+	}));
+	const chapterEvidence = (args.chapterEvidence ?? []).slice(-2).map((chapter) => ({
+		number: chapter.number,
+		title: chapter.title,
+		summary: compact(chapter.summary, 2600),
+	}));
+	const prompt = [
+		`Chapter window: ${args.chapterWindow[0]}-${args.chapterWindow[1]}`,
+		`Two-chapter continuity digests JSON: ${JSON.stringify(chapterEvidence)}`,
+		`Known character candidates JSON: ${JSON.stringify(candidatePayload)}`,
+		'Return exactly {"updates":[{"entityId":"known id","patch":{...},"evidence":["short supplied fact"],"confidence":0.0}]}',
+		'Allowed patch keys only: bio, appearance, personality, rank, currentDisposition, affinity, motivations, factionTags, knownFacts.',
+		'Use affinity only for a clearly evidenced -100..100 relationship shift. Use motivations for durable goals.',
+		'Do not return currentAction, currentLocation, emotionalState, relationship objects, eventMemory, aliases, status, or presence; deterministic extraction owns those fields.',
+		'Only use an entityId from the candidate list. Omit unchanged characters and unsupported or uncertain claims.',
+		'Appearance, bio, rank, and personality require explicit supplied evidence; never infer them from genre or names.',
+	].join('\n\n');
+	const result = await generateCharacterUpdateText({
+		storyId: args.storyId,
+		operation: 'chapter.character_update',
+		service: availableService,
+		prompt,
+		maxTokens: 8192,
+		metadata: { chapterWindow: args.chapterWindow, candidateCount: candidates.length },
+	});
+	const parsed = asRecord(await parseCharacterUpdateResult({
+		storyId: args.storyId,
+		operation: 'chapter.character_update',
+		service: availableService,
+		result,
+		metadata: { chapterWindow: args.chapterWindow, candidateCount: candidates.length },
+	}));
+	const known = new Map(candidates.map((candidate) => [candidate.entityId, candidate]));
+	const updates: Array<{ entityId: string; state: JsonRecord }> = [];
+	const seen = new Set<string>();
+	for (const value of Array.isArray(parsed.updates) ? parsed.updates : []) {
+		const update = asRecord(value);
+		const entityId = typeof update.entityId === 'string' ? update.entityId.trim() : '';
+		const candidate = known.get(entityId);
+		if (!candidate || seen.has(entityId)) continue;
+		const draft = coerceDraft(update.patch);
+		if (!hasUsefulDraft(draft)) continue;
+		seen.add(entityId);
+		updates.push({ entityId, state: mergeDraftIntoState(candidate.state, draft) });
+	}
+
+	return {
+		status: 'generated',
+		reason: updates.length ? null : 'The model found no supported durable character changes.',
+		requestedServiceId: CHARACTER_UPDATE_SERVICE_ID,
+		effectiveServiceId: service.serviceId,
+		model: result.model,
+		promptChars: result.promptChars,
+		responseChars: result.responseChars,
+		updates,
+	};
+}
+
 export async function draftCharacterUpdateFromStoryContext(storyId: string, args: CharacterDraftUpdateArgs): Promise<JsonRecord> {
 	const db = getDb();
 	const [character] = await db.select().from(entities).where(eq(entities.id, args.recordId)).limit(1);
@@ -250,19 +564,11 @@ export async function draftCharacterUpdateFromStoryContext(storyId: string, args
 		recent.length ? `Recent transcript:\n${recent.map(renderEntryContext).join('\n\n')}` : '',
 	].filter(Boolean).join('\n\n');
 
-	let generation: Awaited<ReturnType<typeof resolveServiceGeneration>> | null = null;
-	let serviceId = '';
-	const missingReasons: string[] = [];
-	for (const candidateServiceId of ['memory', 'loreManagement', 'classifier', 'narrative']) {
-		const resolved = await resolveServiceGeneration(candidateServiceId);
-		if (resolved.profile) {
-			generation = resolved;
-			serviceId = candidateServiceId;
-			break;
-		}
-		if (resolved.missingReason) missingReasons.push(resolved.missingReason);
+	const service = await resolveCharacterUpdateService();
+	if (!service.serviceId || !service.resolved) {
+		throw new Error(service.reason ?? 'No character update model is configured.');
 	}
-	if (!generation?.profile) throw new Error(missingReasons[0] ?? 'No LLM profile is configured.');
+	const availableService = { ...service, serviceId: service.serviceId, resolved: service.resolved };
 
 	const prompt = [
 		`Character id: ${character.id}`,
@@ -276,16 +582,21 @@ export async function draftCharacterUpdateFromStoryContext(storyId: string, args
 		'Use motivations for goals. Use affinity as a -100..100 number. If the evidence has no update, return {}.',
 		'Use only supported facts. Empty string or empty array is better than guessing. For list fields, include durable current facts the reviewer should keep.',
 	].join('\n\n');
-	const result = await generateServerTextWithMetrics({
-		profile: generation.profile,
-		model: generation.generation.model,
-		temperature: Math.min(generation.generation.temperature ?? 0.2, 0.4),
-		maxTokens: Math.min(generation.generation.maxTokens ?? 1600, 1600),
-		system: generation.systemPromptOverride?.trim() || 'You update structured NPC canon from text RPG context. Return strict JSON only.',
+	const result = await generateCharacterUpdateText({
+		storyId,
+		operation: 'character.draft_update',
+		service: availableService,
 		prompt,
-		responseFormat: 'json_object',
+		maxTokens: 1600,
+		metadata: { recordId: character.id, characterName: character.name },
 	});
-	const draft = coerceDraft(parseJsonFromGeneratedText(result.text));
+	const draft = coerceDraft(await parseCharacterUpdateResult({
+		storyId,
+		operation: 'character.draft_update',
+		service: availableService,
+		result,
+		metadata: { recordId: character.id, characterName: character.name },
+	}));
 	if (!hasUsefulDraft(draft)) {
 		return {
 			storyId,
@@ -329,7 +640,7 @@ export async function draftCharacterUpdateFromStoryContext(storyId: string, args
 			sourceChapterIds: searchedChapters.map((chapter) => chapter.id),
 			sourceArcIds: searchedArcs.map((arc) => arc.id),
 			selectedMemoryIds: memorySelection.selectedIds,
-			serviceId,
+			serviceId: service.serviceId,
 			model: result.model,
 			promptChars: result.promptChars,
 		},

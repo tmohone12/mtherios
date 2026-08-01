@@ -6,6 +6,15 @@ import {
 	updateStory,
 } from '$lib/services/database';
 import {
+	createShelfResponseSchema,
+	shelfListResponseSchema,
+	shelfSummarySchema,
+	type CreateShelfRequest,
+	type CreateShelfResponse,
+	type ShelfSummary,
+	type UpdateShelfRequest,
+} from '$lib/contracts/shelves';
+import {
 	arcCommandResponseSchema,
 	arcDeleteResponseSchema,
 	bootstrapResponseSchema,
@@ -59,6 +68,7 @@ export type LivingMemoryCommandResponse = {
 
 export interface BackendStorySummary {
 	id: string;
+	shelfId?: string | null;
 	clientStoryId?: string | null;
 	title?: string | null;
 	description?: string | null;
@@ -73,6 +83,7 @@ export interface BackendStorySummary {
 }
 
 export interface CreateBackendStoryInput {
+	shelfId?: string | null;
 	title: string;
 	description?: string | null;
 	genre?: string | null;
@@ -92,6 +103,7 @@ export interface CreateBackendStoryInput {
 
 export interface CreateBackendStoryResult {
 	storyId: string;
+	shelfId?: string;
 	serverVersion: number;
 	createdAt: string;
 }
@@ -130,6 +142,38 @@ export const CONTROL_SURFACE_BOOTSTRAP_LIMITS = {
 	memoryNodeLimit: 80,
 } as const;
 
+const ENGINE_COMMAND_MAX_ATTEMPTS = 3;
+const ENGINE_COMMAND_RETRY_DELAY_MS = 200;
+const RETRYABLE_ENGINE_COMMAND_MESSAGES = [
+	'failed to fetch',
+	'fetch failed',
+	'networkerror',
+	'econnrefused',
+	'econnreset',
+	'etimedout',
+	'socket hang up',
+	'connection terminated',
+	'connection closed',
+	'terminal request failed: 502',
+	'terminal request failed: 503',
+	'terminal request failed: 504',
+];
+
+export function isRetryableEngineCommandFailure(error: unknown): boolean {
+	if (error instanceof TypeError) return true;
+	const message = error instanceof Error
+		? error.message
+		: typeof error === 'string'
+			? error
+			: '';
+	const normalized = message.toLowerCase();
+	return RETRYABLE_ENGINE_COMMAND_MESSAGES.some((needle) => normalized.includes(needle));
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function getJson(url: string): Promise<unknown> {
 	const response = await fetch(url);
 	if (!response.ok) {
@@ -162,11 +206,12 @@ function cacheStatusArgs(options: Partial<EngineCacheStatusArgs> = {}): Record<s
 	return args;
 }
 
-export async function listBackendStories(): Promise<BackendStorySummary[]> {
+export async function listBackendStories(options: { shelfId?: string | null } = {}): Promise<BackendStorySummary[]> {
+	const args = options.shelfId ? { shelfId: options.shelfId } : {};
 	const response = await sendEngineCommand({
 		storyId: '__app__',
 		command: 'story.list',
-		args: {},
+		args,
 	});
 	if (response.status !== 'succeeded') {
 		throw new Error(response.error ?? 'Terminal world database list failed.');
@@ -176,6 +221,20 @@ export async function listBackendStories(): Promise<BackendStorySummary[]> {
 		throw new Error('Terminal world database list returned an invalid payload.');
 	}
 	return (raw as { stories: BackendStorySummary[] }).stories;
+}
+
+export async function listBackendShelves(): Promise<ShelfSummary[]> {
+	const response = await sendEngineCommand({ storyId: '__app__', command: 'shelf.list', args: {} });
+	if (response.status !== 'succeeded') throw new Error(response.error ?? 'Shelf list failed.');
+	return shelfListResponseSchema.parse(response.result).shelves;
+}
+
+export async function createBackendShelf(input: CreateShelfRequest): Promise<CreateShelfResponse> {
+	return sendStoryEngineCommandResult('__app__', 'shelf.create', input, createShelfResponseSchema);
+}
+
+export async function updateBackendShelf(shelfId: string, input: UpdateShelfRequest): Promise<ShelfSummary> {
+	return sendStoryEngineCommandResult('__app__', 'shelf.update', { shelfId, ...input }, shelfSummarySchema);
 }
 
 export async function createBackendStoryShell(input: CreateBackendStoryInput): Promise<CreateBackendStoryResult> {
@@ -255,8 +314,49 @@ export async function fetchEngineCacheStatus(
 
 export async function sendEngineCommand(command: EngineCommandRequest): Promise<EngineCommandResponse> {
 	const payload = engineCommandRequestSchema.parse(command);
-	const raw = await sendJson('/api/engine/command', 'POST', payload);
-	return engineCommandResponseSchema.parse(raw);
+	let lastFailure: unknown = null;
+
+	for (let attempt = 0; attempt < ENGINE_COMMAND_MAX_ATTEMPTS; attempt += 1) {
+		try {
+			const raw = await sendJson('/api/engine/command', 'POST', payload);
+			const response = engineCommandResponseSchema.parse(raw);
+			if (response.status !== 'failed' || !isRetryableEngineCommandFailure(response.error)) {
+				return response;
+			}
+			lastFailure = new Error(response.error ?? `Engine command failed: ${payload.command}`);
+		} catch (error) {
+			if (!isRetryableEngineCommandFailure(error)) throw error;
+			lastFailure = error;
+		}
+
+		if (attempt < ENGINE_COMMAND_MAX_ATTEMPTS - 1) {
+			await delay(ENGINE_COMMAND_RETRY_DELAY_MS * (attempt + 1));
+		}
+	}
+
+	throw lastFailure instanceof Error ? lastFailure : new Error(`Engine command failed: ${payload.command}`);
+}
+
+export async function repairBackendWikiNow(): Promise<EngineCommandResponse> {
+	const response = await sendEngineCommand({
+		storyId: '__all_stories__',
+		command: 'jobs.storyVaultSync',
+		args: {
+			allStories: true,
+			runNow: true,
+			index: true,
+		},
+	});
+	if (response.status !== 'succeeded') {
+		throw new Error(response.error ?? 'Failed to repair wiki index.');
+	}
+	const result = response.result && typeof response.result === 'object'
+		? response.result as Record<string, unknown>
+		: {};
+	if (result.ok === false) {
+		throw new Error('Wiki index repair failed.');
+	}
+	return response;
 }
 
 async function sendStoryEngineCommandResult<T>(
@@ -369,14 +469,14 @@ export async function cacheBackendStoryFromBootstrap(
 	});
 }
 
-export async function refreshStoryCatalog(): Promise<Story[]> {
+export async function refreshStoryCatalog(options: { shelfId?: string | null } = {}): Promise<Story[]> {
 	const localStories = await getAllStories();
 	let serverStories: Story[] = [];
 	let liveServerIds: Set<string> | null = null;
 	let liveClientStoryIds = new Set<string>();
 
 	try {
-		const serverRows = await listBackendStories();
+		const serverRows = await listBackendStories(options);
 		liveServerIds = new Set(serverRows.map((row) => row.id).filter(Boolean));
 		liveClientStoryIds = new Set(serverRows.map((row) => row.clientStoryId).filter((id): id is string => Boolean(id)));
 		const localByServerId = new Map(
@@ -398,6 +498,7 @@ export async function refreshStoryCatalog(): Promise<Story[]> {
 
 	const byId = new Map<string, Story>();
 	for (const story of localStories) {
+		if (options.shelfId && (story.shelfId ?? 'shelf_default') !== options.shelfId) continue;
 		if (liveServerIds && story.syncStatus === 'local-only') continue;
 		if (
 			liveServerIds
@@ -427,6 +528,7 @@ export async function cacheBackendStory(row: BackendStorySummary): Promise<Story
 
 	const story: Story = {
 		id: localId,
+		shelfId: row.shelfId ?? 'shelf_default',
 		title: row.title || 'Untitled Chronicle',
 		description: row.description ?? null,
 		genre: row.genre ?? null,
@@ -461,6 +563,7 @@ export async function cacheBackendStory(row: BackendStorySummary): Promise<Story
 	const existing = await getStory(localId);
 	if (existing) {
 		await updateStory(localId, {
+			shelfId: story.shelfId,
 			title: story.title,
 			description: story.description,
 			genre: story.genre,

@@ -12,6 +12,7 @@ import {
 	engineEntityDeleteArgsSchema,
 	engineJobStatusArgsSchema,
 	engineOrchestratorRunArgsSchema,
+	enginePlotBrainPlanArgsSchema,
 	enginePromptPacketDebugArgsSchema,
 	engineRollupArcJobArgsSchema,
 	engineRunDueJobsArgsSchema,
@@ -30,6 +31,7 @@ import {
 	type EngineCacheStatusArgs,
 	type EngineCommandRequest,
 	type EngineCommandResponse,
+	type EnginePlotBrainPlanArgs,
 	type LlmServiceSetting,
 	type LlmServiceSettingPatch,
 	type RecordPatchRequest,
@@ -37,6 +39,13 @@ import {
 } from '$lib/contracts/engine';
 import type { GmTimelineBrief } from '$lib/contracts/memory';
 import { worldDatabaseImportRequestSchema, type WorldDatabaseImportRequest } from '$lib/contracts/worldDatabase';
+import {
+	compileWorldSeedToBundle,
+	previewWorldSeedSource,
+	seedImportRequestSchema,
+	seedPreviewRequestSchema,
+} from '$lib/contracts/worldSeed';
+import { createShelfRequestSchema, updateShelfRequestSchema } from '$lib/contracts/shelves';
 import {
 	arcDeleteRequestSchema,
 	arcUpsertRequestSchema,
@@ -84,14 +93,19 @@ import {
 	deleteBackendChapter,
 	deleteBackendEntity,
 	deleteBackendStory,
+	deleteBackendShelf,
 	exportBackendStory,
 	createBackendStory,
+	createBackendShelf,
+	getBackendShelf,
 	getBootstrap,
 	getStoryEntriesPage,
 	importIndexedDbBundle,
 	listContextCheckpoints,
 	listBackendStories,
+	listBackendShelves,
 	revertToContextCheckpoint,
+	updateBackendShelf,
 	upsertBackendArcFromLocal,
 	upsertBackendChapterFromLocal,
 	upsertBackendEntityFromEntry,
@@ -103,7 +117,6 @@ import { publishEngineEvent } from './events';
 import {
 	advanceStoryTurn,
 	loadGmTimelineBrief,
-	promoteDueTimelineEvents,
 	scheduleTimelineEvent,
 	type StoryEventRow,
 } from '$lib/server/events/timeline';
@@ -112,6 +125,7 @@ import {
 	listBackendJobsCommand,
 	runDueBackendJobsCommand,
 	runReindexStoryJobCommand,
+	runPlotBrainPlanCommand,
 	runRollupArcJobCommand,
 	runStoryVaultSyncJobCommand,
 	runSyncPullCommand,
@@ -199,7 +213,12 @@ export interface EngineCommandHandlers {
 	patchWorldRecord?: (type: string, recordId: string, request: RecordPatchRequest) => Promise<JsonRecord>;
 	draftCharacterUpdate?: (storyId: string, args: CharacterDraftUpdateArgs) => Promise<JsonRecord>;
 	searchWorld?: (input: Parameters<typeof searchCanonicalWorld>[0]) => Promise<JsonRecord>;
-	listStories?: () => Promise<JsonRecord[]>;
+	listShelves?: () => Promise<JsonRecord[]>;
+	getShelf?: (shelfId: string) => Promise<JsonRecord>;
+	createShelf?: (input: unknown) => Promise<JsonRecord>;
+	updateShelf?: (shelfId: string, input: unknown) => Promise<JsonRecord>;
+	deleteShelf?: (shelfId: string) => Promise<JsonRecord>;
+	listStories?: (options?: { shelfId?: string | null }) => Promise<JsonRecord[]>;
 	createStory?: (input: unknown) => Promise<JsonRecord>;
 	exportStory?: (storyId: string) => Promise<JsonRecord>;
 	deleteStory?: (storyId: string, options: { mode: 'archive' | 'purge'; exportBeforeDelete: boolean }) => Promise<JsonRecord>;
@@ -224,12 +243,7 @@ export interface EngineCommandHandlers {
 	submitTurn?: (input: unknown) => Promise<TurnResponse>;
 	loadTimelineBrief?: (input: Parameters<typeof loadGmTimelineBrief>[0]) => Promise<GmTimelineBrief>;
 	scheduleTimelineEvent?: (input: Parameters<typeof scheduleTimelineEvent>[0]) => Promise<StoryEventRow>;
-	advanceStoryTurn?: (storyId: string, delta?: number) => Promise<number>;
-	promoteDueTimelineEvents?: (
-		storyId: string,
-		currentTurn: number,
-		options?: Parameters<typeof promoteDueTimelineEvents>[2],
-	) => Promise<StoryEventRow[]>;
+	advanceStoryTurn?: typeof advanceStoryTurn;
 	prepareTurn?: (input: unknown) => Promise<PreparedServerTurnSummary>;
 	retrieveMemory?: (input: Parameters<typeof runMemoryRetrieveCommand>[0]) => Promise<RetrievedMemoryPacket>;
 	pullSyncChanges?: (input: Parameters<typeof runSyncPullCommand>[0]) => Promise<SyncPullCommandResult>;
@@ -240,6 +254,7 @@ export interface EngineCommandHandlers {
 	runRollupArcJob?: (input: RollupArcJobCommandInput) => Promise<JsonRecord>;
 	runStoryVaultSyncJob?: (input: StoryVaultSyncJobCommandInput) => Promise<JsonRecord>;
 	runWorldSimJob?: (input: WorldSimJobCommandInput) => Promise<JsonRecord>;
+	runPlotBrainPlan?: (input: EnginePlotBrainPlanArgs & { storyId: string }) => Promise<JsonRecord>;
 	runOrchestrator?: (input: EngineOrchestratorRunInput) => Promise<EngineOrchestratorRunResult>;
 }
 
@@ -346,6 +361,11 @@ export async function executeEngineCommand(
 	const writeWorldRecord = handlers.patchWorldRecord ?? patchWorldRecord;
 	const draftCharacterUpdate = handlers.draftCharacterUpdate ?? draftCharacterUpdateFromStoryContext;
 	const searchWorld = handlers.searchWorld ?? searchCanonicalWorld;
+	const listShelves = handlers.listShelves ?? listBackendShelves;
+	const getShelf = handlers.getShelf ?? getBackendShelf;
+	const createShelf = handlers.createShelf ?? createBackendShelf;
+	const updateShelf = handlers.updateShelf ?? updateBackendShelf;
+	const deleteShelf = handlers.deleteShelf ?? deleteBackendShelf;
 	const listStories = handlers.listStories ?? listBackendStories;
 	request = { ...request, storyId: await resolveBackendStoryId(request.storyId, listStories) };
 	const base = responseBase(request);
@@ -368,7 +388,6 @@ export async function executeEngineCommand(
 	const loadTimelineBrief = handlers.loadTimelineBrief ?? loadGmTimelineBrief;
 	const scheduleTimeline = handlers.scheduleTimelineEvent ?? scheduleTimelineEvent;
 	const advanceTimelineTurn = handlers.advanceStoryTurn ?? advanceStoryTurn;
-	const promoteTimelineEvents = handlers.promoteDueTimelineEvents ?? promoteDueTimelineEvents;
 	const prepareTurn = handlers.prepareTurn ?? prepareServerTurn;
 	const retrieveMemory = handlers.retrieveMemory ?? runMemoryRetrieveCommand;
 	const pullSyncChanges = handlers.pullSyncChanges ?? runSyncPullCommand;
@@ -379,6 +398,7 @@ export async function executeEngineCommand(
 	const runRollupArcJob = handlers.runRollupArcJob ?? runRollupArcJobCommand;
 	const runStoryVaultSyncJob = handlers.runStoryVaultSyncJob ?? runStoryVaultSyncJobCommand;
 	const runWorldSimJob = handlers.runWorldSimJob ?? runWorldSimJobCommand;
+	const runPlotBrainPlan = handlers.runPlotBrainPlan ?? runPlotBrainPlanCommand;
 	const previewResolution = handlers.previewEntityResolution ?? previewEntityResolutionCommand;
 	const addAlias = handlers.addEntityAlias ?? addEntityAliasCommand;
 	const mergeDuplicateEntities = handlers.mergeEntities ?? mergeEntitiesCommand;
@@ -609,6 +629,52 @@ export async function executeEngineCommand(
 					},
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'database.seed.preview': {
+				const args = seedPreviewRequestSchema.parse(request.args ?? {});
+				const result = previewWorldSeedSource(args);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						seedPreview: result.summary,
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'database.seed.import': {
+				const args = seedImportRequestSchema.parse(request.args ?? {});
+				const preview = args.source ? previewWorldSeedSource(args.source) : null;
+				const seed = args.seed ?? preview?.seedDraft;
+				if (!seed) throw new Error('Seed import requires either a seed object or an import source.');
+				const bundle = compileWorldSeedToBundle(seed);
+				if (!bundle.worldDatabase.story) throw new Error('Seed import requires a first story. Add story.title to the seed.');
+				const result = await importWorldDatabase({
+					bundle: bundle as unknown as WorldDatabaseImportRequest['bundle'],
+					options: args.options,
+				});
+				const imported = asRecord(result);
+				const storyId = typeof imported.storyId === 'string' ? imported.storyId : request.storyId;
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: { ...asRecord(result), bundle, preview },
+					projectionChanges: {
+						seedImport: {
+							ok: imported.ok !== false,
+							storyId,
+							shelfId: typeof bundle.shelf.id === 'string' ? bundle.shelf.id : null,
+							counts: asRecord(imported.counts),
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId, type: 'state.changed', data: response.projectionChanges });
 				publishSucceededEvent(response);
 				return response;
 			}
@@ -1172,8 +1238,88 @@ export async function executeEngineCommand(
 				publishSucceededEvent(response);
 				return response;
 			}
+			case 'shelf.list': {
+				const shelves = await listShelves();
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: { shelves },
+					projectionChanges: {
+						shelfCatalog: { count: shelves.length },
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'shelf.get': {
+				const args = asRecord(request.args ?? {});
+				const shelfId = stringField(args.shelfId) || request.storyId;
+				const shelf = await getShelf(shelfId);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: { shelf },
+					projectionChanges: { shelf },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'shelf.create': {
+				const args = createShelfRequestSchema.parse(request.args ?? {});
+				const result = await createShelf(args);
+				const created = asRecord(result);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						shelf: {
+							shelfId: typeof created.shelfId === 'string' ? created.shelfId : null,
+							created: true,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'shelf.update': {
+				const rawArgs = asRecord(request.args ?? {});
+				const shelfId = stringField(rawArgs.shelfId) || request.storyId;
+				const args = updateShelfRequestSchema.parse(rawArgs);
+				const shelf = await updateShelf(shelfId, args);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: { shelf },
+					projectionChanges: { shelf },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'shelf.delete': {
+				const args = asRecord(request.args ?? {});
+				const shelfId = stringField(args.shelfId) || request.storyId;
+				const result = await deleteShelf(shelfId);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { shelf: { shelfId, deleted: true } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
 			case 'story.list': {
-				const stories = await listStories();
+				const args = asRecord(request.args ?? {});
+				const stories = await listStories({ shelfId: typeof args.shelfId === 'string' ? args.shelfId : null });
 				const response = {
 					...base,
 					status: 'succeeded',
@@ -1711,9 +1857,8 @@ export async function executeEngineCommand(
 			}
 			case 'timeline.advance': {
 				const args = engineTimelineAdvanceArgsSchema.parse(request.args ?? {});
-				const currentTurn = await advanceTimelineTurn(request.storyId, args.delta);
-				const promotedEvents = await promoteTimelineEvents(request.storyId, currentTurn, {
-					serverVersion: args.serverVersion,
+				const { currentTurn, serverVersion, promotedEvents } = await advanceTimelineTurn(request.storyId, args.delta, {
+					expectedServerVersion: args.serverVersion,
 				});
 				const brief = await loadTimelineBrief({
 					storyId: request.storyId,
@@ -1729,6 +1874,7 @@ export async function executeEngineCommand(
 				});
 				const result = {
 					currentTurn,
+					serverVersion,
 					promotedEvents,
 					brief,
 				};
@@ -1746,6 +1892,7 @@ export async function executeEngineCommand(
 						commandId: response.commandId,
 						clientCommandId: response.clientCommandId,
 						currentTurn,
+						serverVersion,
 						promotedEventIds: promotedEvents.map((event) => event.id),
 						dueEvents: brief.dueEvents,
 					},
@@ -2185,6 +2332,36 @@ export async function executeEngineCommand(
 						projectionChanges: response.projectionChanges,
 					},
 				});
+				return response;
+			}
+			case 'plotBrain.plan': {
+				const args = enginePlotBrainPlanArgsSchema.parse(request.args ?? {});
+				const result = await runPlotBrainPlan({
+					...args,
+					storyId: request.storyId,
+				});
+				const resultRecord = asRecord(result);
+				const projection = {
+					ok: resultRecord.ok !== false,
+					storyId: typeof resultRecord.storyId === 'string' ? resultRecord.storyId : request.storyId,
+					frameId: typeof resultRecord.frameId === 'string' ? resultRecord.frameId : null,
+					plotCardCount: typeof resultRecord.plotCardCount === 'number' ? resultRecord.plotCardCount : null,
+					threadCount: typeof resultRecord.threadCount === 'number' ? resultRecord.threadCount : null,
+					eventCount: typeof resultRecord.eventCount === 'number' ? resultRecord.eventCount : null,
+					proposalCount: typeof resultRecord.proposalCount === 'number' ? resultRecord.proposalCount : null,
+					executed: resultRecord.executed === true,
+				};
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						plotBrain: projection,
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
 				return response;
 			}
 			default: {

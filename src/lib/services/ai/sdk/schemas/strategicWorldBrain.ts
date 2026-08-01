@@ -95,6 +95,57 @@ function normalizeUrgency(value: unknown): 'low' | 'rising' | 'urgent' | 'critic
 	return 'low';
 }
 
+function normalizePlotUrgency(value: unknown): 'simmer' | 'emerging' | 'immediate' {
+	const text = asString(value)?.toLowerCase() ?? '';
+	if (/immediate|urgent|critical|high|now/.test(text)) return 'immediate';
+	if (/emerging|rising|medium|soon/.test(text)) return 'emerging';
+	return 'simmer';
+}
+
+function normalizeClockVelocity(value: unknown): 'stalled' | 'slow' | 'steady' | 'fast' | 'surging' {
+	const text = asString(value)?.toLowerCase() ?? '';
+	if (/stall|block|pause|stop/.test(text)) return 'stalled';
+	if (/slow|sluggish/.test(text)) return 'slow';
+	if (/surg|accelerat|escalat|critical/.test(text)) return 'surging';
+	if (/fast|rapid|quick/.test(text)) return 'fast';
+	return 'steady';
+}
+
+function normalizeStrategicVisibility(value: unknown): 'public' | 'rumored' | 'secret' | 'unknown' | undefined {
+	const text = asString(value)?.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+	if (!text) return undefined;
+	if (['public', 'rumored', 'secret', 'unknown'].includes(text)) return text as 'public' | 'rumored' | 'secret' | 'unknown';
+	if (/rumou?r|whisper|hearsay/.test(text)) return 'rumored';
+	if (/secret|hidden|covert|private|classified/.test(text)) return 'secret';
+	if (/public|visible|open|known|player_known/.test(text)) return 'public';
+	return 'unknown';
+}
+
+function normalizeTimeHorizon(value: unknown): 'next_tick' | 'next_few_turns' | 'this_arc' | 'future_arc' | 'long_burn' | undefined {
+	const text = asString(value)?.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+	if (!text) return undefined;
+	if (['next_tick', 'next_few_turns', 'this_arc', 'future_arc', 'long_burn'].includes(text)) {
+		return text as 'next_tick' | 'next_few_turns' | 'this_arc' | 'future_arc' | 'long_burn';
+	}
+	if (/immediate|now|next_turn|next_tick/.test(text)) return 'next_tick';
+	if (/soon|short|near|few_turn/.test(text)) return 'next_few_turns';
+	if (/future|next_arc|later/.test(text)) return 'future_arc';
+	if (/long|slow_burn|eventual/.test(text)) return 'long_burn';
+	return 'this_arc';
+}
+
+function normalizeExpectedPayoff(value: unknown): 'soon' | 'this_arc' | 'future_arc' | 'long_burn' | 'optional' {
+	const text = asString(value)?.toLowerCase().replace(/[^a-z0-9]+/g, '_') ?? '';
+	if (['soon', 'this_arc', 'future_arc', 'long_burn', 'optional'].includes(text)) {
+		return text as 'soon' | 'this_arc' | 'future_arc' | 'long_burn' | 'optional';
+	}
+	if (/future|later|following_arc|next_arc/.test(text)) return 'future_arc';
+	if (/immediate|next_turn|near|short/.test(text)) return 'soon';
+	if (/long|slow|eventual/.test(text)) return 'long_burn';
+	if (/optional|side|player_choice/.test(text)) return 'optional';
+	return 'this_arc';
+}
+
 function normalizeOperationType(value: unknown): 'diplomatic' | 'military' | 'economic' | 'intelligence' | 'propaganda' | 'logistics' | 'internal' {
 	const text = asString(value)?.toLowerCase() ?? '';
 	if (['diplomatic', 'military', 'economic', 'intelligence', 'propaganda', 'logistics', 'internal'].includes(text)) {
@@ -126,18 +177,37 @@ function compact(value: unknown, max = 700): string {
 	return `${text.slice(0, max - 3).trimEnd()}...`;
 }
 
-function normalizePlotLine(value: unknown): unknown {
+const strategicPlotKinds = [
+	'main_plot', 'subplot', 'character_arc', 'faction_plot', 'mystery', 'war',
+	'political_intrigue', 'survival', 'personal_goal', 'background_pressure',
+] as const;
+
+function normalizePlotKind(value: unknown, fallback: typeof strategicPlotKinds[number]): typeof strategicPlotKinds[number] {
+	const text = asString(value)?.toLowerCase().replace(/[^a-z0-9]+/g, '_') ?? '';
+	if (strategicPlotKinds.includes(text as typeof strategicPlotKinds[number])) return text as typeof strategicPlotKinds[number];
+	if (/roman|relationship|character/.test(text)) return 'character_arc';
+	if (/politic|conspiracy|intrigue/.test(text)) return 'political_intrigue';
+	if (/mystery|secret|investigat/.test(text)) return 'mystery';
+	if (/war|battle|invasion/.test(text)) return 'war';
+	if (/survival/.test(text)) return 'survival';
+	if (/personal|moral/.test(text)) return 'personal_goal';
+	if (/background|social|economic/.test(text)) return 'background_pressure';
+	if (/faction/.test(text)) return 'faction_plot';
+	return fallback;
+}
+
+function normalizePlotLine(value: unknown, fallback: typeof strategicPlotKinds[number] = 'faction_plot'): unknown {
 	if (!isRecord(value)) return value;
 	return {
 		...value,
 		title: value.title ?? value.name ?? 'Strategic plot pressure',
-		kind: value.kind ?? 'faction_plot',
+		kind: normalizePlotKind(value.kind, fallback),
 		pressure: normalizePressure(value.pressure),
 		summary: value.summary ?? value.description ?? value.reason ?? 'Strategic pressure is rising.',
 		linkedSchemeIds: value.linkedSchemeIds ?? [],
 		linkedFactionGoalIds: value.linkedFactionGoalIds ?? [],
 		linkedThreadIds: value.linkedThreadIds ?? [],
-		expectedPayoff: value.expectedPayoff ?? 'this_arc',
+		expectedPayoff: normalizeExpectedPayoff(value.expectedPayoff ?? value.timeHorizon),
 		playerAgency: value.playerAgency ?? 'world_driven',
 	};
 }
@@ -193,8 +263,8 @@ function normalizeFactionOperation(value: unknown): unknown {
 		actionType: normalizeOperationType(value.actionType ?? value.kind ?? value.type ?? action),
 		target: value.target ?? value.targetName ?? value.targetFaction ?? value.targetLocation ?? null,
 		urgency: normalizeUrgency(value.urgency ?? value.pressure ?? value.priority),
-		visibility: value.visibility ?? value.secrecy ?? 'secret',
-		timeHorizon: value.timeHorizon ?? value.horizon ?? value.when ?? 'this_arc',
+		visibility: normalizeStrategicVisibility(value.visibility ?? value.secrecy) ?? 'secret',
+		timeHorizon: normalizeTimeHorizon(value.timeHorizon ?? value.horizon ?? value.when) ?? 'this_arc',
 		triggerConditions: stringArray.parse(value.triggerConditions ?? value.triggers ?? value.tickTriggers),
 		stallConditions: stringArray.parse(value.stallConditions ?? value.blockers ?? value.stallTriggers),
 		visibleSignals: stringArray.parse(value.visibleSignals ?? value.visibleEffects ?? value.publicSignals),
@@ -225,7 +295,13 @@ function normalizeCanonPatch(value: unknown): unknown {
 function normalizeStrategicWorldFrame(value: unknown): unknown {
 	if (!isRecord(value)) return value;
 	const frame: Record<string, unknown> = { ...value };
-	const plotUpdates = Array.isArray(frame.plotUpdates) ? frame.plotUpdates.map(normalizePlotLine) : [];
+	const plotUpdates = Array.isArray(frame.plotUpdates) ? frame.plotUpdates.map(item => normalizePlotLine(item)) : [];
+
+	if (!Array.isArray(frame.tensionSeeds) && Array.isArray(frame.tensions)) frame.tensionSeeds = frame.tensions;
+	if (!Array.isArray(frame.antagonistCandidates) && Array.isArray(frame.actors)) frame.antagonistCandidates = frame.actors;
+	if (!Array.isArray(frame.plotCards) && Array.isArray(frame.plots)) frame.plotCards = frame.plots;
+	if (!isRecord(frame.activationPlan) && isRecord(frame.plotActivationPlan)) frame.activationPlan = frame.plotActivationPlan;
+	if (!isRecord(frame.plotBrainWritePlan) && isRecord(frame.writePlan)) frame.plotBrainWritePlan = frame.writePlan;
 
 	if (!Array.isArray(frame.mainPlots) && plotUpdates.length > 0) {
 		frame.mainPlots = plotUpdates.filter((plot, index) =>
@@ -238,10 +314,10 @@ function normalizeStrategicWorldFrame(value: unknown): unknown {
 		);
 	}
 	if (Array.isArray(frame.mainPlots)) {
-		frame.mainPlots = frame.mainPlots.map(normalizePlotLine);
+		frame.mainPlots = frame.mainPlots.map(item => normalizePlotLine(item, 'main_plot'));
 	}
 	if (Array.isArray(frame.subplots)) {
-		frame.subplots = frame.subplots.map(normalizePlotLine);
+		frame.subplots = frame.subplots.map(item => normalizePlotLine(item, 'subplot'));
 	}
 
 	if (Array.isArray(frame.schemeDirectives)) {
@@ -292,8 +368,7 @@ function normalizeStrategicWorldFrame(value: unknown): unknown {
 	return frame;
 }
 
-export const strategicEvidenceRefSchema = z.object({
-	sourceType: z.enum([
+const strategicEvidenceSourceTypes = [
 		'arc',
 		'chapter',
 		'scheme',
@@ -305,7 +380,13 @@ export const strategicEvidenceRefSchema = z.object({
 		'entry',
 		'memory',
 		'unknown',
-	]).default('unknown'),
+] as const;
+
+export const strategicEvidenceRefSchema = z.object({
+	sourceType: z.preprocess((value) => {
+		const normalized = asString(value)?.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+		return strategicEvidenceSourceTypes.includes(normalized as typeof strategicEvidenceSourceTypes[number]) ? normalized : 'unknown';
+	}, z.enum(strategicEvidenceSourceTypes).default('unknown')),
 	sourceId: z.string().nullable().optional(),
 	label: z.string().default('Unspecified evidence'),
 	note: z.string().nullable().optional(),
@@ -326,26 +407,144 @@ const evidenceRefsArray = z.preprocess((value) => {
 
 export const strategicPlotLineSchema = z.object({
 	title: z.string(),
-	kind: z.enum([
-		'main_plot',
-		'subplot',
-		'character_arc',
-		'faction_plot',
-		'mystery',
-		'war',
-		'political_intrigue',
-		'survival',
-		'personal_goal',
-		'background_pressure',
-	]).default('background_pressure'),
+	kind: z.enum(strategicPlotKinds).default('background_pressure'),
 	pressure: z.preprocess(normalizePressure, z.enum(['low', 'medium', 'high', 'critical']).default('medium')),
 	summary: z.string(),
 	linkedSchemeIds: stringArray,
 	linkedFactionGoalIds: stringArray,
 	linkedThreadIds: stringArray,
-	expectedPayoff: z.enum(['soon', 'this_arc', 'future_arc', 'long_burn', 'optional']).default('this_arc'),
+	expectedPayoff: z.preprocess(normalizeExpectedPayoff, z.enum(['soon', 'this_arc', 'future_arc', 'long_burn', 'optional']).default('this_arc')),
 	playerAgency: z.enum(['player_driven', 'world_driven', 'reactive', 'background']).default('world_driven'),
 });
+
+const boundedScore = z.preprocess((value) => {
+	const numeric = asNumber(value);
+	if (numeric == null) return value;
+	return Math.max(0, Math.min(100, numeric));
+}, z.number().min(0).max(100).default(50));
+
+export const plotBrainTensionSeedSchema = z.object({
+	id: z.string().default(''),
+	title: z.string().default('Unresolved tension'),
+	kind: z.enum([
+		'debt', 'oath', 'rivalry', 'resource_shortage', 'succession', 'secret',
+		'romantic_pressure', 'faction_goal_conflict', 'wounded_pride', 'mystery',
+		'threat', 'moral_contradiction', 'earned_goodwill', 'location_pressure', 'other',
+	]).default('other'),
+	involvedEntityIds: stringArray,
+	involvedFactionIds: stringArray,
+	involvedLocationIds: stringArray,
+	pressure: boundedScore,
+	volatility: boundedScore,
+	playerRelevance: boundedScore,
+	canonConfidence: confidence,
+	unresolvedQuestion: z.string().default(''),
+	whyItMatters: z.string().default(''),
+	evidenceRefs: evidenceRefsArray,
+});
+
+export const plotBrainAntagonistCandidateSchema = z.object({
+	id: z.string().default(''),
+	actorEntityId: z.string().nullable().optional(),
+	actorFactionId: z.string().nullable().optional(),
+	name: z.string().default('Unknown actor'),
+	role: z.enum([
+		'primary_antagonist', 'subplot_antagonist', 'rival', 'pressure_actor',
+		'false_antagonist', 'tragic_opponent', 'hidden_patron', 'unwitting_catalyst',
+	]).default('pressure_actor'),
+	tensionSeedIds: stringArray,
+	motive: z.string().default(''),
+	fear: z.string().default(''),
+	woundOrNeed: z.string().default(''),
+	method: z.string().default(''),
+	lineTheyWillNotCross: z.string().default(''),
+	escalationTrigger: z.string().default(''),
+	hesitationTrigger: z.string().default(''),
+	plausibilityScore: boundedScore,
+	dramaticScore: boundedScore,
+	agencyRisk: boundedScore,
+	evidenceRefs: evidenceRefsArray,
+});
+
+export const plotBrainClueSchema = z.object({
+	clue: z.string(),
+	delivery: z.enum(['rumor', 'scene_detail', 'npc_behavior', 'document', 'found_object', 'absence', 'price_or_resource', 'direct_confession', 'other']).default('other'),
+	truth: z.string().default(''),
+	visibility: z.enum(['subtle', 'obvious']).default('subtle'),
+	evidenceRefs: evidenceRefsArray,
+});
+
+export const plotBrainPressureBeatSchema = z.object({
+	delayTurns: z.number().int().min(0).max(50).default(1),
+	title: z.string(),
+	body: z.string(),
+	urgency: z.preprocess(normalizePlotUrgency, z.enum(['simmer', 'emerging', 'immediate']).default('simmer')),
+	visibility: z.enum(['secret', 'player_known', 'public']).default('secret'),
+	actorEntityIds: stringArray,
+	targetEntityIds: stringArray,
+	locationIds: stringArray,
+	factionIds: stringArray,
+	memoryImpact: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const plotBrainPlotCardSchema = z.object({
+	id: z.string().default(''),
+	title: z.string(),
+	logline: z.string().default(''),
+	kind: z.enum([
+		'main_plot', 'subplot', 'character_arc', 'faction_plot', 'mystery', 'war',
+		'political_intrigue', 'survival', 'personal_goal', 'background_pressure',
+		'romantic_complication', 'moral_dilemma', 'social_pressure', 'economic_pressure',
+	]).default('subplot'),
+	lifecycleStage: z.enum(['seed', 'simmer', 'reveal', 'escalate', 'crisis', 'fallout', 'resolved', 'dormant']).default('seed'),
+	pressure: boundedScore,
+	urgency: z.enum(['dormant', 'simmer', 'emerging', 'immediate']).default('simmer'),
+	visibility: z.enum(['secret', 'rumored', 'player_known', 'public']).default('secret'),
+	actorEntityIds: stringArray,
+	actorFactionIds: stringArray,
+	antagonistCandidateIds: stringArray,
+	targetEntityIds: stringArray,
+	targetFactionIds: stringArray,
+	locationIds: stringArray,
+	goal: z.string().default(''),
+	motive: z.string().default(''),
+	method: z.string().default(''),
+	stakes: z.string().default(''),
+	playerTouchpoints: stringArray,
+	clueTrail: z.array(plotBrainClueSchema).default([]),
+	pressureBeats: z.array(plotBrainPressureBeatSchema).default([]),
+	ignoredOutcome: z.string().default(''),
+	successOutcome: z.string().default(''),
+	failureOutcome: z.string().default(''),
+	partialOutcome: z.string().default(''),
+	sourceRefs: evidenceRefsArray,
+	continuityRisks: stringArray,
+	antiRailroadNotes: stringArray,
+});
+
+export const plotBrainActivationPlanSchema = z.object({
+	activateNow: stringArray,
+	keepDormant: stringArray,
+	retireOrMerge: stringArray,
+	rationale: z.string().default(''),
+}).default({ activateNow: [], keepDormant: [], retireOrMerge: [], rationale: '' });
+
+export const plotBrainWritePlanSchema = z.object({
+	storyThreadCreates: z.array(z.record(z.string(), z.unknown())).default([]),
+	storyThreadUpdates: z.array(z.object({
+		threadId: z.string(),
+		status: z.enum(['open', 'imminent', 'stalled', 'closed', 'abandoned']).optional(),
+		significance: z.enum(['minor', 'moderate', 'major', 'critical']).optional(),
+		description: z.string().optional(),
+		reason: z.string().default('Strategic plot brain update.'),
+	})).default([]),
+	timelineEvents: z.array(plotBrainPressureBeatSchema.extend({
+		plotCardId: z.string().default(''),
+		threadId: z.string().nullable().optional(),
+		sourceRefs: evidenceRefsArray,
+	})).default([]),
+	patchProposals: z.array(z.record(z.string(), z.unknown())).default([]),
+}).default({ storyThreadCreates: [], storyThreadUpdates: [], timelineEvents: [], patchProposals: [] });
 
 export const verboseFactionGoalDirectiveSchema = z.object({
 	type: z.enum(['create_goal', 'update_goal', 'retire_goal', 'reframe_goal']),
@@ -409,7 +608,7 @@ export const strategicClockSchema = z.object({
 	name: z.string(),
 	ownerFactionName: z.string(),
 	progress: z.number().min(0).max(100).default(0),
-	velocity: z.enum(['stalled', 'slow', 'steady', 'fast', 'surging']).default('steady'),
+	velocity: z.preprocess(normalizeClockVelocity, z.enum(['stalled', 'slow', 'steady', 'fast', 'surging']).default('steady')),
 	goal: z.string(),
 	visibleToPlayer: z.boolean().default(false),
 	tickTriggers: stringArray,
@@ -446,8 +645,8 @@ export const strategicFactionOperationSchema = z.object({
 	actionType: z.preprocess(normalizeOperationType, z.enum(['diplomatic', 'military', 'economic', 'intelligence', 'propaganda', 'logistics', 'internal']).default('diplomatic')),
 	target: z.string().nullable().optional(),
 	urgency: z.preprocess(normalizeUrgency, z.enum(['low', 'rising', 'urgent', 'critical']).default('rising')),
-	visibility: strategicVisibilitySchema.default('secret'),
-	timeHorizon: z.enum(['next_tick', 'next_few_turns', 'this_arc', 'future_arc', 'long_burn']).default('this_arc'),
+	visibility: z.preprocess(normalizeStrategicVisibility, strategicVisibilitySchema).default('secret'),
+	timeHorizon: z.preprocess(normalizeTimeHorizon, z.enum(['next_tick', 'next_few_turns', 'this_arc', 'future_arc', 'long_burn'])).default('this_arc'),
 	triggerConditions: stringArray,
 	stallConditions: stringArray,
 	visibleSignals: stringArray,
@@ -463,7 +662,7 @@ export const worldEventSuggestionSchema = z.object({
 	title: z.string(),
 	description: z.string(),
 	type: z.string().default('strategic_pressure'),
-	visibility: strategicVisibilitySchema.default('unknown'),
+	visibility: z.preprocess(normalizeStrategicVisibility, strategicVisibilitySchema).default('unknown'),
 	linkedSchemeIds: stringArray,
 	linkedThreadIds: stringArray,
 	evidenceRefs: evidenceRefsArray,
@@ -525,12 +724,22 @@ const strategicWorldFrameBaseSchema = z.object({
 	fastWorldSimInstructions: z.string().default(''),
 	narratorPromptCard: z.string().default(''),
 	canonPatchSuggestions: z.array(strategicCanonPatchSchema).default([]),
+	tensionSeeds: z.array(plotBrainTensionSeedSchema).default([]),
+	antagonistCandidates: z.array(plotBrainAntagonistCandidateSchema).default([]),
+	plotCards: z.array(plotBrainPlotCardSchema).default([]),
+	activationPlan: plotBrainActivationPlanSchema,
+	plotBrainWritePlan: plotBrainWritePlanSchema,
 });
 
 export const strategicWorldFrameSchema = z.preprocess(
 	normalizeStrategicWorldFrame,
 	strategicWorldFrameBaseSchema,
 );
+
+export function hasStrategicPlotContent(value: unknown): boolean {
+	const parsed = strategicWorldFrameSchema.safeParse(value);
+	return parsed.success && (parsed.data.mainPlots.length > 0 || parsed.data.subplots.length > 0 || parsed.data.plotCards.length > 0);
+}
 
 export type StrategicWorldFrameResult = z.infer<typeof strategicWorldFrameSchema>;
 export type SchemeDirectiveResult = z.infer<typeof schemeDirectiveSchema>;

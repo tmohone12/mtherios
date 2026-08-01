@@ -35,10 +35,18 @@ const STOPWORDS = new Set([
 	'there', 'their', 'about', 'into', 'then', 'than', 'they', 'them', 'your',
 	'you', 'for', 'are', 'was', 'were', 'will', 'would', 'could', 'should',
 	'after', 'before', 'again', 'just', 'like', 'tell', 'ask', 'said', 'says',
+	'him', 'his', 'her', 'hers', 'its', 'who', 'whom', 'whose',
 ]);
 
 export function normalizeLookup(text: string): string {
 	return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+export function lookupMentioned(query: string, candidate: string): boolean {
+	const normalizedQuery = normalizeLookup(query);
+	const normalizedCandidate = normalizeLookup(candidate);
+	return normalizedCandidate.length >= 3
+		&& ` ${normalizedQuery} `.includes(` ${normalizedCandidate} `);
 }
 
 export function memoryQueryTokens(text: string, max = 36): string[] {
@@ -61,6 +69,17 @@ function ageDays(value: string): number | null {
 
 function asRecord(value: unknown): JsonRecord | null {
 	return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : null;
+}
+
+function integer(value: unknown): number | null {
+	return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function storyTurn(node: MemoryNode): number | null {
+	const metadata = asRecord(node.metadata);
+	return integer(metadata?.occurredTurn)
+		?? integer(metadata?.validFromTurn)
+		?? integer(metadata?.scheduledTurn);
 }
 
 function normalizedTokens(text: string): string[] {
@@ -120,9 +139,16 @@ function scoreExplanation(node: MemoryNode, request: MemoryRetrieveRequest): Mem
 	const keyword = keywordScore(node, queryTokens);
 	const vectorSimilarity = vectorSimilarityScore(node);
 	const vectorScore = vectorSimilarity > 0 ? Math.min(2.5, vectorSimilarity * 2.5) : 0;
+	const nodeStoryTurn = storyTurn(node);
+	const turnDistance = request.currentTurn === undefined || nodeStoryTurn === null
+		? null
+		: request.currentTurn - nodeStoryTurn;
 	const age = ageDays(node.updatedAt);
-	const recencyBoost = age == null ? 0 : 1.2 * Math.exp(-age / 45);
-	const ageDecay = age == null || age <= 180 ? 0 : Math.min(1.8, ((age - 180) / 365) * Math.max(0.25, 1 - node.importance));
+	const storyRecencyBoost = turnDistance === null || turnDistance < 0 ? 0 : 1.8 * Math.exp(-turnDistance / 20);
+	const dueSoonBoost = turnDistance === null || turnDistance >= 0 ? 0 : 1.5 * Math.exp(turnDistance / 8);
+	const storyAgeDecay = turnDistance === null || turnDistance <= 80 ? 0 : Math.min(1.8, ((turnDistance - 80) / 160) * Math.max(0.25, 1 - node.importance));
+	const recencyBoost = turnDistance === null && age != null ? 1.2 * Math.exp(-age / 45) : 0;
+	const ageDecay = turnDistance === null && age != null && age > 180 ? Math.min(1.8, ((age - 180) / 365) * Math.max(0.25, 1 - node.importance)) : 0;
 	const locationScore = request.locationId && node.locationId === request.locationId ? 2 : 0;
 	const sceneEntityScore = overlaps(node.entityIds, request.sceneEntityIds) ? 2.5 : 0;
 	const threadScore = overlaps(node.threadIds, request.threadIds) ? 2 : 0;
@@ -134,7 +160,10 @@ function scoreExplanation(node: MemoryNode, request: MemoryRetrieveRequest): Mem
 	const total = importanceScore
 		+ keyword.score
 		+ vectorScore
+		+ storyRecencyBoost
+		+ dueSoonBoost
 		+ recencyBoost
+		- storyAgeDecay
 		- ageDecay
 		+ locationScore
 		+ sceneEntityScore
@@ -150,7 +179,10 @@ function scoreExplanation(node: MemoryNode, request: MemoryRetrieveRequest): Mem
 		`importance ${importanceScore.toFixed(2)}`,
 		keyword.score > 0 ? `keyword ${keyword.score.toFixed(2)} (${keyword.matchedTokens.slice(0, 6).join(', ')})` : '',
 		vectorScore > 0 ? `vector ${vectorScore.toFixed(2)}` : '',
+		storyRecencyBoost > 0.05 ? `story recency ${storyRecencyBoost.toFixed(2)} (${turnDistance} turns)` : '',
+		dueSoonBoost > 0.05 ? `due soon ${dueSoonBoost.toFixed(2)} (+${Math.abs(turnDistance ?? 0)} turns)` : '',
 		recencyBoost > 0.05 ? `recency ${recencyBoost.toFixed(2)}` : '',
+		storyAgeDecay > 0 ? `story age decay -${storyAgeDecay.toFixed(2)} (${turnDistance} turns)` : '',
 		ageDecay > 0 ? `age decay -${ageDecay.toFixed(2)}` : '',
 		locationScore > 0 ? `same location ${request.locationId}` : '',
 		sceneEntities.length > 0 ? `scene entity ${sceneEntities.slice(0, 4).join(', ')}` : '',

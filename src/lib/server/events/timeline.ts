@@ -16,6 +16,12 @@ export type StoryEventInsert = typeof storyEvents.$inferInsert;
 export type NpcEventLinkRow = typeof npcEventLinks.$inferSelect;
 export type NpcEventLinkInsert = typeof npcEventLinks.$inferInsert;
 
+export interface AdvanceStoryTurnResult {
+	currentTurn: number;
+	serverVersion: number;
+	promotedEvents: StoryEventRow[];
+}
+
 export const DEFAULT_RECENT_LIMIT = 12;
 export const DEFAULT_SCHEDULED_LIMIT = 10;
 export const DEFAULT_DUE_LIMIT = 10;
@@ -47,6 +53,11 @@ const NPC_EVENT_LINK_SELECT = {
 function looksLikeNpcEntityId(entityId: string): boolean {
 	const clean = entityId.trim().toLowerCase();
 	return clean.startsWith('npc_') || clean.startsWith('character_') || clean.startsWith('char_');
+}
+
+function assertExpectedServerVersion(storyId: string, actual: number, expected?: number): void {
+	if (expected === undefined || expected === actual) return;
+	throw new Error(`Story version conflict for ${storyId}: expected ${expected}, found ${actual}.`);
 }
 
 export function selectDueTimelineEvents(events: StoryEventRow[], currentTurn: number): StoryEventRow[] {
@@ -413,9 +424,23 @@ export async function scheduleTimelineEvent(input: Parameters<typeof buildSchedu
 	targetNpcEntityIds?: string[];
 }): Promise<StoryEventRow> {
 	const db = getDb();
-	const eventInsert = buildScheduledTimelineEventInsert(input);
 
 	return db.transaction(async (tx) => {
+		const [story] = await tx
+			.select({ serverVersion: stories.serverVersion })
+			.from(stories)
+			.where(eq(stories.id, input.storyId))
+			.for('update')
+			.limit(1);
+		if (!story) throw new Error(`Story not found: ${input.storyId}`);
+		assertExpectedServerVersion(input.storyId, story.serverVersion, input.serverVersion);
+		const serverVersion = story.serverVersion + 1;
+		await tx.update(stories).set({
+			serverVersion,
+			updatedAt: input.now,
+		}).where(eq(stories.id, input.storyId));
+
+		const eventInsert = buildScheduledTimelineEventInsert({ ...input, serverVersion });
 		const [row] = await tx.insert(storyEvents).values(eventInsert).returning();
 		if (!row) throw new Error('Failed to schedule timeline event');
 
@@ -457,20 +482,41 @@ export async function promoteDueTimelineEvents(
 		.returning();
 }
 
-export async function advanceStoryTurn(storyId: string, delta = 1): Promise<number> {
-	const now = new Date().toISOString();
+export async function advanceStoryTurn(
+	storyId: string,
+	delta = 1,
+	options: { expectedServerVersion?: number; now?: string } = {},
+): Promise<AdvanceStoryTurnResult> {
+	const now = options.now ?? new Date().toISOString();
 	const step = Math.max(0, Math.floor(Number.isFinite(delta) ? delta : 1));
-	const [row] = await getDb()
-		.update(stories)
-		.set({
-			currentTurn: sql`${stories.currentTurn} + ${step}`,
-			updatedAt: now,
-		})
-		.where(eq(stories.id, storyId))
-		.returning({ currentTurn: stories.currentTurn });
+	return getDb().transaction(async (tx) => {
+		const [story] = await tx
+			.select({ currentTurn: stories.currentTurn, serverVersion: stories.serverVersion })
+			.from(stories)
+			.where(eq(stories.id, storyId))
+			.for('update')
+			.limit(1);
+		if (!story) throw new Error(`Story not found: ${storyId}`);
+		assertExpectedServerVersion(storyId, story.serverVersion, options.expectedServerVersion);
 
-	if (!row) throw new Error(`Story not found: ${storyId}`);
-	return row.currentTurn;
+		const currentTurn = story.currentTurn + step;
+		const serverVersion = story.serverVersion + 1;
+		await tx.update(stories).set({
+			currentTurn,
+			serverVersion,
+			updatedAt: now,
+		}).where(eq(stories.id, storyId));
+		const promotedEvents = await tx
+			.update(storyEvents)
+			.set(buildDueTimelineEventPromotionPatch(now, { serverVersion }))
+			.where(and(
+				eq(storyEvents.storyId, storyId),
+				eq(storyEvents.status, 'scheduled'),
+				sql`${storyEvents.scheduledTurn} <= ${currentTurn}`,
+			))
+			.returning();
+		return { currentTurn, serverVersion, promotedEvents };
+	});
 }
 
 function toBriefEvent(

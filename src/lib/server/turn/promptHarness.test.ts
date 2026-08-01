@@ -183,6 +183,80 @@ function failedLabels(findings: ReturnType<typeof evaluatePromptHarness>): strin
 }
 
 describe('turn prompt harness', () => {
+	it('injects only activated strategic plot pressure into terminal narration', () => {
+		const report = buildPromptHarnessReport({
+			name: 'strategic-plot-pressure',
+			playerText: 'I study the market crowd.',
+			ctx: baseContext({
+				story: row({
+					...baseContext().story,
+					metadata: {
+						plotBrain: {
+							lastFrame: {
+								arcNumber: 2,
+								publicSummary: 'Market pressure rises.',
+								narratorPromptCard: 'Show pressure through prices and behavior.',
+								plotCards: [
+									{ id: 'plot_market', title: 'The Empty Granary', logline: 'Merchants conceal grain.', lifecycleStage: 'simmer', urgency: 'emerging', pressure: 70, clueTrail: [{ clue: 'Matching seals appear.', truth: 'The guild coordinated it.' }] },
+									{ id: 'plot_dormant', title: 'Dormant Coup', logline: 'A coup waits.', lifecycleStage: 'simmer', urgency: 'simmer', pressure: 40 },
+								],
+								activationPlan: { activateNow: ['plot_market'], keepDormant: ['plot_dormant'] },
+							},
+						},
+					},
+				}),
+			}),
+		});
+
+		expect(report.prompt).toContain('Strategic World Pressure');
+		expect(report.prompt).toContain('The Empty Granary');
+		expect(report.prompt).not.toContain('Dormant Coup');
+		expect(report.prompt).not.toContain('The guild coordinated it.');
+	});
+
+	it('routes server narrator doctrine by story prompt pack id', () => {
+		const animeReport = buildPromptHarnessReport({
+			name: 'anime-pack-isolation',
+			playerText: 'I walk into the school courtyard.',
+			ctx: baseContext({
+				story: row({
+					...baseContext().story,
+					id: 'story_anime',
+					title: 'Rise Of the Aether Dragon',
+					description: 'A Kuoh Academy supernatural campaign.',
+					genre: 'Anime Power Fantasy',
+					settings: { promptPackId: 'anime-power-fantasy' },
+					headerPrompt: null,
+					metadata: {},
+				}),
+			}),
+		});
+		const asoiafReport = buildPromptHarnessReport({
+			name: 'feudal-pack-isolation',
+			playerText: 'I study the court before I speak.',
+			ctx: baseContext({
+				story: row({
+					...baseContext().story,
+					id: 'story_asoiaf',
+					genre: 'dark fantasy political intrigue',
+					settings: { promptPackId: 'feudal-dark-gritty-asoiaf' },
+					headerPrompt: null,
+					metadata: {},
+				}),
+			}),
+		});
+
+		expect(animeReport.system).toContain('Anime Power Fantasy');
+		expect(animeReport.system).toContain('Player agency is absolute');
+		expect(animeReport.system).toContain('universal praise, trust, forgiveness, attraction, or compliance');
+		expect(animeReport.system).not.toContain('LIVING FEUDAL GM DOCTRINE');
+		expect(animeReport.system).not.toContain('ASOIAF-level grimdark feudal sandbox');
+		expect(asoiafReport.system).toContain('Feudal Dark Gritty');
+		expect(asoiafReport.system).toContain('ASOIAF-inspired');
+		expect(asoiafReport.system).not.toContain('Core Narrative Framework');
+		expect(asoiafReport.system).not.toContain('Anime Power Fantasy Narrator');
+	});
+
 	it('tells state extraction to preserve unknown characters as reviewable references', () => {
 		const prompt = buildStateExtractionPrompt(
 			'I listen for the name whispered in the crowd.',
@@ -430,7 +504,7 @@ describe('turn prompt harness', () => {
 
 		expect(report.prompt).toContain('Player character:');
 		expect(report.prompt).toContain('- Name: Aurion Balaerys');
-		expect(report.prompt).toContain('- character: Aurion Balaerys');
+		expect(report.prompt).not.toContain('- character: Aurion Balaerys');
 		expect(report.prompt).not.toContain('- character: Vermillion Zhen Lian');
 	});
 
@@ -482,11 +556,11 @@ describe('turn prompt harness', () => {
 			name: 'long-campaign-continuity',
 			playerText: 'I ask Vaelar why everyone keeps circling back to the letter.',
 			ctx: baseContext({
-				recentEntries: Array.from({ length: 70 }, (_, index) => row({
+				recentEntries: Array.from({ length: 130 }, (_, index) => row({
 					id: `entry_${index}`,
 					storyId: 'story_balaerys',
 					type: index % 2 === 0 ? 'user_action' : 'narration',
-					content: `Conversation beat ${index}: the letter was discussed without repeating the discovery scene.`,
+					content: `Conversation beat ${index}: the letter was discussed without repeating the discovery scene. ${'court detail '.repeat(350)}`,
 					position: index,
 					parentId: index > 0 ? `entry_${index - 1}` : null,
 					branchId: null,
@@ -549,12 +623,40 @@ describe('turn prompt harness', () => {
 			},
 		});
 
-		expect(report.messages).toHaveLength(60);
+		expect(report.tokens.messages).toBeLessThanOrEqual(12_000);
+		expect(report.messages.length).toBeLessThan(130);
+		expect(report.messages[0]?.content).not.toContain('Conversation beat 0:');
+		expect(report.messages.at(-2)?.content).toContain('Conversation beat 128');
+		expect(report.messages.at(-1)?.content).toContain('Conversation beat 129');
+		expect(report.system).toContain('silently evaluate each present NPC');
 		expect(report.prompt).toContain('Saga memory');
 		expect(report.prompt).toContain('Arc memory');
 		expect(report.prompt).toContain('do not rediscover this as if new');
-		expect(report.prompt).not.toContain('Chapter memory');
-		expect(report.prompt).not.toContain(longChapterOutcome);
+		expect(report.prompt).toContain('Chapter memory');
+		expect(report.prompt).toContain('Chapter 3 outcome: Vaelar exposed the same purple-sealed letter once and only once');
+	});
+
+	it('keeps the newest user and assistant turn when that clipped pair exceeds the dialogue budget', () => {
+		const report = buildPromptHarnessReport({
+			name: 'oversized-latest-dialogue-turn',
+			playerText: 'Continue from the latest exchange.',
+			ctx: baseContext({
+				recentEntries: [
+					row({ id: 'entry_old', storyId: 'story_balaerys', type: 'user_action', content: 'Old user turn.', position: 0, parentId: null, branchId: null, metadata: {} }),
+					row({ id: 'narration_old', storyId: 'story_balaerys', type: 'narration', content: 'Old narration.', position: 1, parentId: 'entry_old', branchId: null, metadata: {} }),
+					row({ id: 'entry_latest', storyId: 'story_balaerys', type: 'user_action', content: `Latest user sentinel ${'ꙮ'.repeat(2_000)}`, position: 2, parentId: 'narration_old', branchId: null, metadata: {} }),
+					row({ id: 'narration_latest', storyId: 'story_balaerys', type: 'narration', content: `Latest assistant sentinel ${'ꙮ'.repeat(7_000)}`, position: 3, parentId: 'entry_latest', branchId: null, metadata: {} }),
+				],
+			}),
+		});
+
+		expect(report.messages).toHaveLength(2);
+		expect(report.messages.map((message) => message.role)).toEqual(['user', 'assistant']);
+		expect(report.messages[0]?.content).toContain('Latest user sentinel');
+		expect(report.messages[1]?.content).toContain('Latest assistant sentinel');
+		expect(report.messages[0]?.content.length).toBeLessThanOrEqual(1000);
+		expect(report.messages[1]?.content.length).toBeLessThanOrEqual(6000);
+		expect(report.tokens.messages).toBeGreaterThan(12_000);
 	});
 
 	it('budgets uncovered chapter memory by size instead of always sending eight chapters', () => {
@@ -641,7 +743,7 @@ describe('turn prompt harness', () => {
 		expect(report.prompt).not.toContain('SOURCE COVERAGE');
 	});
 
-	it('uses arc summaries without expanding covered chapter summaries', () => {
+	it('keeps recent covered chapter detail beside the arc summary', () => {
 		const longOutcome = [
 			'Aurion reached Yin under heat, incense, trade-gold, and foreign perfume.',
 			'Ser Davos and Malyrio stayed watchful while the Copper Court pressed around them.',
@@ -708,9 +810,9 @@ describe('turn prompt harness', () => {
 		expect(report.prompt).toContain('Arc memory');
 		expect(report.prompt).toContain('summary: Aurion begins making a name in Yi Ti.');
 		expect(report.prompt).not.toContain('chapters:');
-		expect(report.prompt).not.toContain('Chapter 7: Arrival in Yin - Aurion reached Yin');
-		expect(report.prompt).not.toContain('Prompt arc sentinel: Aurion joked about poison');
-		expect(report.prompt).not.toContain('Chapter 8: Xanda at Dinner - Aurion met Xanda');
+		expect(report.prompt).toContain('Chapter 7: Arrival in Yin');
+		expect(report.prompt).toContain('Prompt arc sentinel: Aurion joked about poison');
+		expect(report.prompt).toContain('Chapter 8: Xanda at Dinner');
 	});
 
 	it('caps oversized arc summaries before adding them to the narration prompt', () => {
@@ -739,9 +841,10 @@ describe('turn prompt harness', () => {
 		expect(report.prompt).toContain('Arc opening fact survives.');
 		expect(report.prompt).not.toContain('Arc prompt tail sentinel');
 		expect(report.prompt).not.toContain('thread tail sentinel');
+		expect(report.prompt.split('\n').find((line) => line.includes('open threads:')) ?? '').not.toContain('...');
 	});
 
-	it('budgets rendered arc memory while still hiding chapters covered by older arcs', () => {
+	it('budgets rendered arc memory while retaining the newest covered chapter', () => {
 		const arcs = Array.from({ length: 9 }, (_, index) => row({
 			id: `arc_${index + 1}`,
 			storyId: 'story_balaerys',
@@ -784,7 +887,7 @@ describe('turn prompt harness', () => {
 		expect(report.prompt).not.toContain('Arc 1 summary sentinel.');
 		expect(report.prompt).not.toContain('Arc 5 summary sentinel.');
 		expect(report.prompt).toContain('Arc 9 summary sentinel.');
-		expect(report.prompt).not.toContain('Covered chapter sentinel should not render.');
+		expect(report.prompt).toContain('Covered chapter sentinel should not render.');
 	});
 
 	it('keeps the tail of long narration messages so continue prompts do not restart', () => {
@@ -1088,6 +1191,49 @@ describe('turn prompt harness', () => {
 		expect(report.prompt).toContain('pressure: the guard captain is searching for the ledger');
 	});
 
+	it('renders canonical character updates and uses isPresent for scene selection', () => {
+		const report = buildPromptHarnessReport({
+			name: 'canonical-character-update-card',
+			playerText: 'I keep listening without interrupting.',
+			ctx: baseContext({
+				recentEntries: [
+					row({
+						id: 'narration_mira_current',
+						storyId: 'story_balaerys',
+						type: 'narration',
+						content: 'Mira remains beside the ledger as the harbor guards gather outside.',
+						position: 20,
+						parentId: null,
+						branchId: null,
+						metadata: {},
+					}),
+				],
+				entities: [
+					entity('npc_mira', 'character', 'Mira', 'A harbor broker.', {
+						isPresent: true,
+						bio: 'Mira survived the harbor coup and now safeguards its evidence.',
+						background: 'stale legacy biography',
+						rank: 'guild factor',
+						currentDisposition: 'guarded but loyal',
+						relationship: { status: 'trusted ally', level: 42, history: [] },
+						motivations: ['protect the ledger witnesses'],
+						knownFacts: ['The guard captain financed the coup.'],
+					}),
+				],
+			}),
+			retrieved: packet('current harbor pressure', []),
+		});
+
+		expect(report.prompt).toContain('Character npc_mira / Mira');
+		expect(report.prompt).toContain('present in the current scene');
+		expect(report.prompt).toContain('rank: guild factor');
+		expect(report.prompt).toContain('disposition: guarded but loyal');
+		expect(report.prompt).toContain('protect the ledger witnesses');
+		expect(report.prompt).toContain('known fact: The guard captain financed the coup.');
+		expect(report.prompt).toContain('[bio]: A harbor broker.; Mira survived the harbor coup and now safeguards its evidence.');
+		expect(report.prompt).not.toContain('stale legacy biography');
+	});
+
 	it('keeps default character cards to the compact lore fields without alias clutter', () => {
 		const report = buildPromptHarnessReport({
 			name: 'character-card-aliases',
@@ -1214,6 +1360,54 @@ describe('turn prompt harness', () => {
 		});
 
 		expect(failedLabels(findings)).toEqual([]);
+	});
+
+	it('shares the belief budget fairly across present NPCs and excludes absent NPCs', () => {
+		const beliefs = [
+			...Array.from({ length: 8 }, (_, index) => row({
+				id: `belief_saera_${index}`,
+				storyId: 'story_balaerys',
+				believerEntityId: 'npc_saera',
+				subjectEntityId: null,
+				belief: `Saera belief ${index}.`,
+				confidence: 0.8,
+				visibility: 'secret',
+				evidenceEventIds: [],
+				sourceEntryIds: [],
+				sourceEventIds: [],
+				sourcePatchIds: [],
+				updatedAt: `2026-06-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+			})),
+			row({
+				id: 'belief_maera', storyId: 'story_balaerys', believerEntityId: 'npc_maera', subjectEntityId: null,
+				belief: 'Maera remembers the unopened gate.', confidence: 0.9, visibility: 'secret', evidenceEventIds: [],
+				sourceEntryIds: [], sourceEventIds: [], sourcePatchIds: [], updatedAt: '2026-07-01T00:00:00.000Z',
+			}),
+			row({
+				id: 'belief_absent', storyId: 'story_balaerys', believerEntityId: 'npc_absent', subjectEntityId: null,
+				belief: 'Absent NPC secret must not leak.', confidence: 1, visibility: 'secret', evidenceEventIds: [],
+				sourceEntryIds: [], sourceEventIds: [], sourcePatchIds: [], updatedAt: '2026-07-02T00:00:00.000Z',
+			}),
+		];
+		const report = buildPromptHarnessReport({
+			name: 'fair-belief-selection',
+			playerText: 'I ask what they know.',
+			ctx: baseContext({
+				entities: [
+					entity('loc_crimson_spire', 'location', 'The Crimson Spire', 'The current room.', { current: true }),
+					entity('pc_balaerys', 'character', 'Balaerys Heir', 'The player.', { present: true }),
+					entity('npc_saera', 'character', 'Lady Saera', 'A watcher.', { present: true }),
+					entity('npc_maera', 'character', 'Lady Maera', 'A witness.', { present: true }),
+					entity('npc_absent', 'character', 'Absent NPC', 'Elsewhere.', { present: false }),
+				],
+				beliefs,
+			}),
+			options: { sceneEntityIds: ['pc_balaerys', 'npc_saera', 'npc_maera'] },
+		});
+
+		expect(report.prompt).toContain('Maera remembers the unopened gate.');
+		expect(report.prompt).toContain('Saera belief 7.');
+		expect(report.prompt).not.toContain('Absent NPC secret must not leak.');
 	});
 
 	it('keeps continuity repair artifacts out of the narration prompt', () => {
@@ -1728,11 +1922,14 @@ describe('turn prompt harness', () => {
 			ctx: baseContext({
 				story: row({
 					id: 'story_balaerys',
+					shelfId: 'shelf_default',
 					clientStoryId: null,
 					title: 'Rise of the Crimson Spire',
 					description: 'A Volantene political fantasy rooted in House Balaerys.',
 					genre: 'political fantasy',
 					mode: 'adventure',
+					role: 'playable',
+					timelineMode: 'overlay',
 					settings: null,
 					headerPrompt: 'The story starts in 296 AC on the protagonist nameday, the 15th day of the 8th moon.',
 					currentTurn: 1065,

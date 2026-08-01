@@ -782,18 +782,18 @@
 {#if editingChapter}
 	<div class="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
 		<button class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick={closeChapterEditor} aria-label="Close chapter editor"></button>
-		<div class="relative z-10 flex max-h-[88vh] w-full max-w-2xl flex-col rounded-t-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] shadow-2xl sm:rounded-2xl">
+		<div class="relative z-10 flex max-h-[88dvh] w-full max-w-2xl flex-col rounded-t-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] pb-[env(safe-area-inset-bottom)] shadow-2xl sm:rounded-2xl sm:pb-0">
 			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-5 py-4">
 				<div>
 					<div class="font-mono text-[10px] uppercase tracking-wider text-[var(--text-accent)]">Chapter {editingChapter.number}</div>
 					<h3 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Edit Chapter Memory</h3>
 				</div>
-				<button onclick={closeChapterEditor} class="rounded-lg p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" title="Close">
+				<button onclick={closeChapterEditor} class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-8 sm:w-8" title="Close" aria-label="Close chapter editor">
 					<X class="h-4 w-4" />
 				</button>
 			</div>
 
-			<div class="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+			<div class="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
 				<div class="space-y-1.5">
 					<label for="chapter-title" class="text-xs text-[var(--text-muted)]">Title</label>
 					<input id="chapter-title" bind:value={chapterTitleDraft} class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none" />
@@ -838,8 +838,8 @@
 			</div>
 
 			<div class="flex gap-3 border-t border-[var(--border-primary)] px-5 py-4">
-				<button onclick={closeChapterEditor} class="flex-1 rounded-lg border border-[var(--border-primary)] py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">Cancel</button>
-				<button onclick={saveChapterEdit} disabled={savingEdit || !chapterSummaryDraft.trim()} class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] py-2 font-display text-xs font-semibold tracking-wide text-[var(--bg-primary)] disabled:opacity-50">
+				<button onclick={closeChapterEditor} class="min-h-11 flex-1 rounded-lg border border-[var(--border-primary)] py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">Cancel</button>
+				<button onclick={saveChapterEdit} disabled={savingEdit || !chapterSummaryDraft.trim()} class="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] py-2 font-display text-xs font-semibold tracking-wide text-[var(--bg-primary)] disabled:opacity-50">
 					{#if savingEdit}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Save class="h-3.5 w-3.5" />{/if}
 					Save Chapter
 				</button>
@@ -851,18 +851,18 @@
 {#if editingArc}
 	<div class="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
 		<button class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick={closeArcEditor} aria-label="Close arc editor"></button>
-		<div class="relative z-10 flex max-h-[88vh] w-full max-w-2xl flex-col rounded-t-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] shadow-2xl sm:rounded-2xl">
+		<div class="relative z-10 flex max-h-[88dvh] w-full max-w-2xl flex-col rounded-t-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] pb-[env(safe-area-inset-bottom)] shadow-2xl sm:rounded-2xl sm:pb-0">
 			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-5 py-4">
 				<div>
 					<div class="font-mono text-[10px] uppercase tracking-wider text-[var(--text-accent)]">Arc {editingArc.arcNumber}</div>
 					<h3 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Edit Arc Memory</h3>
 				</div>
-				<button onclick={closeArcEditor} class="rounded-lg p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" title="Close">
+				<button onclick={closeArcEditor} class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-8 sm:w-8" title="Close" aria-label="Close arc editor">
 					<X class="h-4 w-4" />
 				</button>
 			</div>
 
-			<div class="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+			<div class="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
 				<div class="space-y-1.5">
 					<label for="arc-title" class="text-xs text-[var(--text-muted)]">Title</label>
 					<input id="arc-title" bind:value={arcTitleDraft} class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none" />
@@ -895,8 +895,8 @@
 			</div>
 
 			<div class="flex gap-3 border-t border-[var(--border-primary)] px-5 py-4">
-				<button onclick={closeArcEditor} class="flex-1 rounded-lg border border-[var(--border-primary)] py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">Cancel</button>
-				<button onclick={saveArcEdit} disabled={savingEdit || !arcSummaryDraft.trim()} class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] py-2 font-display text-xs font-semibold tracking-wide text-[var(--bg-primary)] disabled:opacity-50">
+				<button onclick={closeArcEditor} class="min-h-11 flex-1 rounded-lg border border-[var(--border-primary)] py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">Cancel</button>
+				<button onclick={saveArcEdit} disabled={savingEdit || !arcSummaryDraft.trim()} class="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] py-2 font-display text-xs font-semibold tracking-wide text-[var(--bg-primary)] disabled:opacity-50">
 					{#if savingEdit}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Save class="h-3.5 w-3.5" />{/if}
 					Save Arc
 				</button>

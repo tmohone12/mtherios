@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { npcEventLinks, stories, storyEvents } from '$lib/server/db/schema';
 import {
+	advanceStoryTurn,
 	buildDueTimelineEventPromotionPatch,
 	buildGmTimelineBrief,
 	buildNpcEventLinksForEvent,
@@ -121,6 +122,7 @@ function createSelectChain(rows: unknown[]) {
 		from: vi.fn(() => chain),
 		innerJoin: vi.fn(() => chain),
 		where: vi.fn((_condition: unknown) => chain),
+		for: vi.fn(() => chain),
 		orderBy: vi.fn((..._expressions: unknown[]) => chain),
 		limit: vi.fn(() => Promise.resolve(rows)),
 	};
@@ -364,6 +366,11 @@ describe('timeline selection helpers', () => {
 			sourcePatchIds: ['patch_1'],
 			serverVersion: 3,
 		});
+		const storySelect = createSelectChain([{ serverVersion: 2 }]);
+		const txSelect = vi.fn(() => storySelect);
+		const storyUpdateWhere = vi.fn().mockResolvedValue(undefined);
+		const storyUpdateSet = vi.fn(() => ({ where: storyUpdateWhere }));
+		const txUpdate = vi.fn(() => ({ set: storyUpdateSet }));
 		const eventReturning = vi.fn().mockResolvedValue([row]);
 		const eventValues = vi.fn(() => ({ returning: eventReturning }));
 		const linkOnConflictDoNothing = vi.fn().mockResolvedValue(undefined);
@@ -371,8 +378,11 @@ describe('timeline selection helpers', () => {
 		const txInsert = vi.fn()
 			.mockReturnValueOnce({ values: eventValues })
 			.mockReturnValueOnce({ values: linkValues });
-		const transaction = vi.fn(async (callback: (tx: { insert: typeof txInsert }) => Promise<TestStoryEvent>) =>
-			callback({ insert: txInsert }));
+		const transaction = vi.fn(async (callback: (tx: {
+			select: typeof txSelect;
+			update: typeof txUpdate;
+			insert: typeof txInsert;
+		}) => Promise<TestStoryEvent>) => callback({ select: txSelect, update: txUpdate, insert: txInsert }));
 		const dbInsert = vi.fn();
 		dbMocks.getDb.mockReturnValue({ transaction, insert: dbInsert });
 
@@ -387,17 +397,21 @@ describe('timeline selection helpers', () => {
 			actorEntityIds: ['npc_mira', 'faction_river_guard'],
 			targetEntityIds: ['npc_borin', 'location_gatehouse'],
 			actorNpcEntityIds: ['npc_anya'],
+			serverVersion: 2,
 		});
 
 		expect(result).toBe(row);
 		expect(transaction).toHaveBeenCalledTimes(1);
 		expect(dbInsert).not.toHaveBeenCalled();
+		expect(storySelect.for).toHaveBeenCalledWith('update');
+		expect(storyUpdateSet).toHaveBeenCalledWith({ serverVersion: 3, updatedAt: now });
 		expect(txInsert).toHaveBeenCalledTimes(2);
 		expect(eventValues).toHaveBeenCalledWith(expect.objectContaining({
 			storyId: 'story_1',
 			status: 'scheduled',
 			title: 'Gatehouse pressure',
 			scheduledTurn: 7,
+			serverVersion: 3,
 		}));
 		expect(linkValues).toHaveBeenCalledWith([
 			expect.objectContaining({
@@ -424,6 +438,56 @@ describe('timeline selection helpers', () => {
 			}),
 		]);
 		expect(linkOnConflictDoNothing).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects a stale schedule version before changing story or event rows', async () => {
+		const storySelect = createSelectChain([{ serverVersion: 5 }]);
+		const txUpdate = vi.fn();
+		const txInsert = vi.fn();
+		const transaction = vi.fn(async (callback) => callback({
+			select: vi.fn(() => storySelect),
+			update: txUpdate,
+			insert: txInsert,
+		}));
+		dbMocks.getDb.mockReturnValue({ transaction });
+
+		await expect(scheduleTimelineEvent({
+			storyId: 'story_1',
+			type: 'scheme',
+			title: 'Stale pressure',
+			body: 'This write should not happen.',
+			currentTurn: 5,
+			delayTurns: 0,
+			now,
+			serverVersion: 4,
+		})).rejects.toThrow('Story version conflict for story_1: expected 4, found 5.');
+		expect(txUpdate).not.toHaveBeenCalled();
+		expect(txInsert).not.toHaveBeenCalled();
+	});
+
+	it('advances the clock and promotes due events with one server-owned version transactionally', async () => {
+		const promoted = [event({ id: 'due_scheduled', status: 'due', scheduledTurn: 7, serverVersion: 8 })];
+		const storySelect = createSelectChain([{ currentTurn: 5, serverVersion: 7 }]);
+		const storyWhere = vi.fn().mockResolvedValue(undefined);
+		const storySet = vi.fn(() => ({ where: storyWhere }));
+		const eventReturning = vi.fn().mockResolvedValue(promoted);
+		const eventWhere = vi.fn(() => ({ returning: eventReturning }));
+		const eventSet = vi.fn(() => ({ where: eventWhere }));
+		const txUpdate = vi.fn((table: unknown) => ({ set: table === stories ? storySet : eventSet }));
+		const transaction = vi.fn(async (callback) => callback({
+			select: vi.fn(() => storySelect),
+			update: txUpdate,
+		}));
+		dbMocks.getDb.mockReturnValue({ transaction });
+
+		const result = await advanceStoryTurn('story_1', 2, { expectedServerVersion: 7, now });
+
+		expect(result).toEqual({ currentTurn: 7, serverVersion: 8, promotedEvents: promoted });
+		expect(transaction).toHaveBeenCalledTimes(1);
+		expect(storySelect.for).toHaveBeenCalledWith('update');
+		expect(storySet).toHaveBeenCalledWith({ currentTurn: 7, serverVersion: 8, updatedAt: now });
+		expect(eventSet).toHaveBeenCalledWith({ status: 'due', serverVersion: 8, updatedAt: now });
+		expect(eventReturning).toHaveBeenCalledTimes(1);
 	});
 
 	it('builds a due promotion patch without mutating occurred turn', () => {

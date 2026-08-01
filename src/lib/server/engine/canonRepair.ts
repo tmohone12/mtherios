@@ -1064,6 +1064,98 @@ export async function reviewPatchProposal(input: {
 	};
 }
 
+export async function applyChapterScribeCharacterContextProposals(input: {
+	storyId: string;
+	proposalIds: string[];
+	reviewer?: string | null;
+	notes?: string | null;
+}): Promise<JsonRecord> {
+	const proposalIds = unique(input.proposalIds.map((id) => id.trim()));
+	if (proposalIds.length === 0) {
+		return { storyId: input.storyId, serverVersion: null, proposalIds: [], appliedCount: 0, affectedEntityIds: [] };
+	}
+
+	const db = getDb();
+	const now = nowIso();
+	const reviewer = input.reviewer?.trim() || 'chapter_scribe';
+	const result = await db.transaction(async (tx) => {
+		const rows = await tx.select().from(patchProposals).where(and(
+			eq(patchProposals.storyId, input.storyId),
+			inArray(patchProposals.id, proposalIds),
+			eq(patchProposals.proposalType, 'character_context_update'),
+			eq(patchProposals.proposedBy, 'chapter_scribe'),
+			inArray(patchProposals.status, ['pending', 'needs_review']),
+		)).for('update');
+		const proposals = rows.filter((proposal) => (
+			proposal.storyId === input.storyId
+			&& proposalIds.includes(proposal.id)
+			&& proposal.proposalType === 'character_context_update'
+			&& proposal.proposedBy === 'chapter_scribe'
+			&& (proposal.status === 'pending' || proposal.status === 'needs_review')
+			&& asRecord(proposal.metadata).sourceType === 'chapter_character_context'
+		));
+		if (proposals.length === 0) {
+			return { serverVersion: null, proposalIds: [], applications: [], appliedCount: 0, affectedEntityIds: [] };
+		}
+
+		const serverVersion = await bumpStoryVersionTx(tx, input.storyId);
+		const applications: JsonRecord[] = [];
+		const affectedEntityIds: string[] = [];
+		let appliedCount = 0;
+		for (const proposal of proposals) {
+			const application = await applyCharacterContextUpdateProposal(tx, {
+				storyId: input.storyId,
+				proposal,
+				serverVersion,
+				now,
+			});
+			const nextStatus = application.appliedCount > 0 ? 'applied' : 'approved';
+			const proposalAffectedEntityIds = unique([...(proposal.affectedEntityIds ?? []), ...application.affectedEntityIds]);
+			const metadata = {
+				...asRecord(proposal.metadata),
+				reviewNotes: input.notes ?? null,
+				reviewedAt: now,
+				reviewedBy: reviewer,
+				appliedOperations: application.appliedOperations,
+				...asRecord(application.metadata),
+			};
+			await tx.update(patchProposals).set({
+				status: nextStatus,
+				decision: 'approved',
+				validatedBy: reviewer,
+				affectedEntityIds: proposalAffectedEntityIds,
+				metadata,
+				serverVersion,
+				updatedAt: now,
+			}).where(and(
+				eq(patchProposals.storyId, input.storyId),
+				eq(patchProposals.id, proposal.id),
+				inArray(patchProposals.status, ['pending', 'needs_review']),
+			));
+			appliedCount += application.appliedCount;
+			affectedEntityIds.push(...application.affectedEntityIds);
+			applications.push({
+				proposalId: proposal.id,
+				status: nextStatus,
+				decision: 'approved',
+				application,
+			});
+		}
+
+		return {
+			serverVersion,
+			proposalIds: proposals.map((proposal) => proposal.id),
+			applications,
+			appliedCount,
+			affectedEntityIds: unique(affectedEntityIds),
+		};
+	});
+	if (result.serverVersion != null && result.affectedEntityIds.length > 0) {
+		await queueCanonRepairRefresh(input.storyId, result.serverVersion, result.affectedEntityIds);
+	}
+	return { storyId: input.storyId, ...result };
+}
+
 async function deleteSourceRefIds(tx: Tx, storyId: string, ids: string[]): Promise<void> {
 	for (let index = 0; index < ids.length; index += 500) {
 		const batch = ids.slice(index, index + 500);

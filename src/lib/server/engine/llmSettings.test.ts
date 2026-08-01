@@ -23,8 +23,8 @@ function setting(): LlmServiceSetting {
 }
 
 describe('LLM settings patches', () => {
-	it('uses classification provider defaults for small brain', () => {
-		expect(serviceDefaultKey('smallBrain')).toBe('classification');
+	it.each(['smallBrain', 'characterUpdate'])('uses classification provider defaults for %s', (serviceId) => {
+		expect(serviceDefaultKey(serviceId)).toBe('classification');
 	});
 
 	it('changes the model without clearing the existing provider settings', () => {

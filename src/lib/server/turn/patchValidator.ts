@@ -76,20 +76,28 @@ function characterEventMemoryPatch(value: unknown): Record<string, string[]> | u
 
 function buildCharacterStatePatch(character: WorldStateUpdate['characters'][number]): Record<string, unknown> {
 	const eventMemory = characterEventMemoryPatch(character.eventMemory);
+	const aliases = nonEmptyList(character.aliases);
+	const isPresent = typeof character.present === 'boolean' ? character.present : undefined;
+	const currentDisposition = stringValue(character.relationship);
+	const motivations = nonEmptyList(character.goals);
+	const bio = stringValue(character.background);
 	return Object.fromEntries(Object.entries({
-		aliases: nonEmptyList(character.aliases),
+		aliases,
 		status: character.status,
-		relationship: stringValue(character.relationship),
+		currentDisposition,
 		traits: nonEmptyList(character.traits),
-		present: typeof character.present === 'boolean' ? character.present : undefined,
+		isPresent,
+		present: isPresent,
 		pressures: nonEmptyList(character.pressures),
 		factionTags: nonEmptyList(character.faction_tags),
 		currentLocation: stringValue(character.currentLocation ?? character.current_location),
 		currentAction: stringValue(character.currentAction ?? character.current_action),
 		emotionalState: stringValue(character.emotionalState ?? character.emotional_state),
 		appearance: stringValue(character.appearance),
-		background: stringValue(character.background),
-		goals: nonEmptyList(character.goals),
+		bio,
+		background: bio,
+		motivations,
+		goals: motivations,
 		speechStyle: stringValue(character.speechStyle ?? character.speech_style),
 		eventMemory,
 	}).filter(([, value]) => value !== undefined));
@@ -97,15 +105,26 @@ function buildCharacterStatePatch(character: WorldStateUpdate['characters'][numb
 
 function mergeEntityState(existing: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
 	const next = { ...existing, ...patch };
+	const currentDisposition = stringValue(patch.currentDisposition);
+	if (currentDisposition) {
+		const relationship = recordValue(existing.relationship);
+		next.relationship = {
+			...relationship,
+			level: typeof relationship.level === 'number' ? relationship.level : 0,
+			status: currentDisposition,
+			history: Array.isArray(relationship.history) ? relationship.history : [],
+		};
+	}
 	const eventMemory = characterEventMemoryPatch(patch.eventMemory);
-	if (!eventMemory) return next;
-	const previous = recordValue(existing.eventMemory ?? existing.npcEventMemory);
-	next.eventMemory = Object.fromEntries(
-		['did', 'saw', 'knew', 'knows'].map((key) => [
-			key,
-			sourceIds(...stringList(previous[key]), ...stringList(eventMemory[key])).slice(-12),
-		]),
-	);
+	if (eventMemory) {
+		const previous = recordValue(existing.eventMemory ?? existing.npcEventMemory);
+		next.eventMemory = Object.fromEntries(
+			['did', 'saw', 'knew', 'knows'].map((key) => [
+				key,
+				sourceIds(...stringList(previous[key]), ...stringList(eventMemory[key])).slice(-12),
+			]),
+		);
+	}
 	return next;
 }
 
@@ -593,12 +612,32 @@ export function turnUpdateOperationCount(update: WorldStateUpdate): number {
 	return makeOperations(update).length;
 }
 
-function advanceWorldTime(currentWorldTime: string | null, timeDelta: string | null | undefined): string | null {
-	const delta = typeof timeDelta === 'string' ? timeDelta.trim() : '';
-	if (!delta) return currentWorldTime;
-	if (!currentWorldTime) return delta;
-	if (currentWorldTime === delta) return currentWorldTime;
-	return `${currentWorldTime}; ${delta}`;
+function parseNarrationSceneAnchor(narration: string): { currentWorldTime: string | null; location: string | null } | null {
+	const firstLine = narration.split(/\r?\n/).map(line => line.trim()).find(Boolean);
+	if (!firstLine?.startsWith('[')) return null;
+	const closingBracket = firstLine.lastIndexOf(']');
+	if (closingBracket < 0) return null;
+	const fields = firstLine.slice(1, closingBracket).split('|');
+	if (fields.length < 4) return null;
+	const field = (label: RegExp) => fields.find(part => label.test(part))
+		?.replace(label, '')
+		.replace(/^\s*[-,:]?\s*/, '')
+		.trim() ?? '';
+	const time = field(/^[\s\S]*?\bTime\b/i);
+	const day = field(/^[\s\S]*?\b(?:Day|Date)\b/i);
+	const rawLocation = field(/^[\s\S]*?\bLocation\b/i);
+	const unknown = new Set([
+		'unknown', 'time unknown', 'unknown time', 'day unknown', 'unknown day',
+		'date unknown', 'unknown date', 'location unknown', 'unknown location',
+		'n a', 'none', 'not established',
+	]);
+	const usable = (value: string) => value.length > 0
+		&& !unknown.has(value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim());
+	const currentWorldTime = usable(time) && usable(day)
+		? `Day ${day.replace(/^Day\s+/i, '')} | ${time}`
+		: null;
+	const location = usable(rawLocation) ? rawLocation : null;
+	return currentWorldTime || location ? { currentWorldTime, location } : null;
 }
 
 function timelineDefaults(input: {
@@ -657,6 +696,7 @@ export interface ApplyTurnUpdateResult {
 
 export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Promise<ApplyTurnUpdateResult> {
 	const db = getDb();
+	const narrationAnchor = parseNarrationSceneAnchor(input.narration);
 	const createdAt = nowIso();
 	const eventIds: string[] = [];
 	const memoryNodeIds: string[] = [];
@@ -680,7 +720,11 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 
 		const currentTurn = story.currentTurn ?? 0;
 		const currentWorldTime = story.currentWorldTime ?? null;
-		const nextWorldTime = advanceWorldTime(currentWorldTime, input.update.time_delta);
+		const nextWorldTime = narrationAnchor?.currentWorldTime
+			?? currentWorldTime
+			?? stringValue(input.update.time_delta)?.slice(0, 240)
+			?? null;
+		const currentLocationId = story.currentLocationId ?? null;
 		const timelineTurn = Number.isFinite(input.timelineTurn ?? NaN)
 			? Math.max(0, Math.trunc(input.timelineTurn as number))
 			: currentTurn;
@@ -708,7 +752,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			}
 		};
 
-		if (!shouldPersistPatch && isSupplemental) return;
+		if (!shouldPersistPatch && isSupplemental && !narrationAnchor) return;
 
 		if (patchId) {
 			await tx.insert(statePatches).values({
@@ -839,13 +883,62 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			});
 		}
 
-		for (const location of input.update.locations) {
-			const entityId = await upsertEntity(tx, input.storyId, 'location', location.name, location.description, {
-				current: location.current,
+		let currentLocationIndex = -1;
+		let extractedCurrentLocationCount = 0;
+		for (const [index, location] of input.update.locations.entries()) {
+			if (location.current && location.name.trim()) {
+				currentLocationIndex = index;
+				extractedCurrentLocationCount += 1;
+			}
+		}
+		if (extractedCurrentLocationCount > 1) {
+			warnings.push(`Multiple current locations extracted; kept the last one (${input.update.locations[currentLocationIndex]?.name}).`);
+		}
+		if (currentLocationIndex < 0 && narrationAnchor?.location) {
+			for (const [index, location] of input.update.locations.entries()) {
+				if (normalizeName(location.name) === normalizeName(narrationAnchor.location)) currentLocationIndex = index;
+			}
+		}
+
+		const hasSelectedLocation = currentLocationIndex >= 0 || Boolean(narrationAnchor?.location);
+		let nextCurrentLocationId = currentLocationId;
+		for (const [index, location] of input.update.locations.entries()) {
+			const locationState = {
+				...(hasSelectedLocation ? { current: index === currentLocationIndex } : {}),
 				region: location.region,
 				connections: location.connections,
+			};
+			const entityId = await upsertEntity(tx, input.storyId, 'location', location.name, location.description, {
+				...locationState,
 			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0);
-			if (entityId) affectedEntityIds.push(entityId);
+			if (entityId) {
+				affectedEntityIds.push(entityId);
+				if (index === currentLocationIndex) nextCurrentLocationId = entityId;
+			}
+		}
+		if (currentLocationIndex < 0 && narrationAnchor?.location) {
+			const entityId = await upsertEntity(tx, input.storyId, 'location', narrationAnchor.location, null, {
+				current: true,
+			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0);
+			if (entityId) {
+				affectedEntityIds.push(entityId);
+				nextCurrentLocationId = entityId;
+			}
+		}
+		if (nextCurrentLocationId !== currentLocationId || currentLocationIndex >= 0 || narrationAnchor?.location) {
+			const locationRows = await tx.select().from(entities)
+				.where(and(eq(entities.storyId, input.storyId), eq(entities.type, 'location')))
+				.limit(1000);
+			// ponytail: 1000 locations is a practical story ceiling; remove the limit if a campaign reaches it.
+			for (const row of locationRows) {
+				const state = recordValue(row.state);
+				if (row.id === nextCurrentLocationId || state.current !== true) continue;
+				await tx.update(entities).set({
+					state: { ...state, current: false },
+					serverVersion: input.serverVersion,
+					updatedAt: createdAt,
+				}).where(and(eq(entities.storyId, input.storyId), eq(entities.id, row.id)));
+			}
 		}
 
 		for (const item of input.update.items) {
@@ -1753,12 +1846,14 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			await tx.update(stories).set({
 				currentTurn: currentTurn + 1,
 				currentWorldTime: nextWorldTime,
+				currentLocationId: nextCurrentLocationId,
 				serverVersion: input.serverVersion,
 				updatedAt: createdAt,
 			}).where(eq(stories.id, input.storyId));
-		} else if (input.update.time_delta) {
+		} else if (nextWorldTime !== currentWorldTime || nextCurrentLocationId !== currentLocationId) {
 			await tx.update(stories).set({
 				currentWorldTime: nextWorldTime,
+				currentLocationId: nextCurrentLocationId,
 				serverVersion: input.serverVersion,
 				updatedAt: createdAt,
 			}).where(eq(stories.id, input.storyId));
@@ -1776,6 +1871,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			memoryNodeIds,
 			patchIds,
 			serverVersion: input.serverVersion,
+			chapterDedupeKey: `chapter-summary-${input.assistantEntryId}`,
 			memorySettings: input.memorySettings,
 		});
 	} catch (error) {

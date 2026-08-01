@@ -1730,14 +1730,12 @@ describe('engine command envelope', () => {
 				serverVersion: 9,
 			},
 		}, {
-			advanceStoryTurn: async (storyId, delta) => {
-				calls.push(`advance:${storyId}:${delta}`);
-				return 22;
-			},
-			promoteDueTimelineEvents: async (storyId, currentTurn, options) => {
-				const version = options && typeof options === 'object' ? options.serverVersion : undefined;
-				calls.push(`promote:${storyId}:${currentTurn}:${version}`);
-				return [{
+			advanceStoryTurn: async (storyId, delta, options) => {
+				calls.push(`advance:${storyId}:${delta}:${options?.expectedServerVersion}`);
+				return {
+					currentTurn: 22,
+					serverVersion: 10,
+					promotedEvents: [{
 					id: 'event_marriage_alliance',
 					storyId,
 					type: 'alliance',
@@ -1759,10 +1757,11 @@ describe('engine command envelope', () => {
 					sourceEntryIds: [],
 					sourcePatchIds: [],
 					metadata: {},
-					serverVersion: 9,
+					serverVersion: 10,
 					createdAt: '2026-06-05T12:00:00.000Z',
 					updatedAt: '2026-06-05T12:00:00.000Z',
-				}];
+					}],
+				};
 			},
 			loadTimelineBrief: async (input) => {
 				calls.push(`brief:${input.storyId}:${input.currentTurn}:${input.presentNpcIds?.join(',')}`);
@@ -1793,12 +1792,12 @@ describe('engine command envelope', () => {
 
 		expect(result.status).toBe('succeeded');
 		expect(calls).toEqual([
-			'advance:story_alpha:2',
-			'promote:story_alpha:22:9',
+			'advance:story_alpha:2:9',
 			'brief:story_alpha:22:npc_mira',
 		]);
 		expect(result.result).toEqual(expect.objectContaining({
 			currentTurn: 22,
+			serverVersion: 10,
 			promotedEvents: [expect.objectContaining({ id: 'event_marriage_alliance' })],
 			brief: expect.objectContaining({ currentTurn: 22 }),
 		}));
@@ -2203,6 +2202,62 @@ describe('engine command envelope', () => {
 		});
 	});
 
+	it('routes strategic plot-brain planning through the shared command surface', async () => {
+		const calls: unknown[] = [];
+		const result = await executeEngineCommand({
+			command: 'plotBrain.plan',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_plot_brain',
+			args: {
+				trigger: 'manual',
+				execute: true,
+				currentTurn: 17,
+				currentWorldTime: 'Day 12, midnight',
+			},
+		}, {
+			runPlotBrainPlan: async (input) => {
+				calls.push(input);
+				return {
+					ok: true,
+					storyId: input.storyId,
+					executed: input.execute,
+					frameId: 'frame_1',
+					plotCardCount: 2,
+					threadCount: 2,
+					eventCount: 3,
+					proposalCount: 1,
+				};
+			},
+		});
+
+		expect(result.status).toBe('succeeded');
+		expect(result.result).toEqual(expect.objectContaining({
+			ok: true,
+			frameId: 'frame_1',
+			plotCardCount: 2,
+		}));
+		expect(result.projectionChanges).toEqual({
+			plotBrain: {
+				ok: true,
+				storyId: 'story_alpha',
+				frameId: 'frame_1',
+				plotCardCount: 2,
+				threadCount: 2,
+				eventCount: 3,
+				proposalCount: 1,
+				executed: true,
+			},
+		});
+		expect(calls).toEqual([{
+			storyId: 'story_alpha',
+			trigger: 'manual',
+			execute: true,
+			currentTurn: 17,
+			currentWorldTime: 'Day 12, midnight',
+			includeSecret: true,
+		}]);
+	});
+
 	it('routes story export and delete through the shared backend command surface', async () => {
 		const calls: string[] = [];
 		const exported = await executeEngineCommand({
@@ -2417,6 +2472,8 @@ describe('engine command envelope', () => {
 					description: 'A small beginning.',
 					genre: 'fantasy',
 					mode: 'adventure',
+					role: 'playable',
+					timelineMode: 'overlay',
 					clientStoryId: 'local_1',
 					startWorkflow: {
 						sourceMode: 'lorebook',
@@ -3018,6 +3075,29 @@ describe('engine command envelope', () => {
 				counts: { entries: 0 },
 			},
 		});
+	});
+
+	it('rejects seed imports without a first story using the UI contract wording', async () => {
+		const result = await executeEngineCommand({
+			command: 'database.seed.import',
+			storyId: '__app__',
+			clientCommandId: 'cmd_seed_import_no_story',
+			args: {
+				seed: {
+					version: 1,
+					shelf: { name: 'Source Shelf' },
+					rawSources: [{ id: 'notes', title: 'notes.md', sourceType: 'markdown_seed', content: 'source only' }],
+				},
+				options: { preserveIds: true, replaceExisting: false, syncWiki: false },
+			},
+		}, {
+			importWorldDatabaseBundle: async () => {
+				throw new Error('import should not run');
+			},
+		});
+
+		expect(result.status).toBe('failed');
+		expect(result.error).toBe('Seed import requires a first story. Add story.title to the seed.');
 	});
 
 	it('runs Google Agent Platform model discovery through engine commands', async () => {

@@ -48,6 +48,13 @@ export interface StrategicWorldBrainInput {
 	pov: POV;
 	tense: Tense;
 	timeTracker: TimeTracker | null;
+	currentTurn?: number;
+	currentWorldTime?: string | null;
+	contextBudget?: number;
+	includeSecret?: boolean;
+	knownEntityIds?: string[];
+	knownFactionIds?: string[];
+	knownThreadIds?: string[];
 }
 
 function compact(value: string | null | undefined, max = 500): string {
@@ -127,7 +134,7 @@ function formatFaction(entry: Entry, characters: Entry[] = []): string {
 	const memberNames = resolveFactionMemberNames(state?.knownMembers ?? [], characters).slice(0, 8);
 	const unresolvedMemberNames = formatUnresolvedFactionMemberNames(state?.unresolvedKnownMembers ?? []);
 	return [
-		`- ${entry.name} [id:${entry.id.slice(0, 8)}]`,
+		`- ${entry.name} [id:${entry.id}]`,
 		`  Description: ${compact(entry.description, 260)}`,
 		`  Status: ${state?.status ?? 'unknown'}, player standing ${state?.playerStanding ?? 0}`,
 		disposition ? `  ${disposition}` : '',
@@ -165,7 +172,7 @@ function formatCharacter(entry: Entry): string {
 		: '';
 	const factionTags = state?.factionTags?.length ? `factions: ${state.factionTags.join(', ')}` : '';
 	return [
-		`- ${entry.name} [id:${entry.id.slice(0, 8)}]`,
+		`- ${entry.name} [id:${entry.id}]`,
 		`  Description: ${compact(state?.bio || entry.description, 260)}`,
 		state?.personality ? `  Personality: ${compact(state.personality, 180)}` : '',
 		state?.currentDisposition ? `  Disposition: ${state.currentDisposition}` : '',
@@ -187,7 +194,7 @@ function formatScheme(scheme: Scheme): string {
 		.map(stage => `${stage.index + 1}. ${stage.label}${stage.completed ? ' [done]' : ''}: ${compact(stage.hook, 120)}`)
 		.join(' | ');
 	return [
-		`- [id:${scheme.id.slice(0, 8)}] ${scheme.ownerName} (${scheme.ownerType}, ${scheme.status}, ${scheme.secrecy}, pressure ${scheme.pressure})`,
+		`- [id:${scheme.id}] ${scheme.ownerName} (${scheme.ownerType}, ${scheme.status}, ${scheme.secrecy}, pressure ${scheme.pressure})`,
 		`  Goal: ${compact(scheme.goal, 220)}`,
 		currentStage ? `  Current stage: ${currentStage.label} - ${compact(currentStage.hook, 180)}` : '',
 		stageLines ? `  Stages: ${stageLines}` : '',
@@ -195,7 +202,7 @@ function formatScheme(scheme: Scheme): string {
 }
 
 function formatThread(thread: StoryThread): string {
-	return `- [id:${thread.id.slice(0, 8)}] ${thread.status}/${thread.significance}: ${compact(thread.description, 220)}`;
+	return `- [id:${thread.id}] ${thread.status}/${thread.significance}: ${compact(thread.description, 220)}`;
 }
 
 function formatArc(arc: Arc): string {
@@ -232,6 +239,13 @@ function formatFactionAction(action: FactionActionRecord): string {
 	return `- ${action.factionName}: ${compact(action.action, 180)} (${action.actionType}, ${action.urgency})`;
 }
 
+function formatPreviousPlotCard(card: StrategicWorldFrame['plotCards'][number]): string {
+	const touchpoints = card.playerTouchpoints?.length
+		? ` Touchpoints: ${card.playerTouchpoints.slice(0, 3).join('; ')}`
+		: '';
+	return `- [id:${card.id}] ${card.title} [${card.lifecycleStage}/${card.urgency}/${card.visibility}/${card.pressure}]: ${compact(card.logline, 180)}${touchpoints}`;
+}
+
 export function buildStrategicWorldBrainSystemPrompt(): string {
 	return `You are the Strategic World Brain for a living-world fiction engine.
 
@@ -245,6 +259,11 @@ Your job:
 - read active schemes as executable plans
 - read faction goals as strategic intent
 - read story threads as plots and subplots
+- mine canon tensions into tensionSeeds
+- score plausible antagonistCandidates by motive, capacity, proximity, and agency risk
+- shape plotCards with goals, motives, methods, clue trails, pressure beats, and outcomes-if-ignored
+- choose an activationPlan for which plots surface now, remain dormant, or retire/merge
+- draft only existing-thread updates and hard-canon patch proposals; the server deterministically derives new threads and timeline events from activated plotCards
 - decide what factions and NPCs are trying to do over the next arc
 - create, update, stall, fork, expose, or retire schemes through directives
 - identify which plots and subplots should gain pressure
@@ -265,6 +284,10 @@ Rules:
 - Do not reveal secrets directly. The narrator card may mention hidden pressure only as conditional background.
 - Canon patch suggestions are proposals only; scheme directives are the executable planning layer.
 - factionOperations are the tactical contract for background faction movement. Every major faction with an active goal should get an operation when it can plausibly act without the player present.
+- Pressure, not rails: create friction, costs, rumors, clues, opportunities, NPC intentions, and consequences. Never force player action, emotion, travel, capture, confession, loyalty, or predetermined outcomes.
+- Return at most six plotCards. Activate at most three: one main plot, up to two subplots, and no more than one immediate card.
+- When story evidence exists, return at least one main plot and one subplot as plotCards, activate at least the main card, and link a canon-bound antagonist or opposing faction when one plausibly fits.
+- Every activated plotCard must cite at least one real source id from the supplied context.
 
 Use these exact JSON field names:
 - mainPlots and subplots, not plotUpdates.
@@ -272,6 +295,13 @@ Use these exact JSON field names:
 - For new schemes, use title, ownerName, goal, progressDelta, visibleEffects, hiddenEffects, nextMoves, reason, confidence.
 - factionOperations[] items must include factionName, operation, objective, actionType, urgency, visibility, timeHorizon, triggerConditions, stallConditions, visibleSignals, hiddenSteps, linkedClockIds, linkedSchemeIds, evidenceRefs, confidence.
 - warPressureCard is required when war, rebellion, invasion, siege, occupation, large raid campaigns, or military collapse are active or plausibly imminent.
+- tensionSeeds[] must include title, kind, involved ids, pressure, volatility, playerRelevance, canonConfidence, unresolvedQuestion, whyItMatters, and evidenceRefs.
+- antagonistCandidates[] must include name, role, motive, method, plausibilityScore, dramaticScore, agencyRisk, and evidenceRefs. Pick antagonists because they are dramatically plausible, not randomly villainous.
+- Prefer candidates bound to supplied actorEntityId or actorFactionId values. Every activated plotCard should link a canon-bound antagonist when one plausibly fits; leave invented candidates dormant and propose their canon separately.
+- plotCards[] must encode Actor wants Goal because Motive, but Obstacle prevents it, so Actor uses Method, leaving Clues, causing Consequence if ignored.
+- plotCards[].pressureBeats are scheduler intents only: they may reveal clues, rumors, prices, absences, NPC moves, or consequences, but must not force player choices.
+- activationPlan must use exact plot card ids to name cards to activateNow, keepDormant, or retireOrMerge. Empty activateNow means activate nothing.
+- plotBrainWritePlan.storyThreadCreates and timelineEvents must be empty because the server derives them from activated plotCards. Use storyThreadUpdates only for supplied thread ids and patchProposals only for reviewable hard-canon changes.
 - canonPatchSuggestions[] must include type, reason, confidence, and evidenceRefs.
 
 Output valid JSON for a StrategicWorldFrame.`;
@@ -281,13 +311,15 @@ export function buildStrategicWorldBrainUserPrompt(input: StrategicWorldBrainInp
 	const currentArc = input.currentArc;
 	const chapterRange = frameChapterRange(input);
 	const previousFrame = input.previousStrategicFrame;
-	return [
+	const prompt = [
 		`Story: ${input.story.title}`,
 		input.story.description ? `Description: ${compact(input.story.description, 700)}` : '',
 		`Mode: ${input.mode}; POV: ${input.pov}; tense: ${input.tense}`,
+		`Current turn: ${input.currentTurn ?? 0}`,
+		input.currentWorldTime ? `World time: ${input.currentWorldTime}` : '',
 		input.timeTracker ? `Time: year ${input.timeTracker.years}, day ${input.timeTracker.days}, ${input.timeTracker.hours}:${String(input.timeTracker.minutes).padStart(2, '0')}` : '',
 		`Trigger: ${input.trigger}`,
-		`Target arc number: ${currentArc?.arcNumber ?? Math.max(0, ...input.recentArcs.map(arc => arc.arcNumber))}`,
+		`Target arc number: ${currentArc?.arcNumber ?? Math.max(0, ...input.recentArcs.map(arc => arc.arcNumber)) + 1}`,
 		`Chapter range under review: ${chapterRange.from}-${chapterRange.to}`,
 		'',
 		'CURRENT ARC',
@@ -345,7 +377,8 @@ export function buildStrategicWorldBrainUserPrompt(input: StrategicWorldBrainInp
 			`Fast sim instructions: ${compact(previousFrame.fastWorldSimInstructions, 360)}`,
 			`Strategic clocks: ${previousFrame.strategicClocks.map(clock => `${clock.name} ${clock.progress}% ${clock.velocity}`).join('; ')}`,
 			`Forward operations: ${(previousFrame.factionOperations ?? []).slice(0, 8).map(op => `${op.factionName}: ${compact(op.operation, 120)} (${op.urgency}, ${op.timeHorizon})`).join('; ')}`,
-		].join('\n') : '',
+			previousFrame.plotCards?.length ? `Previous plot cards:\n${previousFrame.plotCards.slice(0, 8).map(formatPreviousPlotCard).join('\n')}` : '',
+		].filter(Boolean).join('\n') : '',
 		'',
 		'BUILD THE NEXT STRATEGIC WORLD FRAME',
 		'Faction goals define why a faction fights; schemes define how they try to win; story threads define how the war becomes player-facing plot; world events record what actually happened.',
@@ -358,4 +391,12 @@ export function buildStrategicWorldBrainUserPrompt(input: StrategicWorldBrainInp
 		'The narratorPromptCard and fastWorldSimInstructions are runtime-critical fields. Keep each under roughly 1200 words, preferably much less.',
 		'Use schemeDirectives for executable plan changes. Use canonPatchSuggestions only for hard-canon proposals backed by evidence.',
 	].filter(Boolean).join('\n');
+	const maxChars = input.contextBudget ? Math.max(8000, Math.floor(input.contextBudget)) : 0;
+	if (!maxChars || prompt.length <= maxChars) return prompt;
+	const marker = '\nBUILD THE NEXT STRATEGIC WORLD FRAME';
+	const tailAt = prompt.lastIndexOf(marker);
+	if (tailAt < 0) return `${prompt.slice(0, maxChars - 3).trimEnd()}...`;
+	const tail = prompt.slice(tailAt + 1);
+	const headBudget = Math.max(1000, maxChars - tail.length - 48);
+	return `${prompt.slice(0, headBudget).trimEnd()}\n\n[Context truncated to configured budget.]\n\n${tail}`;
 }

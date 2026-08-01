@@ -9,7 +9,7 @@ import {
 
 describe('memory settings helpers', () => {
 	it('keeps the shared terminal memory packet default explicit', () => {
-		expect(DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET).toBe(800);
+		expect(DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET).toBe(1200);
 	});
 
 	it('maps context slider positions to non-linear budget steps', () => {

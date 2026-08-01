@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { backendJobTypes, continuityAuditDedupeKey, shouldQueueTurnStoryVaultSync, turnStateExtractionDedupeKey } from './outbox';
+import { selectStoryMemory } from '$lib/services/ai/context/storyMemorySelector';
 import {
 	backendJobStatusEventData,
 	buildArcMemoryFields,
@@ -7,12 +8,17 @@ import {
 	buildEventMemoryNodeValues,
 	chapterCharacterContextPatch,
 	chapterCharacterContextProposalValues,
+	chapterCharacterNamesMatch,
+	chapterCharacterSummaryContextPatch,
+	chapterMemoryEntityIds,
 	buildChapterMemoryDigest,
 	buildChapterSummary,
 	chapterCharacterReferenceCandidates,
 	refreshChapterCharacterContextProposalValues,
+	replaceCharacterContextOperationState,
 	isSupersededJobFailure,
 	selectArcRollupBatches,
+	shouldAutoApplyChapterCharacterContext,
 	shouldProjectEventToMemory,
 	storyVaultFollowupVersion,
 	summarizeBackendJobs,
@@ -28,6 +34,7 @@ describe('turn state extraction jobs', () => {
 describe('continuity audit jobs', () => {
 	it('exposes a stable background job type and dedupe key', () => {
 		expect(backendJobTypes).toContain('continuity_audit');
+		expect(backendJobTypes).toContain('plan_plot_brain');
 		expect(continuityAuditDedupeKey({ assistantEntryId: 'entry_assistant' })).toBe('continuity-audit-entry_assistant');
 	});
 });
@@ -331,7 +338,7 @@ describe('deterministic arc summaries', () => {
 		]);
 	});
 
-	it('rolls chapter summaries into readable story memory instead of nested clipped checkpoints', () => {
+	it('rolls chapter summaries into a cohesive arc overview instead of a chapter list', () => {
 		const chapterSummary = buildChapterSummary([
 			{
 				id: 'entry_91',
@@ -371,10 +378,12 @@ describe('deterministic arc summaries', () => {
 			openThreads: ['thread_xanda_dinner'],
 		}] as any[]);
 
-		expect(summary).toContain('Chapter 7 (Dinner in Yin):');
+		expect(summary).toContain('Arc overview:');
 		expect(summary).toContain('Arc-summary sentinel: the dinner may become romance');
-		expect(summary).toContain('Characters:');
+		expect(summary).toContain('Character movement:');
 		expect(summary).toContain('Aurion [pc_aurion]');
+		expect(summary).toContain('Open threads:');
+		expect(summary).not.toMatch(/^Chapter \d+/);
 		expect(summary).not.toContain('[CHECKPOINT = Chapter checkpoint');
 		expect(summary).not.toContain('...');
 	});
@@ -472,9 +481,66 @@ describe('deterministic arc summaries', () => {
 
 		expect(summary).toContain('Arc-rollup opening fact survives.');
 		expect(summary).not.toContain('Arc-rollup tail sentinel');
+		expect(summary).not.toContain('...');
 		expect(fields.characterArcs[0]?.development).not.toContain('character tail sentinel');
 		expect(fields.unresolvedThreads.join(' ')).not.toContain('thread tail sentinel');
-		expect(summary.length).toBeLessThan(1400);
+		expect(summary.length).toBeLessThan(2600);
+	});
+
+	it('carries canonical chapter character tags into arc rollups', () => {
+		const firstChapterEntityIds = chapterMemoryEntityIds({
+			eventEntityIds: ['npc_event_actor'],
+			keyCharacters: ['Kiba Yuuto', 'Red Dragon Emperor'],
+			canonicalCharacters: [
+				{ id: 'npc_kiba', name: 'Yuuto Kiba', state: {}, metadata: {} },
+				{ id: 'npc_issei', name: 'Issei Hyoudou', state: { aliases: ['Red Dragon Emperor'] }, metadata: {} },
+				{ id: 'npc_rias', name: 'Rias Gremory', state: {}, metadata: {} },
+			] as any[],
+		});
+		const fields = buildArcMemoryFields([
+			{
+				number: 1,
+				title: 'First',
+				sceneOutcome: 'Kiba keeps watch.',
+				irreversibleChanges: [],
+				promisesDebtsOaths: [],
+				openThreads: [],
+				metadata: { trackedEntityIds: firstChapterEntityIds },
+			},
+			{
+				number: 2,
+				title: 'Second',
+				sceneOutcome: 'Rias takes command.',
+				irreversibleChanges: [],
+				promisesDebtsOaths: [],
+				openThreads: [],
+				metadata: { trackedEntityIds: ['npc_rias', 'npc_kiba'] },
+			},
+		] as any[]);
+
+		expect(firstChapterEntityIds).toEqual(['npc_event_actor', 'npc_kiba', 'npc_issei']);
+		expect(fields.trackedEntityIds).toEqual(['npc_event_actor', 'npc_kiba', 'npc_issei', 'npc_rias']);
+	});
+
+	it('selects story memory using current and legacy character metadata', () => {
+		const selected = selectStoryMemory([
+			{ id: 'chapter_legacy', number: 1, title: 'First', sceneOutcome: 'Old consequence.', metadata: { legacyCharacters: ['Akeno Himejima'] } },
+			{ id: 'chapter_current', number: 2, title: 'Second', sceneOutcome: 'New consequence.', metadata: { characters: ['Rias Gremory'] } },
+		], [
+			{ id: 'arc_tracked', number: 1, title: 'First Arc', summary: 'Long consequence.', metadata: { trackedEntityIds: ['npc_kiba'] } },
+		], {
+			query: 'Akeno Himejima Rias Gremory npc_kiba',
+			recentCount: 0,
+			relevantCount: 3,
+			resurfacedCount: 0,
+			tokenBudget: 800,
+		});
+
+		expect(selected.selectedIds).toEqual(expect.arrayContaining([
+			'chapter:chapter_legacy',
+			'chapter:chapter_current',
+			'arc:arc_tracked',
+		]));
 	});
 });
 
@@ -627,6 +693,35 @@ describe('chapter character reference candidates', () => {
 });
 
 describe('chapter character context patches', () => {
+	it('applies automatic character continuity on every second completed chapter', () => {
+		expect(shouldAutoApplyChapterCharacterContext(1)).toBe(false);
+		expect(shouldAutoApplyChapterCharacterContext(2)).toBe(true);
+		expect(shouldAutoApplyChapterCharacterContext(3)).toBe(false);
+		expect(shouldAutoApplyChapterCharacterContext(4)).toBe(true);
+	});
+
+	it('replaces only the audited character state operation before batch apply', () => {
+		const operations = replaceCharacterContextOperationState([
+			{ op: 'replace', path: '/characters/npc_xanda/state', value: { currentAction: 'old' } },
+			{ op: 'review', path: '/unrelated', value: { keep: true } },
+		], {
+			currentAction: 'kept deterministic action',
+			currentDisposition: 'new durable disposition',
+		});
+
+		expect(operations).toEqual([
+			{
+				op: 'replace',
+				path: '/characters/npc_xanda/state',
+				value: {
+					currentAction: 'kept deterministic action',
+					currentDisposition: 'new durable disposition',
+				},
+			},
+			{ op: 'review', path: '/unrelated', value: { keep: true } },
+		]);
+	});
+
 	it('turns source events into reviewable current state without erasing old memory', () => {
 		const patch = chapterCharacterContextPatch({
 			entityId: 'npc_xanda',
@@ -664,6 +759,44 @@ describe('chapter character context patches', () => {
 			eventMemory: {
 				saw: ['Xanda watched Aurion enter the Copper Court.'],
 				did: ['relationship_shift: Xanda tests Aurion with honeyed locusts - Xanda laughs when Aurion eats despite the warning.'],
+			},
+		});
+	});
+
+	it('falls back to chapter character summaries when extracted events lack entity ids', () => {
+		expect(chapterCharacterNamesMatch('Yuuto Kiba', 'Kiba Yuuto')).toBe(true);
+		expect(chapterCharacterNamesMatch('Kaelion', 'Kaelion Primoris')).toBe(true);
+		const patch = chapterCharacterSummaryContextPatch({
+			entityName: 'Yuuto Kiba',
+			currentState: { eventMemory: { did: ['Chapter 18: guarded the church perimeter.'] } },
+			digest: {
+				title: 'The Rescue',
+				summary: [
+					'[CHARACTER STATE =',
+					'Kiba Yuuto [unknown_entity]: Fought in the rescue with a holy sword and kept watch over Kaelion.',
+					'Rias Gremory [unknown_entity]: Led the rescue against orders.',
+					']',
+				].join('\n'),
+				keywords: [],
+				keyCharacters: ['Kiba Yuuto', 'Rias Gremory'],
+				keyLocations: [],
+				plotThreads: [],
+				emotionalTone: 'aftermath',
+				source: 'llm',
+			},
+			chapterNumber: 19,
+			events: [{ id: 'event_unlinked', actorEntityIds: [], targetEntityIds: [] }] as any[],
+		});
+
+		expect(patch).toMatchObject({
+			sourceEventIds: ['event_unlinked'],
+			state: {
+				eventMemory: {
+					did: [
+						'Chapter 18: guarded the church perimeter.',
+						'Chapter 19: Fought in the rescue with a holy sword and kept watch over Kaelion.',
+					],
+				},
 			},
 		});
 	});
@@ -723,7 +856,10 @@ describe('chapter character context patches', () => {
 			chapterNumber: 8,
 			chapterTitle: 'After the Dinner',
 			patch: {
-				state: { currentAction: 'pressing Aurion after dinner' },
+				state: {
+					currentAction: 'pressing Aurion after dinner',
+					eventMemory: { did: ['pressed Aurion after dinner'] },
+				},
 				sourceEventIds: ['event_new'],
 				did: ['pressing Aurion after dinner'],
 				saw: [],
@@ -734,13 +870,32 @@ describe('chapter character context patches', () => {
 		});
 
 		const refreshed = refreshChapterCharacterContextProposalValues({
+			operations: [{
+				op: 'replace',
+				path: '/characters/npc_xanda/state',
+				value: {
+					currentAction: 'testing Aurion at dinner',
+					eventMemory: { did: ['tested Aurion at dinner'] },
+				},
+			}],
 			sourceEntryIds: ['entry_old'],
 			sourceEventIds: ['event_old'],
 			metadata: { firstChapterId: 'chapter_7', chapterId: 'chapter_7' },
 		}, values);
 
 		expect(refreshed).toMatchObject({
-			operations: values.operations,
+			operations: [{
+				op: 'replace',
+				path: '/characters/npc_xanda/state',
+				value: {
+					currentAction: 'pressing Aurion after dinner',
+					eventMemory: {
+						did: ['tested Aurion at dinner', 'pressed Aurion after dinner'],
+						saw: [],
+						knew: [],
+					},
+				},
+			}],
 			sourceEntryIds: ['entry_old', 'entry_new'],
 			sourceEventIds: ['event_old', 'event_new'],
 			metadata: {

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 	resolveServiceGeneration: vi.fn(),
 	generateServerTextWithMetrics: vi.fn(),
 	parseJsonFromGeneratedText: vi.fn(),
+	recordApiCallLog: vi.fn(),
 }));
 
 vi.mock('$lib/server/db/client', () => ({
@@ -21,12 +22,16 @@ vi.mock('./llmSettings', () => ({
 	resolveServiceGeneration: mocks.resolveServiceGeneration,
 }));
 
+vi.mock('./apiCallLogs', () => ({
+	recordApiCallLog: mocks.recordApiCallLog,
+}));
+
 vi.mock('$lib/server/turn/provider', () => ({
 	generateServerTextWithMetrics: mocks.generateServerTextWithMetrics,
 	parseJsonFromGeneratedText: mocks.parseJsonFromGeneratedText,
 }));
 
-import { draftCharacterUpdateFromStoryContext } from './characterDrafts';
+import { draftCharacterUpdateFromStoryContext, refineChapterCharacterUpdates } from './characterDrafts';
 
 function createDbMock() {
 	const insertCalls: Array<{ table: unknown; value: Record<string, unknown> }> = [];
@@ -158,6 +163,7 @@ function createDbMock() {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.bumpStoryVersion.mockResolvedValue(42);
+	mocks.recordApiCallLog.mockResolvedValue(null);
 	mocks.resolveServiceGeneration.mockResolvedValue({
 		setting: null,
 		profile: {
@@ -205,9 +211,10 @@ describe('draftCharacterUpdateFromStoryContext', () => {
 			recentLimit: 30,
 		});
 
-		const generationArgs = mocks.generateServerTextWithMetrics.mock.calls[0][0] as { prompt: string; responseFormat: string };
-		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(1, 'memory');
+		const generationArgs = mocks.generateServerTextWithMetrics.mock.calls[0][0] as { prompt: string; responseFormat: string; reasoningEffort: string };
+		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(1, 'characterUpdate');
 		expect(generationArgs.responseFormat).toBe('json_object');
+		expect(generationArgs.reasoningEffort).toBe('off');
 		expect(generationArgs.prompt).toContain('bio, appearance, personality, rank, currentDisposition, affinity, motivations, factionTags, knownFacts');
 		expect(generationArgs.prompt).toContain('Use motivations for goals.');
 		expect(generationArgs.prompt).not.toContain('personalOpinion');
@@ -286,5 +293,151 @@ describe('draftCharacterUpdateFromStoryContext', () => {
 		});
 		expect(insertCalls).toEqual([]);
 		expect(mocks.bumpStoryVersion).not.toHaveBeenCalled();
+	});
+});
+
+describe('refineChapterCharacterUpdates', () => {
+	it('uses one character-update call and only merges allowed fields for known ids', async () => {
+		mocks.generateServerTextWithMetrics.mockResolvedValueOnce({
+			text: JSON.stringify({
+				updates: [
+					{
+						entityId: 'npc_mira',
+						patch: {
+							currentDisposition: 'protective of the harbor witness',
+							motivations: ['keep the witness alive'],
+							knownFacts: ['the witness crossed the north quay'],
+							currentAction: 'invented replacement action',
+							eventMemory: { did: ['invented replacement memory'] },
+						},
+					},
+					{ entityId: 'npc_unknown', patch: { bio: 'must be rejected' } },
+				],
+			}),
+			model: 'character-model',
+			endpoint: 'mock',
+			durationMs: 1,
+			promptChars: 250,
+			responseChars: 150,
+			usage: { requestTokens: 20, responseTokens: 10, totalTokens: 30 },
+		});
+
+		const result = await refineChapterCharacterUpdates({
+			storyId: 'story_alpha',
+			chapterWindow: [7, 8],
+			chapterEvidence: [{
+				number: 8,
+				title: 'The North Quay',
+				summary: 'Mira barred the quay and chose to protect the harbor witness.',
+			}],
+			candidates: [{
+				entityId: 'npc_mira',
+				name: 'Mira',
+				state: {
+					currentAction: 'barred the north quay',
+					eventMemory: { did: ['Chapter 8: Mira barred the north quay.'], saw: [] },
+					knownFacts: ['Mira knew the market code.'],
+				},
+			}],
+		});
+
+		expect(mocks.resolveServiceGeneration).toHaveBeenCalledTimes(1);
+		expect(mocks.resolveServiceGeneration).toHaveBeenCalledWith('characterUpdate');
+		expect(mocks.generateServerTextWithMetrics).toHaveBeenCalledTimes(1);
+		expect(mocks.generateServerTextWithMetrics.mock.calls[0][0].prompt).toContain('The North Quay');
+		expect(mocks.generateServerTextWithMetrics.mock.calls[0][0].prompt).toContain('Mira barred the quay');
+		expect(result).toMatchObject({
+			status: 'generated',
+			effectiveServiceId: 'characterUpdate',
+			model: 'character-model',
+			updates: [{
+				entityId: 'npc_mira',
+				state: {
+					currentAction: 'barred the north quay',
+					currentDisposition: 'protective of the harbor witness',
+					motivations: ['keep the witness alive'],
+					knownFacts: ['Mira knew the market code.', 'the witness crossed the north quay'],
+					eventMemory: { did: ['Chapter 8: Mira barred the north quay.'], saw: [] },
+				},
+			}],
+		});
+		expect(result.updates[0].state).not.toHaveProperty('eventMemory.did.1');
+		expect(mocks.recordApiCallLog).toHaveBeenCalledWith(expect.objectContaining({
+			serviceId: 'characterUpdate',
+			operation: 'chapter.character_update',
+			status: 'success',
+			metadata: expect.objectContaining({ parseOutcome: 'parsed' }),
+		}));
+	});
+
+	it('honors an explicitly disabled character-update service without falling back', async () => {
+		mocks.resolveServiceGeneration.mockResolvedValueOnce({
+			setting: { serviceId: 'characterUpdate', enabled: false },
+			profile: null,
+			generation: {},
+			systemPromptOverride: null,
+			missingReason: 'Terminal LLM service "characterUpdate" is disabled.',
+		});
+
+		const result = await refineChapterCharacterUpdates({
+			storyId: 'story_alpha',
+			chapterWindow: [7, 8],
+			candidates: [{ entityId: 'npc_mira', name: 'Mira', state: {} }],
+		});
+
+		expect(result).toMatchObject({
+			status: 'skipped',
+			effectiveServiceId: 'characterUpdate',
+			reason: expect.stringContaining('disabled'),
+		});
+		expect(mocks.resolveServiceGeneration).toHaveBeenCalledTimes(1);
+		expect(mocks.generateServerTextWithMetrics).not.toHaveBeenCalled();
+	});
+
+	it('uses classifier only as a migration fallback when no new service row exists', async () => {
+		mocks.resolveServiceGeneration
+			.mockResolvedValueOnce({
+				setting: null,
+				profile: null,
+				generation: {},
+				systemPromptOverride: null,
+				missingReason: 'missing characterUpdate row',
+			})
+			.mockResolvedValueOnce({
+				setting: { serviceId: 'classifier', enabled: true },
+				profile: {
+					id: 'server-classifier',
+					name: 'Server classifier',
+					providerType: 'openrouter',
+					apiKey: 'test-key',
+					customModels: [],
+					fetchedModels: [],
+					reasoningModels: [],
+					hiddenModels: [],
+					favoriteModels: [],
+				},
+				generation: { model: 'legacy-model', temperature: 0.2, maxTokens: 1800 },
+				systemPromptOverride: null,
+				missingReason: null,
+			});
+		mocks.generateServerTextWithMetrics.mockResolvedValueOnce({
+			text: JSON.stringify({ updates: [] }),
+			model: 'legacy-model',
+			endpoint: 'mock',
+			durationMs: 1,
+			promptChars: 100,
+			responseChars: 14,
+			usage: { requestTokens: null, responseTokens: null, totalTokens: null },
+		});
+
+		const result = await refineChapterCharacterUpdates({
+			storyId: 'story_alpha',
+			chapterWindow: [7, 8],
+			candidates: [{ entityId: 'npc_mira', name: 'Mira', state: {} }],
+		});
+
+		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(1, 'characterUpdate');
+		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(2, 'classifier');
+		expect(result).toMatchObject({ status: 'generated', effectiveServiceId: 'classifier', updates: [] });
 	});
 });

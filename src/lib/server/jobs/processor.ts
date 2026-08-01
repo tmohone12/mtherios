@@ -12,7 +12,7 @@ import {
 import { getMtheriosAppConfig } from '$lib/server/app/config';
 import { getStoryVaultStatus, materializeStoryVault, writeStoryVaultLintReport, type StoryVaultStatus } from '$lib/server/wiki/storyVault';
 import { indexWiki, lintWiki } from '$lib/server/wiki/wikiCore';
-import { claimBackendJobs, enqueueBackendJob, enqueueStoryVaultSyncJob, markBackendJobComplete, markBackendJobFailed, type BackendJobType } from './outbox';
+import { claimBackendJobs, enqueueBackendJob, enqueueChapterSummaryJob, enqueuePlotBrainJob, enqueueStoryVaultSyncJob, markBackendJobComplete, markBackendJobFailed, type BackendJobType } from './outbox';
 import { indexCanonicalRecords } from '$lib/server/engine/canonicalSearch';
 import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
 import { publishEngineEvent } from '$lib/server/engine/events';
@@ -20,9 +20,18 @@ import { resolveServiceGeneration } from '$lib/server/engine/llmSettings';
 import { createTimingRecorder, type TimingEntry, type TimingRecorder } from '$lib/server/performance/timing';
 import { mapWithConcurrency, readGenerationConcurrency } from '$lib/server/performance/concurrency';
 import { buildTurnDebugSnapshot } from '$lib/server/turn/debugSnapshot';
-import { applyValidatedTurnUpdate, parseTurnUpdate, turnUpdateOperationCount } from '$lib/server/turn/patchValidator';
+import { applyValidatedTurnUpdate } from '$lib/server/turn/patchValidator';
 import { buildStateExtractionPrompt } from '$lib/server/turn/promptPacket';
-import { buildStateExtractionResponseSchema, shouldExtractDurableState } from '$lib/server/turn/orchestrator';
+import {
+	buildStateExtractionResponseSchema,
+	classifierGenerationMaxTokens,
+	DEFAULT_STATE_EXTRACTION_SYSTEM,
+	parseStateExtractionResult,
+	shouldExtractDurableState,
+	shouldUseLegacyClassifierFallback,
+} from '$lib/server/turn/orchestrator';
+import { applyChapterScribeCharacterContextProposals } from '$lib/server/engine/canonRepair';
+import { refineChapterCharacterUpdates } from '$lib/server/engine/characterDrafts';
 import { isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from '$lib/server/memory/entityResolver';
 import {
 	ServerGenerationError,
@@ -31,6 +40,7 @@ import {
 	type ServerGenerationResult,
 } from '$lib/server/turn/provider';
 import { buildMtheriosSummaryInstruction, extractMtheriosSummarySection, formatMtheriosMemorySummary, summarizeMtheriosMemoryForRollup, type MtheriosCharacterState } from '$lib/services/ai/context/mtheriosSummaryFormat';
+import { hasStrategicPlotContent } from '$lib/services/ai/sdk/schemas/strategicWorldBrain';
 
 type BackendJobRow = typeof backendJobs.$inferSelect;
 type ArcRow = typeof arcs.$inferSelect;
@@ -45,6 +55,9 @@ const ARC_ROLLUP_KEY_POINT_CHAR_LIMIT = 1200;
 const ARC_ROLLUP_CHARACTER_DEVELOPMENT_CHAR_LIMIT = 420;
 const ARC_ROLLUP_THREAD_CHAR_LIMIT = 240;
 const ARC_ROLLUP_THREAD_LIMIT = 20;
+const ARC_ROLLUP_OVERVIEW_CHAR_LIMIT = 1050;
+const ARC_ROLLUP_SUMMARY_ITEM_LIMIT = 3;
+const CHARACTER_CONTEXT_AUTO_APPLY_CHAPTER_INTERVAL = 2;
 
 export interface ChapterMemoryDigest {
 	title: string;
@@ -114,12 +127,12 @@ export function chapterCharacterContextProposalValues(input: {
 }
 
 export function refreshChapterCharacterContextProposalValues(
-	existingProposal: Pick<typeof patchProposals.$inferSelect, 'sourceEntryIds' | 'sourceEventIds' | 'metadata'>,
+	existingProposal: Pick<typeof patchProposals.$inferSelect, 'operations' | 'sourceEntryIds' | 'sourceEventIds' | 'metadata'>,
 	values: typeof patchProposals.$inferInsert,
 ): Partial<typeof patchProposals.$inferInsert> {
 	const metadata = asRecord(values.metadata);
 	return {
-		operations: values.operations,
+		operations: mergeChapterCharacterContextOperations(existingProposal.operations, values.operations),
 		reason: values.reason,
 		suggestion: values.suggestion,
 		affectedEntityIds: values.affectedEntityIds,
@@ -135,6 +148,64 @@ export function refreshChapterCharacterContextProposalValues(
 		serverVersion: values.serverVersion,
 		updatedAt: values.updatedAt,
 	};
+}
+
+function characterContextOperationState(operations: unknown): Record<string, unknown> | null {
+	if (!Array.isArray(operations)) return null;
+	for (const rawOperation of operations) {
+		const operation = asRecord(rawOperation);
+		if (operation.op !== 'replace' || !/^\/(?:characters|entities)\/[^/]+\/state$/.test(String(operation.path ?? ''))) continue;
+		const state = asRecord(operation.value);
+		if (Object.keys(state).length > 0) return state;
+	}
+	return null;
+}
+
+export function replaceCharacterContextOperationState(
+	operations: unknown,
+	state: Record<string, unknown>,
+): (typeof patchProposals.$inferInsert)['operations'] {
+	if (!Array.isArray(operations)) return [];
+	return operations.map((rawOperation) => {
+		const operation = asRecord(rawOperation);
+		return operation.op === 'replace' && /^\/(?:characters|entities)\/[^/]+\/state$/.test(String(operation.path ?? ''))
+			? { ...operation, value: state }
+			: rawOperation;
+	}) as (typeof patchProposals.$inferInsert)['operations'];
+}
+
+function mergeChapterCharacterContextOperations(
+	previous: unknown,
+	next: (typeof patchProposals.$inferInsert)['operations'],
+): (typeof patchProposals.$inferInsert)['operations'] {
+	const previousState = characterContextOperationState(previous);
+	const nextState = characterContextOperationState(next);
+	if (!previousState || !nextState || !Array.isArray(next)) return next;
+	const previousMemory = asRecord(previousState.eventMemory);
+	const nextMemory = asRecord(nextState.eventMemory);
+	const mergedState = {
+		...previousState,
+		...nextState,
+		eventMemory: {
+			...previousMemory,
+			...nextMemory,
+			did: mergeStringList(previousMemory.did, asStringArray(nextMemory.did)),
+			saw: mergeStringList(previousMemory.saw, asStringArray(nextMemory.saw)),
+			knew: mergeStringList(previousMemory.knew, asStringArray(nextMemory.knew)),
+		},
+	};
+	return next.map((rawOperation) => {
+		const operation = asRecord(rawOperation);
+		return operation.op === 'replace' && /^\/(?:characters|entities)\/[^/]+\/state$/.test(String(operation.path ?? ''))
+			? { ...operation, value: mergedState }
+			: rawOperation;
+	}) as (typeof patchProposals.$inferInsert)['operations'];
+}
+
+export function shouldAutoApplyChapterCharacterContext(chapterNumber: number): boolean {
+	return Number.isInteger(chapterNumber)
+		&& chapterNumber > 0
+		&& chapterNumber % CHARACTER_CONTEXT_AUTO_APPLY_CHAPTER_INTERVAL === 0;
 }
 
 export interface BackendJobTimingReport {
@@ -254,6 +325,18 @@ function snippet(value: string, max = 220): string {
 	return clean.length > max ? `${clean.slice(0, Math.max(0, max - 1)).trimEnd()}...` : clean;
 }
 
+function arcSummarySnippet(value: string, max: number): string {
+	const clean = compactWhitespace(value).replace(/\s*\.\.\.$/u, '');
+	if (clean.length <= max) return clean;
+	const slice = clean.slice(0, max).trimEnd();
+	const sentence = [...slice.matchAll(/[.!?]["')\]]?(?=\s|$)/g)].at(-1);
+	if (sentence && sentence.index !== undefined && sentence.index > max * 0.45) {
+		return slice.slice(0, sentence.index + sentence[0].length).trim();
+	}
+	const wordBreak = slice.lastIndexOf(' ');
+	return slice.slice(0, wordBreak > max * 0.45 ? wordBreak : max).replace(/[,:;("-]+$/u, '').trim();
+}
+
 export function backendJobStatusEventData(
 	job: Pick<BackendJobRow, 'id' | 'storyId' | 'type' | 'attemptCount' | 'maxAttempts'>,
 	status: BackendJobStatusEventStatus,
@@ -303,6 +386,21 @@ function stableId(prefix: string, parts: string[]): string {
 
 function normalizedCharacterReference(value: string): string {
 	return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+export function chapterCharacterNamesMatch(left: string, right: string): boolean {
+	const leftName = normalizedCharacterReference(left);
+	const rightName = normalizedCharacterReference(right);
+	if (!leftName || !rightName) return false;
+	if (leftName === rightName) return true;
+	const leftTokens = leftName.split(' ');
+	const rightTokens = rightName.split(' ');
+	if (leftTokens.length === rightTokens.length
+		&& [...leftTokens].sort().join(' ') === [...rightTokens].sort().join(' ')) return true;
+	const [shorter, longer] = leftTokens.length <= rightTokens.length
+		? [leftTokens, rightTokens]
+		: [rightTokens, leftTokens];
+	return shorter.length === 1 && shorter[0].length >= 4 && longer.includes(shorter[0]);
 }
 
 function characterReferenceMentioned(text: string, name: string): boolean {
@@ -1716,23 +1814,32 @@ async function createChapterCharacterContextUpdateProposals(input: {
 }): Promise<Record<string, unknown>> {
 	const db = getDb();
 	const ids = eventEntityIds(input.events);
-	if (!ids.length) return { candidates: 0, created: 0, skipped: 0 };
-
-	const rows = await db.select().from(entities).where(and(
+	const idSet = new Set(ids);
+	const activeCharacters = await db.select().from(entities).where(and(
 		eq(entities.storyId, input.storyId),
 		eq(entities.type, 'character'),
 		eq(entities.status, 'active'),
-		inArray(entities.id, ids),
-	)).limit(12);
+	)).limit(160);
+	const rows = activeCharacters.filter((entity) =>
+		idSet.has(entity.id) || Boolean(chapterCharacterSummaryForEntity(input.digest, entity))
+	).slice(0, 12);
 	let created = 0;
 	let updated = 0;
 	let skipped = 0;
 
 	for (const entity of rows) {
+		const currentState = asRecord(entity.state);
 		const patch = chapterCharacterContextPatch({
 			entityId: entity.id,
-			currentState: asRecord(entity.state),
+			currentState,
 			digest: input.digest,
+			events: input.events,
+		}) ?? chapterCharacterSummaryContextPatch({
+			entityName: entity.name,
+			aliases: entityCharacterNames(entity).slice(1),
+			currentState,
+			digest: input.digest,
+			chapterNumber: input.chapter.number,
 			events: input.events,
 		});
 		if (!patch) {
@@ -1755,6 +1862,7 @@ async function createChapterCharacterContextUpdateProposals(input: {
 			eq(patchProposals.storyId, input.storyId),
 			eq(patchProposals.proposalType, 'character_context_update'),
 			eq(patchProposals.targetRecordId, entity.id),
+			eq(patchProposals.proposedBy, 'chapter_scribe'),
 			inArray(patchProposals.status, ['pending', 'needs_review']),
 		)).limit(1);
 		if (existingProposal) {
@@ -1770,6 +1878,242 @@ async function createChapterCharacterContextUpdateProposals(input: {
 	}
 
 	return { candidates: rows.length, created, updated, skipped };
+}
+
+function storedChapterMemoryDigest(chapter: ChapterRow): ChapterMemoryDigest {
+	const metadata = asRecord(chapter.metadata);
+	return {
+		title: chapter.title ?? `Chapter ${chapter.number}`,
+		summary: chapter.sceneOutcome,
+		keywords: asStringArray(metadata.legacyKeywords),
+		keyCharacters: asStringArray(metadata.legacyCharacters),
+		keyLocations: asStringArray(metadata.legacyLocations),
+		plotThreads: asStringArray(chapter.openThreads),
+		emotionalTone: typeof metadata.emotionalTone === 'string' ? metadata.emotionalTone : 'continuity',
+		source: metadata.summarySource === 'llm' ? 'llm' : 'deterministic',
+		model: typeof metadata.summaryModel === 'string' ? metadata.summaryModel : undefined,
+	};
+}
+
+async function autoApplyChapterCharacterContextUpdates(input: {
+	storyId: string;
+	chapterNumber: number;
+}): Promise<Record<string, unknown>> {
+	const cadence = CHARACTER_CONTEXT_AUTO_APPLY_CHAPTER_INTERVAL;
+	if (!shouldAutoApplyChapterCharacterContext(input.chapterNumber)) {
+		return { applied: false, deferred: true, cadence };
+	}
+
+	const windowStart = Math.max(1, input.chapterNumber - cadence + 1);
+	const db = getDb();
+	const proposals = await db.select({
+		id: patchProposals.id,
+		targetRecordId: patchProposals.targetRecordId,
+		operations: patchProposals.operations,
+		metadata: patchProposals.metadata,
+	}).from(patchProposals).where(and(
+		eq(patchProposals.storyId, input.storyId),
+		eq(patchProposals.proposalType, 'character_context_update'),
+		eq(patchProposals.proposedBy, 'chapter_scribe'),
+		inArray(patchProposals.status, ['pending', 'needs_review']),
+	));
+	const eligibleProposals = proposals.filter((proposal) => {
+			const metadata = asRecord(proposal.metadata);
+			const chapterNumber = asNumber(metadata.chapterNumber, 0);
+			return metadata.sourceType === 'chapter_character_context'
+				&& chapterNumber >= windowStart
+				&& chapterNumber <= input.chapterNumber;
+		});
+	const proposalIds = eligibleProposals.map((proposal) => proposal.id);
+	let characterUpdate: Record<string, unknown> = {
+		status: 'skipped',
+		reason: proposalIds.length ? 'No valid character states were available.' : 'No pending character proposals.',
+		updatedCount: 0,
+	};
+	const candidates = eligibleProposals.flatMap((proposal) => {
+		const state = characterContextOperationState(proposal.operations);
+		if (!proposal.targetRecordId || !state) return [];
+		const metadata = asRecord(proposal.metadata);
+		return [{
+			entityId: proposal.targetRecordId,
+			name: typeof metadata.characterName === 'string' && metadata.characterName.trim()
+				? metadata.characterName.trim()
+				: proposal.targetRecordId,
+			state,
+		}];
+	});
+
+	if (candidates.length > 0) {
+		try {
+			const chapterRows = await db.select({
+				number: chapters.number,
+				title: chapters.title,
+				sceneOutcome: chapters.sceneOutcome,
+				irreversibleChanges: chapters.irreversibleChanges,
+				npcKnowledgeChanges: chapters.npcKnowledgeChanges,
+				relationshipChanges: chapters.relationshipChanges,
+				openThreads: chapters.openThreads,
+			}).from(chapters).where(and(
+				eq(chapters.storyId, input.storyId),
+				inArray(chapters.number, [windowStart, input.chapterNumber]),
+			)).orderBy(asc(chapters.number));
+			const refinement = await refineChapterCharacterUpdates({
+				storyId: input.storyId,
+				chapterWindow: [windowStart, input.chapterNumber],
+				chapterEvidence: chapterRows.map((chapter) => ({
+					number: chapter.number,
+					title: chapter.title ?? `Chapter ${chapter.number}`,
+					summary: [
+						chapter.sceneOutcome,
+						...chapter.irreversibleChanges,
+						...chapter.relationshipChanges,
+						...chapter.openThreads,
+						JSON.stringify(chapter.npcKnowledgeChanges),
+					].filter(Boolean).join('\n'),
+				})),
+				candidates,
+			});
+			const proposalsByEntityId = new Map(
+				eligibleProposals
+					.filter((proposal) => proposal.targetRecordId)
+					.map((proposal) => [proposal.targetRecordId as string, proposal]),
+			);
+			let updatedCount = 0;
+			for (const update of refinement.updates) {
+				const proposal = proposalsByEntityId.get(update.entityId);
+				if (!proposal) continue;
+				await db.update(patchProposals).set({
+					operations: replaceCharacterContextOperationState(proposal.operations, update.state),
+					metadata: {
+						...asRecord(proposal.metadata),
+						characterUpdateServiceId: refinement.effectiveServiceId,
+						characterUpdateModel: refinement.model,
+						characterUpdatePromptChars: refinement.promptChars,
+						characterUpdatedAt: nowIso(),
+					},
+					updatedAt: nowIso(),
+				}).where(and(
+					eq(patchProposals.storyId, input.storyId),
+					eq(patchProposals.id, proposal.id),
+					inArray(patchProposals.status, ['pending', 'needs_review']),
+				));
+				updatedCount += 1;
+			}
+			characterUpdate = {
+				status: refinement.status,
+				reason: refinement.reason,
+				requestedServiceId: refinement.requestedServiceId,
+				effectiveServiceId: refinement.effectiveServiceId,
+				model: refinement.model,
+				candidateCount: candidates.length,
+				updatedCount,
+			};
+		} catch (error) {
+			console.warn('[jobs] character update refinement failed; applying deterministic chapter evidence:', error);
+			characterUpdate = {
+				status: 'failed_fallback',
+				reason: error instanceof Error ? error.message : String(error),
+				candidateCount: candidates.length,
+				updatedCount: 0,
+			};
+		}
+	}
+
+	const result = await applyChapterScribeCharacterContextProposals({
+		storyId: input.storyId,
+		proposalIds,
+		reviewer: 'chapter_scribe_auto',
+		notes: `Automatic character continuity refresh after chapters ${windowStart}-${input.chapterNumber}.`,
+	});
+	return {
+		deferred: false,
+		cadence,
+		chapterWindow: [windowStart, input.chapterNumber],
+		proposalCount: proposalIds.length,
+		characterUpdate,
+		...result,
+		applied: asNumber(result.appliedCount, 0) > 0,
+	};
+}
+
+function chapterCharacterStateBlocks(summary: string): Array<{ name: string; summary: string }> {
+	const section = extractMtheriosSummarySection(summary, 'CHARACTER STATE');
+	const identified = [...section.matchAll(/^([^\n:]+?)\s+\[[^\]\n]+\]:\s*([\s\S]*?)(?=^[^\n:]+?\s+\[[^\]\n]+\]:|(?![\s\S]))/gmu)]
+		.map((match) => ({ name: match[1].trim(), summary: compactWhitespace(match[2]) }))
+		.filter((block) => block.name && block.summary);
+	if (identified.length > 0) return identified;
+	return section.split(/\n\s*\n/)
+		.map((block) => block.trim())
+		.map((block) => {
+			const separator = block.indexOf(':');
+			if (separator < 1) return null;
+			const name = block.slice(0, separator).replace(/\s+\[[^\]]+\]\s*$/u, '').trim();
+			const characterSummary = compactWhitespace(block.slice(separator + 1));
+			return name && characterSummary ? { name, summary: characterSummary } : null;
+		})
+		.filter((block): block is { name: string; summary: string } => Boolean(block));
+}
+
+function entityCharacterNames(entity: typeof entities.$inferSelect): string[] {
+	const state = asRecord(entity.state);
+	const metadata = asRecord(entity.metadata);
+	return uniqueStrings([
+		entity.name,
+		...asStringArray(state.aliases),
+		...asStringArray(metadata.aliases),
+	]);
+}
+
+export function chapterMemoryEntityIds(input: {
+	eventEntityIds: string[];
+	keyCharacters: string[];
+	canonicalCharacters: Array<typeof entities.$inferSelect>;
+}): string[] {
+	return uniqueStrings([
+		...input.eventEntityIds,
+		...input.canonicalCharacters
+			.filter((entity) => input.keyCharacters.some((character) =>
+				entityCharacterNames(entity).some((name) => chapterCharacterNamesMatch(name, character))))
+			.map((entity) => entity.id),
+	]);
+}
+
+function chapterCharacterSummaryForEntity(
+	digest: ChapterMemoryDigest,
+	entity: typeof entities.$inferSelect,
+): string | null {
+	const names = entityCharacterNames(entity);
+	const block = chapterCharacterStateBlocks(digest.summary)
+		.find((candidate) => names.some((name) => chapterCharacterNamesMatch(name, candidate.name)));
+	return block?.summary ?? null;
+}
+
+export function chapterCharacterSummaryContextPatch(input: {
+	entityName: string;
+	aliases?: string[];
+	currentState: Record<string, unknown>;
+	digest: ChapterMemoryDigest;
+	chapterNumber: number;
+	events: StoryEventRow[];
+}): ChapterCharacterContextPatch | null {
+	const names = uniqueStrings([input.entityName, ...(input.aliases ?? [])]);
+	const characterSummary = chapterCharacterStateBlocks(input.digest.summary)
+		.find((candidate) => names.some((name) => chapterCharacterNamesMatch(name, candidate.name)))?.summary;
+	if (!characterSummary) return null;
+	const memory = asRecord(input.currentState.eventMemory ?? input.currentState.npcEventMemory);
+	const chapterMemory = snippet(`Chapter ${input.chapterNumber}: ${characterSummary}`, 360);
+	return {
+		state: {
+			...input.currentState,
+			eventMemory: {
+				...memory,
+				did: mergeStringList(memory.did, [chapterMemory]),
+			},
+		},
+		sourceEventIds: uniqueStrings(input.events.map((event) => event.id)),
+		did: [chapterMemory],
+		saw: [],
+	};
 }
 
 async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
@@ -1803,7 +2147,7 @@ async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingReco
 	}, () => loadEventsForEntries(job.storyId, sourceEntryIds));
 	const sourceEventIds = events.map((event) => event.id);
 	const threadIds = uniqueStrings(events.flatMap((event) => asStringArray(event.threadIds)));
-	const entityIds = eventEntityIds(events);
+	const eventIds = eventEntityIds(events);
 	const number = (previousChapter?.number ?? 0) + 1;
 	const chapterId = stableId('chapter', [first.id, last.id]);
 	const fallbackDigest = timePhaseSync(recorder, 'job.summarize_chapter.build_summary', {
@@ -1815,6 +2159,17 @@ async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingReco
 		events: events.length,
 	}, () => summarizeChapterMemoryWithLlm(chapterEntries, events, fallbackDigest));
 	const { title, summary } = digest;
+	const canonicalCharacters = await timePhase(recorder, 'job.summarize_chapter.resolve_character_tags', {
+		keyCharacters: digest.keyCharacters.length,
+	}, () => getDb().select().from(entities).where(and(
+		eq(entities.storyId, job.storyId),
+		eq(entities.type, 'character'),
+	)));
+	const entityIds = chapterMemoryEntityIds({
+		eventEntityIds: eventIds,
+		keyCharacters: digest.keyCharacters,
+		canonicalCharacters,
+	});
 	const now = nowIso();
 	const serverVersion = await timePhase(recorder, 'job.summarize_chapter.bump_version', {}, () => bumpStoryVersion(job.storyId));
 	const irreversibleChanges = events
@@ -1922,6 +2277,24 @@ async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingReco
 		serverVersion,
 		now,
 	}));
+	const previousCharacterContextUpdates = previousChapter
+		&& previousChapter.number === number - 1
+		&& shouldAutoApplyChapterCharacterContext(number)
+		? await timePhase(recorder, 'job.summarize_chapter.previous_character_context_updates', {
+			chapterNumber: previousChapter.number,
+		}, async () => {
+			const previousEvents = await loadEventsForEntries(job.storyId, asStringArray(previousChapter.sourceEntryIds));
+			return createChapterCharacterContextUpdateProposals({
+				storyId: job.storyId,
+				chapter: previousChapter,
+				digest: storedChapterMemoryDigest(previousChapter),
+				events: previousEvents,
+				sourceEntryIds: asStringArray(previousChapter.sourceEntryIds),
+				serverVersion,
+				now,
+			});
+		})
+		: { candidates: 0, created: 0, updated: 0, skipped: 0, deferred: true };
 	const characterContextUpdates = await timePhase(recorder, 'job.summarize_chapter.character_context_updates', {
 		entityIds: entityIds.length,
 	}, () => createChapterCharacterContextUpdateProposals({
@@ -1954,6 +2327,13 @@ async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingReco
 		})(),
 		rollupArc(job, recorder),
 	]));
+	const automaticCharacterContextUpdates = await timePhase(recorder, 'job.summarize_chapter.auto_apply_character_context', {
+		chapterNumber: number,
+		cadence: CHARACTER_CONTEXT_AUTO_APPLY_CHAPTER_INTERVAL,
+	}, () => autoApplyChapterCharacterContextUpdates({
+		storyId: job.storyId,
+		chapterNumber: number,
+	}));
 	return {
 		created: true,
 		chapterId: chapter.id,
@@ -1961,7 +2341,9 @@ async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingReco
 		entryCount: chapterEntries.length,
 		eventCount: events.length,
 		characterReferences,
+		previousCharacterContextUpdates,
 		characterContextUpdates,
+		automaticCharacterContextUpdates,
 		factionPressure,
 		worldTick,
 		arc,
@@ -1982,6 +2364,7 @@ export interface ArcMemoryFields {
 	characterArcs: Array<{ name: string; development: string }>;
 	unresolvedThreads: string[];
 	emotionalProgression: string;
+	trackedEntityIds: string[];
 }
 
 function sectionLines(section: string): string[] {
@@ -2061,11 +2444,30 @@ export function buildArcMemoryFields(arcChapters: ArcSummaryChapter[]): ArcMemor
 		emotionalProgression: tones.length
 			? tones.join(' -> ')
 			: 'Carry forward the arc consequences, unresolved threads, and character pressure established by these chapters.',
+		trackedEntityIds: uniqueStrings(arcChapters.flatMap((chapter) =>
+			asStringArray(asRecord(chapter.metadata).trackedEntityIds))),
 	};
 }
 
 export function buildArcSummary(arcChapters: ArcSummaryChapter[]): string {
-	return buildArcMemoryFields(arcChapters).keyPlotPoints.join('\n\n');
+	const fields = buildArcMemoryFields(arcChapters);
+	const overview = fields.keyPlotPoints
+		.map((point) => point
+			.replace(/^Chapter\s+\d+(?:\s+\([^)]+\))?:\s*/i, '')
+			.replace(/^(?:Opening|Middle|Ending):\s*/i, ''))
+		.filter(Boolean)
+		.join(' ');
+	const sections = [
+		`Arc overview:\n${arcSummarySnippet(overview, ARC_ROLLUP_OVERVIEW_CHAR_LIMIT)}`,
+		fields.unresolvedThreads.length
+			? `Open threads:\n${fields.unresolvedThreads.slice(0, ARC_ROLLUP_SUMMARY_ITEM_LIMIT).map((thread) => `- ${arcSummarySnippet(thread, 160)}`).join('\n')}`
+			: '',
+		fields.characterArcs.length
+			? `Character movement:\n${fields.characterArcs.slice(0, ARC_ROLLUP_SUMMARY_ITEM_LIMIT).map((arc) => `- ${arc.name}: ${arcSummarySnippet(arc.development, 190)}`).join('\n')}`
+			: '',
+		fields.emotionalProgression ? `Tone to carry forward:\n${arcSummarySnippet(fields.emotionalProgression, 320)}` : '',
+	];
+	return sections.filter(Boolean).join('\n\n');
 }
 
 export function selectArcRollupBatches<T extends { id: string }>(
@@ -2088,6 +2490,7 @@ async function upsertArcMemoryNode(input: {
 	title: string;
 	summary: string;
 	chapterIds: string[];
+	entityIds: string[];
 	sourceEventIds: string[];
 	openThreadIds: string[];
 	serverVersion: number;
@@ -2102,7 +2505,7 @@ async function upsertArcMemoryNode(input: {
 		content: input.summary,
 		summary: input.summary,
 		keywords: ['arc', 'terminal_rollup'],
-		entityIds: [],
+		entityIds: input.entityIds,
 		factionIds: [],
 		threadIds: input.openThreadIds,
 		locationId: null,
@@ -2121,6 +2524,7 @@ async function upsertArcMemoryNode(input: {
 			title: input.title,
 			content: input.summary,
 			summary: input.summary,
+			entityIds: input.entityIds,
 			threadIds: input.openThreadIds,
 			sourceEventIds: input.sourceEventIds,
 			metadata: { sourceType: 'terminal_arc_job', jobId: input.jobId, chapterIds: input.chapterIds },
@@ -2176,6 +2580,7 @@ async function rollupArc(job: BackendJobRow, recorder?: TimingRecorder): Promise
 			characterArcs: fields.characterArcs,
 			unresolvedThreads: fields.unresolvedThreads,
 			emotionalProgression: fields.emotionalProgression,
+			trackedEntityIds: fields.trackedEntityIds,
 		};
 
 		const [arc] = await timePhase(recorder, 'job.rollup_arc.persist_arc', {
@@ -2214,6 +2619,7 @@ async function rollupArc(job: BackendJobRow, recorder?: TimingRecorder): Promise
 			title,
 			summary,
 			chapterIds,
+			entityIds: fields.trackedEntityIds,
 			sourceEventIds,
 			openThreadIds,
 			serverVersion,
@@ -2224,6 +2630,12 @@ async function rollupArc(job: BackendJobRow, recorder?: TimingRecorder): Promise
 	}
 
 	const firstArc = createdArcs[0];
+	const latestArc = createdArcs[createdArcs.length - 1];
+	const plotBrainJobId = await timePhase(recorder, 'job.rollup_arc.enqueue_plot_brain', {}, () => enqueuePlotBrainJob({
+		storyId: job.storyId,
+		trigger: 'arc_created',
+		scopeId: latestArc.arcId,
+	}));
 	return {
 		created: true,
 		arcId: firstArc.arcId,
@@ -2231,6 +2643,7 @@ async function rollupArc(job: BackendJobRow, recorder?: TimingRecorder): Promise
 		chapterCount: firstArc.chapterCount,
 		arcCount: createdArcs.length,
 		arcs: createdArcs,
+		plotBrainJobId,
 	};
 }
 
@@ -2355,11 +2768,26 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): 
 	const assistantEntryId = requirePayloadString(payload, 'assistantEntryId');
 	const playerText = requirePayloadString(payload, 'playerText');
 	const narration = requirePayloadString(payload, 'narration');
+	const memorySettingsPayload = asRecord(payload.memorySettings);
+	const memorySettings = {
+		chapterThreshold: asOptionalInt(memorySettingsPayload.chapterThreshold, 5, 200),
+		postChapterBuffer: asOptionalInt(memorySettingsPayload.postChapterBuffer, 0, 100),
+		chaptersPerArc: asOptionalInt(memorySettingsPayload.chaptersPerArc, 2, 50),
+	};
+	const chapterSummaryJobId = await timePhase(recorder, 'job.extract_turn_state.enqueue_chapter_summary', {
+		assistantEntryId,
+	}, () => enqueueChapterSummaryJob({
+		storyId: job.storyId,
+		serverVersion: asNumber(payload.serverVersion, 0),
+		dedupeKey: `chapter-summary-${assistantEntryId}`,
+		memorySettings,
+	}));
 	if (!shouldExtractDurableState(playerText, narration)) {
 		return {
 			status: 'no_changes',
 			operationCount: 0,
 			skipped: 'deterministic_no_durable_state',
+			chapterSummaryJobId,
 		};
 	}
 	const clientTurnId = typeof payload.clientTurnId === 'string' && payload.clientTurnId.trim()
@@ -2368,61 +2796,54 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): 
 	const timelineTurn = typeof payload.timelineTurn === 'number' && Number.isFinite(payload.timelineTurn)
 		? Math.max(0, Math.trunc(payload.timelineTurn))
 		: null;
-	const memorySettingsPayload = asRecord(payload.memorySettings);
-	const memorySettings = {
-		chapterThreshold: asOptionalInt(memorySettingsPayload.chapterThreshold, 5, 200),
-		postChapterBuffer: asOptionalInt(memorySettingsPayload.postChapterBuffer, 0, 100),
-		chaptersPerArc: asOptionalInt(memorySettingsPayload.chaptersPerArc, 2, 50),
-	};
 	const classifierService = await timePhase(recorder, 'job.extract_turn_state.resolve_service', {}, () => resolveServiceGeneration('classifier'));
-	const fallbackNarrativeService = classifierService.profile
-		? null
-		: await timePhase(recorder, 'job.extract_turn_state.resolve_narrative_fallback', {}, () => resolveServiceGeneration('narrative'));
+	if (classifierService.setting?.enabled === false) {
+		return {
+			status: 'classifier_disabled',
+			missingReason: classifierService.missingReason,
+			chapterSummaryJobId,
+		};
+	}
+	const useNarrativeFallback = shouldUseLegacyClassifierFallback(classifierService);
+	const fallbackNarrativeService = useNarrativeFallback
+		? await timePhase(recorder, 'job.extract_turn_state.resolve_narrative_fallback', {}, () => resolveServiceGeneration('narrative'))
+		: null;
 	const classifierProfile = classifierService.profile ?? fallbackNarrativeService?.profile ?? null;
 	if (!classifierProfile) {
-		return {
-			status: 'classifier_unavailable',
-			missingReason: classifierService.missingReason ?? fallbackNarrativeService?.missingReason ?? null,
-		};
+		throw new Error(classifierService.missingReason
+			?? fallbackNarrativeService?.missingReason
+			?? 'Classifier service is unavailable.');
 	}
 
 	const generationService = classifierService.profile ? classifierService : fallbackNarrativeService ?? classifierService;
 	const classifierGeneration = generationService.generation;
-	const classifierSystem = generationService.systemPromptOverride?.trim() || 'You extract canonical state changes for a text adventure. Return strict JSON only.';
+	const classifierMaxTokens = classifierGenerationMaxTokens(classifierGeneration);
+	const classifierSystem = classifierService.systemPromptOverride?.trim() || DEFAULT_STATE_EXTRACTION_SYSTEM;
 	const extractionPrompt = buildStateExtractionPrompt(playerText, narration);
-	let rawUpdate: unknown = null;
+	const effectiveServiceId = classifierService.profile ? 'classifier' : 'narrative';
+	const logMetadata = {
+		configuredServiceId: 'classifier',
+		effectiveServiceId,
+		legacyNarrativeFallback: useNarrativeFallback,
+		maxOutputTokens: classifierMaxTokens,
+		responseFormat: 'json_schema',
+		responseSchemaName: 'mtherios_state_patch',
+	};
+	let extractionResult: ServerGenerationResult;
 	try {
-		const extractionResult = await timePhase(recorder, 'job.extract_turn_state.llm', {
+		extractionResult = await timePhase(recorder, 'job.extract_turn_state.llm', {
 			serviceId: 'classifier',
+			effectiveServiceId,
 			model: classifierGeneration.model ?? null,
 		}, () => generateServerTextWithMetrics({
 			profile: classifierProfile,
 			model: classifierGeneration.model,
 			temperature: classifierGeneration.temperature,
-			maxTokens: Math.min(classifierGeneration.maxTokens ?? 2048, 2048),
+			maxTokens: classifierMaxTokens,
 			system: classifierSystem,
 			prompt: extractionPrompt,
 			responseSchema: buildStateExtractionResponseSchema(),
 		}));
-		await timePhase(recorder, 'job.extract_turn_state.log_success', {}, () => logDeferredStateExtractionCall({
-			job,
-			clientTurnId,
-			profile: classifierProfile,
-			result: extractionResult,
-			status: 'success',
-			metadata: {
-				responseFormat: 'json_schema',
-				responseSchemaName: 'mtherios_state_patch',
-				debugSnapshot: buildTurnDebugSnapshot({
-					kind: 'state_extraction',
-					playerText,
-					system: classifierSystem,
-					prompt: extractionPrompt,
-					output: extractionResult.text,
-				}),
-			},
-		}));
-		rawUpdate = parseJsonFromGeneratedText(extractionResult.text);
 	} catch (error) {
 		const failedResult = generationErrorResult(error);
 		if (failedResult) {
@@ -2436,8 +2857,10 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): 
 				status: 'error',
 				error,
 				metadata: {
-					responseFormat: 'json_schema',
-					responseSchemaName: 'mtherios_state_patch',
+					...logMetadata,
+					parseOutcome: 'not_started',
+					applyOutcome: 'not_started',
+					reasoningTokens: failedResult.usage?.reasoningTokens ?? null,
 					statusCode: failedResult.statusCode ?? null,
 					debugSnapshot: buildTurnDebugSnapshot({
 						kind: 'state_extraction',
@@ -2448,54 +2871,122 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): 
 				},
 			}));
 		}
-		return {
-			status: 'llm_error',
-			error: error instanceof Error ? error.message : String(error),
-			statusCode: failedResult?.statusCode ?? null,
-		};
+		throw error;
 	}
 
-	const parsedUpdate = timePhaseSync(recorder, 'job.extract_turn_state.parse_update', {}, () => parseTurnUpdate(rawUpdate));
-	const operationCount = turnUpdateOperationCount(parsedUpdate.update);
-	if (operationCount === 0 && parsedUpdate.warnings.length === 0) {
+	let parsedUpdate: ReturnType<typeof parseStateExtractionResult> | null = null;
+	let applyStarted = false;
+	try {
+		parsedUpdate = timePhaseSync(recorder, 'job.extract_turn_state.parse_update', {}, () => parseStateExtractionResult(extractionResult.text));
+		if (parsedUpdate.operationCount === 0) {
+			await timePhase(recorder, 'job.extract_turn_state.log_success', {}, () => logDeferredStateExtractionCall({
+				job,
+				clientTurnId,
+				profile: classifierProfile,
+				result: extractionResult,
+				status: 'success',
+				metadata: {
+					...logMetadata,
+					parseOutcome: 'valid',
+					applyOutcome: 'no_changes',
+					operationCount: 0,
+					finishReason: extractionResult.finishReason ?? null,
+					reasoningTokens: extractionResult.usage.reasoningTokens ?? null,
+					debugSnapshot: buildTurnDebugSnapshot({
+						kind: 'state_extraction',
+						playerText,
+						system: classifierSystem,
+						prompt: extractionPrompt,
+						output: extractionResult.text,
+					}),
+				},
+			}));
+			return { status: 'no_changes', operationCount: 0, chapterSummaryJobId };
+		}
+
+		applyStarted = true;
+		const serverVersion = await timePhase(recorder, 'job.extract_turn_state.bump_version', {
+			operationCount: parsedUpdate.operationCount,
+		}, () => bumpStoryVersion(job.storyId));
+		const applied = await timePhase(recorder, 'job.extract_turn_state.apply_update', {
+			operationCount: parsedUpdate.operationCount,
+			serverVersion,
+		}, () => applyValidatedTurnUpdate({
+			storyId: job.storyId,
+			playerEntryId,
+			assistantEntryId,
+			narration,
+			update: parsedUpdate!.update,
+			parseWarnings: parsedUpdate!.warnings,
+			retrievedMemoryIds: asStringArray(payload.retrievedMemoryIds),
+			serverVersion,
+			mode: 'supplemental',
+			timelineTurn,
+			memorySettings,
+		}));
+		await timePhase(recorder, 'job.extract_turn_state.log_success', {}, () => logDeferredStateExtractionCall({
+			job,
+			clientTurnId,
+			profile: classifierProfile,
+			result: extractionResult,
+			status: 'success',
+			metadata: {
+				...logMetadata,
+				parseOutcome: 'valid',
+				applyOutcome: 'applied',
+				operationCount: parsedUpdate!.operationCount,
+				appliedEventCount: applied.eventIds.length,
+				appliedPatchCount: applied.patchIds.length,
+				appliedMemoryNodeCount: applied.memoryNodeIds.length,
+				applyWarningCount: applied.warnings.length,
+				finishReason: extractionResult.finishReason ?? null,
+				reasoningTokens: extractionResult.usage.reasoningTokens ?? null,
+				debugSnapshot: buildTurnDebugSnapshot({
+					kind: 'state_extraction',
+					playerText,
+					system: classifierSystem,
+					prompt: extractionPrompt,
+					output: extractionResult.text,
+				}),
+			},
+		}));
 		return {
-			status: 'no_changes',
-			operationCount,
+			status: 'applied',
+			serverVersion,
+			operationCount: parsedUpdate.operationCount,
+			parseWarnings: parsedUpdate.warnings.length,
+			warnings: applied.warnings,
+			eventIds: applied.eventIds,
+			patchIds: applied.patchIds,
+			memoryNodeIds: applied.memoryNodeIds,
+			chapterSummaryJobId,
 		};
+	} catch (error) {
+		await timePhase(recorder, 'job.extract_turn_state.log_error', {}, () => logDeferredStateExtractionCall({
+			job,
+			clientTurnId,
+			profile: classifierProfile,
+			result: extractionResult,
+			status: 'error',
+			error,
+			metadata: {
+				...logMetadata,
+				parseOutcome: parsedUpdate ? 'valid' : 'error',
+				applyOutcome: applyStarted ? 'error' : 'not_started',
+				operationCount: parsedUpdate?.operationCount ?? null,
+				finishReason: extractionResult.finishReason ?? null,
+				reasoningTokens: extractionResult.usage.reasoningTokens ?? null,
+				debugSnapshot: buildTurnDebugSnapshot({
+					kind: 'state_extraction',
+					playerText,
+					system: classifierSystem,
+					prompt: extractionPrompt,
+					output: extractionResult.text,
+				}),
+			},
+		}));
+		throw error;
 	}
-
-	const serverVersion = await timePhase(recorder, 'job.extract_turn_state.bump_version', {
-		operationCount,
-		parseWarnings: parsedUpdate.warnings.length,
-	}, () => bumpStoryVersion(job.storyId));
-	const applied = await timePhase(recorder, 'job.extract_turn_state.apply_update', {
-		operationCount,
-		parseWarnings: parsedUpdate.warnings.length,
-		serverVersion,
-	}, () => applyValidatedTurnUpdate({
-		storyId: job.storyId,
-		playerEntryId,
-		assistantEntryId,
-		narration,
-		update: parsedUpdate.update,
-		parseWarnings: parsedUpdate.warnings,
-		retrievedMemoryIds: asStringArray(payload.retrievedMemoryIds),
-		serverVersion,
-		mode: 'supplemental',
-		timelineTurn,
-		memorySettings,
-	}));
-
-	return {
-		status: 'applied',
-		serverVersion,
-		operationCount,
-		parseWarnings: parsedUpdate.warnings.length,
-		warnings: applied.warnings,
-		eventIds: applied.eventIds,
-		patchIds: applied.patchIds,
-		memoryNodeIds: applied.memoryNodeIds,
-	};
 }
 
 async function continuityAudit(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
@@ -2532,6 +3023,36 @@ async function continuityAudit(job: BackendJobRow, recorder?: TimingRecorder): P
 	return result;
 }
 
+async function planPlotBrain(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
+	const payload = asRecord(job.payload);
+	if (payload.skipIfPlanned === true) {
+		const [story] = await getDb().select({ metadata: stories.metadata }).from(stories).where(eq(stories.id, job.storyId)).limit(1);
+		if (!story) throw new Error(`Story not found: ${job.storyId}`);
+		const metadata = asRecord(story.metadata);
+		const plotBrain = asRecord(metadata.plotBrain);
+		if (hasStrategicPlotContent(plotBrain.lastFrame ?? metadata.strategicWorldFrame)) {
+			return { planned: false, reason: 'already_planned' };
+		}
+	}
+	// ponytail: dynamic import avoids the serviceCommands <-> processor static cycle; extract a leaf command if another worker needs it.
+	const { runPlotBrainPlanCommand } = await import('$lib/server/engine/serviceCommands');
+	const result = await timePhase(recorder, 'job.plan_plot_brain.execute', {}, () => runPlotBrainPlanCommand({
+		storyId: job.storyId,
+		trigger: typeof payload.trigger === 'string' ? payload.trigger : 'scheduled_refresh',
+		execute: true,
+		includeSecret: true,
+	}));
+	return {
+		planned: true,
+		frameId: result.frameId,
+		plotCardCount: result.plotCardCount,
+		threadCount: result.threadCount,
+		eventCount: result.eventCount,
+		proposalCount: result.proposalCount,
+		warnings: result.warnings,
+	};
+}
+
 async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const type = job.type as BackendJobType;
 	return timePhase(recorder, `job.${type}.total`, {
@@ -2560,6 +3081,8 @@ async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder):
 				return extractTurnState(job, recorder);
 			case 'continuity_audit':
 				return continuityAudit(job, recorder);
+			case 'plan_plot_brain':
+				return planPlotBrain(job, recorder);
 			default:
 				throw new Error(`Unknown backend job type: ${job.type}`);
 		}

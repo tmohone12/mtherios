@@ -1,7 +1,7 @@
 import { SERVICE_DEFINITIONS, settings } from '$lib/stores/settings.svelte';
 import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 import type { APIProfile, ProviderType } from '$lib/types';
-import type { EngineCommandResponse, LlmServiceSetting } from '$lib/contracts/engine';
+import type { EngineCommandResponse, LlmServiceSettingPatch } from '$lib/contracts/engine';
 
 const DEFAULT_KEY_REFS: Partial<Record<ProviderType, string>> = {
 	openrouter: 'env:OPENROUTER_API_KEY',
@@ -22,7 +22,7 @@ const DEFAULT_KEY_REFS: Partial<Record<ProviderType, string>> = {
 };
 
 function serviceDefaultKey(serviceId: string): 'narrative' | 'classification' {
-	return serviceId === 'classifier' || serviceId === 'worldSimulation' || serviceId === 'smallBrain'
+	return serviceId === 'classifier' || serviceId === 'characterUpdate' || serviceId === 'worldSimulation' || serviceId === 'smallBrain'
 		? 'classification'
 		: 'narrative';
 }
@@ -43,7 +43,7 @@ export function terminalApiKeyRefForProfile(profile: APIProfile | null): string 
 
 type TerminalSecretRef = { ref: string; value: string };
 
-async function patchTerminalLlmSettings(payload: LlmServiceSetting[], secrets: TerminalSecretRef[] = []): Promise<void> {
+async function patchTerminalLlmSettings(payload: LlmServiceSettingPatch[], secrets: TerminalSecretRef[] = []): Promise<void> {
 	if (payload.length === 0) return;
 	const response = await fetch('/api/engine/command', {
 		method: 'POST',
@@ -63,7 +63,7 @@ async function patchTerminalLlmSettings(payload: LlmServiceSetting[], secrets: T
 	}
 }
 
-function terminalSettingForService(serviceId: string): LlmServiceSetting | null {
+function terminalSettingForService(serviceId: string): LlmServiceSettingPatch | null {
 	const config = settings.getServiceConfig(serviceId);
 	const profile = settings.getServiceProfile(serviceId) ?? settings.activeProfile;
 	if (!profile) return null;
@@ -84,7 +84,6 @@ function terminalSettingForService(serviceId: string): LlmServiceSetting | null 
 		topP: null,
 		frequencyPenalty: null,
 		presencePenalty: null,
-		reasoningEffort: null,
 		contextBudget: settings.contextBudget > 0 ? settings.contextBudget : null,
 		enabled: config.enabled,
 		systemPromptOverride: config.systemPromptOverride?.trim() || null,
@@ -119,7 +118,7 @@ function uniqueSecrets(items: Array<TerminalSecretRef | null>): TerminalSecretRe
 export async function syncTerminalLlmSettingsFromBrowser(serviceIds = Object.keys(SERVICE_DEFINITIONS)): Promise<void> {
 	const payload = serviceIds
 		.map(terminalSettingForService)
-		.filter((item): item is LlmServiceSetting => Boolean(item));
+		.filter((item): item is LlmServiceSettingPatch => Boolean(item));
 	const secrets = uniqueSecrets(serviceIds.map(terminalSecretForService));
 	await patchTerminalLlmSettings(payload, secrets);
 }

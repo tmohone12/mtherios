@@ -13,8 +13,8 @@ const settingsMock = vi.hoisted(() => ({
 		apiKey: 'sk-browser-key',
 	},
 	getServiceConfig: vi.fn((serviceId: string) => ({
-		model: serviceId === 'classifier' || serviceId === 'smallBrain' ? '' : 'gpt-4.1',
-		temperature: serviceId === 'smallBrain' ? 0.3 : serviceId === 'classifier' ? 0.2 : 0.8,
+		model: serviceId === 'classifier' || serviceId === 'characterUpdate' || serviceId === 'smallBrain' ? '' : 'gpt-4.1',
+		temperature: serviceId === 'smallBrain' ? 0.3 : serviceId === 'classifier' || serviceId === 'characterUpdate' ? 0.2 : 0.8,
 		maxTokens: serviceId === 'classifier' ? 1024 : 4096,
 		enabled: true,
 		systemPromptOverride: serviceId === 'narrative' ? 'Narrate with teeth.' : '',
@@ -26,6 +26,7 @@ vi.mock('$lib/stores/settings.svelte', () => ({
 	SERVICE_DEFINITIONS: {
 		narrative: {},
 		classifier: {},
+		characterUpdate: {},
 		smallBrain: {},
 	},
 	settings: settingsMock,
@@ -129,19 +130,22 @@ describe('terminal settings engine gateway client', () => {
 			.rejects.toThrow('settings failed');
 	});
 
-	it('uses classification provider defaults for small brain terminal sync', async () => {
+	it.each([
+		['smallBrain', 0.3],
+		['characterUpdate', 0.2],
+	])('uses classification provider defaults for %s terminal sync', async (serviceId, temperature) => {
 		fetchMock.mockResolvedValue(engineResponse('settings.llm.save', { settings: [] }));
 
-		await syncTerminalLlmSettingsFromBrowser(['smallBrain']);
+		await syncTerminalLlmSettingsFromBrowser([serviceId]);
 
 		const body = await postedCommand();
 		expect(body.args).toEqual({
 			settings: [
 				expect.objectContaining({
-					serviceId: 'smallBrain',
+					serviceId,
 					providerType: 'openai',
 					model: 'gpt-4.1-mini',
-					temperature: 0.3,
+					temperature,
 					maxTokens: 4096,
 				}),
 			],

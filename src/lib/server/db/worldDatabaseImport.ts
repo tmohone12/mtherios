@@ -21,6 +21,7 @@ import {
 	relationships,
 	sagas,
 	statePatches,
+	shelves,
 	stories,
 	storyEntries,
 	storyEvents,
@@ -28,6 +29,7 @@ import {
 } from '$lib/server/db/schema';
 import { enqueueImportProjectionJobs, enqueueStoryVaultSyncJob } from '$lib/server/jobs/outbox';
 import { deleteStoryVaultArtifacts } from '$lib/server/wiki/storyVault';
+import { memoryImportanceSchema, memoryNodeTypeSchema } from '$lib/contracts/memory';
 import { worldDatabaseImportRequestSchema } from '$lib/contracts/worldDatabase';
 
 type JsonRecord = Record<string, unknown>;
@@ -144,6 +146,15 @@ const patchStatusAliases: Record<string, string> = {
 	merged: 'applied',
 };
 
+const continuityLevelValues = new Set(['info', 'warning', 'error']);
+const continuityLevelAliases: Record<string, string> = {
+	low: 'info',
+	medium: 'warning',
+	high: 'warning',
+	critical: 'error',
+};
+const continuityStatusValues = new Set(['open', 'resolved', 'dismissed']);
+
 function normalizeStoryMode(value: unknown): string {
 	return normalizeEnum(value, 'adventure', storyModes, storyModeAliases);
 }
@@ -158,6 +169,18 @@ function normalizeEventStatus(value: unknown): string {
 
 function normalizePatchStatus(value: unknown): string {
 	return normalizeEnum(value, 'proposed', patchStatusValues, patchStatusAliases);
+}
+
+function normalizeContinuityLevel(value: unknown): string {
+	return normalizeEnum(value, 'warning', continuityLevelValues, continuityLevelAliases);
+}
+
+function normalizeContinuityStatus(value: unknown): string {
+	return normalizeEnum(value, 'open', continuityStatusValues);
+}
+
+function normalizeAlias(value: string): string {
+	return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 function asJsonArray(value: unknown): Array<Record<string, unknown>> {
@@ -274,11 +297,14 @@ function isIdListKey(key: string): boolean {
 function storyValue(row: JsonRecord, importedAt: string): typeof stories.$inferInsert {
 	return {
 		id: asString(row.id, id('story')),
+		shelfId: asString(row.shelfId, 'shelf_default'),
 		clientStoryId: asNullableString(row.clientStoryId),
 		title: asString(row.title, 'Imported World Database'),
 		description: asNullableString(row.description),
 		genre: asNullableString(row.genre),
 		mode: normalizeStoryMode(row.mode),
+		role: asString(row.role, 'playable'),
+		timelineMode: asString(row.timelineMode, 'overlay'),
 		settings: row.settings == null ? null : asRecord(row.settings),
 		headerPrompt: asNullableString(row.headerPrompt),
 		currentLocationId: asNullableString(row.currentLocationId),
@@ -293,6 +319,34 @@ function storyValue(row: JsonRecord, importedAt: string): typeof stories.$inferI
 		createdAt: asString(row.createdAt, importedAt),
 		updatedAt: importedAt,
 	};
+}
+
+function shelfValue(row: JsonRecord, importedAt: string, fallbackGenre: string | null): typeof shelves.$inferInsert {
+	const name = asString(row.name, 'Default Shelf');
+	return {
+		id: asString(row.id, 'shelf_default'),
+		name,
+		slug: asString(row.slug, name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'default_shelf'),
+		description: asNullableString(row.description),
+		genre: asNullableString(row.genre) ?? fallbackGenre,
+		coverImageUrl: asNullableString(row.coverImageUrl),
+		settings: asRecord(row.settings),
+		metadata: asRecord(row.metadata),
+		serverVersion: asNumber(row.serverVersion, 1),
+		createdAt: asString(row.createdAt, importedAt),
+		updatedAt: asString(row.updatedAt, importedAt),
+	};
+}
+
+async function resolveImportShelf(
+	db: ReturnType<typeof getDb>,
+	shelfRow: typeof shelves.$inferInsert,
+): Promise<{ shelfId: string; insertShelfRow: typeof shelves.$inferInsert | null }> {
+	const [byId] = await db.select({ id: shelves.id }).from(shelves).where(eq(shelves.id, shelfRow.id)).limit(1);
+	if (byId) return { shelfId: byId.id, insertShelfRow: null };
+	const [bySlug] = await db.select({ id: shelves.id }).from(shelves).where(eq(shelves.slug, shelfRow.slug)).limit(1);
+	if (bySlug) return { shelfId: bySlug.id, insertShelfRow: null };
+	return { shelfId: shelfRow.id, insertShelfRow: shelfRow };
 }
 
 function entryValue(row: JsonRecord, storyId: string, importedAt: string, index: number): typeof storyEntries.$inferInsert {
@@ -332,12 +386,13 @@ function entityValue(row: JsonRecord, storyId: string, importedAt: string): type
 }
 
 function aliasValue(row: JsonRecord, storyId: string, importedAt: string): typeof entityAliases.$inferInsert {
+	const alias = asString(row.alias);
 	return {
 		id: asString(row.id, id('alias')),
 		storyId,
 		entityId: asString(row.entityId),
-		alias: asString(row.alias),
-		normalizedAlias: asString(row.normalizedAlias, asString(row.alias).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()),
+		alias,
+		normalizedAlias: normalizeAlias(alias),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		serverVersion: asNumber(row.serverVersion, 1),
 		createdAt: asString(row.createdAt, importedAt),
@@ -677,9 +732,9 @@ function continuityWarningValue(row: JsonRecord, storyId: string, importedAt: st
 		id: asString(row.id, id('warning')),
 		storyId,
 		warningType: asString(row.warningType),
-		level: asString(row.level, 'warning'),
+		level: normalizeContinuityLevel(row.level),
 		title: asString(row.title, 'Imported continuity warning'),
-		status: asString(row.status, 'open'),
+		status: normalizeContinuityStatus(row.status),
 		details: asString(row.details),
 		entityIds: asStringArray(row.entityIds),
 		factionIds: asStringArray(row.factionIds),
@@ -699,10 +754,13 @@ function continuityWarningValue(row: JsonRecord, storyId: string, importedAt: st
 }
 
 function memoryValue(row: JsonRecord, storyId: string, importedAt: string): typeof memoryNodes.$inferInsert {
+	const importedType = asString(row.type, 'canonical');
+	const type = memoryNodeTypeSchema.parse(importedType);
+	const metadata = asRecord(row.metadata);
 	return {
 		id: asString(row.id, id('memory')),
 		storyId,
-		type: asString(row.type, 'canonical'),
+		type,
 		title: asString(row.title, 'Imported Memory'),
 		content: asString(row.content),
 		summary: asNullableString(row.summary),
@@ -712,12 +770,14 @@ function memoryValue(row: JsonRecord, storyId: string, importedAt: string): type
 		threadIds: asStringArray(row.threadIds),
 		locationId: asNullableString(row.locationId),
 		visibility: normalizeVisibility(row.visibility),
-		importance: asNumber(row.importance, 0.5),
+		importance: memoryImportanceSchema.parse(row.importance),
 		sourceEntryIds: asStringArray(row.sourceEntryIds),
 		sourceEventIds: asStringArray(row.sourceEventIds),
 		sourcePatchIds: asStringArray(row.sourcePatchIds),
 		embedding: cleanEmbedding(row.embedding),
-		metadata: asRecord(row.metadata),
+		metadata: type === importedType
+			? metadata
+			: { ...metadata, normalizedMemoryTypeFrom: importedType },
 		serverVersion: asNumber(row.serverVersion, 1),
 		createdAt: asString(row.createdAt, importedAt),
 		updatedAt: asString(row.updatedAt, importedAt),
@@ -797,8 +857,15 @@ export async function importWorldDatabaseBundle(input: unknown) {
 	if (!request.options.preserveIds) tables = remapTables(tables);
 	const storyRow = storyValue(tables.story, importedAt);
 	const storyId = storyRow.id;
+	const bundleRecord = asRecord(request.bundle);
+	const shelfSource = asRecord(bundleRecord.shelf);
+	const shelfRow = Object.keys(shelfSource).length > 0
+		? shelfValue(shelfSource, importedAt, storyRow.genre ?? null)
+		: shelfValue({ id: storyRow.shelfId, name: storyRow.shelfId === 'shelf_default' ? 'Default Shelf' : 'Imported Shelf' }, importedAt, storyRow.genre ?? null);
 	const counts: Record<string, number> = {};
 	const db = getDb();
+	const resolvedShelf = await resolveImportShelf(db, shelfRow);
+	storyRow.shelfId = resolvedShelf.shelfId;
 
 	const [existing] = await db.select({ id: stories.id }).from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (existing && !request.options.replaceExisting) {
@@ -814,6 +881,11 @@ export async function importWorldDatabaseBundle(input: unknown) {
 	}
 
 	await db.transaction(async (tx) => {
+		if (resolvedShelf.insertShelfRow) {
+			await tx.insert(shelves).values(resolvedShelf.insertShelfRow).onConflictDoNothing();
+			increment(counts, 'shelves', 1);
+		}
+
 		await tx.insert(stories).values(storyRow);
 		increment(counts, 'stories', 1);
 

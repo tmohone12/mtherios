@@ -17,6 +17,7 @@ import {
 	fetchBackendStoryProjection,
 	fetchEngineCacheStatus,
 	listBackendStories,
+	repairBackendWikiNow,
 	refreshStoryCatalog,
 	listContextCheckpoints,
 	resolveBackendStoryBootstrap,
@@ -109,6 +110,7 @@ const transcriptPage: StoryEntriesPageResponse = {
 
 describe('server story control-surface client', () => {
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.clearAllMocks();
 		vi.restoreAllMocks();
 	});
@@ -205,6 +207,52 @@ describe('server story control-surface client', () => {
 				memoryNodeLimit: 80,
 			},
 		});
+	});
+
+	it('runs bulk wiki repair through the engine command gateway', async () => {
+		const result = {
+			ok: true,
+			mode: 'bulk',
+			selected: 3,
+			queued: 3,
+			runNow: true,
+		};
+		const fetchMock = vi.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce(jsonResponse(engineResponse('jobs.storyVaultSync', '__all_stories__', result)));
+
+		await expect(repairBackendWikiNow()).resolves.toEqual(expect.objectContaining({
+			status: 'succeeded',
+			result,
+		}));
+
+		expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+			storyId: '__all_stories__',
+			command: 'jobs.storyVaultSync',
+			args: {
+				allStories: true,
+				runNow: true,
+				index: true,
+			},
+		});
+	});
+
+	it('retries transient engine envelope failures while loading story bootstrap', async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce(jsonResponse({
+				...engineResponse('campaign.bootstrap', 'story_alpha', null),
+				status: 'failed',
+				error: 'connect ECONNREFUSED 127.0.0.1:5432',
+			}))
+			.mockResolvedValueOnce(jsonResponse(
+				engineResponse('campaign.bootstrap', 'story_alpha', bootstrap),
+			));
+
+		const result = fetchBackendStoryBootstrap('story_alpha');
+		await vi.advanceTimersByTimeAsync(200);
+
+		await expect(result).resolves.toEqual(bootstrap);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
 	it('recovers a cached story when its backend story id is stale', async () => {

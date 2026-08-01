@@ -1233,7 +1233,11 @@ describe('legacy API route gateway compatibility', () => {
 			{
 				storyId: '__app__',
 				command: 'story.create',
-				args: createBody,
+				args: {
+					...createBody,
+					role: 'playable',
+					timelineMode: 'overlay',
+				},
 			},
 		]);
 	});

@@ -10,7 +10,7 @@ import {
 } from '../worldsim';
 import { arcSummarySchema } from '../arc';
 import { entryRefinementResultSchema } from '../entryRefinement';
-import { strategicWorldFrameSchema } from '../strategicWorldBrain';
+import { hasStrategicPlotContent, strategicWorldFrameSchema } from '../strategicWorldBrain';
 import { wikiLintResultSchema, wikiTextFixSchema } from '../wikiLint';
 import {
 	applyPlotMomentumAgencyGuard,
@@ -445,6 +445,92 @@ describe('plotMomentumSchema', () => {
 });
 
 describe('strategicWorldFrameSchema', () => {
+	it('distinguishes a useful plot plan from a schema-valid empty frame', () => {
+		expect(hasStrategicPlotContent({})).toBe(false);
+		expect(hasStrategicPlotContent({ mainPlots: [{}] })).toBe(true);
+	});
+
+	it('defaults plot-brain planning fields on minimal strategic frames', () => {
+		const parsed = strategicWorldFrameSchema.parse({
+			arcNumber: 2,
+			publicSummary: 'The court is tense.',
+			narratorPromptCard: 'Let rumors breathe.',
+		});
+
+		expect(parsed.tensionSeeds).toEqual([]);
+		expect(parsed.antagonistCandidates).toEqual([]);
+		expect(parsed.plotCards).toEqual([]);
+		expect(parsed.activationPlan).toEqual({ activateNow: [], keepDormant: [], retireOrMerge: [], rationale: '' });
+		expect(parsed.plotBrainWritePlan).toEqual({
+			storyThreadCreates: [],
+			storyThreadUpdates: [],
+			timelineEvents: [],
+			patchProposals: [],
+		});
+	});
+
+	it('normalizes loose plot-brain output into bounded planning cards', () => {
+		const parsed = strategicWorldFrameSchema.parse({
+			arcNumber: 3,
+			publicSummary: 'Bread prices are becoming political.',
+			tensions: [{
+				title: 'Missing grain is leverage',
+				kind: 'resource_shortage',
+				pressure: 140,
+				volatility: 65,
+				playerRelevance: 80,
+				canonConfidence: 75,
+				unresolvedQuestion: 'Who profits from blaming the watch?',
+				whyItMatters: 'It can create civic friction without forcing action.',
+				evidenceRefs: ['Chapter 4 grain riot'],
+			}],
+			actors: [{
+				name: 'Mara Voss',
+				role: 'subplot_antagonist',
+				motive: 'Protect her warehouse monopoly.',
+				plausibilityScore: 88,
+				dramaticScore: 70,
+				agencyRisk: 12,
+			}],
+			plots: [{
+				title: 'The Grain That Was Never Missing',
+				logline: 'A merchant house hides grain to inflate prices and frame a rival.',
+				kind: 'economic_pressure',
+				pressure: 72,
+				urgency: 'emerging',
+				visibility: 'rumored',
+				clueTrail: [{ clue: 'Two rumors use the same phrase.', delivery: 'rumor', truth: 'The rumor was coordinated.' }],
+				pressureBeats: [{ title: 'Bread prices rise early', body: 'Bakers raise prices before public notice.', delayTurns: 1, urgency: 'urgent' }],
+				sourceRefs: [{ sourceType: 'character', sourceId: 'character_mara', label: 'Mara Voss' }],
+			}],
+			plotActivationPlan: { activateNow: ['The Grain That Was Never Missing'], rationale: 'It touches the current market scene.' },
+			writePlan: {
+				timelineEvents: [{ title: 'Bread prices rise early', body: 'Bakers raise prices before public notice.', plotCardId: 'plot_grain' }],
+			},
+		});
+
+		expect(parsed.tensionSeeds[0]).toMatchObject({
+			title: 'Missing grain is leverage',
+			pressure: 100,
+			canonConfidence: 0.75,
+		});
+		expect(parsed.tensionSeeds[0].evidenceRefs[0]).toMatchObject({ label: 'Chapter 4 grain riot' });
+		expect(parsed.antagonistCandidates[0]).toMatchObject({ name: 'Mara Voss', role: 'subplot_antagonist' });
+		expect(parsed.plotCards[0]).toMatchObject({
+			title: 'The Grain That Was Never Missing',
+			kind: 'economic_pressure',
+			lifecycleStage: 'seed',
+		});
+		expect(parsed.plotCards[0].clueTrail[0]).toMatchObject({ delivery: 'rumor', visibility: 'subtle' });
+		expect(parsed.plotCards[0].pressureBeats[0].urgency).toBe('immediate');
+		expect(parsed.plotCards[0].sourceRefs[0]).toMatchObject({ sourceType: 'unknown', sourceId: 'character_mara' });
+		expect(parsed.activationPlan.activateNow).toEqual(['The Grain That Was Never Missing']);
+		expect(parsed.plotBrainWritePlan.timelineEvents[0]).toMatchObject({
+			title: 'Bread prices rise early',
+			plotCardId: 'plot_grain',
+		});
+	});
+
 	it('accepts a strategic frame with scheme directives and clocks', () => {
 		const parsed = strategicWorldFrameSchema.parse({
 			arcNumber: 4,
@@ -493,7 +579,7 @@ describe('strategicWorldFrameSchema', () => {
 				name: 'The Synod Secures the Grain Roads',
 				ownerFactionName: 'Iron Synod',
 				progress: 55,
-				velocity: 'steady',
+				velocity: 'accelerating',
 				goal: 'Control food movement before winter.',
 				visibleToPlayer: false,
 				tickTriggers: ['player ignores merchant disappearances'],
@@ -536,7 +622,7 @@ describe('strategicWorldFrameSchema', () => {
 		});
 
 		expect(parsed.schemeDirectives).toHaveLength(1);
-		expect(parsed.strategicClocks[0].progress).toBe(55);
+		expect(parsed.strategicClocks[0]).toMatchObject({ progress: 55, velocity: 'surging' });
 		expect(parsed.warPressureCard?.phase).toBe('mobilization');
 		expect(parsed.factionOperations[0]).toMatchObject({
 			factionName: 'Iron Synod',
@@ -556,9 +642,11 @@ describe('strategicWorldFrameSchema', () => {
 				name: 'The Iron Leash',
 				pressure: 85,
 				summary: 'The debt trap is springing shut.',
+				expectedPayoff: 'next arc',
 			}],
 			subplots: [{
 				name: 'Elephant Obstruction',
+				kind: 'romantic_complication',
 				pressure: 'urgent',
 				summary: 'Guild regulations are slowing Balaerys logistics.',
 			}],
@@ -588,10 +676,16 @@ describe('strategicWorldFrameSchema', () => {
 				goal: 'Prepare a blockade without public commitment.',
 				type: 'fleet logistics',
 				priority: 75,
-				horizon: 'next_tick',
+				visibility: 'covert',
+				horizon: 'short_term',
 				visibleEffects: 'Dock scribes start counting hulls.',
 				hiddenEffects: ['Captains receive coded harbor routes.'],
 				confidence: 80,
+			}],
+			worldEventSuggestions: [{
+				title: 'Sealed orders move through Kuoh.',
+				description: 'Couriers begin using guarded routes.',
+				visibility: 'player-known',
 			}],
 			warPressure: {
 				phase: 'fleet mobilization',
@@ -618,6 +712,9 @@ describe('strategicWorldFrameSchema', () => {
 		expect(parsed.warPressureCard?.phase).toBe('fleet mobilization');
 		expect(parsed.mainPlots[0].title).toBe('The Iron Leash');
 		expect(parsed.mainPlots[0].pressure).toBe('critical');
+		expect(parsed.mainPlots[0].expectedPayoff).toBe('future_arc');
+		expect(parsed.subplots[0].kind).toBe('character_arc');
+		expect(parsed.worldEventSuggestions[0].visibility).toBe('public');
 		expect(parsed.subplots[0].pressure).toBe('high');
 		expect(parsed.schemeDirectives[0]).toMatchObject({
 			type: 'create_scheme',
@@ -634,7 +731,8 @@ describe('strategicWorldFrameSchema', () => {
 			operation: 'Send sealed fleet orders to allied captains.',
 			actionType: 'military',
 			urgency: 'urgent',
-			timeHorizon: 'next_tick',
+			visibility: 'secret',
+			timeHorizon: 'next_few_turns',
 			visibleSignals: ['Dock scribes start counting hulls.'],
 		});
 		expect(parsed.canonPatchSuggestions[0].type).toBe('custom');

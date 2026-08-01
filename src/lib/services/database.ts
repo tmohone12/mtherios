@@ -301,6 +301,38 @@ db.version(12).stores({
 	syncOutbox: 'id, storyId, serverStoryId, status, createdAt, [storyId+status]',
 });
 
+// Version 13: First-class shelves. Existing cached stories are attached to
+// the compatibility shelf used by the terminal backend migration.
+db.version(13).stores({
+	stories: 'id, shelfId, title, createdAt, updatedAt, serverStoryId, serverVersion, [shelfId+updatedAt]',
+	storyEntries: 'id, storyId, position, type, [storyId+position], [storyId+branchId+position]',
+	characters: 'id, storyId, name, [storyId+name]',
+	locations: 'id, storyId, name, [storyId+name]',
+	items: 'id, storyId, name, [storyId+name]',
+	storyBeats: 'id, storyId, type, status',
+	chapters: 'id, storyId, number, [storyId+number]',
+	lorebookEntries: 'id, storyId, name, type, [storyId+type]',
+	embeddedImages: 'id, storyId, entryId, status, [storyId+entryId]',
+	appSettings: 'key',
+	arcs: 'id, storyId, arcNumber, [storyId+arcNumber]',
+	sagas: 'id, storyId, sagaNumber, [storyId+sagaNumber]',
+	proceduralRules: 'id, storyId, category, maturity, [storyId+category], [storyId+maturity]',
+	embeddingCache: 'id, sourceId, sourceType, [sourceType+sourceId]',
+	entryRelationships: 'id, storyId, sourceEntryId, targetEntryId, type, [storyId+sourceEntryId], [storyId+targetEntryId]',
+	conversationMemory: 'id, storyId, npcEntryId, storyPosition, [storyId+npcEntryId], [storyId+storyPosition]',
+	worldEvents: 'id, storyId, triggerPosition, type, [storyId+triggerPosition]',
+	agreements: 'id, storyId, status, category, createdChapterNumber, [storyId+status], [storyId+category]',
+	factionActions: 'id, storyId, factionName, chapterNumber, urgency, [storyId+chapterNumber]',
+	rumors: 'id, storyId, status, chapterNumber, relatedFaction, [storyId+status]',
+	schemes: 'id, storyId, status, ownerType, ownerEntryId, branchId, [storyId+status], [storyId+ownerType], [storyId+branchId]',
+	storyThreads: 'id, storyId, status, significance, [storyId+status], [storyId+significance]',
+	syncOutbox: 'id, storyId, serverStoryId, status, createdAt, [storyId+status]',
+}).upgrade(async (tx) => {
+	await tx.table('stories').toCollection().modify((story) => {
+		story.shelfId ??= 'shelf_default';
+	});
+});
+
 // Debug function to check DB status
 export async function debugDatabaseStatus(): Promise<void> {
 	console.log('=== Database Debug Info ===');

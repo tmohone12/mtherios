@@ -12,6 +12,10 @@ export const smallBrainContextResultSchema = z.object({
 	relevantFactionIds: stringArraySchema,
 	promptNotes: stringArraySchema,
 	uncertainties: stringArraySchema,
+	evidence: z.array(z.object({
+		statement: z.string().min(1),
+		sourceIds: z.array(z.string().min(1)).min(1),
+	}).strict()).default([]),
 }).strict();
 
 export const smallBrainCanonResultSchema = z.object({
@@ -53,7 +57,7 @@ export const smallBrainWorldResultSchema = z.object({
 	}).strict()).default([]),
 }).strict();
 
-export const smallBrainResultSchema = z.union([
+export const smallBrainResultSchema = z.discriminatedUnion('mode', [
 	smallBrainContextResultSchema,
 	smallBrainCanonResultSchema,
 	smallBrainWorldResultSchema,

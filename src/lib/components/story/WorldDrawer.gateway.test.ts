@@ -36,4 +36,13 @@ describe('WorldDrawer terminal control-surface diagnostics', () => {
 		expect(source).toContain('factionSearchText');
 		expect(source).toContain('state.unresolvedKnownMembers');
 	});
+
+	it('restores a persisted Plot Pulse draft after navigation', () => {
+		const source = readFileSync(resolve('src/lib/components/story/WorldDrawer.svelte'), 'utf8');
+		const plotBrainBlock = source.slice(source.indexOf('async function runPlotBrain'), source.indexOf('// ── Meters'));
+
+		expect(source).toContain('story.campaignProjection?.story');
+		expect(source).toContain('pendingFrameId');
+		expect(plotBrainBlock.indexOf('await story.pullBackendProjection()')).toBeLessThan(plotBrainBlock.indexOf('pendingPlotFrameId = null'));
+	});
 });

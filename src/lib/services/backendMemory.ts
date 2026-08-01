@@ -112,6 +112,28 @@ export async function runBackendWorldSimTick(story: Story): Promise<Record<strin
 	}) as Promise<Record<string, unknown>>;
 }
 
+export async function runBackendPlotBrainPlan(
+	story: Story,
+	options: {
+		trigger?: string;
+		execute?: boolean;
+		currentTurn?: number;
+		currentWorldTime?: string | null;
+		includeSecret?: boolean;
+		frameId?: string;
+	} = {},
+): Promise<Record<string, unknown> | null> {
+	if (!story.serverStoryId) return null;
+	return postEngineCommand(story.serverStoryId, 'plotBrain.plan', {
+		trigger: options.trigger ?? 'manual',
+		execute: options.execute ?? false,
+		currentTurn: options.currentTurn ?? 0,
+		currentWorldTime: options.currentWorldTime ?? null,
+		includeSecret: options.includeSecret ?? true,
+		...(options.frameId ? { frameId: options.frameId } : {}),
+	}) as Promise<Record<string, unknown>>;
+}
+
 export async function importLocalStoryToBackend(storyId: string): Promise<{
 	serverStoryId: string;
 	serverVersion: number;

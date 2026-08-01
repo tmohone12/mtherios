@@ -153,7 +153,7 @@ export const storyEventTypeSchema = z.preprocess(
 	storyEventTypeEnumSchema,
 );
 
-const memoryNodeTypeEnumSchema = z.enum([
+export const memoryNodeTypeEnumSchema = z.enum([
 	'hot',
 	'canonical',
 	'episodic',
@@ -163,14 +163,60 @@ const memoryNodeTypeEnumSchema = z.enum([
 	'procedural',
 ]);
 
-const importedLoreMemoryNodeTypes = new Set(['seed_index', 'source_attribution', 'source_digest']);
-const importedLoreProceduralMemoryNodeTypes = new Set(['seed_policy']);
+const memoryNodeTypeAliases = new Map<string, z.infer<typeof memoryNodeTypeEnumSchema>>([
+	['world', 'canonical'],
+	['world_lore', 'canonical'],
+	['lore', 'canonical'],
+	['semantic', 'canonical'],
+	['seed_index', 'canonical'],
+	['source_attribution', 'canonical'],
+	['source_digest', 'canonical'],
+	['event', 'episodic'],
+	['scene', 'episodic'],
+	['plot', 'plot_ledger'],
+	['plot_thread', 'plot_ledger'],
+	['belief', 'npc_belief'],
+	['npc_memory', 'npc_belief'],
+	['faction_memory', 'faction'],
+	['recent', 'hot'],
+	['working', 'hot'],
+	['seed_policy', 'procedural'],
+	['canon_policy', 'procedural'],
+	['policy', 'procedural'],
+	['rules', 'procedural'],
+]);
+
+function normalizeMemoryNodeType(value: unknown): unknown {
+	if (typeof value !== 'string') return value;
+	const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+	return memoryNodeTypeAliases.get(normalized) ?? normalized;
+}
 
 export const memoryNodeTypeSchema = z.preprocess(
-	(value) => typeof value === 'string' && importedLoreProceduralMemoryNodeTypes.has(value)
-		? 'procedural'
-		: typeof value === 'string' && importedLoreMemoryNodeTypes.has(value) ? 'canonical' : value,
+	normalizeMemoryNodeType,
 	memoryNodeTypeEnumSchema,
+);
+
+export function normalizeMemoryImportance(value: unknown): unknown {
+	if (value == null || value === '') return undefined;
+	const numeric = typeof value === 'number'
+		? value
+		: typeof value === 'string'
+			? Number(value)
+			: Number.NaN;
+	if (!Number.isFinite(numeric)) return value;
+	const normalized = numeric > 1 ? numeric / 10 : numeric;
+	return Math.max(0, Math.min(1, normalized));
+}
+
+export const memoryImportanceSchema = z.preprocess(
+	normalizeMemoryImportance,
+	z.number().min(0).max(1).default(0.5),
+);
+
+export const requiredMemoryImportanceSchema = z.preprocess(
+	normalizeMemoryImportance,
+	z.number().min(0).max(1),
 );
 
 export const storyEventStatusSchema = z.enum(['proposed', 'scheduled', 'due', 'committed', 'cancelled']);
@@ -277,7 +323,7 @@ export const memoryNodeSchema = z.object({
 	threadIds: z.array(z.string()).default([]),
 	locationId: z.string().nullable().default(null),
 	visibility: memoryVisibilitySchema.default('player_known'),
-	importance: z.number().min(0).max(1).default(0.5),
+	importance: memoryImportanceSchema,
 	sourceEntryIds: z.array(z.string()).default([]),
 	sourceEventIds: z.array(z.string()).default([]),
 	sourcePatchIds: z.array(z.string()).default([]),
@@ -297,7 +343,7 @@ export const memoryRetrievalTraceItemSchema = z.object({
 	reason: z.string(),
 	tokenEstimate: z.number().int().nonnegative(),
 	ageDays: z.number().int().nonnegative().nullable().default(null),
-	importance: z.number().min(0).max(1),
+	importance: requiredMemoryImportanceSchema,
 	visibility: memoryVisibilitySchema.default('player_known'),
 	entityIds: z.array(z.string()).default([]),
 	factionIds: z.array(z.string()).default([]),
@@ -327,10 +373,13 @@ export const storyStartWorkflowSchema = z.object({
 });
 
 export const createStoryRequestSchema = z.object({
+	shelfId: z.string().trim().min(1).optional(),
 	title: z.string().min(1),
 	description: z.string().nullable().optional(),
 	genre: z.string().nullable().optional(),
 	mode: z.enum(['adventure', 'creative-writing']).default('adventure'),
+	role: z.enum(['playable', 'template', 'archive', 'test']).default('playable'),
+	timelineMode: z.enum(['overlay', 'shared', 'fork']).default('overlay'),
 	settings: jsonObjectSchema.nullable().optional(),
 	headerPrompt: z.string().nullable().optional(),
 	playerReputation: z.string().nullable().optional(),
@@ -340,6 +389,7 @@ export const createStoryRequestSchema = z.object({
 
 export const createStoryResponseSchema = z.object({
 	storyId: z.string(),
+	shelfId: z.string().optional(),
 	serverVersion: z.number().int().nonnegative(),
 	createdAt: z.string(),
 });
@@ -573,6 +623,7 @@ export const livingMemoryCommandResponseSchema = z.object({
 export const memoryRetrieveRequestSchema = z.object({
 	storyId: z.string(),
 	query: z.string().default(''),
+	currentTurn: z.number().int().nonnegative().optional(),
 	sceneEntityIds: z.array(z.string()).default([]),
 	locationId: z.string().nullable().optional(),
 	threadIds: z.array(z.string()).default([]),

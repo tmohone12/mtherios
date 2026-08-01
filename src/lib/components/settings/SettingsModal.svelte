@@ -545,7 +545,7 @@
 	<button class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick={onClose} aria-label="Close settings"></button>
 
 	<!-- Modal: wider, taller -->
-	<div class="settings-modal-shell relative flex min-h-0 w-full max-w-3xl flex-col overflow-hidden rounded-none border-0 border-[var(--border-primary)] bg-[var(--bg-secondary)] sm:flex-row sm:rounded-2xl sm:border">
+	<div class="settings-modal-shell relative flex min-h-0 w-full max-w-3xl flex-col overflow-hidden rounded-none border-0 border-[var(--border-primary)] bg-[var(--bg-secondary)] sm:flex-row sm:rounded-2xl sm:border" role="dialog" aria-modal="true" aria-label="Settings">
 
 		<!-- Sidebar -->
 		<div class="hidden sm:flex w-48 shrink-0 flex-col border-r border-[var(--border-primary)] bg-[var(--bg-primary)]">
@@ -569,7 +569,7 @@
 		</div>
 
 		<!-- Mobile tab picker -->
-		<div class="grid shrink-0 grid-cols-3 gap-1.5 border-b border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 sm:hidden">
+		<div class="grid shrink-0 grid-cols-4 gap-1.5 border-b border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 sm:hidden">
 			{#each tabs as tab}
 				<button
 					type="button"
@@ -590,11 +590,11 @@
 		<!-- Content area -->
 		<div class="flex min-h-0 flex-1 flex-col min-w-0">
 			<!-- Header -->
-			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3 sm:px-6 sm:py-3">
+			<div class="flex items-center justify-between border-b border-[var(--border-primary)] py-2 pl-4 pr-2 sm:px-6 sm:py-3">
 				<h3 class="font-display text-base tracking-wide text-[var(--text-primary)]">
 					{tabs.find(t => t.id === activeTab)?.label ?? 'Settings'}
 				</h3>
-				<button class="text-[var(--text-muted)] hover:text-[var(--text-primary)]" onclick={onClose}>
+				<button class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-8 sm:w-8" onclick={onClose} aria-label="Close settings">
 					<X class="h-5 w-5" />
 				</button>
 			</div>
@@ -625,9 +625,10 @@
 
 					<!-- Narrative model override -->
 					<div class="space-y-2">
-						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Narrative Model</label>
+						<label for="narrative-model-input" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Narrative Model</label>
 						<div class="flex gap-2">
 							<input
+								id="narrative-model-input"
 								type="text"
 								bind:value={settings.narrativeSettings.model}
 								placeholder={settings.activeProvider?.fallbackModels?.[0] ?? 'model-name'}
@@ -682,16 +683,16 @@
 					<!-- Generation params -->
 					<div class="grid grid-cols-2 gap-4">
 						<div class="space-y-1.5">
-							<label class="text-xs text-[var(--text-muted)]">Temperature</label>
-							<input type="range" min="0" max="2" step="0.1"
+							<label for="narrative-temperature" class="text-xs text-[var(--text-muted)]">Temperature</label>
+							<input id="narrative-temperature" type="range" min="0" max="2" step="0.1"
 								bind:value={settings.narrativeSettings.temperature}
 								onchange={() => saveNarrativeSettingsAndSync()}
 								class="w-full accent-[var(--color-gold-400)]" />
 							<div class="text-center font-mono text-xs text-[var(--text-primary)]">{settings.narrativeSettings.temperature?.toFixed(1) ?? '1.0'}</div>
 						</div>
 						<div class="space-y-1.5">
-							<label class="text-xs text-[var(--text-muted)]">Max Tokens</label>
-							<input type="number" min="256" max="65536" step="256"
+							<label for="narrative-max-tokens" class="text-xs text-[var(--text-muted)]">Max Tokens</label>
+							<input id="narrative-max-tokens" type="number" min="256" max="65536" step="256"
 								bind:value={settings.narrativeSettings.maxTokens}
 								onchange={() => saveNarrativeSettingsAndSync()}
 								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-1.5 font-mono text-sm text-[var(--text-primary)] focus:outline-none" />
@@ -759,7 +760,7 @@
 							{#if prov.requiresApiKey}
 								<div class="space-y-1.5">
 									<div class="flex items-center justify-between">
-										<label class="text-xs text-[var(--text-muted)]">
+										<label for="provider-api-key-{editingProvider}" class="text-xs text-[var(--text-muted)]">
 											{editingProvider === 'anthropic' ? 'API Key or Setup Token' : editingProvider === 'anthropic-proxy' ? 'Bridge Token' : 'API Key'}
 										</label>
 										{#if editingProvider === 'anthropic'}
@@ -770,6 +771,7 @@
 									</div>
 									<div class="relative">
 										<input
+											id="provider-api-key-{editingProvider}"
 											type={showApiKey ? 'text' : 'password'}
 											bind:value={apiKey}
 											placeholder={editingProvider === 'anthropic' ? 'sk-ant-... or sk-ant-oat-...' : editingProvider === 'anthropic-proxy' ? 'Bridge token from cc-bridge service' : 'sk-...'}
@@ -800,8 +802,8 @@
 							<!-- Custom URL -->
 							{#if editingProvider === 'openai-compatible' || editingProvider === 'ollama' || editingProvider === 'lmstudio' || editingProvider === 'anthropic-proxy'}
 								<div class="space-y-1.5">
-									<label class="text-xs text-[var(--text-muted)]">Base URL</label>
-									<input type="text" bind:value={customUrl}
+									<label for="provider-base-url-{editingProvider}" class="text-xs text-[var(--text-muted)]">Base URL</label>
+									<input id="provider-base-url-{editingProvider}" type="text" bind:value={customUrl}
 										placeholder={prov.baseUrl || 'https://your-api.com/v1'}
 										class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none" />
 								</div>
@@ -809,8 +811,8 @@
 
 							<!-- Model quick select -->
 							<div class="space-y-1.5">
-								<label class="text-xs text-[var(--text-muted)]">Default Model</label>
-								<input type="text" bind:value={model}
+								<label for="provider-default-model-{editingProvider}" class="text-xs text-[var(--text-muted)]">Default Model</label>
+								<input id="provider-default-model-{editingProvider}" type="text" bind:value={model}
 									placeholder={editOptions[0] ?? 'model-name'}
 									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none" />
 								<div class="flex gap-2">
@@ -1102,12 +1104,13 @@
 				<div class="space-y-5">
 					<!-- Image Provider (separate from narrative) -->
 					<div class="space-y-2">
-						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Image Provider</label>
+						<label for="image-profile-select" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Image Provider</label>
 						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
 							The provider used for image generation. Independent from the narrative provider — pick a configured profile, configure a dedicated one below, or leave on default to follow the active narrative profile.
 						</p>
 						<div class="flex gap-2">
 							<select
+								id="image-profile-select"
 								class="flex-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none"
 								value={settings.uiSettings.imageProfileId ?? ''}
 								onchange={(e) => { settings.uiSettings.imageProfileId = (e.target as HTMLSelectElement).value; settings.saveUISettings(); }}
@@ -1137,8 +1140,9 @@
 							</div>
 
 							<div class="space-y-1.5">
-								<label class="text-xs text-[var(--text-muted)]">Provider</label>
+								<label for="image-provider-type" class="text-xs text-[var(--text-muted)]">Provider</label>
 								<select
+									id="image-provider-type"
 									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none"
 									bind:value={imgProviderType}
 								>
@@ -1151,9 +1155,10 @@
 
 							{#if PROVIDERS[imgProviderType]?.requiresApiKey}
 								<div class="space-y-1.5">
-									<label class="text-xs text-[var(--text-muted)]">API Key</label>
+									<label for="image-provider-api-key" class="text-xs text-[var(--text-muted)]">API Key</label>
 									<div class="relative">
 										<input
+											id="image-provider-api-key"
 											type={imgShowKey ? 'text' : 'password'}
 											bind:value={imgApiKey}
 											placeholder="API key for the image provider"
@@ -1168,8 +1173,9 @@
 
 							{#if imgProviderType === 'openai-compatible' || imgProviderType === 'ollama' || imgProviderType === 'lmstudio'}
 								<div class="space-y-1.5">
-									<label class="text-xs text-[var(--text-muted)]">Base URL</label>
+									<label for="image-provider-base-url" class="text-xs text-[var(--text-muted)]">Base URL</label>
 									<input
+										id="image-provider-base-url"
 										type="text"
 										bind:value={imgBaseUrl}
 										placeholder={PROVIDERS[imgProviderType]?.baseUrl || 'https://your-api.com/v1'}
@@ -1194,11 +1200,12 @@
 
 					<!-- Character Consistency Prompt -->
 					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
-						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Character Prompt</label>
+						<label for="image-character-prompt" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Character Prompt</label>
 						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
 							Persistent description of your character (appearance, clothing, distinguishing features). Prepended to every image prompt to keep visuals consistent across scenes.
 						</p>
 						<textarea
+							id="image-character-prompt"
 							class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
 							rows="4"
 							placeholder="e.g. A tall woman in her late twenties, dark auburn hair braided over one shoulder, emerald eyes, wearing a worn leather cuirass over a forest-green tunic, a silver crescent pendant at her throat"
@@ -1209,7 +1216,7 @@
 
 					<!-- Image Generation Mode -->
 					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
-						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Generation Mode</label>
+						<span class="font-display text-sm tracking-wide text-[var(--text-primary)]">Generation Mode</span>
 						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
 							Controls when images are generated. Inline generates automatically after each narrative. Agentic lets the AI decide.
 						</p>
@@ -1233,7 +1240,7 @@
 
 					<!-- Style Preset -->
 					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
-						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Art Style</label>
+						<span class="font-display text-sm tracking-wide text-[var(--text-primary)]">Art Style</span>
 						<div class="grid grid-cols-2 gap-2">
 							{#each Object.entries(STYLE_PRESETS) as [key, preset]}
 								<button class="rounded-lg border border-[var(--border-primary)] px-3 py-2.5 text-left transition-colors
@@ -1265,7 +1272,7 @@
 
 					<!-- Image Size -->
 					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
-						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Image Size</label>
+						<span class="font-display text-sm tracking-wide text-[var(--text-primary)]">Image Size</span>
 						<div class="grid grid-cols-3 gap-2">
 							{#each ['512x512', '1024x1024', '1024x1792'] as size}
 								<button class="rounded-lg border border-[var(--border-primary)] px-3 py-2.5 text-center transition-colors
@@ -1281,11 +1288,12 @@
 
 					<!-- Model Override -->
 					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
-						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Model Override</label>
+						<label for="image-model-override" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Model Override</label>
 						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
 							Leave empty to use the provider's default image model.
 						</p>
 						<input
+							id="image-model-override"
 							type="text"
 							class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
 							placeholder={settings.activeProvider?.imageDefaults?.defaultModel ?? 'Provider default'}
@@ -1299,7 +1307,7 @@
 				{:else if activeTab === 'interface'}
 				<div class="space-y-5">
 					<div class="space-y-2">
-						<label class="font-display text-sm tracking-wide text-[var(--text-primary)]">Font Size</label>
+						<span class="font-display text-sm tracking-wide text-[var(--text-primary)]">Font Size</span>
 						<div class="grid grid-cols-3 gap-2">
 							{#each ['small', 'medium', 'large'] as size}
 								<button class="rounded-lg border border-[var(--border-primary)] px-4 py-3 font-display text-sm capitalize tracking-wide transition-colors

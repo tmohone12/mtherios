@@ -13,6 +13,7 @@
 	import { isTerminalReachabilityError } from '$lib/services/backendMemory';
 	import { buildBackendClientContext as buildBackendClientContextHint } from '$lib/services/backendClientContext';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
+	import { deleteSetting, getSetting, setSetting } from '$lib/services/database';
 	import { shouldUseTerminalEngineTurn } from './engineTurnRouting';
 
 	type ActionType = 'do' | 'say' | 'think' | 'story' | 'free';
@@ -31,6 +32,38 @@
 	let isGenerating = $state(false);
 	let abortController = $state<AbortController | null>(null);
 	let turnError = $state<string | null>(null);
+	let draftLoadVersion = 0;
+	let draftEdited = false;
+	let draftRevision = 0;
+	const draftStoryId = $derived(story.currentStory?.id ?? '');
+
+	function draftKey(storyId: string): string {
+		return `narratorDraft:${storyId}`;
+	}
+
+	function setInputDraft(value: string): void {
+		draftEdited = true;
+		draftRevision += 1;
+		inputValue = value;
+		if (!draftStoryId) return;
+		const operation = value ? setSetting(draftKey(draftStoryId), value) : deleteSetting(draftKey(draftStoryId));
+		operation.catch(error => console.warn('[ActionInput] Failed to persist draft:', error));
+	}
+
+	function handleDraftInput(event: Event): void {
+		setInputDraft((event.currentTarget as HTMLTextAreaElement).value);
+	}
+
+	$effect(() => {
+		const storyId = draftStoryId;
+		const loadVersion = ++draftLoadVersion;
+		draftEdited = false;
+		inputValue = '';
+		if (!storyId) return;
+		getSetting(draftKey(storyId)).then(value => {
+			if (loadVersion === draftLoadVersion && !draftEdited) inputValue = value ?? '';
+		}).catch(error => console.warn('[ActionInput] Failed to restore draft:', error));
+	});
 
 	// ── Player scheme declaration (Declare Plan modal) ──
 	let showPlanModal = $state(false);
@@ -42,7 +75,7 @@
 	$effect(() => {
 		function onInject(e: Event) {
 			const text = (e as CustomEvent<string>).detail;
-			if (text) inputValue = text;
+			if (text) setInputDraft(text);
 		}
 		window.addEventListener('mtherios:inject-input', onInject);
 		return () => window.removeEventListener('mtherios:inject-input', onInject);
@@ -302,13 +335,21 @@
 	async function handleSubmit() {
 		if (!inputValue.trim() || isGenerating || !story.currentStory || story.hydratingWorld || terminalRuntimeUnavailable) return;
 
-		const rawInput = inputValue.trim();
+		const submittedInput = inputValue;
+		const rawInput = submittedInput.trim();
 		turnError = null;
+		const submittedStoryId = draftStoryId;
+		setInputDraft('');
+		const submittedDraftRevision = draftRevision;
 
 		// Check for /roll command first
 		if (rawInput.match(/^\/roll\s/i)) {
-			inputValue = '';
-			await handlePlayerRoll(rawInput);
+			try {
+				await handlePlayerRoll(rawInput);
+			} catch (error) {
+				if (draftStoryId === submittedStoryId && draftRevision === submittedDraftRevision) setInputDraft(submittedInput);
+				turnError = error instanceof Error ? error.message : String(error);
+			}
 			return;
 		}
 
@@ -316,7 +357,6 @@
 		const planMatch = rawInput.match(/^\/plan\s+([\s\S]+)$/i);
 		if (planMatch) {
 			const text = planMatch[1].trim();
-			inputValue = '';
 			await submitPlayerPlan(text);
 			return;
 		}
@@ -329,15 +369,19 @@
 			content = buildActionContent(rawInput, actionType);
 		}
 
-		inputValue = '';
-
 		if (shouldUseBackendTurn()) {
-			const handled = await submitBackendAuthoritativeTurn(content);
+			const handled = await submitBackendAuthoritativeTurn(content, submittedInput);
 			if (handled) return;
 		}
 
 		// Add user action entry
-		await story.addEntry('user_action', content);
+		try {
+			await story.addEntry('user_action', content);
+		} catch (error) {
+			if (draftStoryId === submittedStoryId && draftRevision === submittedDraftRevision) setInputDraft(submittedInput);
+			turnError = `Could not send message: ${error instanceof Error ? error.message : String(error)}`;
+			return;
+		}
 
 		// Generate response
 		isGenerating = true;
@@ -637,10 +681,12 @@
 		}
 	}
 
-	async function submitBackendAuthoritativeTurn(content: string): Promise<boolean> {
+	async function submitBackendAuthoritativeTurn(content: string, submittedInput: string): Promise<boolean> {
 		if (!story.currentStory?.serverStoryId) return false;
 		const clientContext = buildBackendClientContext(content);
 		const clientTurnId = crypto.randomUUID();
+		const submittedStoryId = draftStoryId;
+		const submittedDraftRevision = draftRevision;
 
 		isGenerating = true;
 		abortController = new AbortController();
@@ -658,6 +704,7 @@
 			onStreamEnd?.(response.narration);
 			return true;
 		} catch (error) {
+			if (draftStoryId === submittedStoryId && draftRevision === submittedDraftRevision) setInputDraft(submittedInput);
 			const message = error instanceof Error ? error.message : String(error);
 			const runtimeUnavailable = isTerminalReachabilityError(error);
 			console.warn(runtimeUnavailable
@@ -738,13 +785,13 @@
 
 {#if showPlanModal}
 	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+		class="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 backdrop-blur-sm sm:items-center sm:p-4"
 		onclick={closePlanModal}
 		onkeydown={(e) => e.key === 'Escape' && closePlanModal()}
 		role="presentation"
 	>
 		<div
-			class="w-full max-w-lg rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 shadow-2xl"
+			class="max-h-[100dvh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 pb-[max(env(safe-area-inset-bottom),20px)] shadow-2xl sm:rounded-xl sm:pb-5"
 			onclick={(e) => e.stopPropagation()}
 			onkeydown={(e) => e.stopPropagation()}
 			role="dialog"
@@ -767,7 +814,7 @@
 				<button
 					onclick={closePlanModal}
 					disabled={planSubmitting}
-					class="rounded-lg p-1 text-[var(--text-muted)] transition-all hover:bg-[var(--color-surface-600)]/30 hover:text-[var(--text-primary)] disabled:opacity-30"
+					class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] transition-all hover:bg-[var(--color-surface-600)]/30 hover:text-[var(--text-primary)] disabled:opacity-30 sm:h-8 sm:w-8"
 					aria-label="Close"
 				>
 					<X class="h-4 w-4" />
@@ -819,7 +866,7 @@
 			{#each actionTypes as type}
 				{@const config = actionConfig[type]}
 				<button
-					class="flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-[11px] font-medium transition-all
+				class="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-[11px] font-medium transition-all
 						{actionType === type ? config.activeStyle : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
 					onclick={() => actionType = type}
 				>
@@ -828,7 +875,7 @@
 				</button>
 			{/each}
 			<button
-				class="flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--text-muted)] transition-all hover:bg-rose-500/10 hover:text-rose-400"
+				class="flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--text-muted)] transition-all hover:bg-rose-500/10 hover:text-rose-400"
 				onclick={openPlanModal}
 				title="Declare a scheme — break a goal into stages the narrator must surface"
 				disabled={isGenerating || planSubmitting}
@@ -861,7 +908,8 @@
 	<div class="flex items-end gap-2 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2
 		{!isCreativeMode ? `border-l-2 ${actionConfig[actionType].borderColor}` : ''}">
 		<textarea
-			bind:value={inputValue}
+			value={inputValue}
+			oninput={handleDraftInput}
 			onkeydown={handleKeydown}
 			placeholder={isCreativeMode ? 'Describe what happens next...' : actionConfig[actionType].placeholder}
 			rows="2"
@@ -871,7 +919,7 @@
 		{#if isGenerating}
 			<button
 				onclick={handleStop}
-				class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-red-400 transition-all hover:bg-red-500/10 active:scale-95"
+				class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-red-400 transition-all hover:bg-red-500/10 active:scale-95 sm:h-9 sm:w-9"
 				title="Stop generation"
 			>
 				<Square class="h-5 w-5" />
@@ -880,7 +928,7 @@
 			<button
 				onclick={handleSubmit}
 				disabled={!inputValue.trim() || story.hydratingWorld || terminalRuntimeUnavailable}
-				class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all active:scale-95 disabled:opacity-30
+				class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg transition-all active:scale-95 disabled:opacity-30 sm:h-9 sm:w-9
 					{isCreativeMode
 						? 'text-[var(--text-accent)] hover:bg-[rgba(212,168,83,0.1)]'
 						: actionConfig[actionType].buttonStyle}"

@@ -217,6 +217,7 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 			primaryKey: 'id',
 			foreignKeys: ['storyId -> stories.id', 'entityId -> entities.id'],
 			fields: ['id', 'storyId', 'entityId', 'alias', 'normalizedAlias', 'sourceEntryIds', 'serverVersion', 'createdAt', 'updatedAt'],
+			constraints: { normalizedAlias: 'derived from alias by lowercase alphanumeric normalization' },
 		},
 		relationships: {
 			purpose: 'Durable graph edges between entities: alliances, rivalries, kinship, ownership, location, debts, and other relationships.',
@@ -313,12 +314,21 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 			primaryKey: 'id',
 			foreignKeys: ['storyId -> stories.id'],
 			fields: ['id', 'storyId', 'warningType', 'level', 'title', 'status', 'details', 'entityIds', 'factionIds', 'threadIds', 'actorIds', 'sourceEntryIds', 'sourceEventIds', 'sourcePatchIds', 'resolutionNotes', 'resolvedBy', 'resolvedAt', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
+			constraints: {
+				level: ['info', 'warning', 'error'],
+				status: ['open', 'resolved', 'dismissed'],
+			},
 		},
 		memoryNodes: {
 			purpose: 'Retrieval memory and compiled world knowledge. Embeddings are optional local indexes, not the source of truth.',
 			primaryKey: 'id',
 			foreignKeys: ['storyId -> stories.id'],
 			fields: ['id', 'storyId', 'type', 'title', 'content', 'summary', 'keywords', 'entityIds', 'factionIds', 'threadIds', 'locationId', 'visibility', 'importance', 'sourceEntryIds', 'sourceEventIds', 'sourcePatchIds', 'embedding', 'metadata', 'serverVersion', 'createdAt', 'updatedAt'],
+			constraints: {
+				type: ['hot', 'canonical', 'episodic', 'plot_ledger', 'npc_belief', 'faction', 'procedural'],
+				visibility: ['public', 'player_known', 'secret'],
+				importance: 'number from 0 to 1; legacy 1-10 imports are normalized',
+			},
 		},
 		chapters: {
 			purpose: 'Checkpoint summaries and durable scene rollups.',

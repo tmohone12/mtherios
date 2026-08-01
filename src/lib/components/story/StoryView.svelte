@@ -277,10 +277,10 @@
 	});
 </script>
 
-<div class="flex h-full flex-col">
+<div class="app-shell flex h-[100dvh] min-h-0 flex-col overflow-hidden">
 	<!-- Header -->
 	<div class="flex items-center gap-3 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 py-3">
-		<button onclick={goBack} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+		<button onclick={goBack} class="-ml-2 flex h-11 w-11 shrink-0 items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] sm:ml-0 sm:h-auto sm:w-auto" title="Back to library" aria-label="Back to library">
 			<ArrowLeft class="h-5 w-5" />
 		</button>
 		<div class="flex-1 min-w-0">
@@ -306,7 +306,7 @@
 				Lore
 			</button>
 		</div>
-		<button onclick={() => drawerOpen = true} class="relative rounded-lg p-2 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" title="World State">
+		<button onclick={() => drawerOpen = true} class="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-auto sm:w-auto sm:p-2" title="World State" aria-label="World State">
 			<Users class="h-4 w-4" />
 			{#if story.characters.length > 0}
 				<span class="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--color-gold-400)] text-[8px] font-bold text-[var(--bg-primary)]">{story.characters.length}</span>
@@ -317,13 +317,13 @@
 	<div class="grid grid-cols-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] sm:hidden">
 		<button
 			onclick={() => workspaceTab = 'play'}
-			class="px-3 py-2 text-xs transition-colors {workspaceTab === 'play' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)]'}"
+			class="min-h-11 px-3 py-2 text-xs transition-colors {workspaceTab === 'play' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)]'}"
 		>
 			Play
 		</button>
 		<button
 			onclick={() => workspaceTab = 'lore'}
-			class="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs transition-colors {workspaceTab === 'lore' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)]'}"
+			class="inline-flex min-h-11 items-center justify-center gap-1.5 px-3 py-2 text-xs transition-colors {workspaceTab === 'lore' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)]'}"
 		>
 			<Database class="h-3.5 w-3.5" />
 			Lore
@@ -355,7 +355,7 @@
 		</div>
 	{:else}
 	<!-- Story entries -->
-	<div bind:this={scrollContainer} class="flex-1 overflow-y-auto pb-4">
+	<div bind:this={scrollContainer} class="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4">
 		{#if story.loading}
 			<div class="flex items-center justify-center py-20">
 				<Loader2 class="h-6 w-6 animate-spin text-[var(--text-accent)]" />
@@ -383,7 +383,7 @@
 						<button
 							onclick={() => story.loadOlderEntries()}
 							disabled={story.loadingOlderEntries}
-							class="rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-muted)] transition-colors hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)] disabled:opacity-50"
+							class="min-h-11 rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-muted)] transition-colors hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)] disabled:opacity-50"
 						>
 							{story.loadingOlderEntries ? 'Loading older messages...' : `Load older messages (${story.entries.length}/${story.entryCount})`}
 						</button>
@@ -402,7 +402,7 @@
 					{#if entry.type === 'user_action'}
 						<div class="group flex flex-col items-end gap-1" role="group" onmouseleave={clearMessageConfirmations}>
 							<div class="max-w-[85%] rounded-2xl rounded-br-md bg-[rgba(212,168,83,0.12)] px-4 py-3">
-								<p class="text-sm leading-relaxed text-[var(--text-primary)]">{entry.content.replace(/^>\s*/, '')}</p>
+								<p class="text-base leading-relaxed text-[var(--text-primary)] sm:text-sm">{entry.content.replace(/^>\s*/, '')}</p>
 							</div>
 							<div class="flex gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
 								<button
@@ -583,7 +583,7 @@
 	</div>
 
 	<!-- Input tray with menu -->
-	<div class="border-t border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 py-3 pb-[max(env(safe-area-inset-bottom),12px)]">
+	<div class="shrink-0 border-t border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-3 pb-[max(env(safe-area-inset-bottom),12px)] sm:px-4">
 		<div class="mx-auto max-w-2xl">
 			<div class="flex items-end gap-2">
 				<!-- Tray menu button -->
@@ -591,7 +591,9 @@
 					<div class="relative shrink-0 mb-0.5">
 						<button
 							onclick={() => { fabOpen = !fabOpen; confirmingDelete = false; }}
-							class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] transition-all hover:bg-[var(--bg-primary)] active:scale-95"
+							class="flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] transition-all hover:bg-[var(--bg-primary)] active:scale-95 sm:h-9 sm:w-9"
+							title={fabOpen ? 'Close story actions' : 'Open story actions'}
+							aria-label={fabOpen ? 'Close story actions' : 'Open story actions'}
 						>
 							{#if fabOpen}
 								<X class="h-4 w-4 text-[var(--text-primary)]" />
@@ -704,14 +706,14 @@
 		></button>
 
 		<!-- Panel -->
-		<div class="relative z-10 flex w-full max-w-xl flex-col rounded-t-2xl sm:rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] shadow-2xl max-h-[85vh]">
+		<div class="relative z-10 flex max-h-[85dvh] w-full max-w-xl flex-col rounded-t-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] pb-[env(safe-area-inset-bottom)] shadow-2xl sm:rounded-2xl sm:pb-0">
 			<!-- Header -->
 			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-5 py-4">
 				<div class="flex items-center gap-2.5">
 					<ScrollText class="h-4 w-4 text-purple-400" />
 					<h3 class="font-display text-sm font-semibold tracking-wide text-[var(--text-primary)]">Story Controls</h3>
 				</div>
-				<button onclick={() => headerEditorOpen = false} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+				<button onclick={() => headerEditorOpen = false} class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-8 sm:w-8">
 					<X class="h-4 w-4" />
 				</button>
 			</div>

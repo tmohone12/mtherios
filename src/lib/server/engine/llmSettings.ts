@@ -161,7 +161,7 @@ function defaultApiKeyRef(providerType: ProviderType, explicit?: string | null):
 }
 
 export function serviceDefaultKey(serviceId: string): keyof ProviderServices {
-	if (serviceId === 'classifier' || serviceId === 'worldSimulation' || serviceId === 'smallBrain') return 'classification';
+	if (serviceId === 'classifier' || serviceId === 'characterUpdate' || serviceId === 'worldSimulation' || serviceId === 'smallBrain') return 'classification';
 	return 'narrative';
 }
 
@@ -171,7 +171,7 @@ function providerServiceDefaults(providerType: ProviderType, serviceId: string) 
 }
 
 function fallbackTemperature(serviceId: string): number {
-	return serviceId === 'classifier' || serviceId === 'smallBrain' ? 0.2 : 1;
+	return serviceId === 'classifier' || serviceId === 'characterUpdate' || serviceId === 'smallBrain' ? 0.2 : 1;
 }
 
 function serviceConfigFromFile(serviceId: string): {
@@ -387,7 +387,7 @@ export async function upsertLlmServiceSettings(settings: LlmServiceSettingPatch[
 export async function resolveServiceGeneration(serviceId: string): Promise<{
 	setting: LlmServiceSetting | null;
 	profile: ProviderProfile | null;
-	generation: { model?: string; temperature?: number; maxTokens?: number };
+	generation: { model?: string; temperature?: number; maxTokens?: number; reasoningEffort?: string | null };
 	systemPromptOverride: string | null;
 	missingReason: string | null;
 }> {
@@ -448,6 +448,7 @@ export async function resolveServiceGeneration(serviceId: string): Promise<{
 			model: setting.model ?? undefined,
 			temperature: setting.temperature,
 			maxTokens: setting.maxTokens,
+			reasoningEffort: setting.reasoningEffort,
 		},
 		systemPromptOverride: setting.systemPromptOverride,
 		missingReason: null,

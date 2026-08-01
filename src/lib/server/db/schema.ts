@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
 	boolean,
+	check,
 	customType,
 	index,
 	integer,
@@ -9,6 +10,7 @@ import {
 	real,
 	text,
 	timestamp,
+	uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
 const jsonArray = sql`'[]'::jsonb`;
@@ -41,13 +43,32 @@ const syncColumns = {
 	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 };
 
+export const shelves = pgTable('shelves', {
+	id: text('id').primaryKey(),
+	name: text('name').notNull(),
+	slug: text('slug').notNull(),
+	description: text('description'),
+	genre: text('genre'),
+	coverImageUrl: text('cover_image_url'),
+	settings: jsonb('settings').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	...syncColumns,
+}, (table) => ({
+	nameIdx: index('shelves_name_idx').on(table.name),
+	slugIdx: uniqueIndex('shelves_slug_idx').on(table.slug),
+	updatedAtIdx: index('shelves_updated_at_idx').on(table.updatedAt),
+}));
+
 export const stories = pgTable('stories', {
 	id: text('id').primaryKey(),
+	shelfId: text('shelf_id').notNull().default('shelf_default').references(() => shelves.id, { onDelete: 'cascade' }),
 	clientStoryId: text('client_story_id'),
 	title: text('title').notNull(),
 	description: text('description'),
 	genre: text('genre'),
 	mode: text('mode').notNull().default('adventure'),
+	role: text('role').notNull().default('playable'),
+	timelineMode: text('timeline_mode').notNull().default('overlay'),
 	settings: jsonb('settings').$type<Record<string, unknown> | null>().default(null),
 	headerPrompt: text('header_prompt'),
 	currentLocationId: text('current_location_id'),
@@ -57,6 +78,8 @@ export const stories = pgTable('stories', {
 	...syncColumns,
 }, (table) => ({
 	clientStoryIdx: index('stories_client_story_id_idx').on(table.clientStoryId),
+	shelfIdx: index('stories_shelf_idx').on(table.shelfId),
+	shelfUpdatedIdx: index('stories_shelf_updated_idx').on(table.shelfId, table.updatedAt),
 	updatedAtIdx: index('stories_updated_at_idx').on(table.updatedAt),
 }));
 
@@ -103,6 +126,7 @@ export const entityAliases = pgTable('entity_aliases', {
 	...syncColumns,
 }, (table) => ({
 	aliasIdx: index('entity_aliases_story_alias_idx').on(table.storyId, table.normalizedAlias),
+	normalizedAliasCheck: check('entity_aliases_normalized_alias_check', sql`${table.normalizedAlias} = trim(regexp_replace(lower(${table.alias}), '[^a-z0-9]+', ' ', 'g'))`),
 }));
 
 export const relationships = pgTable('relationships', {
@@ -431,6 +455,8 @@ export const continuityWarnings = pgTable('continuity_warnings', {
 }, (table) => ({
 	storyStatusIdx: index('continuity_warnings_story_status_idx').on(table.storyId, table.status),
 	storyLevelIdx: index('continuity_warnings_story_level_idx').on(table.storyId, table.level),
+	levelCheck: check('continuity_warnings_level_check', sql`${table.level} in ('info', 'warning', 'error')`),
+	statusCheck: check('continuity_warnings_status_check', sql`${table.status} in ('open', 'resolved', 'dismissed')`),
 }));
 
 export const memoryNodes = pgTable('memory_nodes', {
@@ -456,6 +482,8 @@ export const memoryNodes = pgTable('memory_nodes', {
 }, (table) => ({
 	storyTypeIdx: index('memory_nodes_story_type_idx').on(table.storyId, table.type),
 	storyLocationIdx: index('memory_nodes_story_location_idx').on(table.storyId, table.locationId),
+	typeCheck: check('memory_nodes_type_check', sql`${table.type} in ('hot', 'canonical', 'episodic', 'plot_ledger', 'npc_belief', 'faction', 'procedural')`),
+	importanceCheck: check('memory_nodes_importance_check', sql`${table.importance} >= 0 and ${table.importance} <= 1`),
 }));
 
 export const chapters = pgTable('chapters', {
@@ -669,6 +697,7 @@ export const apiCallLogs = pgTable('api_call_logs', {
 }));
 
 export const schema = {
+	shelves,
 	stories,
 	storyEntries,
 	entities,

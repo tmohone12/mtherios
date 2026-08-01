@@ -9,10 +9,12 @@ import { turnRequestSchema, type RetrievedMemoryPacket, type TurnRequest, type T
 import { bumpStoryVersion, getSyncChanges } from '$lib/server/memory/canonical';
 import { retrieveMemoryPacket } from '$lib/server/memory/retrieval';
 import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
+import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET } from '$lib/services/memorySettings';
 import { contextWiki } from '$lib/server/wiki/wikiCore';
 import { loadGmTimelineBrief, promoteDueTimelineEvents } from '$lib/server/events/timeline';
 import { loadTurnContext } from './context';
-import { buildServerTurnPrompt, buildPromptSectionTrace, buildStateExtractionPrompt, type PromptSectionTrace } from './promptPacket';
+import { buildServerTurnPrompt, buildPromptSectionTrace, buildStateExtractionPrompt, chaptersForPromptContinuity, type PromptSectionTrace } from './promptPacket';
+export { chaptersForPromptContinuity } from './promptPacket';
 import {
 	ServerGenerationError,
 	generateServerTextWithMetrics,
@@ -20,12 +22,12 @@ import {
 	type ResponseSchemaOptions,
 	type ServerGenerationResult,
 } from './provider';
-import { applyValidatedTurnUpdate, parseTurnUpdate } from './patchValidator';
+import { applyValidatedTurnUpdate, turnUpdateOperationCount } from './patchValidator';
 import { requireResolvedServiceProfile, resolveServiceGeneration } from '$lib/server/engine/llmSettings';
 import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
 import { appendTurnEvidence } from '$lib/server/engine/campaignVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
-import { enqueueContinuityAuditJob, enqueueTurnStateExtractionJob } from '$lib/server/jobs/outbox';
+import { enqueueChapterSummaryJob, enqueueContinuityAuditJob, enqueueTurnStateExtractionJob } from '$lib/server/jobs/outbox';
 import {
 	buildEngineCacheKey,
 	engineCacheDependencyHash,
@@ -40,6 +42,8 @@ import { createTimingRecorder, type TimingEntry, type TimingRecorder } from '$li
 import type { TurnContext } from './context';
 import { ensureFreshStoryVault, resolveWikiTarget } from '$lib/server/wiki/storyVault';
 import { getMtheriosAppConfig } from '$lib/server/app/config';
+import { countTokens, truncateToTokenBudget } from '$lib/utils/tokens';
+import { encodeDiceMarker, parseRollMarker, rollCheck, type RollCheckResult } from '$lib/utils/dice';
 import { sliceWellFormedText, toWellFormedText } from './wellFormedText';
 
 function nowIso(): string {
@@ -61,9 +65,37 @@ function stableJson(value: unknown): string {
 	return JSON.stringify(value) ?? 'null';
 }
 
-export function chaptersForPromptContinuity<T extends { id: string }>(chapters: T[], arcs: Array<{ chapterIds: string[] }>): T[] {
-	const coveredChapterIds = new Set(arcs.flatMap((arc) => arc.chapterIds));
-	return chapters.filter((chapter) => !coveredChapterIds.has(chapter.id));
+export function resolveNarrationRoll(text: string): {
+	preText: string;
+	diceMarker: string;
+	rollSummary: string;
+	result: RollCheckResult;
+} | null {
+	const { preText, marker } = parseRollMarker(text);
+	if (!marker) return null;
+	try {
+		const result = rollCheck(marker.notation, marker.dc, marker.ability, marker.description);
+		const critical = result.critical === 'success'
+			? ' (NATURAL 20 - CRITICAL SUCCESS!)'
+			: result.critical === 'failure'
+				? ' (NATURAL 1 - CRITICAL FAILURE!)'
+				: '';
+		return {
+			preText,
+			diceMarker: encodeDiceMarker(result),
+			rollSummary: `[Roll Result: ${marker.ability} Check - ${result.notation} = ${result.total} (natural ${result.natural}) vs DC ${marker.dc} - ${result.success ? 'SUCCESS' : 'FAILURE'}${critical}]`,
+			result,
+		};
+	} catch {
+		return null;
+	}
+}
+
+export function shouldQueueChapterSummaryWithoutState(
+	mode: 'deferred' | 'sync' | 'none',
+	counts: { eventIds: number; memoryNodeIds: number; patchIds: number },
+): boolean {
+	return mode !== 'deferred' && counts.eventIds === 0 && counts.memoryNodeIds === 0 && counts.patchIds === 0;
 }
 
 const CONTINUITY_CACHE_CHAPTER_OUTCOME_CHAR_LIMIT = 900;
@@ -209,6 +241,51 @@ type ProviderProfile = NonNullable<TurnRequest['providerProfile']>;
 type GenerationTiming = NonNullable<TurnResponse['generationTimings']>[number];
 type ResolvedGenerationService = Awaited<ReturnType<typeof resolveServiceGeneration>>;
 type ServerTurnPrompt = ReturnType<typeof buildServerTurnPrompt>;
+
+const strictWorldStateUpdateSchema = worldStateUpdateSchema.strict();
+const strictExtractedUpdateSchema = z.object({ update: strictWorldStateUpdateSchema }).strict();
+
+export const DEFAULT_STATE_EXTRACTION_SYSTEM = 'You extract canonical state changes for a text adventure. Return strict JSON only.';
+
+export function shouldUseLegacyClassifierFallback(
+	service: Pick<ResolvedGenerationService, 'profile' | 'setting'>,
+): boolean {
+	return service.profile === null && service.setting === null;
+}
+
+export function classifierGenerationMaxTokens(
+	generation: Pick<ResolvedGenerationService['generation'], 'maxTokens'>,
+	fallback = 2048,
+): number {
+	return generation.maxTokens ?? fallback;
+}
+
+export function parseStateExtractionResult(text: string): {
+	update: z.infer<typeof worldStateUpdateSchema>;
+	warnings: string[];
+	operationCount: number;
+} {
+	if (!text.trim()) throw new Error('Classifier returned an empty state extraction response.');
+	const raw = parseJsonFromGeneratedText(text);
+	const wrapped = strictExtractedUpdateSchema.safeParse(raw);
+	if (wrapped.success) {
+		return {
+			update: wrapped.data.update,
+			warnings: [],
+			operationCount: turnUpdateOperationCount(wrapped.data.update),
+		};
+	}
+	const direct = strictWorldStateUpdateSchema.safeParse(raw);
+	if (!direct.success) {
+		const issues = [...wrapped.error.issues, ...direct.error.issues]
+			.slice(0, 4)
+			.map((issue) => `${issue.path.join('.') || 'root'}: ${issue.message}`)
+			.join('; ');
+		throw new Error(`Classifier returned an invalid state extraction response: ${issues}`);
+	}
+	return { update: direct.data, warnings: [], operationCount: turnUpdateOperationCount(direct.data) };
+}
+
 export interface ProcessServerTurnOptions {
 	onNarrationChunk?: (chunk: string) => void | Promise<void>;
 }
@@ -237,14 +314,12 @@ interface LoadServerWikiContextCacheOptions {
 	sourceHash?: WikiContextSourceHasher;
 }
 
-const DEFAULT_MEMORY_TOKEN_BUDGET = 800;
-const MEMORY_RETRIEVAL_BUDGET_MS = 700;
-const MAX_CLASSIFIER_TOKENS = 2048;
+const MEMORY_RETRIEVAL_BUDGET_MS = 3_000;
 const WIKI_CONTEXT_LIMIT = 4;
 const WIKI_CONTEXT_PAGE_LIMIT = 6;
 const WIKI_CONTEXT_PAGE_CHARS = 700;
 const WIKI_CONTEXT_MAX_CHARS = 4000;
-const WIKI_CONTEXT_BUDGET_MS = 700;
+const WIKI_CONTEXT_BUDGET_MS = 3_000;
 const GM_TIMELINE_BRIEF_BUDGET_MS = 300;
 const PREPARED_TURN_TTL_MS = 120_000;
 const PREPARED_TURN_CACHE_MAX = 48;
@@ -513,21 +588,25 @@ function clampInt(value: number | null | undefined, min: number, max: number, fa
 
 export function applyPromptContextBudget(
 	value: string,
-	maxChars: number | null | undefined,
+	maxTokens: number | null | undefined,
 ): { value: string; truncated: boolean } {
 	const cleanValue = toWellFormedText(value);
-	if (!maxChars || maxChars <= 0 || cleanValue.length <= maxChars) return { value: cleanValue, truncated: cleanValue !== value };
+	if (!maxTokens || maxTokens <= 0 || countTokens(cleanValue) <= maxTokens) return { value: cleanValue, truncated: cleanValue !== value };
 	const finalInstruction = 'Return only GM narration prose for the player action. Do not include JSON, ending choices, numbered options, menus, or OOC notes in this response.';
-	const marker = '\n\n[Backend context budget truncated older dynamic context.]\n\n';
-	if (maxChars <= marker.length + finalInstruction.length + 120 || !cleanValue.endsWith(finalInstruction)) {
+	const marker = cleanValue.includes('<context_data>')
+		? '\n\n</context_data>\n\n[Backend context budget truncated lower-priority context.]\n\n'
+		: '\n\n[Backend context budget truncated lower-priority context.]\n\n';
+	const reservedTokens = countTokens(marker) + countTokens(finalInstruction);
+	if (maxTokens <= reservedTokens + 32 || !cleanValue.endsWith(finalInstruction)) {
 		return {
-			value: sliceWellFormedText(cleanValue, Math.max(0, maxChars)),
+			value: truncateToTokenBudget(cleanValue, Math.max(1, maxTokens)),
 			truncated: true,
 		};
 	}
-	const headBudget = Math.max(0, maxChars - marker.length - finalInstruction.length);
+	const headBudget = Math.max(1, maxTokens - reservedTokens - 4);
+	const head = truncateToTokenBudget(cleanValue.slice(0, -finalInstruction.length).trimEnd(), headBudget);
 	return {
-		value: `${sliceWellFormedText(cleanValue, headBudget).trimEnd()}${marker}${finalInstruction}`,
+		value: `${head.trimEnd()}${marker}${finalInstruction}`,
 		truncated: true,
 	};
 }
@@ -1436,7 +1515,7 @@ export async function prepareServerTurnContext(
 	const narrativeService = await recorder.time('turn.service_config.narrative', {}, () => resolveServiceGeneration('narrative'));
 	const narrativeProfile = requireResolvedServiceProfile('narrative', narrativeService);
 	const narrativeGeneration = narrativeService.generation;
-	const memoryTokenBudget = clampInt(request.clientContext?.memoryTokenBudget, 160, 2400, DEFAULT_MEMORY_TOKEN_BUDGET);
+	const memoryTokenBudget = clampInt(request.clientContext?.memoryTokenBudget, 160, 2400, DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET);
 	const memorySettings = {
 		chapterThreshold: clampInt(request.clientContext?.chapterThreshold, 5, 200, 20),
 		postChapterBuffer: clampInt(request.clientContext?.postChapterBuffer, 0, 100, 10),
@@ -1575,7 +1654,7 @@ export async function prepareServerTurnContext(
 	const promptBudget = applyPromptContextBudget(prompt.prompt, request.clientContext?.contextBudget ?? 0);
 	if (promptBudget.truncated) {
 		contextSkipped.push({ source: 'dynamic_context', reason: 'truncated_by_context_budget' });
-		warnings.push(`Dynamic prompt context budget applied: ${prompt.prompt.length} -> ${promptBudget.value.length} chars.`);
+		warnings.push(`Dynamic prompt context budget applied: ${countTokens(prompt.prompt)} -> ${countTokens(promptBudget.value)} tokens.`);
 	}
 	const narrativeSystemDynamic = promptBudget.value;
 	const narrativePrompt = `Player action:\n${request.playerText}`;
@@ -1820,20 +1899,35 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 	} = prepared;
 	const warnings: string[] = [...prepared.warnings];
 	const classifierService = await recorder.time('turn.service_config.classifier', {}, () => resolveServiceGeneration('classifier'));
-	const classifierProfile = classifierService.profile ?? narrativeProfile;
+	const useNarrativeClassifierFallback = shouldUseLegacyClassifierFallback(classifierService);
+	const classifierExplicitlyDisabled = classifierService.setting?.enabled === false;
+	const classifierProfile = classifierService.profile ?? (useNarrativeClassifierFallback ? narrativeProfile : null);
+	const effectiveClassifierServiceId = classifierService.profile
+		? 'classifier'
+		: useNarrativeClassifierFallback
+			? 'narrative'
+			: null;
 	const classifierGeneration = classifierService.profile
 		? {
 			...classifierService.generation,
 			temperature: classifierService.generation.temperature ?? 0.2,
-			maxTokens: Math.min(classifierService.generation.maxTokens ?? MAX_CLASSIFIER_TOKENS, MAX_CLASSIFIER_TOKENS),
+			maxTokens: classifierGenerationMaxTokens(classifierService.generation),
 		}
-		: {
+		: useNarrativeClassifierFallback ? {
 			model: narrativeGeneration.model,
 			temperature: 0.2,
-			maxTokens: Math.min(narrativeGeneration.maxTokens ?? MAX_CLASSIFIER_TOKENS, MAX_CLASSIFIER_TOKENS),
+			maxTokens: classifierGenerationMaxTokens(narrativeGeneration),
+		} : {
+			temperature: 0.2,
+			maxTokens: classifierGenerationMaxTokens({}),
 		};
 	if (classifierService.missingReason) {
-		warnings.push(`Classifier service fallback: ${classifierService.missingReason}`);
+		const label = classifierExplicitlyDisabled
+			? 'Classifier disabled'
+			: useNarrativeClassifierFallback
+				? 'Classifier legacy fallback to narrative'
+				: 'Classifier unavailable';
+		warnings.push(`${label}: ${classifierService.missingReason}`);
 	}
 	const deferStateExtraction = request.clientContext?.deferStateExtraction !== false;
 	const generationTimings: GenerationTiming[] = [];
@@ -1851,12 +1945,14 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 	};
 
 	let narration = '';
+	let narrationOperation = 'turn.narration';
 	try {
 		const result = await generateServerTextWithMetrics({
 			profile: narrativeProfile,
 			model: narrativeGeneration.model,
 			temperature: narrativeGeneration.temperature,
 			maxTokens: narrativeGeneration.maxTokens,
+			reasoningEffort: narrativeGeneration.reasoningEffort,
 			system: narrativeSystem,
 			systemDynamic: narrativeSystemDynamic,
 			messages: prompt.messages,
@@ -1915,10 +2011,44 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				}),
 			},
 		});
+
+		const roll = resolveNarrationRoll(narration);
+		if (roll) {
+			narrationOperation = 'turn.narration.roll_continuation';
+			const continuation = await generateServerTextWithMetrics({
+				profile: narrativeProfile,
+				model: narrativeGeneration.model,
+				temperature: narrativeGeneration.temperature,
+				maxTokens: narrativeGeneration.maxTokens,
+				reasoningEffort: narrativeGeneration.reasoningEffort,
+				system: narrativeSystem,
+				systemDynamic: narrativeSystemDynamic,
+				messages: [...prompt.messages, { role: 'assistant', content: roll.preText }],
+				prompt: `${roll.rollSummary}\n\nContinue immediately after the roll result. Do not repeat the turn header or include another roll marker.`,
+				onTextDelta: options.onNarrationChunk,
+			});
+			generationTimings.push(timingFromResult(narrationOperation, 'narrative', continuation, 'success'));
+			recorder.record('turn.llm.narration_roll_continuation', continuation.durationMs, {
+				serviceId: 'narrative',
+				model: continuation.model,
+				status: 'success',
+			});
+			await logGenerationCall({
+				storyId: request.storyId,
+				clientTurnId: request.clientTurnId,
+				serviceId: 'narrative',
+				operation: narrationOperation,
+				profile: narrativeProfile,
+				result: continuation,
+				status: 'success',
+				metadata: { dice: roll.result.notation, dc: roll.result.dc, success: roll.result.success },
+			});
+			narration = `${roll.preText}\n\n${roll.diceMarker}\n\n${continuation.text}`.trim();
+		}
 	} catch (error) {
 		const failedResult = generationErrorResult(error);
 		if (failedResult) {
-			generationTimings.push(timingFromResult('turn.narration', 'narrative', failedResult, 'error'));
+			generationTimings.push(timingFromResult(narrationOperation, 'narrative', failedResult, 'error'));
 			recorder.record('turn.llm.narration', failedResult.durationMs, {
 				serviceId: 'narrative',
 				model: failedResult.model,
@@ -1936,7 +2066,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				storyId: request.storyId,
 				clientTurnId: request.clientTurnId,
 				serviceId: 'narrative',
-				operation: 'turn.narration',
+				operation: narrationOperation,
 				profile: narrativeProfile,
 				result: failedResult,
 				status: 'error',
@@ -1954,7 +2084,8 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 	if (!narration.trim()) {
 		throw new Error('Terminal narrative generation returned an empty response. No backend turn was persisted.');
 	}
-	const stateExtractionMode: 'deferred' | 'sync' | 'none' = shouldExtractDurableState(request.playerText, narration)
+	const stateExtractionMode: 'deferred' | 'sync' | 'none' = !classifierExplicitlyDisabled
+		&& shouldExtractDurableState(request.playerText, narration)
 		? deferStateExtraction ? 'deferred' : 'sync'
 		: 'none';
 
@@ -2010,20 +2141,37 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		}).onConflictDoNothing(),
 	]));
 
-	let rawUpdate: unknown = { update: worldStateUpdateSchema.parse({}) };
+	let parsedUpdate = {
+		update: worldStateUpdateSchema.parse({}),
+		warnings: [] as string[],
+		operationCount: 0,
+	};
+	let classifierExtractionResult: ServerGenerationResult | null = null;
+	let classifierExtractionPrompt = '';
+	let classifierExtractionSystem = '';
+	let classifierParseSucceeded = false;
+	const classifierLogMetadata = {
+		configuredServiceId: 'classifier',
+		effectiveServiceId: effectiveClassifierServiceId,
+		legacyNarrativeFallback: useNarrativeClassifierFallback,
+		maxOutputTokens: classifierGeneration.maxTokens,
+		responseFormat: 'json_schema',
+		responseSchemaName: 'mtherios_state_patch',
+	};
 	if (classifierProfile && stateExtractionMode === 'sync') {
-		const classifierSystem = classifierService.systemPromptOverride?.trim() || 'You extract canonical state changes for a text adventure. Return strict JSON only.';
-		const extractionPrompt = buildStateExtractionPrompt(request.playerText, narration);
+		classifierExtractionSystem = classifierService.systemPromptOverride?.trim() || DEFAULT_STATE_EXTRACTION_SYSTEM;
+		classifierExtractionPrompt = buildStateExtractionPrompt(request.playerText, narration);
 		try {
 			const extractionResult = await generateServerTextWithMetrics({
 				profile: classifierProfile,
 				model: classifierGeneration.model,
 				temperature: classifierGeneration.temperature,
 				maxTokens: classifierGeneration.maxTokens,
-				system: classifierSystem,
-				prompt: extractionPrompt,
+				system: classifierExtractionSystem,
+				prompt: classifierExtractionPrompt,
 				responseSchema: buildStateExtractionResponseSchema(),
 			});
+			classifierExtractionResult = extractionResult;
 			generationTimings.push(timingFromResult('turn.state_extraction', 'classifier', extractionResult, 'success'));
 			recorder.record('turn.llm.state_extraction', extractionResult.durationMs, {
 				serviceId: 'classifier',
@@ -2039,30 +2187,12 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				responseSchemaName: 'mtherios_state_patch',
 				retryCount: extractionResult.retryCount ?? 0,
 			});
-			await logGenerationCall({
-				storyId: request.storyId,
-				clientTurnId: request.clientTurnId,
-				serviceId: 'classifier',
-				operation: 'turn.state_extraction',
-				profile: classifierProfile,
-				result: extractionResult,
-				status: 'success',
-				metadata: {
-					responseFormat: 'json_schema',
-					responseSchemaName: 'mtherios_state_patch',
-					debugSnapshot: buildTurnDebugSnapshot({
-						kind: 'state_extraction',
-						playerText: request.playerText,
-						system: classifierSystem,
-						prompt: extractionPrompt,
-						output: extractionResult.text,
-					}),
-				},
-			});
-			rawUpdate = parseJsonFromGeneratedText(extractionResult.text);
+			parsedUpdate = recorder.timeSync('turn.validation.parse_update', {}, () => parseStateExtractionResult(extractionResult.text));
+			classifierParseSucceeded = true;
 		} catch (error) {
 			const failedResult = generationErrorResult(error);
-			if (failedResult) {
+			const loggedResult = classifierExtractionResult ?? failedResult;
+			if (failedResult && !classifierExtractionResult) {
 				generationTimings.push(timingFromResult('turn.state_extraction', 'classifier', failedResult, 'error'));
 				recorder.record('turn.llm.state_extraction', failedResult.durationMs, {
 					serviceId: 'classifier',
@@ -2079,24 +2209,30 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 					retryCount: failedResult.retryCount ?? 0,
 					statusCode: failedResult.statusCode ?? null,
 				});
+			}
+			if (loggedResult) {
 				await logGenerationCall({
 					storyId: request.storyId,
 					clientTurnId: request.clientTurnId,
 					serviceId: 'classifier',
 					operation: 'turn.state_extraction',
 					profile: classifierProfile,
-					result: failedResult,
+					result: loggedResult,
 					status: 'error',
 					error,
 					metadata: {
-						responseFormat: 'json_schema',
-						responseSchemaName: 'mtherios_state_patch',
-						statusCode: failedResult.statusCode ?? null,
+						...classifierLogMetadata,
+						parseOutcome: classifierExtractionResult ? 'error' : 'not_started',
+						applyOutcome: 'not_started',
+						finishReason: classifierExtractionResult?.finishReason ?? null,
+						reasoningTokens: classifierExtractionResult?.usage.reasoningTokens ?? null,
+						statusCode: failedResult?.statusCode ?? null,
 						debugSnapshot: buildTurnDebugSnapshot({
 							kind: 'state_extraction',
 							playerText: request.playerText,
-							system: classifierSystem,
-							prompt: extractionPrompt,
+							system: classifierExtractionSystem,
+							prompt: classifierExtractionPrompt,
+							output: classifierExtractionResult?.text,
 						}),
 					},
 				});
@@ -2105,21 +2241,82 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		}
 	}
 
-	const parsedUpdate = recorder.timeSync('turn.validation.parse_update', {}, () => parseTurnUpdate(rawUpdate));
 	warnings.push(...parsedUpdate.warnings);
-	const applied = await recorder.time('turn.validation.apply_update', {
-		parseWarnings: parsedUpdate.warnings.length,
-	}, () => applyValidatedTurnUpdate({
-		storyId: request.storyId,
-		playerEntryId,
-		assistantEntryId,
-		narration,
-		update: parsedUpdate.update,
-		parseWarnings: parsedUpdate.warnings,
-		retrievedMemoryIds: retrieved.nodes.map((node) => node.id),
-		serverVersion: turnVersion,
-		memorySettings,
-	}));
+	let applied: Awaited<ReturnType<typeof applyValidatedTurnUpdate>>;
+	try {
+		applied = await recorder.time('turn.validation.apply_update', {
+			parseWarnings: parsedUpdate.warnings.length,
+		}, () => applyValidatedTurnUpdate({
+			storyId: request.storyId,
+			playerEntryId,
+			assistantEntryId,
+			narration,
+			update: parsedUpdate.update,
+			parseWarnings: parsedUpdate.warnings,
+			retrievedMemoryIds: retrieved.nodes.map((node) => node.id),
+			serverVersion: turnVersion,
+			memorySettings,
+		}));
+	} catch (error) {
+		if (classifierProfile && classifierExtractionResult && classifierParseSucceeded) {
+			await logGenerationCall({
+				storyId: request.storyId,
+				clientTurnId: request.clientTurnId,
+				serviceId: 'classifier',
+				operation: 'turn.state_extraction',
+				profile: classifierProfile,
+				result: classifierExtractionResult,
+				status: 'error',
+				error,
+				metadata: {
+					...classifierLogMetadata,
+					parseOutcome: 'valid',
+					applyOutcome: 'error',
+					operationCount: parsedUpdate.operationCount,
+					finishReason: classifierExtractionResult.finishReason ?? null,
+					reasoningTokens: classifierExtractionResult.usage.reasoningTokens ?? null,
+					debugSnapshot: buildTurnDebugSnapshot({
+						kind: 'state_extraction',
+						playerText: request.playerText,
+						system: classifierExtractionSystem,
+						prompt: classifierExtractionPrompt,
+						output: classifierExtractionResult.text,
+					}),
+				},
+			});
+		}
+		throw error;
+	}
+	if (classifierProfile && classifierExtractionResult && classifierParseSucceeded) {
+		await logGenerationCall({
+			storyId: request.storyId,
+			clientTurnId: request.clientTurnId,
+			serviceId: 'classifier',
+			operation: 'turn.state_extraction',
+			profile: classifierProfile,
+			result: classifierExtractionResult,
+			status: 'success',
+			metadata: {
+				...classifierLogMetadata,
+				parseOutcome: 'valid',
+				applyOutcome: parsedUpdate.operationCount > 0 ? 'applied' : 'no_changes',
+				operationCount: parsedUpdate.operationCount,
+				appliedEventCount: applied.eventIds.length,
+				appliedPatchCount: applied.patchIds.length,
+				appliedMemoryNodeCount: applied.memoryNodeIds.length,
+				applyWarningCount: applied.warnings.length,
+				finishReason: classifierExtractionResult.finishReason ?? null,
+				reasoningTokens: classifierExtractionResult.usage.reasoningTokens ?? null,
+				debugSnapshot: buildTurnDebugSnapshot({
+					kind: 'state_extraction',
+					playerText: request.playerText,
+					system: classifierExtractionSystem,
+					prompt: classifierExtractionPrompt,
+					output: classifierExtractionResult.text,
+				}),
+			},
+		});
+	}
 	warnings.push(...applied.warnings);
 	if (stateExtractionMode === 'deferred') {
 		try {
@@ -2134,12 +2331,32 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				narration,
 				clientTurnId: request.clientTurnId,
 				timelineTurn: gmBrief.currentTurn,
+				serverVersion: turnVersion,
 				retrievedMemoryIds: retrieved.nodes.map((node) => node.id),
 				memorySettings,
 			}));
 			warnings.push(`State extraction queued as background job: ${jobId}`);
 		} catch (error) {
 			warnings.push(`State extraction enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	if (shouldQueueChapterSummaryWithoutState(stateExtractionMode, {
+		eventIds: applied.eventIds.length,
+		memoryNodeIds: applied.memoryNodeIds.length,
+		patchIds: applied.patchIds.length,
+	})) {
+		try {
+			const chapterJobId = await recorder.time('turn.chapter_summary.enqueue_without_state_changes', {
+				stateExtractionMode,
+			}, () => enqueueChapterSummaryJob({
+				storyId: request.storyId,
+				serverVersion: turnVersion,
+				dedupeKey: `chapter-summary-${assistantEntryId}`,
+				memorySettings,
+			}));
+			warnings.push(`Chapter checkpoint queued independently of state extraction: ${chapterJobId}`);
+		} catch (error) {
+			warnings.push(`Chapter checkpoint enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 	const promotionMetadata: Record<string, unknown> = {
