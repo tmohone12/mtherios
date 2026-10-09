@@ -1,0 +1,9 @@
+# Phase 12 disposable provider qualification — 2026-09-23
+
+Target: isolated MythEngine app at `127.0.0.1:5174`, build artifact `44c820a6537f...`, source fingerprint `3dba0705e0be...`, isolated PostgreSQL on port 5433, jobs disabled. A new disposable project and game were created for this exercise. Effective project settings had `gmResearch`, `gmQuestions`, `gmNames` and `gmImages` disabled. No provider-backed secret Research call was made.
+
+The GM `agent.run.start` call used an OOC request for a one-sentence test acknowledgment. Run `run_826394ba-fa4b-444a-a0e5-75b6938a6df0` completed at game version 2. PostgreSQL held exactly one user action and one narration; no GM tool call was recorded. The planner usage row reported model `z-ai/glm-5.3-flash-uncensored`, 2,502 total tokens and provider-reported 0 USD. The separate narration API receipt reported `turn.narration` success, 260 tokens and finish reason `stop`. The OOC entry was marked noncanon.
+
+The project-only Assistant conversation `assistant_conversation_85c045ff-e819-402e-81f0-3c67c1d1e1f6` asked for a read-only confirmation. Run `assistant_run_0decaf77-4792-4c2b-a5f9-6389991f888e` completed, with one completed `list` tool receipt, one user message and one Assistant reply. The project had zero content items afterward. Its two completed provider calls used `zai-org/glm-5:thinking`, reported 4,256 total tokens and provider-reported 0 USD; there were zero unaccounted attempts.
+
+Both runs finished before cleanup. The game was purged through `app:story delete`, then the project through `shelf.delete`. PostgreSQL counts for the disposable project, game, GM run and Assistant conversation were all zero. This proves completed GM and Assistant provider paths and persisted receipts on the tested artifact; it does not qualify every failure, restart, cost-mixing or UI scenario in the Phase 12 matrix.

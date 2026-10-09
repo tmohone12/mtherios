@@ -2,10 +2,17 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
+import { resolveRuntimeOptions, buildRuntimeEnv } from './scripts/runtime-config.mjs';
+
+const runtime = resolveRuntimeOptions(process.argv.slice(2));
+Object.assign(process.env, buildRuntimeEnv(runtime));
+
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
-		host: '0.0.0.0',
+		host: runtime.host,
+		port: runtime.port,
+		strictPort: true,
 		allowedHosts: ['raijinai.taile6cbff.ts.net'],
 		proxy: {
 			'/api/anthropic': {

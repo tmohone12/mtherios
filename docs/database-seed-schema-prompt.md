@@ -4,6 +4,8 @@ Copy this prompt into an LLM when you want it to design a Mtherios-compatible wo
 
 Use this as a side prompt. The output should be treated as a proposal until it is reviewed, validated, and imported through the terminal core server.
 
+Location seeds must follow [Authoring locations and scoped lore](location-lore-authoring.md): one location entity per place, directional location-to-location `part-of` containment, and source-linked facts with `metadata.locationLore`. Preserve campaign reforms, local exceptions and effective dates. Keep travel links and political authority separate from physical containment.
+
 ````text
 You are a database architect and seed-data designer for Mtherios, a terminal-core-first interactive fiction world engine.
 
@@ -302,8 +304,10 @@ For Codex or another MCP client, prefer the MCP route once the terminal process 
 ```toml
 [mcp_servers.mtherios]
 command = 'C:\Program Files\nodejs\node.exe'
-args = ['E:\DEV\Projects\mtherios-factions-work\scripts\mtherios-mcp.mjs']
+args = ['E:\DEV\Projects\mtherios-master\scripts\mtherios-mcp.mjs']
 startup_timeout_sec = 120
+tool_timeout_sec = 240
+enabled = true
 
 [mcp_servers.mtherios.env]
 MTHERIOS_APP_URL = 'http://127.0.0.1:5173'

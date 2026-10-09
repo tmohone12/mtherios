@@ -1,19 +1,22 @@
 <script lang="ts">
 	import { X, Check, ExternalLink, Eye, EyeOff, Globe, Server, Sparkles, Cpu, Zap, SlidersHorizontal, Wrench, Palette, ScrollText, ChevronDown, ImageIcon, Brain, RefreshCw, Search, FileText } from 'lucide-svelte';
+	import JevProviderPanel from './JevProviderPanel.svelte';
+	import AgentSettingsPanel from './AgentSettingsPanel.svelte';
 	import ServiceConfigPanel from './ServiceConfigPanel.svelte';
 	import PromptsPanel from './PromptsPanel.svelte';
 	import PromptInspector from './PromptInspector.svelte';
 	import ContextWindow from '../story/ContextWindow.svelte';
+	import MemoryProcessingStatus from '../story/MemoryProcessingStatus.svelte';
+	import { story } from '$lib/stores/story.svelte';
 	import { settings, SERVICE_DEFINITIONS, SERVICE_PROFILES } from '$lib/stores/settings.svelte';
 	import { PROVIDERS, getProviderList } from '$lib/services/ai/sdk/providers/config';
-	import { STYLE_PRESETS } from '$lib/services/ai/image/ImageGenerationService';
 	import {
 		CONTEXT_BUDGET_STEPS,
 		contextBudgetSliderIndexToValue,
 		contextBudgetValueToSliderIndex,
 		formatTokenBudgetCompact,
 	} from '$lib/services/memorySettings';
-	import { defaultTerminalApiKeyRef, syncTerminalLlmSettingsFromBrowser } from '$lib/services/terminalSettings';
+	import { defaultTerminalApiKeyRef, refreshTerminalLlmSettings, patchTerminalLlmSettings, syncInheritedGameMasterTools } from '$lib/services/terminalSettings';
 	import type { ProviderType, APIProfile, UISettings } from '$lib/types';
 	import { uuid } from '$lib/utils/uuid';
 	import { fade } from 'svelte/transition';
@@ -24,9 +27,13 @@
 	}
 
 	let { open, onClose }: Props = $props();
+	let terminalSettingsError = $state('');
+	$effect(() => {
+		if (open) void refreshTerminalLlmSettings().then(() => terminalSettingsError = '').catch(error => terminalSettingsError = String(error));
+	});
 
 	// Tab navigation
-	type Tab = 'providers' | 'services' | 'prompts' | 'memory' | 'images' | 'interface' | 'inspector';
+	type Tab = 'agents' | 'providers' | 'services' | 'prompts' | 'memory' | 'images' | 'interface' | 'inspector';
 	type NumericUiSettingKey = Extract<keyof UISettings,
 		| 'maxMessages'
 		| 'maxHistoryEntries'
@@ -38,6 +45,8 @@
 		| 'retrievedLoreEntryLimit'
 		| 'conversationMemoryLimit'
 		| 'backendMemoryTokenBudget'
+		| 'recentDialogueTokens'
+		| 'recentDialogueTurns'
 		| 'snapshotTokenCap'>;
 
 	interface MemoryDial {
@@ -68,8 +77,25 @@
 	let modelSearch = $state('');
 	let editModelSearch = $state('');
 	let fetchingModels = $state(false);
+	let fetchingEditorModels = $state(false);
+	let modelRequest = 0;
+	let activeModelRequest = 0;
 	let modelFetchMessage = $state('');
 	let contextBudgetSliderIndex = $state(0);
+
+	$effect(() => {
+		if (!open) {
+			modelRequest += 1;
+			activeModelRequest += 1;
+			fetchingModels = false;
+			fetchingEditorModels = false;
+			testStatus = 'idle';
+		}
+	});
+	$effect(() => {
+		void settings.activeProfile?.id;
+		modelFetchMessage = '';
+	});
 
 	$effect(() => {
 		contextBudgetSliderIndex = contextBudgetValueToSliderIndex(settings.contextBudget);
@@ -159,17 +185,19 @@
 		const profile = getProfileByProvider(providerType);
 		const provider = PROVIDERS[providerType];
 		if (!profile || !provider) return false;
-		return !provider.requiresApiKey || !!profile.apiKey;
+		return !provider.requiresApiKey || !!profile.apiKey || profile.id.startsWith('terminal:');
 	}
 
 	function keyLabelFor(profile: APIProfile): string {
 		const provider = PROVIDERS[profile.providerType as ProviderType];
 		if (provider && !provider.requiresApiKey) return 'Application Default Credentials';
 		if (profile.apiKey.startsWith('sk-ant-oat-')) return 'Setup Token (OAuth)';
-		return profile.apiKey ? '••••' + profile.apiKey.slice(-4) : 'Not stored';
+		return profile.id.startsWith('terminal:') && !profile.apiKey ? 'Managed on server' : profile.apiKey ? '••••' + profile.apiKey.slice(-4) : 'Not stored';
 	}
 
 	function selectProvider(id: ProviderType) {
+		modelRequest += 1;
+		fetchingEditorModels = false;
 		editingProvider = id;
 		const existing = getProfileByProvider(id);
 		apiKey = existing?.apiKey ?? '';
@@ -189,25 +217,32 @@
 		const profile = settings.activeProfile;
 		const provider = settings.activeProvider;
 		if (!profile || !provider) return;
+		const request = ++activeModelRequest;
+		const key = profile.apiKey;
+		const baseUrl = profile.baseUrl || provider.baseUrl;
+		const isCurrent = () => request === activeModelRequest && settings.activeProfile?.id === profile.id && settings.activeProfile?.apiKey === key && (settings.activeProfile?.baseUrl || settings.activeProvider?.baseUrl) === baseUrl;
 		fetchingModels = true;
 		modelFetchMessage = '';
 		try {
-			const baseUrl = profile.baseUrl || provider.baseUrl;
 			if (!baseUrl) throw new Error('This provider does not expose an OpenAI-compatible /models endpoint.');
-			const ids = await fetchOpenAIModels(baseUrl, profile.apiKey);
+			const ids = await fetchOpenAIModels(baseUrl, key);
+			if (!isCurrent()) return;
 			profile.fetchedModels = ids;
 			await settings.saveProfiles();
-			modelFetchMessage = `Fetched ${ids.length} model${ids.length === 1 ? '' : 's'}.`;
+			if (isCurrent()) modelFetchMessage = `Fetched ${ids.length} model${ids.length === 1 ? '' : 's'}.`;
 		} catch (e) {
-			modelFetchMessage = e instanceof Error ? e.message : 'Failed to fetch models.';
+			if (isCurrent()) modelFetchMessage = e instanceof Error ? e.message : 'Failed to fetch models.';
 		} finally {
-			fetchingModels = false;
+			if (request === activeModelRequest) fetchingModels = false;
 		}
 	}
 
 	async function fetchModelsForEditing() {
 		if (!editingProvider) return;
-		fetchingModels = true;
+		const request = ++modelRequest;
+		const providerId = editingProvider, key = apiKey, url = customUrl;
+		const isCurrent = () => request === modelRequest && editingProvider === providerId && apiKey === key && customUrl === url;
+		fetchingEditorModels = true;
 		testStatus = 'testing';
 		testMessage = '';
 		try {
@@ -215,14 +250,19 @@
 			const baseUrl = customUrl || provider.baseUrl;
 			if (!baseUrl) throw new Error('This provider does not expose an OpenAI-compatible /models endpoint.');
 			const ids = await fetchOpenAIModels(baseUrl, apiKey);
+			if (!isCurrent()) return;
 			fetchedModelsForProfile = ids;
 			testStatus = 'success';
 			testMessage = `Fetched ${ids.length} model${ids.length === 1 ? '' : 's'}.`;
 		} catch (e) {
+			if (!isCurrent()) return;
 			testStatus = 'error';
 			testMessage = e instanceof Error ? e.message : 'Failed to fetch models.';
 		} finally {
-			fetchingModels = false;
+			if (request === modelRequest) {
+				fetchingEditorModels = false;
+				if (!isCurrent()) testStatus = 'idle';
+			}
 		}
 	}
 
@@ -232,6 +272,9 @@
 		const providerConfig = PROVIDERS[providerType];
 		const existing = getProfileByProvider(providerType);
 		const normalizedKeyRef = terminalApiKeyRef.trim() || null;
+		if (normalizedKeyRef?.replace(/^env:/, '').startsWith('sk-')) {
+			testStatus = 'error'; testMessage = 'Put the secret in API Key. Terminal key ref must be a name such as env:NANOGPT_API_KEY.'; return;
+		}
 
 		if (existing) {
 			existing.apiKey = apiKey;
@@ -262,10 +305,13 @@
 
 		if (model) {
 			settings.narrativeSettings.model = model;
-			await saveNarrativeSettingsAndSync();
+			await settings.saveNarrativeSettings();
 		}
 		try {
-			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']);
+			await settings.setServiceConfig('narrative', { profileId: settings.activeProfileId ?? '', model: settings.narrativeSettings.model });
+			await patchTerminalLlmSettings([{ serviceId: 'narrative', providerType, baseUrl: customUrl || providerConfig?.baseUrl || null, model: settings.narrativeSettings.model || null, apiKeyRef: normalizedKeyRef || defaultTerminalApiKeyRef(providerType) }], apiKey.trim() ? [{ ref: normalizedKeyRef || defaultTerminalApiKeyRef(providerType), value: apiKey.trim() }] : []);
+			await syncInheritedGameMasterTools();
+			await refreshTerminalLlmSettings();
 			testStatus = 'success';
 			testMessage = 'Saved provider and synced terminal runtime settings.';
 		} catch (error) {
@@ -276,7 +322,11 @@
 
 	async function testConnection() {
 		if (!editingProvider) return;
+		const request = ++modelRequest;
+		const providerId = editingProvider, key = apiKey, url = customUrl, selectedModel = model;
+		const isCurrent = () => request === modelRequest && editingProvider === providerId && apiKey === key && customUrl === url && model === selectedModel;
 		testStatus = 'testing';
+		testMessage = '';
 		try {
 			const provider = PROVIDERS[editingProvider];
 			const testModel = model || provider.fallbackModels[0];
@@ -308,8 +358,8 @@
 						max_tokens: 1,
 					}),
 				});
-				if (res.ok) { testStatus = 'success'; testMessage = 'Connected!'; }
-				else { const err = await res.text(); testStatus = 'error'; testMessage = `HTTP ${res.status}: ${err.slice(0, 150)}`; }
+				if (res.ok) { if (!isCurrent()) return; testStatus = 'success'; testMessage = 'Connected!'; }
+				else { const err = await res.text(); if (!isCurrent()) return; testStatus = 'error'; testMessage = `HTTP ${res.status}: ${err.slice(0, 150)}`; }
 			} else if (isZaiShape) {
 				// Z.AI's public OpenAPI surface exposes chat completions, not /models.
 				const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -324,49 +374,56 @@
 						stream: false,
 					}),
 				});
-				if (res.ok) { testStatus = 'success'; testMessage = 'Connected!'; }
-				else { const err = await res.text(); testStatus = 'error'; testMessage = `HTTP ${res.status}: ${err.slice(0, 150)}`; }
+				if (res.ok) { if (!isCurrent()) return; testStatus = 'success'; testMessage = 'Connected!'; }
+				else { const err = await res.text(); if (!isCurrent()) return; testStatus = 'error'; testMessage = `HTTP ${res.status}: ${err.slice(0, 150)}`; }
 			} else {
 				// OpenAI-compatible: hit /models, parse the list, persist it.
 				try {
 					const ids = await fetchOpenAIModels(baseUrl, apiKey);
+					if (!isCurrent()) return;
 					fetchedModelsForProfile = ids;
 					testStatus = 'success';
 					testMessage = ids.length > 0
 						? `Connected — fetched ${ids.length} model${ids.length === 1 ? '' : 's'}`
 						: 'Connected, but no models returned';
 				} catch (e) {
+					if (!isCurrent()) return;
 					testStatus = 'error';
 					testMessage = e instanceof Error ? e.message : 'Connection failed';
 				}
 			}
 		} catch (e) {
+			if (!isCurrent()) return;
 			testStatus = 'error';
 			testMessage = e instanceof Error ? e.message : 'Connection failed';
+		} finally {
+			if (request === modelRequest && !isCurrent()) testStatus = 'idle';
 		}
 	}
 
 	// Generation settings (bound and saved)
-	async function syncNarrativeRuntimeSetting() {
+	async function syncNarrativeRuntimeSetting(field: 'model' | 'temperature' | 'maxTokens' | 'reasoningEffort') {
 		try {
-			await syncTerminalLlmSettingsFromBrowser(['narrative']);
+			await patchTerminalLlmSettings([{ serviceId: 'narrative', [field]: settings.narrativeSettings[field] }]);
+			if (field === 'model') await syncInheritedGameMasterTools();
+			await refreshTerminalLlmSettings();
 		} catch (error) {
 			console.warn('[Settings] Terminal sync for narrative settings failed:', error);
 		}
 	}
 
-	async function saveNarrativeSettingsAndSync() {
+	async function saveNarrativeSettingsAndSync(field: 'model' | 'temperature' | 'maxTokens' | 'reasoningEffort' = 'model') {
 		await settings.saveNarrativeSettings();
-		await syncNarrativeRuntimeSetting();
+		await syncNarrativeRuntimeSetting(field);
 	}
 
 	async function saveTemp(val: number) {
 		settings.narrativeSettings.temperature = val;
-		await saveNarrativeSettingsAndSync();
+		await saveNarrativeSettingsAndSync('temperature');
 	}
 	async function saveMaxTokens(val: number) {
 		settings.narrativeSettings.maxTokens = val;
-		await saveNarrativeSettingsAndSync();
+		await saveNarrativeSettingsAndSync('maxTokens');
 	}
 
 	function clampDial(value: number, min: number, max: number): number {
@@ -407,17 +464,12 @@
 	async function saveUiNumber(key: NumericUiSettingKey, value: number, min: number, max: number) {
 		settings.uiSettings[key] = clampDial(value, min, max);
 		await settings.saveUISettings();
-		if (key === 'backendMemoryTokenBudget') {
-			await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
-				console.warn('[Settings] Terminal memory setting sync failed:', error);
-			});
-		}
 	}
 
 	async function saveContextBudgetValue(value: number) {
 		settings.contextBudget = clampDial(value, 0, 200000);
 		await settings.saveContextBudget();
-		await syncTerminalLlmSettingsFromBrowser(['narrative', 'classifier']).catch((error) => {
+		await patchTerminalLlmSettings(['narrative', 'classifier'].map(serviceId => ({ serviceId, contextBudget: settings.contextBudget || null }))).catch((error) => {
 			console.warn('[Settings] Terminal context budget sync failed:', error);
 		});
 	}
@@ -433,97 +485,50 @@
 	const topProviders: ProviderType[] = ['anthropic', 'openrouter', 'nanogpt', 'openai'];
 	const otherProviders = getProviderList().filter(p => !topProviders.includes(p.value));
 
-	// ── Inline image-provider editor (Images tab) ──
-	let imgEditorOpen = $state(false);
-	let imgProviderType = $state<ProviderType>('google-ai-studio');
-	let imgApiKey = $state('');
-	let imgBaseUrl = $state('');
-	let imgShowKey = $state(false);
-	let imgSaving = $state(false);
-	let imgSaveError = $state('');
-
-	const imageCapableProviders = $derived(
-		(Object.keys(PROVIDERS) as ProviderType[])
-			.filter(k => PROVIDERS[k].capabilities.imageGeneration)
-			.map(k => ({ value: k, label: PROVIDERS[k].name }))
-	);
-
-	function openImgEditorForExisting() {
-		const id = settings.uiSettings.imageProfileId;
-		const existing = id ? settings.profiles.find(p => p.id === id) : undefined;
-		if (existing) {
-			imgProviderType = existing.providerType as ProviderType;
-			imgApiKey = existing.apiKey ?? '';
-			imgBaseUrl = existing.baseUrl ?? '';
-		} else {
-			imgProviderType = 'google-ai-studio';
-			imgApiKey = '';
-			imgBaseUrl = '';
-		}
-		imgSaveError = '';
-		imgEditorOpen = true;
-	}
-
-	async function saveImageProvider() {
-		imgSaving = true;
-		imgSaveError = '';
-		try {
-			const cfg = PROVIDERS[imgProviderType];
-			if (!cfg) throw new Error('Unknown provider type');
-			if (cfg.requiresApiKey && !imgApiKey) throw new Error('API key required');
-
-			const currentId = settings.uiSettings.imageProfileId;
-			const existing = currentId ? settings.profiles.find(p => p.id === currentId) : undefined;
-			// Reuse existing profile only if it's the same provider type AND
-			// is image-only (so we don't stomp the user's narrative profile).
-			const reuse = existing && existing.providerType === imgProviderType
-				&& settings.activeProfileId !== existing.id;
-
-			if (reuse && existing) {
-				existing.apiKey = imgApiKey;
-				if (imgBaseUrl) existing.baseUrl = imgBaseUrl; else delete existing.baseUrl;
-				await settings.saveProfiles();
-			} else {
-				const profile: APIProfile = {
-					id: uuid(),
-					name: `${cfg.name} (Image)`,
-					providerType: imgProviderType,
-					apiKey: imgApiKey,
-					...(imgBaseUrl ? { baseUrl: imgBaseUrl } : {}),
-					customModels: [],
-					fetchedModels: [],
-					reasoningModels: [],
-					hiddenModels: [],
-					favoriteModels: [],
-					createdAt: Date.now(),
-				};
-				await settings.addProfile(profile);
-				settings.uiSettings.imageProfileId = profile.id;
-				await settings.saveUISettings();
-			}
-			imgEditorOpen = false;
-		} catch (e) {
-			imgSaveError = e instanceof Error ? e.message : 'Save failed';
-		} finally {
-			imgSaving = false;
-		}
-	}
-
-	const tabs: Array<{ id: Tab; label: string; shortLabel: string; icon: typeof Globe }> = [
-		{ id: 'providers', label: 'Providers & Models', shortLabel: 'Providers', icon: Globe },
-		{ id: 'services', label: 'AI Services', shortLabel: 'Services', icon: Wrench },
-		{ id: 'prompts', label: 'Prompts', shortLabel: 'Prompts', icon: FileText },
-		{ id: 'memory', label: 'Memory', shortLabel: 'Memory', icon: Brain },
-		{ id: 'images', label: 'Image Generation', shortLabel: 'Images', icon: ImageIcon },
-		{ id: 'interface', label: 'Interface', shortLabel: 'UI', icon: Palette },
-		{ id: 'inspector', label: 'Inspector', shortLabel: 'Inspector', icon: ScrollText },
+	const tabs: Array<{ id: Tab; label: string; shortLabel: string; description: string; icon: typeof Globe }> = [
+		{ id: 'providers', label: 'Providers & Models', shortLabel: 'Providers', description: 'Connect your providers and choose the voice behind your stories.', icon: Globe },
+		{ id: 'agents', label: 'Agent Tools', shortLabel: 'Tools', description: 'Set separate project and game preferences for GM and Assistant tools.', icon: Wrench },
+		{ id: 'services', label: 'AI Services', shortLabel: 'Services', description: 'Choose the models that help write, remember, and build your world.', icon: Wrench },
+		{ id: 'prompts', label: 'Prompts', shortLabel: 'Prompts', description: 'Shape the instructions behind your narrator and creative tools.', icon: FileText },
+		{ id: 'memory', label: 'Memory', shortLabel: 'Memory', description: 'Give each scene the right balance of recent events and lasting history.', icon: Brain },
+		{ id: 'images', label: 'Image Generation', shortLabel: 'Images', description: 'Set an art direction for the people and places in your story.', icon: ImageIcon },
+		{ id: 'interface', label: 'Interface', shortLabel: 'Interface', description: 'Make room for the way you like to read and write.', icon: Palette },
+		{ id: 'inspector', label: 'Inspector', shortLabel: 'Inspector', description: 'Look inside the context and instructions sent to your narrator.', icon: ScrollText },
 	];
 
-	const liveContextDials: MemoryDial[] = [
+	function focusDialog(node: HTMLElement) {
+		const previousFocus = document.activeElement;
+		const frame = requestAnimationFrame(() => node.querySelector<HTMLButtonElement>('[data-settings-close]')?.focus());
+		function handleKeydown(event: KeyboardEvent) {
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				event.stopPropagation();
+				onClose();
+			} else if (event.key === 'Tab') {
+				const controls = [...node.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]')].filter(control => control.offsetParent !== null);
+				const target = event.shiftKey ? controls.at(-1) : controls[0];
+				if (document.activeElement === (event.shiftKey ? controls[0] : controls.at(-1))) {
+					event.preventDefault();
+					target?.focus();
+				}
+			}
+		}
+		node.addEventListener('keydown', handleKeydown);
+		return { destroy() {
+			cancelAnimationFrame(frame);
+			node.removeEventListener('keydown', handleKeydown);
+			if (previousFocus instanceof HTMLElement) previousFocus.focus();
+		} };
+	}
+
+	const serverMemoryControls = $derived(Boolean(story.currentStory?.serverStoryId) || settings.uiSettings.serverAuthoritativeTurns);
+	const liveContextDials: MemoryDial[] = $derived(serverMemoryControls ? [
+		{ key: 'recentDialogueTurns', label: 'Recent Dialogue', description: 'Keep up to this many complete player-and-GM turns from the current chapter. A scene checkpoint may shorten this to 10 turns; a 24,000-token safety cap prevents oversized requests.', min: 1, max: 40, step: 1, suffix: 'turns' },
+	] : [
 		{ key: 'snapshotTokenCap', label: 'Dynamic Prompt Cap', description: 'Caps arcs, chapters, lore, world state, retrieved memory, and final instructions before history is added.', min: 0, max: 50000, step: 500, suffix: 'tokens', zeroLabel: 'Auto' },
 		{ key: 'maxMessages', label: 'Conversation Messages', description: 'Recent chat turns kept in the short-term prompt window.', min: 1, max: 1000, step: 1, suffix: 'messages' },
 		{ key: 'maxHistoryEntries', label: 'Raw History Scan', description: 'Raw entries allowed into the local history scan before token budgeting cuts them down.', min: 1, max: 1000, step: 1, suffix: 'entries' },
-	];
+	]);
 
 	const retrievalDials: MemoryDial[] = [
 		{ key: 'backendMemoryTokenBudget', label: 'Terminal Memory Packet', description: 'Target size for terminal-retrieved memory when a story is bound to the terminal world database.', min: 160, max: 2400, step: 20, suffix: 'tokens' },
@@ -533,74 +538,57 @@
 	];
 
 	const summaryDials: MemoryDial[] = [
-		{ key: 'chapterThreshold', label: 'Chapter Threshold', description: 'Eligible entries needed before the chapter summarizer can run.', min: 5, max: 200, step: 5, suffix: 'entries' },
-		{ key: 'postChapterBuffer', label: 'Post-Chapter Buffer', description: 'Fresh entries protected from summarization so the current scene stays hot.', min: 0, max: 100, step: 1, suffix: 'entries' },
 		{ key: 'maxPrevChaptersInSummary', label: 'Prior Chapter Context', description: 'Older chapter summaries given to the chapter summarizer for continuity.', min: 0, max: 50, step: 1, suffix: 'chapters', zeroLabel: 'None' },
-		{ key: 'chaptersPerArc', label: 'Chapters per Arc', description: 'Uncovered chapters condensed into one long-term arc at a time.', min: 2, max: 50, step: 1, suffix: 'chapters' },
 	];
 </script>
 
 {#if open}
-<div class="fixed inset-0 z-50 flex items-stretch justify-stretch overflow-hidden p-0 sm:items-center sm:justify-center sm:p-4" transition:fade={{ duration: 150 }}>
-	<button class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick={onClose} aria-label="Close settings"></button>
+<div class="settings-overlay" transition:fade={{ duration: 150 }}>
+	<button class="settings-backdrop" onclick={onClose} aria-label="Close settings" tabindex="-1"></button>
 
 	<!-- Modal: wider, taller -->
-	<div class="settings-modal-shell relative flex min-h-0 w-full max-w-3xl flex-col overflow-hidden rounded-none border-0 border-[var(--border-primary)] bg-[var(--bg-secondary)] sm:flex-row sm:rounded-2xl sm:border" role="dialog" aria-modal="true" aria-label="Settings">
+	<div class="settings-modal-shell" class:settings-wide={activeTab === 'prompts'} role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1" use:focusDialog>
+		{#if terminalSettingsError}<p role="alert" class="p-3 text-sm text-red-400">Terminal settings could not refresh: {terminalSettingsError}</p>{/if}
 
 		<!-- Sidebar -->
-		<div class="hidden sm:flex w-48 shrink-0 flex-col border-r border-[var(--border-primary)] bg-[var(--bg-primary)]">
-			<div class="px-4 py-5">
-				<h2 class="font-display text-sm font-semibold tracking-wider uppercase text-[var(--text-accent)]">Settings</h2>
+		<aside class="settings-sidebar">
+			<div class="settings-brand">
+				<span class="settings-eyebrow">Your workspace</span>
+				<h2>Settings</h2>
 			</div>
-			<nav class="flex-1 space-y-0.5 px-2">
+			<nav class="settings-navigation" aria-label="Settings sections">
 				{#each tabs as tab}
 					<button
-						class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors
-							{activeTab === tab.id
-								? 'bg-[rgba(212,168,83,0.1)] text-[var(--text-accent)]'
-								: 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'}"
+						class="settings-nav-item"
+						class:active={activeTab === tab.id}
+						aria-current={activeTab === tab.id ? 'page' : undefined}
 						onclick={() => activeTab = tab.id}
 					>
 						<tab.icon class="h-4 w-4 shrink-0" />
-						<span>{tab.label}</span>
+						<span class="settings-nav-label">{tab.label}</span>
+						<span class="settings-nav-short">{tab.shortLabel}</span>
 					</button>
 				{/each}
 			</nav>
-		</div>
-
-		<!-- Mobile tab picker -->
-		<div class="grid shrink-0 grid-cols-4 gap-1.5 border-b border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 sm:hidden">
-			{#each tabs as tab}
-				<button
-					type="button"
-					aria-label={tab.label}
-					aria-pressed={activeTab === tab.id}
-					class="flex min-h-11 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[10px] font-semibold uppercase tracking-wider transition-colors
-						{activeTab === tab.id
-							? 'border-[var(--color-gold-600)]/50 bg-[rgba(212,168,83,0.12)] text-[var(--text-accent)]'
-							: 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-muted)]'}"
-					onclick={() => activeTab = tab.id}
-				>
-					<tab.icon class="h-3.5 w-3.5 shrink-0" />
-					<span class="min-w-0 truncate">{tab.shortLabel}</span>
-				</button>
-			{/each}
-		</div>
+			<div class="settings-sidebar-note"><span></span> Make it your own.</div>
+		</aside>
 
 		<!-- Content area -->
-		<div class="flex min-h-0 flex-1 flex-col min-w-0">
+		<div class="settings-main">
 			<!-- Header -->
-			<div class="flex items-center justify-between border-b border-[var(--border-primary)] py-2 pl-4 pr-2 sm:px-6 sm:py-3">
-				<h3 class="font-display text-base tracking-wide text-[var(--text-primary)]">
-					{tabs.find(t => t.id === activeTab)?.label ?? 'Settings'}
-				</h3>
-				<button class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-8 sm:w-8" onclick={onClose} aria-label="Close settings">
+			<header class="settings-header">
+				<div>
+					<span class="settings-eyebrow">Preferences / {tabs.findIndex(t => t.id === activeTab) + 1 < 10 ? '0' : ''}{tabs.findIndex(t => t.id === activeTab) + 1}</span>
+					<h3 id="settings-section-title">{tabs.find(t => t.id === activeTab)?.label ?? 'Settings'}</h3>
+					<p>{tabs.find(t => t.id === activeTab)?.description}</p>
+				</div>
+				<button class="settings-close" data-settings-close onclick={onClose} aria-label="Close settings">
 					<X class="h-5 w-5" />
 				</button>
-			</div>
+			</header>
 
 			<!-- Scrollable content -->
-			<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pt-4 sm:p-6 sm:pt-6" style="margin-top: 0; -webkit-overflow-scrolling: touch;">
+			<div class="settings-body" aria-labelledby="settings-section-title">
 
 				<!-- ═══ TAB: PROVIDERS & MODELS ═══ -->
 				{#if activeTab === 'providers'}
@@ -608,10 +596,10 @@
 
 					<!-- Active provider + model display -->
 					{#if settings.activeProfile}
-						<div class="rounded-xl border border-[var(--color-gold-600)]/20 bg-[rgba(212,168,83,0.04)] p-4">
+						<div class="active-provider rounded-xl border border-[var(--color-gold-600)]/20 bg-[rgba(212,168,83,0.04)] p-4">
 							<div class="flex items-center justify-between mb-3">
 								<span class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Active Provider</span>
-								<span class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">CONNECTED</span>
+								<span class="provider-status">Active profile</span>
 							</div>
 							<div class="text-sm text-[var(--text-primary)] font-semibold">{settings.activeProfile.name}</div>
 							<div class="mt-1 font-mono text-xs text-[var(--text-muted)]">
@@ -625,8 +613,8 @@
 
 					<!-- Narrative model override -->
 					<div class="space-y-2">
-						<label for="narrative-model-input" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Narrative Model</label>
-						<div class="flex gap-2">
+						<label for="narrative-model-input" class="font-display text-sm tracking-wide text-[var(--text-primary)]">GameMaster Model</label>
+						<div class="model-actions flex gap-2">
 							<input
 								id="narrative-model-input"
 								type="text"
@@ -645,7 +633,7 @@
 							</button>
 							<button
 								class="rounded-lg bg-[var(--color-gold-400)]/20 px-3 py-2 text-xs font-semibold text-[var(--text-accent)] hover:bg-[var(--color-gold-400)]/30"
-								onclick={saveNarrativeSettingsAndSync}
+								onclick={() => saveNarrativeSettingsAndSync()}
 							>Save</button>
 						</div>
 						{#if modelChips.length > 0}
@@ -681,12 +669,20 @@
 					</div>
 
 					<!-- Generation params -->
+					<p class="text-xs text-[var(--text-muted)]">These settings mirror the terminal. API keys stay on the server unless you explicitly replace one.</p>
+					<button class="min-h-11 text-xs text-[var(--text-accent)]" onclick={() => refreshTerminalLlmSettings().then(() => terminalSettingsError = '').catch(error => terminalSettingsError = String(error))}>Refresh from server</button>
+					<div class="space-y-1.5">
+						<label for="narrative-reasoning" class="text-xs text-[var(--text-muted)]">Reasoning (server setting)</label>
+						<select id="narrative-reasoning" bind:value={settings.narrativeSettings.reasoningEffort} onchange={() => saveNarrativeSettingsAndSync('reasoningEffort')} class="w-full rounded-lg bg-[var(--bg-tertiary)] p-2 text-sm">
+							{#each ['off', 'low', 'medium', 'high'] as effort}<option value={effort}>{effort}</option>{/each}
+						</select>
+					</div>
 					<div class="grid grid-cols-2 gap-4">
 						<div class="space-y-1.5">
 							<label for="narrative-temperature" class="text-xs text-[var(--text-muted)]">Temperature</label>
 							<input id="narrative-temperature" type="range" min="0" max="2" step="0.1"
 								bind:value={settings.narrativeSettings.temperature}
-								onchange={() => saveNarrativeSettingsAndSync()}
+								onchange={() => saveNarrativeSettingsAndSync('temperature')}
 								class="w-full accent-[var(--color-gold-400)]" />
 							<div class="text-center font-mono text-xs text-[var(--text-primary)]">{settings.narrativeSettings.temperature?.toFixed(1) ?? '1.0'}</div>
 						</div>
@@ -694,10 +690,12 @@
 							<label for="narrative-max-tokens" class="text-xs text-[var(--text-muted)]">Max Tokens</label>
 							<input id="narrative-max-tokens" type="number" min="256" max="65536" step="256"
 								bind:value={settings.narrativeSettings.maxTokens}
-								onchange={() => saveNarrativeSettingsAndSync()}
+								onchange={() => saveNarrativeSettingsAndSync('maxTokens')}
 								class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-1.5 font-mono text-sm text-[var(--text-primary)] focus:outline-none" />
 						</div>
 					</div>
+
+					<JevProviderPanel />
 
 					<!-- Provider list -->
 					<div>
@@ -777,7 +775,7 @@
 											placeholder={editingProvider === 'anthropic' ? 'sk-ant-... or sk-ant-oat-...' : editingProvider === 'anthropic-proxy' ? 'Bridge token from cc-bridge service' : 'sk-...'}
 											class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 pr-8 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
 										/>
-										<button class="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)]"
+										<button class="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
 											onclick={() => showApiKey = !showApiKey}>
 											{#if showApiKey}<EyeOff class="h-3.5 w-3.5" />{:else}<Eye class="h-3.5 w-3.5" />{/if}
 										</button>
@@ -828,10 +826,10 @@
 									<button
 										class="flex items-center gap-1.5 rounded-lg border border-[var(--border-primary)] px-3 py-1.5 text-xs text-[var(--text-primary)] hover:border-[var(--color-gold-600)] disabled:opacity-50"
 										onclick={fetchModelsForEditing}
-										disabled={fetchingModels || (prov.requiresApiKey && !apiKey)}
+										disabled={testStatus === 'testing' || (prov.requiresApiKey && !apiKey)}
 										title="Fetch models from this provider"
 									>
-										<RefreshCw class="h-3.5 w-3.5 {fetchingModels ? 'animate-spin' : ''}" />
+										<RefreshCw class="h-3.5 w-3.5 {fetchingEditorModels ? 'animate-spin' : ''}" />
 										Get
 									</button>
 								</div>
@@ -868,7 +866,7 @@
 									{:else}Test{/if}
 								</button>
 								<button class="flex-1 rounded-lg bg-[var(--color-gold-400)]/20 px-3 py-2 text-xs font-semibold text-[var(--text-accent)] hover:bg-[var(--color-gold-400)]/30"
-									onclick={saveProfile} disabled={prov.requiresApiKey && !apiKey}>
+								onclick={saveProfile} disabled={prov.requiresApiKey && !apiKey && !getProfileByProvider(editingProvider)?.id.startsWith('terminal:')}>
 									Save Provider
 								</button>
 							</div>
@@ -898,7 +896,9 @@
 				</div>
 
 				<!-- ═══ TAB: AI SERVICES ═══ -->
-				{:else if activeTab === 'services'}
+				{:else if activeTab === 'agents'}
+				<AgentSettingsPanel />
+			{:else if activeTab === 'services'}
 				<ServiceConfigPanel onBack={() => activeTab = 'providers'} />
 
 				<!-- ═══ TAB: PROMPTS ═══ -->
@@ -908,11 +908,14 @@
 				<!-- ═══ TAB: MEMORY ═══ -->
 				{:else if activeTab === 'memory'}
 				<div class="space-y-4">
+					{#if story.currentStory?.serverStoryId}
+						<MemoryProcessingStatus storyId={story.currentStory.serverStoryId} />
+					{/if}
 					<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
 						<div class="mb-4 flex items-start justify-between gap-3">
 							<div>
 								<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Live Context</h4>
-								<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">Prompt size, recent turns, and raw history intake.</p>
+								<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">Separate allowances for scene memory and recent dialogue. The server checks the whole request and reserves room for the reply.</p>
 							</div>
 							<span class="rounded-full border border-[var(--border-primary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
 								{settings.contextBudget === 0 ? 'Auto' : `${settings.contextBudget.toLocaleString()} tokens`}
@@ -922,13 +925,14 @@
 						<div class="space-y-5">
 							<div class="space-y-2">
 								<div class="flex items-center justify-between gap-3">
-									<span class="text-xs font-medium text-[var(--text-primary)]">Context Budget</span>
+									<span class="text-xs font-medium text-[var(--text-primary)]">Scene and Memory Budget</span>
 									<span class="font-mono text-[11px] text-[var(--text-muted)]">{settings.contextBudget === 0 ? 'Auto' : settings.contextBudget.toLocaleString()}</span>
 								</div>
 								<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
 									<input
 										type="range"
 										bind:value={contextBudgetSliderIndex}
+										aria-label="Scene and memory budget slider"
 										use:syncRangeValue={contextBudgetSliderIndex}
 										min="0"
 										max={CONTEXT_BUDGET_STEPS.length - 1}
@@ -939,6 +943,7 @@
 									<input
 										type="number"
 										value={settings.contextBudget}
+										aria-label="Scene and memory budget in tokens"
 										min="0"
 										max="200000"
 										step="1000"
@@ -952,7 +957,7 @@
 									<span class="text-center">{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[8])}</span>
 									<span class="text-right">{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[CONTEXT_BUDGET_STEPS.length - 1])}</span>
 								</div>
-								<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">0 keeps the model-aware automatic budget.</p>
+								<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">0 uses the compiler's built-in section limits. Recent dialogue has its own allowance below; this is not the total model context size.</p>
 							</div>
 
 							{#each liveContextDials as dial (dial.key)}
@@ -965,7 +970,7 @@
 										{#if dial.key === 'backendMemoryTokenBudget'}
 											<input
 												type="range"
-												value={String(backendMemorySliderPosition())}
+												aria-label={`${dial.label} slider`} value={String(backendMemorySliderPosition())}
 												use:syncRangeValue={backendMemorySliderPosition()}
 												min="0"
 												max="100"
@@ -976,7 +981,7 @@
 										{:else}
 											<input
 												type="range"
-												value={String(settingValue(dial.key))}
+												aria-label={`${dial.label} slider`} value={String(settingValue(dial.key))}
 												use:syncRangeValue={settingValue(dial.key)}
 												min={dial.min}
 												max={dial.max}
@@ -987,7 +992,7 @@
 										{/if}
 										<input
 											type="number"
-											bind:value={settings.uiSettings[dial.key]}
+											aria-label={dial.label} bind:value={settings.uiSettings[dial.key]}
 											min={dial.min}
 											max={dial.max}
 											step={dial.step}
@@ -1013,7 +1018,7 @@
 						</div>
 
 						<div class="space-y-5">
-							{#each retrievalDials as dial (dial.key)}
+							{#each retrievalDials.filter(dial => !serverMemoryControls || dial.key === 'backendMemoryTokenBudget') as dial (dial.key)}
 								<div class="space-y-2">
 									<div class="flex items-center justify-between gap-3">
 										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
@@ -1023,7 +1028,7 @@
 										{#if dial.key === 'backendMemoryTokenBudget'}
 											<input
 												type="range"
-												value={String(backendMemorySliderPosition())}
+												aria-label={`${dial.label} slider`} value={String(backendMemorySliderPosition())}
 												use:syncRangeValue={backendMemorySliderPosition()}
 												min="0"
 												max="100"
@@ -1034,7 +1039,7 @@
 										{:else}
 											<input
 												type="range"
-												value={String(settingValue(dial.key))}
+												aria-label={`${dial.label} slider`} value={String(settingValue(dial.key))}
 												use:syncRangeValue={settingValue(dial.key)}
 												min={dial.min}
 												max={dial.max}
@@ -1045,7 +1050,7 @@
 										{/if}
 										<input
 											type="number"
-											value={settingValue(dial.key)}
+											aria-label={dial.label} value={settingValue(dial.key)}
 											min={dial.min}
 											max={dial.max}
 											step={dial.step}
@@ -1062,11 +1067,11 @@
 					<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
 						<div class="mb-4">
 							<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Summary Jobs</h4>
-							<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">Chapter creation and arc condensation pacing.</p>
+							<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">Each chapter summarizes 20 completed story turns, keeping your action and its narration together. Each arc summarizes 10 consecutive chapters. Summarization starts as soon as the window is complete.</p>
 						</div>
 
 						<div class="space-y-5">
-							{#each summaryDials as dial (dial.key)}
+							{#each summaryDials.filter(dial => !serverMemoryControls || dial.key !== 'maxPrevChaptersInSummary') as dial (dial.key)}
 								<div class="space-y-2">
 									<div class="flex items-center justify-between gap-3">
 										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
@@ -1075,7 +1080,7 @@
 									<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
 										<input
 											type="range"
-											value={settingValue(dial.key)}
+											aria-label={dial.label} value={settingValue(dial.key)}
 											min={dial.min}
 											max={dial.max}
 											step={dial.step}
@@ -1084,7 +1089,7 @@
 										/>
 										<input
 											type="number"
-											value={settingValue(dial.key)}
+											aria-label={dial.label} value={settingValue(dial.key)}
 											min={dial.min}
 											max={dial.max}
 											step={dial.step}
@@ -1102,118 +1107,11 @@
 				<!-- ═══ TAB: IMAGE GENERATION ═══ -->
 				{:else if activeTab === 'images'}
 				<div class="space-y-5">
-					<!-- Image Provider (separate from narrative) -->
-					<div class="space-y-2">
-						<label for="image-profile-select" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Image Provider</label>
-						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
-							The provider used for image generation. Independent from the narrative provider — pick a configured profile, configure a dedicated one below, or leave on default to follow the active narrative profile.
-						</p>
-						<div class="flex gap-2">
-							<select
-								id="image-profile-select"
-								class="flex-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none"
-								value={settings.uiSettings.imageProfileId ?? ''}
-								onchange={(e) => { settings.uiSettings.imageProfileId = (e.target as HTMLSelectElement).value; settings.saveUISettings(); }}
-							>
-								<option value="">Use narrative provider (default)</option>
-								{#each settings.profiles as p}
-									{@const cfg = PROVIDERS[p.providerType as ProviderType]}
-									{@const supportsImages = cfg?.capabilities.imageGeneration}
-									<option value={p.id}>{p.name}{supportsImages ? '' : ' — no image support'}</option>
-								{/each}
-							</select>
-							<button
-								class="rounded-xl border border-[var(--border-primary)] px-4 py-3 text-xs text-[var(--text-primary)] hover:border-[var(--color-gold-600)]"
-								onclick={openImgEditorForExisting}
-							>
-								{settings.uiSettings.imageProfileId ? 'Edit Key' : 'Add Image Provider'}
-							</button>
-						</div>
+					<div class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4 text-sm text-[var(--text-secondary)]">
+						Scene images and character portraits use the Image Generation service configured under
+						<button class="font-semibold text-[var(--text-accent)] underline" onclick={() => activeTab = 'services'}>AI Services</button>.
+						Character appearance and scene details come from the saved game.
 					</div>
-
-					<!-- Inline image-provider editor -->
-					{#if imgEditorOpen}
-						<div class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4 space-y-3">
-							<div class="flex items-center justify-between">
-								<h4 class="font-display text-sm font-semibold text-[var(--text-primary)]">Image Provider Setup</h4>
-								<button class="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]" onclick={() => imgEditorOpen = false}>Close</button>
-							</div>
-
-							<div class="space-y-1.5">
-								<label for="image-provider-type" class="text-xs text-[var(--text-muted)]">Provider</label>
-								<select
-									id="image-provider-type"
-									class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none"
-									bind:value={imgProviderType}
-								>
-									{#each imageCapableProviders as p}
-										<option value={p.value}>{p.label}</option>
-									{/each}
-								</select>
-								<p class="text-[10px] text-[var(--text-muted)]">For Gemini image, pick <span class="font-mono">Google AI Studio</span>.</p>
-							</div>
-
-							{#if PROVIDERS[imgProviderType]?.requiresApiKey}
-								<div class="space-y-1.5">
-									<label for="image-provider-api-key" class="text-xs text-[var(--text-muted)]">API Key</label>
-									<div class="relative">
-										<input
-											id="image-provider-api-key"
-											type={imgShowKey ? 'text' : 'password'}
-											bind:value={imgApiKey}
-											placeholder="API key for the image provider"
-											class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 pr-8 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
-										/>
-										<button class="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" onclick={() => imgShowKey = !imgShowKey}>
-											{#if imgShowKey}<EyeOff class="h-3.5 w-3.5" />{:else}<Eye class="h-3.5 w-3.5" />{/if}
-										</button>
-									</div>
-								</div>
-							{/if}
-
-							{#if imgProviderType === 'openai-compatible' || imgProviderType === 'ollama' || imgProviderType === 'lmstudio'}
-								<div class="space-y-1.5">
-									<label for="image-provider-base-url" class="text-xs text-[var(--text-muted)]">Base URL</label>
-									<input
-										id="image-provider-base-url"
-										type="text"
-										bind:value={imgBaseUrl}
-										placeholder={PROVIDERS[imgProviderType]?.baseUrl || 'https://your-api.com/v1'}
-										class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none"
-									/>
-								</div>
-							{/if}
-
-							{#if imgSaveError}
-								<div class="rounded-lg bg-red-500/10 p-2 text-xs text-red-400">{imgSaveError}</div>
-							{/if}
-
-							<button
-								class="w-full rounded-lg bg-[var(--color-gold-400)]/20 px-3 py-2 text-xs font-semibold text-[var(--text-accent)] hover:bg-[var(--color-gold-400)]/30 disabled:opacity-50"
-								onclick={saveImageProvider}
-								disabled={imgSaving || (PROVIDERS[imgProviderType]?.requiresApiKey && !imgApiKey)}
-							>
-								{imgSaving ? 'Saving...' : 'Save & Use for Images'}
-							</button>
-						</div>
-					{/if}
-
-					<!-- Character Consistency Prompt -->
-					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
-						<label for="image-character-prompt" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Character Prompt</label>
-						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
-							Persistent description of your character (appearance, clothing, distinguishing features). Prepended to every image prompt to keep visuals consistent across scenes.
-						</p>
-						<textarea
-							id="image-character-prompt"
-							class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
-							rows="4"
-							placeholder="e.g. A tall woman in her late twenties, dark auburn hair braided over one shoulder, emerald eyes, wearing a worn leather cuirass over a forest-green tunic, a silver crescent pendant at her throat"
-							value={settings.uiSettings.imageCharacterPrompt ?? ''}
-							oninput={(e) => { settings.uiSettings.imageCharacterPrompt = (e.target as HTMLTextAreaElement).value; settings.saveUISettings(); }}
-						></textarea>
-					</div>
-
 					<!-- Image Generation Mode -->
 					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
 						<span class="font-display text-sm tracking-wide text-[var(--text-primary)]">Generation Mode</span>
@@ -1238,69 +1136,6 @@
 						</div>
 					</div>
 
-					<!-- Style Preset -->
-					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
-						<span class="font-display text-sm tracking-wide text-[var(--text-primary)]">Art Style</span>
-						<div class="grid grid-cols-2 gap-2">
-							{#each Object.entries(STYLE_PRESETS) as [key, preset]}
-								<button class="rounded-lg border border-[var(--border-primary)] px-3 py-2.5 text-left transition-colors
-									{settings.uiSettings.imageStyle === key
-										? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
-										: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
-									onclick={() => { settings.uiSettings.imageStyle = key; settings.saveUISettings(); }}>
-									<div class="text-sm">{preset.label}</div>
-								</button>
-							{/each}
-							<button class="rounded-lg border border-[var(--border-primary)] px-3 py-2.5 text-left transition-colors
-								{settings.uiSettings.imageStyle === 'custom'
-									? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
-									: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
-								onclick={() => { settings.uiSettings.imageStyle = 'custom'; settings.saveUISettings(); }}>
-								<div class="text-sm">Custom</div>
-							</button>
-						</div>
-						{#if settings.uiSettings.imageStyle === 'custom'}
-							<textarea
-								class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
-								rows="3"
-								placeholder="Describe the art style for generated images..."
-								value={settings.uiSettings.imageCustomStyle ?? ''}
-								oninput={(e) => { settings.uiSettings.imageCustomStyle = (e.target as HTMLTextAreaElement).value; settings.saveUISettings(); }}
-							></textarea>
-						{/if}
-					</div>
-
-					<!-- Image Size -->
-					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
-						<span class="font-display text-sm tracking-wide text-[var(--text-primary)]">Image Size</span>
-						<div class="grid grid-cols-3 gap-2">
-							{#each ['512x512', '1024x1024', '1024x1792'] as size}
-								<button class="rounded-lg border border-[var(--border-primary)] px-3 py-2.5 text-center transition-colors
-									{settings.uiSettings.imageSize === size
-										? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
-										: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
-									onclick={() => { settings.uiSettings.imageSize = size; settings.saveUISettings(); }}>
-									<div class="text-sm">{size}</div>
-								</button>
-							{/each}
-						</div>
-					</div>
-
-					<!-- Model Override -->
-					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
-						<label for="image-model-override" class="font-display text-sm tracking-wide text-[var(--text-primary)]">Model Override</label>
-						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
-							Leave empty to use the provider's default image model.
-						</p>
-						<input
-							id="image-model-override"
-							type="text"
-							class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
-							placeholder={settings.activeProvider?.imageDefaults?.defaultModel ?? 'Provider default'}
-							value={settings.uiSettings.imageModel ?? ''}
-							oninput={(e) => { settings.uiSettings.imageModel = (e.target as HTMLInputElement).value; settings.saveUISettings(); }}
-						/>
-					</div>
 				</div>
 
 				<!-- ═══ TAB: INTERFACE ═══ -->
@@ -1353,3 +1188,96 @@
 	</div>
 </div>
 {/if}
+
+<style>
+	.settings-overlay {
+		position: fixed;
+		inset: 0;
+		z-index: 50;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 28px;
+	}
+	.settings-backdrop { position: absolute; inset: 0; background: rgb(6 9 7 / 76%); backdrop-filter: blur(10px); }
+	.settings-modal-shell {
+		position: relative;
+		display: grid;
+		grid-template-columns: 232px minmax(0, 1fr);
+		width: 100%;
+		max-width: 1120px;
+		height: min(90dvh, 880px);
+		max-height: calc(100dvh - 56px);
+		min-height: 0;
+		overflow: hidden;
+		border: 1px solid var(--border-primary);
+		border-radius: 20px;
+		background: var(--bg-secondary);
+		box-shadow: 0 32px 100px rgb(0 0 0 / 45%);
+	}
+	.settings-modal-shell.settings-wide { max-width: 1440px; }
+	.settings-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; background: var(--bg-primary); border-right: 1px solid var(--border-primary); }
+	.settings-brand { padding: 34px 26px 26px; }
+	.settings-eyebrow { display: block; color: var(--text-muted); font: 10px/1.5 var(--font-ui); font-weight: 600; text-transform: uppercase; letter-spacing: .17em; }
+	.settings-brand h2 { margin-top: 7px; font: 30px/1.2 var(--font-display); color: var(--text-primary); }
+	.settings-navigation { display: flex; flex-direction: column; gap: 5px; padding: 0 13px; }
+	.settings-nav-item { display: flex; align-items: center; gap: 11px; min-height: 46px; padding: 12px; border: 1px solid transparent; border-radius: 9px; color: var(--text-muted); text-align: left; font-size: 12px; transition: color 150ms, background 150ms, border-color 150ms; }
+	.settings-nav-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+	.settings-nav-item.active { border-color: color-mix(in srgb, var(--text-accent) 20%, transparent); color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 9%, transparent); }
+	.settings-nav-short { display: none; }
+	.settings-sidebar-note { display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 28px 26px; font-size: 11px; color: var(--text-muted); }
+	.settings-sidebar-note span { height: 5px; width: 5px; border-radius: 50%; background: #96ab91; }
+	.settings-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+	.settings-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding: 30px 36px 25px; border-bottom: 1px solid var(--border-primary); }
+	.settings-header h3 { margin-top: 9px; font: 30px/1.15 var(--font-display); color: var(--text-primary); letter-spacing: -.025em; }
+	.settings-header p { max-width: 550px; margin-top: 10px; color: var(--text-muted); font-size: 12px; line-height: 1.7; }
+	.settings-close { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 38px; height: 38px; border: 1px solid var(--border-primary); border-radius: 10px; color: var(--text-muted); }
+	.settings-close:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+	.settings-body { min-height: 0; min-width: 0; flex: 1; overflow: auto; overscroll-behavior: contain; padding: 30px 36px 42px; scrollbar-gutter: stable; }
+	.settings-body > :global(div) { max-width: 900px; margin-inline: auto; }
+	.settings-wide .settings-body > :global(div) { max-width: none; }
+	.settings-body :global(input:not([type='checkbox']):not([type='range'])),
+	.settings-body :global(select),
+	.settings-body :global(textarea) { min-width: 0; min-height: 42px; border-radius: 8px; font-size: 12px; line-height: 1.65; transition: border-color 150ms, box-shadow 150ms; }
+	.settings-body :global(textarea) { resize: vertical; }
+	.settings-body :global(input:focus-visible),
+	.settings-body :global(select:focus-visible),
+	.settings-body :global(textarea:focus-visible) { outline: 2px solid color-mix(in srgb, var(--text-accent) 45%, transparent); outline-offset: 2px; }
+	.settings-body :global(button.font-display), .settings-body :global(label.font-display) { font-family: var(--font-ui); letter-spacing: .01em; }
+	.settings-body :global(label) { line-height: 1.65; }
+	.settings-body :global(section) { padding: 24px; border-radius: 12px; }
+	.settings-body :global(section h4) { font: 21px/1.3 var(--font-display); text-transform: none; letter-spacing: 0; color: var(--text-primary); }
+	.settings-body :global(section p) { font-size: 11px; line-height: 1.7; }
+	.settings-body :global(input[type='range']) { min-height: 24px; }
+	.settings-body :global(label:has(> input[type='checkbox'])) { gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--border-primary); }
+	.active-provider { padding: 22px; background: linear-gradient(115deg, color-mix(in srgb, var(--text-accent) 8%, transparent), transparent); }
+	.provider-status { border: 1px solid rgb(150 171 145 / 25%); border-radius: 20px; padding: 3px 9px; background: rgb(150 171 145 / 9%); color: #a9bea4; font-size: 10px; }
+	.model-actions { flex-wrap: wrap; }
+	.model-actions input { flex-basis: 200px; }
+	@media (max-width: 900px) {
+		.settings-overlay { padding: 18px; }
+		.settings-modal-shell { grid-template-columns: 195px minmax(0, 1fr); max-height: calc(100dvh - 36px); }
+		.settings-header, .settings-body { padding: 24px; }
+		.settings-brand { padding-inline: 23px; }
+		.settings-nav-item { font-size: 11px; gap: 8px; }
+	}
+	@media (max-width: 700px) {
+		.settings-overlay { padding: 0; }
+		.settings-modal-shell { display: flex; flex-direction: column; height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; }
+		.settings-sidebar { flex-shrink: 0; border-right: 0; border-bottom: 1px solid var(--border-primary); }
+		.settings-brand, .settings-sidebar-note, .settings-nav-label { display: none; }
+		.settings-navigation { flex-direction: row; gap: 5px; padding: 12px 16px; overflow-x: auto; }
+		.settings-nav-item { flex-shrink: 0; min-height: 42px; font-size: 11px; padding: 10px 12px; }
+		.settings-nav-short { display: inline; }
+		.settings-main { flex: 1; }
+		.settings-header { padding: 23px 20px 20px; }
+		.settings-header h3 { font-size: 26px; }
+		.settings-header p { font-size: 11px; margin-top: 8px; }
+		.settings-header .settings-eyebrow { font-size: 9px; }
+		.settings-body { padding: 22px 18px 32px; }
+		.settings-body :global(section) { padding: 18px; }
+		.settings-body :global(input:not([type='checkbox']):not([type='range'])),
+		.settings-body :global(select), .settings-body :global(textarea) { font-size: 16px; }
+		.settings-close { width: 42px; height: 42px; }
+	}
+</style>

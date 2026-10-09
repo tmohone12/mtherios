@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { isCurrentAgreement } from '$lib/contracts/agreements';
 	import { onMount } from 'svelte';
 	import { BookOpen, CloudUpload, Edit3, GitBranch, Loader2, RotateCcw, Save, Search, Shield, Trash2, X } from 'lucide-svelte';
 	import {
@@ -20,13 +21,14 @@
 	import { story } from '$lib/stores/story.svelte';
 	import type { Agreement, Arc, Chapter, ConversationMemoryEntry, FactionActionRecord, Story, StoryThread } from '$lib/types';
 
+	let { storyId = null }: { storyId?: string | null } = $props();
 	let stories = $state<Story[]>([]);
 	let selectedStoryId = $state<string | null>(null);
 	let chapters = $state<Chapter[]>([]);
 	let arcs = $state<Arc[]>([]);
 	let loading = $state(false);
 	let searchQuery = $state('');
-	let viewMode = $state<'ledger' | 'chapters' | 'arcs'>('ledger');
+	let viewMode = $state<'ledger' | 'chapters' | 'arcs'>('chapters');
 	let backendSyncing = $state(false);
 	let backendMessage = $state<string | null>(null);
 	let storyThreads = $state<StoryThread[]>([]);
@@ -59,8 +61,8 @@
 	let arcEmotionDraft = $state('');
 
 	onMount(async () => {
-		stories = await refreshStoryCatalog();
-		selectedStoryId = stories[0]?.id ?? null;
+		stories = storyId && story.currentStory?.id === storyId ? [story.currentStory] : await refreshStoryCatalog();
+		selectedStoryId = storyId ?? stories[0]?.id ?? null;
 		await loadMemory();
 	});
 
@@ -79,7 +81,9 @@
 		loading = true;
 		try {
 			if (story.currentStory?.id === selectedStoryId && story.currentStory.serverStoryId) {
-				await story.pullBackendProjection();
+				// This panel is a GM-facing memory view. Fetch the authoritative
+				// projection directly, without waiting for local outbox sync work.
+				await story.refreshCampaignProjection();
 			}
 			const terminalStoryId = story.currentStory?.id === selectedStoryId
 				? story.currentStory.serverStoryId
@@ -142,7 +146,7 @@
 
 	const openThreads = $derived(storyThreads.filter(thread => thread.status !== 'closed' && thread.status !== 'abandoned'));
 	const openThreadCount = $derived(openThreads.length || arcs.reduce((count, arc) => count + arc.unresolvedThreads.length, 0));
-	const activeAgreements = $derived(agreements.filter(agreement => agreement.status === 'active' || agreement.status === 'contested'));
+	const activeAgreements = $derived(agreements.filter(isCurrentAgreement));
 	const recentFactionPressure = $derived([...factionActions].sort((a, b) => b.createdAt - a.createdAt).slice(0, 8));
 	const criticalNpcMemory = $derived(conversationMemory
 		.filter(memory => memory.importance === 'critical' || memory.importance === 'significant')
@@ -392,13 +396,14 @@
 	}
 </script>
 
-<div class="flex h-full flex-col overflow-hidden">
-	<div class="border-b border-[var(--border-primary)] px-4 py-4">
-		<div class="mb-3 flex items-center justify-between gap-3">
+<div class="memory-workspace h-full overflow-y-auto">
+	<div class="memory-header">
+		<div class="workspace-page-heading">
 			<div class="min-w-0">
-				<h2 class="font-display text-sm tracking-wide text-[var(--text-primary)]">Chapters & Arcs</h2>
+				<p class="workspace-eyebrow">The story so far</p>
+				<h2>Chapters & arcs.</h2>
 				{#if selectedStory}
-					<p class="mt-1 truncate text-xs text-[var(--text-muted)]">{selectedStory.title}</p>
+					<p class="workspace-subtitle">{selectedStory.title} <span aria-hidden="true">·</span> The moments, memories, and threads that shape your world.</p>
 				{/if}
 			</div>
 
@@ -406,6 +411,7 @@
 				<button
 					class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors {viewMode === 'ledger' ? 'bg-[rgba(212,168,83,0.14)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
 					onclick={() => viewMode = 'ledger'}
+					aria-pressed={viewMode === 'ledger'}
 					title="What matters now"
 				>
 					<Shield class="h-3.5 w-3.5" />
@@ -414,6 +420,7 @@
 				<button
 					class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors {viewMode === 'chapters' ? 'bg-[rgba(212,168,83,0.14)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
 					onclick={() => viewMode = 'chapters'}
+					aria-pressed={viewMode === 'chapters'}
 				>
 					<BookOpen class="h-3.5 w-3.5" />
 					Chapters
@@ -421,6 +428,7 @@
 				<button
 					class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors {viewMode === 'arcs' ? 'bg-[rgba(212,168,83,0.14)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
 					onclick={() => viewMode = 'arcs'}
+					aria-pressed={viewMode === 'arcs'}
 				>
 					<GitBranch class="h-3.5 w-3.5" />
 					Arcs
@@ -428,9 +436,10 @@
 			</div>
 		</div>
 
-		{#if stories.length > 1}
+		{#if !storyId && stories.length > 1}
 			<select
 				bind:value={selectedStoryId}
+				aria-label="Story for chapters and arcs"
 				onchange={handleStoryChange}
 				class="mb-3 w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)]"
 			>
@@ -441,15 +450,21 @@
 		{/if}
 
 		{#if selectedStory}
+			<details class="memory-tools">
+				<summary><CloudUpload size={15} />Sync & checkpoints<span>Manage saved context</span></summary>
+				<div class="memory-tools-content">
 			<div class="mb-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
 				<div class="flex items-center justify-between gap-3">
 					<div class="min-w-0">
-						<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Terminal Database</div>
+						<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">GM memory source</div>
 						<p class="mt-1 truncate text-xs text-[var(--text-secondary)]">
 							{selectedStory.serverStoryId
-								? `Bound at v${selectedStory.serverVersion ?? 0} (${selectedStory.syncStatus ?? 'synced'})`
+								? `Terminal database v${selectedStory.serverVersion ?? 0} (${selectedStory.syncStatus ?? 'synced'})`
 								: 'Local-only. Import to use terminal memory retrieval and sync.'}
 						</p>
+						{#if selectedStory.serverStoryId}
+							<p class="mt-1 text-[10px] leading-relaxed text-[var(--text-muted)]">These chapter and arc records are refreshed from the same database used to build GM context. Each narrated turn’s receipt shows its exact final selection.</p>
+						{/if}
 					</div>
 					<button
 						class="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-primary)] px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-accent)] disabled:opacity-50"
@@ -514,9 +529,11 @@
 					{/if}
 				</div>
 			{/if}
+				</div>
+			</details>
 		{/if}
 
-		<div class="mb-3 grid grid-cols-3 gap-2">
+		<div class="memory-stats mb-3 grid grid-cols-3 gap-2">
 			<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
 				<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Chapters</div>
 				<div class="mt-1 font-mono text-sm text-[var(--text-primary)]">{chapters.length}</div>
@@ -531,18 +548,21 @@
 			</div>
 		</div>
 
+		{#if viewMode !== 'ledger'}
 		<div class="relative">
 			<Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
 			<input
 				type="text"
 				bind:value={searchQuery}
-				placeholder="Search chapters and arcs..."
+				aria-label="Search chapters and arcs"
+				placeholder={viewMode === 'chapters' ? 'Find a chapter...' : 'Find an arc...'}
 				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] py-2 pl-9 pr-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
 			/>
 		</div>
+		{/if}
 	</div>
 
-	<div class="flex-1 overflow-y-auto px-4 py-3">
+	<div class="memory-content">
 		{#if loading}
 			<div class="flex items-center justify-center py-16 text-[var(--text-accent)]">
 				<Loader2 class="h-6 w-6 animate-spin" />
@@ -550,7 +570,7 @@
 		{:else if stories.length === 0}
 			<p class="py-10 text-center text-sm text-[var(--text-muted)]">Create a story first to build chapters and arcs.</p>
 		{:else if viewMode === 'ledger'}
-			<div class="space-y-3">
+			<div class="memory-ledger">
 				<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
 					<div class="mb-2 text-[10px] uppercase tracking-wider text-[var(--text-accent)]">What Matters Now</div>
 					{#if openThreads.length === 0 && activeAgreements.length === 0 && recentFactionPressure.length === 0}
@@ -904,3 +924,27 @@
 		</div>
 	</div>
 {/if}
+
+<style>
+	.memory-workspace { max-width: 1400px; margin: 0 auto; }
+	.memory-header { padding: clamp(22px, 3.4vw, 42px) clamp(20px, 3.4vw, 42px) 20px; }
+	.memory-content { padding: 0 clamp(20px, 3.4vw, 42px) 40px; }
+	.memory-tools { margin-bottom: 22px; border: 1px solid var(--border-secondary); border-radius: 8px; background: var(--bg-secondary); }
+	.memory-tools > summary { display: flex; align-items: center; gap: 10px; padding: 14px 16px; font-size: 12px; color: var(--text-secondary); }
+	.memory-tools > summary > span { margin-left: auto; font-size: 10px; color: var(--text-muted); }
+	.memory-tools[open] > summary { color: var(--text-accent); border-bottom: 1px solid var(--border-secondary); }
+	.memory-tools-content { padding: 16px 16px 4px; }
+	.memory-stats { gap: 0; margin-bottom: 24px; padding-block: 10px; border-block: 1px solid var(--border-secondary); }
+	.memory-stats > div { background: transparent; border: 0; border-radius: 0; padding: 10px 22px; border-right: 1px solid var(--border-secondary); }
+	.memory-stats > div:first-child { padding-left: 0; }
+	.memory-stats > div:last-child { border: 0; }
+	.memory-stats .font-mono { font: 30px/1.2 var(--font-display); }
+	.memory-ledger { display: grid; gap: 18px; align-items: start; }
+	.memory-ledger > section, .memory-content article { background: var(--bg-secondary); padding: 22px; border-color: var(--border-secondary); border-radius: 9px; }
+	.memory-content article { margin-bottom: 16px; }
+	.memory-content article h3 { margin-top: 8px; font-size: 24px; font-weight: 400; }
+	.memory-content article > p { line-height: 1.8; }
+	.memory-ledger > section > div:first-child { margin-bottom: 18px; font-size: 10px; letter-spacing: .15em; }
+	@media (min-width: 1200px) { .memory-ledger { grid-template-columns: repeat(2, minmax(0, 1fr)); } .memory-ledger > section:first-child { grid-row: span 2; } }
+	@media (max-width: 639px) { .memory-tools > summary > span { display: none; } .memory-ledger > section, .memory-content article { padding: 18px; } .memory-stats > div { padding-inline: 12px; } }
+</style>

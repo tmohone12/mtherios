@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseDice, rollDice, rollCheck, formatRollText, parseRollMarker, parseRollCommand, encodeDiceMarker } from '../dice';
 
 describe('parseDice', () => {
+	it.each(['0d20', '1d0', '1000000000d6', '1d9007199254740992', '2d6 advantage'])('rejects invalid or unsupported dice: %s', notation => {
+		expect(() => parseDice(notation)).toThrow();
+	});
 	it('parses simple notation', () => {
 		const d = parseDice('1d20');
 		expect(d).toEqual({ count: 1, sides: 20, modifier: 0, advantage: false, disadvantage: false });
@@ -41,6 +44,16 @@ describe('parseDice', () => {
 });
 
 describe('rollDice', () => {
+	it('validates object input before allocating rolls', () => {
+		expect(() => rollDice({ count: 0, sides: 20, modifier: 0, advantage: false, disadvantage: false })).toThrow();
+	});
+
+	it('cancels advantage against disadvantage', () => {
+		const result = rollDice('1d20 advantage disadvantage');
+		expect(result.rolls).toHaveLength(1);
+		expect(result.advantage).toBe(false);
+		expect(result.disadvantage).toBe(false);
+	});
 	it('produces result within valid range', () => {
 		for (let i = 0; i < 50; i++) {
 			const r = rollDice('1d6');
@@ -91,6 +104,16 @@ describe('rollDice', () => {
 });
 
 describe('rollCheck', () => {
+	it('does not mistake a sum of two d20s for a natural 20', () => {
+		const random = vi.spyOn(Math, 'random').mockReturnValue(0.45);
+		try {
+			expect(rollCheck('2d20', 25)).toMatchObject({ natural: 20, success: false, critical: null });
+		} finally { random.mockRestore(); }
+	});
+
+	it.each([NaN, Infinity, -1, 1.5])('rejects invalid DC %s', dc => {
+		expect(() => rollCheck('1d20', dc)).toThrow();
+	});
 	it('succeeds when total >= DC (non-d20 avoids crit rules)', () => {
 		// Use d100+100 to guarantee success without d20 crit-fail on nat 1
 		const r = rollCheck('1d100+100', 10, 'STR', 'Break door');
@@ -171,6 +194,18 @@ describe('parseRollMarker', () => {
 		});
 		expect(result.preText).toBe('You try to break the door.');
 		expect(result.postText).toBe('The wood creaks.');
+	});
+
+	it.each([
+		'{{roll:1d20+3:DC15:CHARISMA:Intimidate the officer}}',
+		'{{roll:1d20+3:DC 15:CHARISMA:Intimidate the officer}}',
+	])('accepts a DC-prefixed difficulty so narration can continue: %s', (text) => {
+		expect(parseRollMarker(text).marker).toEqual({
+			notation: '1d20+3',
+			dc: 15,
+			ability: 'CHARISMA',
+			description: 'Intimidate the officer',
+		});
 	});
 
 	it('returns null marker for text without markers', () => {

@@ -17,6 +17,7 @@ export type EngineEventType =
 	| 'orchestrator.completed'
 	| 'job.status'
 	| 'state.changed'
+	| 'gm.activity'
 	| 'narration.chunk';
 
 export interface EngineEventInput {

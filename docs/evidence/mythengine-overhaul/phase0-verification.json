@@ -1,0 +1,287 @@
+{
+  "recordedAt": "2026-09-21T22:46:08.918Z",
+  "phase": 0,
+  "root": "E:/DEV/Projects/MythEngine",
+  "branch": "codex/mythengine-overhaul",
+  "sourceHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+  "originalProtection": {
+    "filesChecked": 760,
+    "mismatches": [],
+    "processPid": 39068,
+    "dataRoot": "E:\\DEV\\Projects\\mtherios-master\\data",
+    "storyCount": 12
+  },
+  "targets": {
+    "application": "MythEngine",
+    "cwd": "E:\\DEV\\Projects\\MythEngine",
+    "configPath": "E:\\DEV\\Projects\\MythEngine\\mythengine.config.json",
+    "appUrl": "http://127.0.0.1:5174/",
+    "host": "127.0.0.1",
+    "port": 5174,
+    "dataRoot": "E:\\DEV\\Projects\\MythEngine\\data",
+    "vaultRoot": "E:\\DEV\\Projects\\MythEngine\\data\\vaults",
+    "defaultVault": "E:\\DEV\\Projects\\MythEngine\\data\\vaults\\default",
+    "database": {
+      "host": "127.0.0.1",
+      "port": "5433",
+      "name": "mythengine"
+    },
+    "qdrantUrl": "http://127.0.0.1:6335/",
+    "qdrantCollection": "mythengine_wiki",
+    "jobWorker": false,
+    "wikiAutoIndex": false,
+    "allowSharedRuntime": false,
+    "environmentKeys": []
+  },
+  "build": {
+    "identity": "mythengine@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "externalId": null,
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 531,
+    "dirtyStatusSha256": "c7ee87c2b84421f10884b458168699587543dca05a42e742edcc0235e220b149",
+    "sourceHashes": {},
+    "builtAt": "2026-09-21T22:42:20.257Z",
+    "sourceSha256": "1093415fe1a92485bd02b23a42aa80122844527242fa4b055f40b2491a89e0e1",
+    "artifactSha256": "2fe5ea1a7ea210ab0ef10e3d4aa4b1cbfe70cd2f8c6c1a6962c2cfbcbbdeb2be"
+  },
+  "runtime": {
+    "ok": true,
+    "mode": "terminal-process",
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "2fe5ea1a7ea210ab0ef10e3d4aa4b1cbfe70cd2f8c6c1a6962c2cfbcbbdeb2be",
+      "externalId": "1093415fe1a92485bd02b23a42aa80122844527242fa4b055f40b2491a89e0e1"
+    },
+    "scope": {
+      "storyId": null
+    },
+    "runtime": {
+      "pid": 57580,
+      "uptimeSeconds": 208,
+      "timestamp": "2026-09-21T22:46:07.457Z"
+    },
+    "config": {
+      "dataRoot": "E:\\DEV\\Projects\\MythEngine\\data",
+      "vaultRoot": "E:\\DEV\\Projects\\MythEngine\\data\\vaults",
+      "defaultVault": "E:\\DEV\\Projects\\MythEngine\\data\\vaults\\default",
+      "allowExternalVaults": false,
+      "qdrantUrl": "http://127.0.0.1:6335",
+      "qdrantCollection": "mythengine_wiki",
+      "ollamaUrl": "http://127.0.0.1:11434",
+      "wikiEmbedProvider": "openrouter",
+      "wikiEmbedModel": "openai/text-embedding-3-small",
+      "wikiAutoIndexStoryVaults": false,
+      "wikiAutoLintStoryVaults": false,
+      "jobWorkerEnabled": false,
+      "jobIntervalMs": 5000,
+      "chapterThreshold": 20,
+      "postChapterBuffer": 0,
+      "chaptersPerArc": 10,
+      "memoryEmbeddingsConfigured": false,
+      "memoryEmbeddingProvider": null,
+      "memoryEmbeddingModel": null,
+      "memoryEmbeddingDimensions": 1536,
+      "memoryEmbeddingBatchSize": 8,
+      "databaseConfigured": true
+    },
+    "services": {
+      "qdrant": {
+        "ok": true,
+        "status": 200,
+        "collections": [],
+        "totalCollections": 0,
+        "totalPoints": 0,
+        "orphanedStoryCollections": 0,
+        "legacyStoryCollections": 0
+      },
+      "ollama": {
+        "ok": false,
+        "error": "fetch failed"
+      }
+    },
+    "jobs": {
+      "total": 0,
+      "memoryProcessing": {
+        "complete": 0,
+        "failed": 0,
+        "waiting": 0,
+        "running": 0
+      },
+      "memoryStageFreshness": {
+        "checkpoint": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        },
+        "consolidation": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        },
+        "optionalIndex": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        }
+      },
+      "queued": 0,
+      "retry": 0,
+      "running": 0,
+      "complete": 0,
+      "failed": 0,
+      "ready": 0,
+      "delayed": 0,
+      "storyCount": 0,
+      "byStatus": {},
+      "byType": {},
+      "readyByType": {},
+      "failedByType": {},
+      "failureClasses": [],
+      "oldestReadyAt": null,
+      "nextRunAfter": null,
+      "recentFailures": [],
+      "runningJobs": []
+    },
+    "wiki": {
+      "totalStories": 0,
+      "vaultFresh": 0,
+      "vaultStale": 0,
+      "vaultMissing": 0,
+      "indexFresh": 0,
+      "indexStale": 0,
+      "indexMissing": 0,
+      "lintFresh": 0,
+      "lintStale": 0,
+      "lintMissing": 0,
+      "attention": []
+    }
+  },
+  "database": {
+    "database": "mythengine",
+    "username": "mythengine",
+    "migrations": [
+      "0001_backend_memory.sql",
+      "0002_faction_canon.sql",
+      "0003_backend_jobs.sql",
+      "0004_strategic_world_frames.sql",
+      "0004_terminal_engine_explorer.sql",
+      "0005_api_call_logs.sql",
+      "0006_sagas.sql",
+      "0007_event_timeline.sql",
+      "0008_campaign_storage_cache.sql",
+      "0009_faction_projects.sql",
+      "0010_core_canon_reference_tables.sql",
+      "0011_patch_proposals_continuity_fields.sql",
+      "0012_context_checkpoints.sql",
+      "0013_memory_node_embedding_variable_vector.sql",
+      "0014_shelves.sql",
+      "0015_memory_node_contract.sql",
+      "0016_story_entry_position_unique.sql",
+      "0017_story_entry_full_text_search.sql",
+      "0018_llm_context_window_override.sql",
+      "0019_story_entry_search_vector.sql",
+      "0020_mythengine_default_shelf.sql"
+    ],
+    "shelves": [
+      {
+        "id": "shelf_default",
+        "description": "Your MythEngine stories."
+      }
+    ]
+  },
+  "containers": [
+    {
+      "name": "mythengine-mythengine-db-1",
+      "ports": "127.0.0.1:5433->5432/tcp",
+      "status": "Up 13 minutes (healthy)"
+    },
+    {
+      "name": "mythengine-qdrant-1",
+      "ports": "127.0.0.1:6335->6333/tcp, 127.0.0.1:6336->6334/tcp",
+      "status": "Up 13 minutes"
+    },
+    {
+      "name": "mtherios-qdrant",
+      "ports": "0.0.0.0:6333-6334->6333-6334/tcp, [::]:6333-6334->6333-6334/tcp",
+      "status": "Up 5 days"
+    },
+    {
+      "name": "mtherios-factions-db",
+      "ports": "0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp",
+      "status": "Up 5 days (healthy)"
+    }
+  ],
+  "composeConfigValid": true,
+  "mcp": {
+    "server": {
+      "name": "mythengine-terminal-database",
+      "version": "0.2.1"
+    },
+    "toolCount": 68,
+    "aliasPairs": 34,
+    "aliasParity": true,
+    "statusAliasesReachExpectedPid": true
+  },
+  "validation": {
+    "runtimeTests": {
+      "passed": 6
+    },
+    "focusedTests": {
+      "files": 8,
+      "passed": 78
+    },
+    "svelteCheck": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "build": "passed",
+    "fullSuiteBeforeFinalShelfAndExportAdjustments": {
+      "total": 1487,
+      "passed": 1484,
+      "failed": 3
+    },
+    "untouchedBaseline": {
+      "total": 56,
+      "passed": 53,
+      "failed": 3,
+      "failures": [
+        "turn prompt harness retains all nine full chapters while they await the next arc",
+        "turn prompt harness omits an arc that cannot fit whole and reports the missing history",
+        "turn prompt harness budgets rendered arc memory while retaining the newest covered chapter"
+      ]
+    },
+    "browser": {
+      "url": "http://127.0.0.1:5174/",
+      "title": "MythEngine",
+      "libraryLabel": "MythEngine story library",
+      "shelfDescription": "Your MythEngine stories.",
+      "newStoryBrand": "MythEngine A LIVING STORY",
+      "updateShellActivated": true
+    }
+  },
+  "limitations": [
+    "Phases 1-12 are planned, not implemented.",
+    "No provider credentials copied or generation request sent.",
+    "Ollama is unavailable; optional embeddings and jobs remain disabled.",
+    "Three inherited prompt-budget tests remain failing.",
+    "PWA title/manifest/cache code verified; an installed mobile PWA was not exercised."
+  ]
+}

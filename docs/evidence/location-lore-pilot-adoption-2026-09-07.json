@@ -1,0 +1,140 @@
+{
+  "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+  "baselineVersion": 3291,
+  "applied": [
+    {
+      "operation": "classify-city",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3293,
+      "patchId": "location_patch_41bab2e8-d4df-4159-8de4-73dbe965fbf0",
+      "recordedAt": "2026-09-07T21:36:26.629Z"
+    },
+    {
+      "operation": "parent:entity_cd230b5e-9c11-4c86-aa0c-064e9088b850",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "entity_cd230b5e-9c11-4c86-aa0c-064e9088b850",
+      "serverVersion": 3294,
+      "patchId": "location_patch_e2c98d3c-be19-4eb8-8048-1672d284f750",
+      "recordedAt": "2026-09-07T21:36:26.688Z"
+    },
+    {
+      "operation": "parent:entity_aeaa7184-68ce-4d21-89cd-854a2cf9db2b",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "entity_aeaa7184-68ce-4d21-89cd-854a2cf9db2b",
+      "serverVersion": 3295,
+      "patchId": "location_patch_9e361e0e-b7cf-4578-abaf-71c4d499ba4a",
+      "recordedAt": "2026-09-07T21:36:26.737Z"
+    },
+    {
+      "operation": "parent:entity_b815d12f-b8b7-4f31-bebf-5c3d452eea3f",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "entity_b815d12f-b8b7-4f31-bebf-5c3d452eea3f",
+      "serverVersion": 3296,
+      "patchId": "location_patch_bf00667b-8852-4172-9464-50c273c3010b",
+      "recordedAt": "2026-09-07T21:36:26.784Z"
+    },
+    {
+      "operation": "scope:veil_scratch_asoiaf_fact_awoiaf_volantis_01",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3297,
+      "patchId": "location_patch_726b2312-760b-4337-9e7d-f492037c98b3",
+      "recordedAt": "2026-09-07T21:36:26.838Z"
+    },
+    {
+      "operation": "scope:veil_scratch_asoiaf_fact_awoiaf_volantis_02",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3298,
+      "patchId": "location_patch_abcb6646-21f5-4b85-894b-0a5f0ac63f67",
+      "recordedAt": "2026-09-07T21:36:26.885Z"
+    },
+    {
+      "operation": "scope:veil_scratch_asoiaf_fact_awoiaf_volantis_03",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3299,
+      "patchId": "location_patch_6c2fd733-631d-430b-a8f1-d55fde663eff",
+      "recordedAt": "2026-09-07T21:36:26.931Z"
+    },
+    {
+      "operation": "scope:veil_scratch_asoiaf_fact_awoiaf_volantis_04",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3300,
+      "patchId": "location_patch_352aeccd-152b-46a0-8f34-e5167b8a9c93",
+      "recordedAt": "2026-09-07T21:36:26.975Z"
+    },
+    {
+      "operation": "scope:veil_scratch_asoiaf_fact_awoiaf_volantis_05",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3301,
+      "patchId": "location_patch_cb785173-aae4-458d-a9e5-f7e406d00450",
+      "recordedAt": "2026-09-07T21:36:27.017Z"
+    },
+    {
+      "operation": "scope:veil_scratch_asoiaf_fact_awoiaf_volantis_06",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3302,
+      "patchId": "location_patch_5f1d0bdf-0296-49ca-acd1-42442649e309",
+      "recordedAt": "2026-09-07T21:36:27.061Z"
+    },
+    {
+      "operation": "scope:veil_scratch_asoiaf_fact_awoiaf_volantis_07",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3303,
+      "patchId": "location_patch_815ef95f-320b-4924-b7ea-8ae3e186b160",
+      "recordedAt": "2026-09-07T21:36:27.108Z"
+    },
+    {
+      "operation": "scope:veil_scratch_asoiaf_fact_awoiaf_volantis_08",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3304,
+      "patchId": "location_patch_82081c96-dc69-423a-817e-7bdfef84b262",
+      "recordedAt": "2026-09-07T21:36:27.152Z"
+    },
+    {
+      "operation": "overview:Volantis: established government",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3305,
+      "patchId": "location_patch_38fe6bcd-e5c0-4384-8159-2b1395dfa032",
+      "recordedAt": "2026-09-07T21:36:27.209Z"
+    },
+    {
+      "operation": "overview:Volantis: daily life and commerce",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3306,
+      "patchId": "location_patch_5c6992f3-b933-4ddf-b8d3-aec468329a14",
+      "recordedAt": "2026-09-07T21:36:27.250Z"
+    },
+    {
+      "operation": "overview:Volantis: Black Walls and Old Blood",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3307,
+      "patchId": "location_patch_5689903b-dbc5-4bd8-86c4-a6f3a5f869d5",
+      "recordedAt": "2026-09-07T21:36:27.290Z"
+    },
+    {
+      "operation": "overview:Volantis: labor, religion and the streets",
+      "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "locationId": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "serverVersion": 3308,
+      "patchId": "location_patch_763bc8bb-c941-4e2d-b563-49ee83922dd9",
+      "recordedAt": "2026-09-07T21:36:27.328Z"
+    }
+  ],
+  "finalVersion": 3308,
+  "currentLoreCount": 12,
+  "childIds": [
+    "entity_cd230b5e-9c11-4c86-aa0c-064e9088b850",
+    "entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587"
+  ]
+}

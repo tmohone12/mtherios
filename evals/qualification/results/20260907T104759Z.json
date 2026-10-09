@@ -1,0 +1,41 @@
+{
+  "createdAt": "2026-09-07T10:47:59.478Z",
+  "mode": "deterministic-campaign-qualification",
+  "build": {
+    "identity": "mtherios@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "externalId": null,
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 504,
+    "dirtyStatusSha256": "2d2b949e3b42496a38825da32fd69ee94bfaf4e5d4673435a7962f6cdf87b117",
+    "sourceHashes": {
+      "scripts/test-campaign-persistence.mjs": "c8b6db978cdb6bf96ee924f7366d9fdf39d96bd1a4d995686f1178fe387656da",
+      "src/lib/server/memory/retrieval.ts": "495432d526b7d0fc58e7dd464b049ddb41cc637c049930565cc9c08e81662e5b",
+      "src/lib/server/turn/patchValidator.ts": "42d4329059f6cd67a4d2dc7ef6d8d99343e3808960ab91f89590acea528fe761",
+      "src/lib/server/db/worldDatabaseImport.ts": "cf670627f79b3eb242c928b02dca2726b2f19306d7b6d4f9ed82528f732e9319"
+    }
+  },
+  "fixture": {
+    "turns": 1000,
+    "entries": 2000,
+    "modelCalls": 0
+  },
+  "ok": true,
+  "checks": [
+    "Current-format export and preserved-ID import into a separate database retain transcript, canon and source links",
+    "Separate-copy import remaps identities consistently across relationships and evidence",
+    "Legacy limit imports the final entry; limit-plus-one creates no story, transcript rows or jobs",
+    "Concurrent export stays on one committed snapshot; read-committed negative control detects the defect",
+    "One competing retry wins; source scope, stale versions and unsupported types are rejected; applied extraction does not duplicate canon",
+    "Both event-memory handlers and embedding updates recover after a committed partial write without duplicate projections",
+    "Historical search retains stemmed matches and filters secret/noncanon/OOC parents before the page limit; narrative slash-command output remains eligible",
+    "Agreement relevance ranks canonical IDs, names, aliases, stemmed action and due sources before limit 80; unrelated protagonist promises and future/foreign/fulfilled obligations do not crowd out older relevant rows",
+    "After 150 turns, fulfillment/annulment/revision survive connection restart and remapped-ID export/import; old and repeated jobs cannot revive duties; current prompts exclude resolved obligations and historical recall labels them",
+    "Scene checkpoint retains a middle-passage promise beyond 150 turns in a fresh Node process without changing dialogue; edits, secrecy, deletion, scene changes and remapped import invalidate stale excerpts; the real worker rebuilds latest evidence even for an old queued job",
+    "A deterministic 1,000-turn campaign preserves mid-campaign obligations, long-gap retrieval, conflicting rumors and GM correction evidence, alternate-POV privacy, fulfillment, restart, and remapped import without provider calls"
+  ],
+  "isolated": true
+}

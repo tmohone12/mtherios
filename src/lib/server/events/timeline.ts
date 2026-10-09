@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type {
 	GmTimelineBrief,
 	GmTimelineBriefEvent,
@@ -32,9 +32,16 @@ const NPC_EVENT_QUERY_MULTIPLIER = 4;
 const NPC_EVENT_SUMMARY_CHAR_LIMIT = 280;
 const NPC_TEXT_MATCH_EVIDENCE = 0.45;
 const NPC_TEXT_MATCH_TERM_LIMIT = 8;
+const NARRATION_EVIDENCE_STOP_WORDS = new Set([
+	'about', 'after', 'again', 'against', 'before', 'being', 'between', 'could', 'event', 'first',
+	'from', 'have', 'into', 'might', 'other', 'plot', 'pressure', 'should', 'someone', 'something',
+	'story', 'their', 'there', 'these', 'thing', 'those', 'through', 'turn', 'until', 'would',
+]);
 
 const PUBLIC_VISIBILITY_VALUES = ['public', 'player_known'] as const;
 const PUBLIC_VISIBILITIES = new Set<string>(PUBLIC_VISIBILITY_VALUES);
+const NARRATIVE_EVENT_STATUSES = new Set(['committed', 'scheduled', 'due']);
+const OOC_EVENT_METADATA_VALUES = new Set(['ooc', 'out_of_character', 'outofcharacter']);
 const NPC_EVENT_LINK_SELECT = {
 	id: npcEventLinks.id,
 	storyId: npcEventLinks.storyId,
@@ -60,15 +67,110 @@ function assertExpectedServerVersion(storyId: string, actual: number, expected?:
 	throw new Error(`Story version conflict for ${storyId}: expected ${expected}, found ${actual}.`);
 }
 
+function record(value: unknown): Record<string, unknown> {
+	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function metadataFlag(value: unknown): boolean {
+	return value === true
+		|| value === 1
+		|| (typeof value === 'string' && ['true', 'yes', '1'].includes(value.trim().toLowerCase()));
+}
+
+function normalizedMetadataValue(value: unknown): string {
+	return typeof value === 'string' ? value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_') : '';
+}
+
+/** Only authoritative, in-world events may steer narration or strategic planning. */
+export function isNarrativeTimelineEvent(event: { type?: unknown; status?: unknown; metadata?: unknown }): boolean {
+	const status = typeof event.status === 'string' ? event.status.trim().toLowerCase() : '';
+	if (!NARRATIVE_EVENT_STATUSES.has(status)) return false;
+	const directMetadata = record(event.metadata);
+	const metadata = { ...record(directMetadata.originalMetadata), ...directMetadata };
+	if (event.type === 'correction' && ('syncOpId' in metadata || metadataFlag(metadata.transcriptOnly))) return false;
+	if (['superseded', 'nonCanon', 'non_canon', 'invalidated', 'deleted'].some(key => metadataFlag(metadata[key]))) return false;
+	if (['supersededBy', 'superseded_by', 'supersededById', 'superseded_by_id']
+		.some(key => typeof metadata[key] === 'string' && metadata[key].trim().length > 0)) return false;
+	return !['sourceType', 'source_type', 'actionType', 'action_type', 'narrativeMode', 'narrative_mode']
+		.some(key => OOC_EVENT_METADATA_VALUES.has(normalizedMetadataValue(metadata[key])));
+}
+
+export function isPlayerNpcBackgroundEvent(
+	event: { metadata?: unknown; actorEntityIds?: unknown },
+	playerEntityId?: string,
+): boolean {
+	return Boolean(playerEntityId)
+		&& record(event.metadata).sourceType === 'npc_independent_action'
+		&& Array.isArray(event.actorEntityIds)
+		&& event.actorEntityIds.includes(playerEntityId);
+}
+
 export function selectDueTimelineEvents(events: StoryEventRow[], currentTurn: number): StoryEventRow[] {
 	return events
 		.filter((event) => {
+			if (!isNarrativeTimelineEvent(event)) return false;
 			if (event.status === 'due') return true;
 			return event.status === 'scheduled'
 				&& event.scheduledTurn !== null
 				&& event.scheduledTurn <= currentTurn;
 		})
 		.sort(compareDueTimelineEvents);
+}
+
+function narrationEvidenceTokens(value: string): string[] {
+	return unique(value
+		.normalize('NFKD')
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, ' ')
+		.split(' ')
+		.map(token => token.trim())
+		.filter(token => token.length >= 4 && !NARRATION_EVIDENCE_STOP_WORDS.has(token)));
+}
+
+function narrationEvidenceTokenMatches(left: string, right: string): boolean {
+	return left === right || (left.length >= 5 && right.length >= 5 && left.slice(0, 5) === right.slice(0, 5));
+}
+
+function narrationEvidenceMatchCount(eventTokens: string[], narrationTokens: string[]): number {
+	return eventTokens.filter(eventToken => narrationTokens.some(token => narrationEvidenceTokenMatches(eventToken, token))).length;
+}
+
+function narrationNegatesEvidence(narration: string, eventTokens: string[]): boolean {
+	return narration
+		.normalize('NFKD')
+		.toLowerCase()
+		.split(/[.!?;\n]+/u)
+		.some((sentence) => {
+			if (!/\b(?:not|never|without|cannot|can't|didn't|doesn't|hasn't|haven't|isn't|aren't|won't)\b/u.test(sentence)) return false;
+			return narrationEvidenceMatchCount(eventTokens, narrationEvidenceTokens(sentence)) >= 2;
+		});
+}
+
+/**
+ * A due event is acknowledged only when successful narration carries multiple concrete
+ * terms from both its title and body. Ambiguous pressure stays due.
+ */
+export function acknowledgedDueEventIdsFromNarration(
+	events: GmTimelineBriefEvent[],
+	narration: string,
+): string[] {
+	const narrationTokens = narrationEvidenceTokens(narration);
+	if (narrationTokens.length === 0) return [];
+
+	return events.filter((event) => {
+		const titleTokens = narrationEvidenceTokens(event.title);
+		const bodyTokens = narrationEvidenceTokens(event.body);
+		const titleMatches = narrationEvidenceMatchCount(titleTokens, narrationTokens);
+		const bodyMatches = narrationEvidenceMatchCount(bodyTokens, narrationTokens);
+		const allTokens = unique([...titleTokens, ...bodyTokens]);
+		const totalMatches = narrationEvidenceMatchCount(allTokens, narrationTokens);
+		if (narrationNegatesEvidence(narration, allTokens)) return false;
+		return titleTokens.length > 0
+			&& bodyTokens.length > 0
+			&& titleMatches >= Math.min(2, titleTokens.length)
+			&& bodyMatches >= Math.min(2, bodyTokens.length)
+			&& totalMatches >= 3;
+	}).map(event => event.id);
 }
 
 export function buildNpcEventLinksForEvent(input: {
@@ -211,10 +313,12 @@ export function buildDueTimelineEventPromotionPatch(now: string, options: Pick<D
 
 export function buildGmTimelineBrief(input: {
 	storyId: string;
+	playerEntityId?: string;
 	currentTurn: number;
 	currentWorldTime: string | null;
 	events: StoryEventRow[];
 	npcLinks: NpcEventLinkRow[];
+	sceneLocationId?: string | null;
 	presentNpcIds?: string[];
 	sceneEntityIds?: string[];
 	includeSecret?: boolean;
@@ -230,12 +334,21 @@ export function buildGmTimelineBrief(input: {
 	const scheduledLimit = normalizeLimit(input.scheduledLimit, DEFAULT_SCHEDULED_LIMIT);
 	const npcLimit = normalizeLimit(input.npcLimit, DEFAULT_NPC_LIMIT);
 	const npcEventLimit = normalizeLimit(input.npcEventLimit, DEFAULT_NPC_EVENT_LIMIT);
-	const visibleEvents = input.events.filter(event => isVisible(event.visibility, includeSecret));
+	const visibleEvents = input.events.filter(event => isNarrativeTimelineEvent(event)
+		&& !isPlayerNpcBackgroundEvent(event, input.playerEntityId)
+		&& isVisible(event.visibility, includeSecret));
 	const visibleEventIds = new Set(visibleEvents.map(event => event.id));
 	const visibleLinks = input.npcLinks.filter(link =>
 		visibleEventIds.has(link.eventId) && isVisible(link.visibility, includeSecret));
 
+	const sceneActors = new Set([...(input.sceneEntityIds ?? []), ...(input.presentNpcIds ?? [])]);
+	const touchesScene = (event: StoryEventRow) => {
+		const locations = [...event.locationIds, ...(event.locationId ? [event.locationId] : [])];
+		return locations.length ? Boolean(input.sceneLocationId && locations.includes(input.sceneLocationId))
+			: [...event.actorEntityIds, ...event.targetEntityIds].some(id => sceneActors.has(id));
+	};
 	const dueRows = selectDueTimelineEvents(visibleEvents, input.currentTurn)
+		.sort((a, b) => Number(touchesScene(b)) - Number(touchesScene(a)))
 		.slice(0, dueLimit);
 	const dueIds = new Set(dueRows.map(event => event.id));
 
@@ -298,19 +411,27 @@ export async function loadGmTimelineBrief(input: {
 	const npcLinkLimit = npcEventLimit * NPC_EVENT_QUERY_MULTIPLIER;
 	const includeSecret = input.includeSecret ?? false;
 	const eventVisibilityCondition = storyEventVisibilityCondition(includeSecret);
+	const eventCanonCondition = storyEventNarrativeCanonCondition();
 	const linkVisibilityCondition = npcEventLinkVisibilityCondition(includeSecret);
 	const recentTurnExpression = storyEventRecentTurnExpression();
+	const sceneLocationId = story.currentLocationId;
+	const sceneActors = unique([...(input.sceneEntityIds ?? []), ...(input.presentNpcIds ?? [])]).slice(0, 16);
+	const locationMatch = sceneLocationId ? or(eq(storyEvents.locationId, sceneLocationId), sql`${storyEvents.locationIds} ? ${sceneLocationId}`) : sql`false`;
+	const actorMatch = sceneActors.length ? or(...sceneActors.map(id => sql`(${storyEvents.actorEntityIds} ? ${id} or ${storyEvents.targetEntityIds} ? ${id})`)) : sql`false`;
+	const dueSceneRank = sql`case when ${locationMatch} or ((${storyEvents.locationId} is null or ${storyEvents.locationId} = '') and ${storyEvents.locationIds} = '[]'::jsonb and ${actorMatch}) then 0 else 1 end`;
 
 	const [dueRows, recentRows, scheduledRows, linkRowsByNpc] = await Promise.all([
-		db.select().from(storyEvents)
+			db.select().from(storyEvents)
 			.where(and(
 				eq(storyEvents.storyId, input.storyId),
 				eventVisibilityCondition,
+				eventCanonCondition,
 				sql`(${storyEvents.status} = 'due' OR (${storyEvents.status} = 'scheduled' AND ${storyEvents.scheduledTurn} <= ${currentTurn}))`,
 			))
 			.orderBy(
+				dueSceneRank,
 				sql`CASE WHEN ${storyEvents.status} = 'due' AND ${storyEvents.scheduledTurn} IS NULL THEN 0 ELSE 1 END`,
-				asc(storyEvents.scheduledTurn),
+				desc(storyEvents.scheduledTurn),
 				desc(recentTurnExpression),
 				desc(storyEvents.updatedAt),
 				asc(storyEvents.id),
@@ -320,6 +441,7 @@ export async function loadGmTimelineBrief(input: {
 			.where(and(
 				eq(storyEvents.storyId, input.storyId),
 				eventVisibilityCondition,
+				eventCanonCondition,
 				eq(storyEvents.status, 'committed'),
 			))
 			.orderBy(
@@ -328,11 +450,12 @@ export async function loadGmTimelineBrief(input: {
 				desc(storyEvents.createdAt),
 				asc(storyEvents.id),
 			)
-			.limit(recentLimit),
+			.limit(recentLimit + 12),
 		db.select().from(storyEvents)
 			.where(and(
 				eq(storyEvents.storyId, input.storyId),
 				eventVisibilityCondition,
+				eventCanonCondition,
 				eq(storyEvents.status, 'scheduled'),
 				sql`${storyEvents.scheduledTurn} > ${currentTurn}`,
 			))
@@ -354,6 +477,7 @@ export async function loadGmTimelineBrief(input: {
 				.where(and(
 					eq(npcEventLinks.storyId, input.storyId),
 					eq(npcEventLinks.npcEntityId, npcEntityId),
+					eventCanonCondition,
 					linkVisibilityCondition,
 					eventVisibilityCondition,
 				))
@@ -393,6 +517,7 @@ export async function loadGmTimelineBrief(input: {
 		? await db.select().from(storyEvents)
 			.where(and(
 				eq(storyEvents.storyId, input.storyId),
+				eventCanonCondition,
 				eventVisibilityCondition,
 				inArray(storyEvents.id, linkedEventIds),
 			))
@@ -407,6 +532,9 @@ export async function loadGmTimelineBrief(input: {
 
 	return buildGmTimelineBrief({
 		...input,
+		sceneLocationId,
+		playerEntityId: typeof record(story.settings).playerEntityId === 'string'
+			? record(story.settings).playerEntityId as string : undefined,
 		currentTurn,
 		currentWorldTime: story.currentWorldTime,
 		events: uniqueStoryEventRows([...dueRows, ...recentRows, ...scheduledRows, ...linkedEventRows, ...textMatchEventRows]),
@@ -478,6 +606,37 @@ export async function promoteDueTimelineEvents(
 			eq(storyEvents.storyId, storyId),
 			eq(storyEvents.status, 'scheduled'),
 			sql`${storyEvents.scheduledTurn} <= ${currentTurn}`,
+			storyEventNarrativeCanonCondition(),
+		))
+		.returning();
+}
+
+export async function commitNarratedPlotBrainEvents(input: {
+	storyId: string;
+	eventIds: string[];
+	currentTurn: number;
+	now?: string;
+	serverVersion?: number;
+}): Promise<StoryEventRow[]> {
+	const eventIds = unique(input.eventIds);
+	if (eventIds.length === 0) return [];
+	const now = input.now ?? new Date().toISOString();
+	const patch: Partial<StoryEventInsert> = {
+		status: 'committed',
+		occurredTurn: input.currentTurn,
+		updatedAt: now,
+	};
+	if (typeof input.serverVersion === 'number' && Number.isFinite(input.serverVersion)) {
+		patch.serverVersion = input.serverVersion;
+	}
+	return getDb()
+		.update(storyEvents)
+		.set(patch)
+		.where(and(
+			eq(storyEvents.storyId, input.storyId),
+			inArray(storyEvents.id, eventIds),
+			storyEventNarrativeCanonCondition(),
+			sql`(${storyEvents.status} = 'due' OR (${storyEvents.status} = 'scheduled' AND ${storyEvents.scheduledTurn} <= ${input.currentTurn}))`,
 		))
 		.returning();
 }
@@ -513,6 +672,7 @@ export async function advanceStoryTurn(
 				eq(storyEvents.storyId, storyId),
 				eq(storyEvents.status, 'scheduled'),
 				sql`${storyEvents.scheduledTurn} <= ${currentTurn}`,
+				storyEventNarrativeCanonCondition(),
 			))
 			.returning();
 		return { currentTurn, serverVersion, promotedEvents };
@@ -552,6 +712,7 @@ async function loadTextMatchedNpcEventRows(input: {
 	if (candidates.length === 0) return [];
 
 	const eventVisibilityCondition = storyEventVisibilityCondition(input.includeSecret);
+	const eventCanonCondition = storyEventNarrativeCanonCondition();
 	const recentTurnExpression = storyEventRecentTurnExpression();
 	const rows = await Promise.all(candidates.map((candidate) => {
 		if (candidate.terms.length === 0) return Promise.resolve([] as StoryEventRow[]);
@@ -559,6 +720,7 @@ async function loadTextMatchedNpcEventRows(input: {
 			.where(and(
 				eq(storyEvents.storyId, input.storyId),
 				eventVisibilityCondition,
+				eventCanonCondition,
 				storyEventTextMatchCondition(candidate.terms),
 			))
 			.orderBy(
@@ -701,7 +863,7 @@ function compareDueTimelineEvents(left: StoryEventRow, right: StoryEventRow): nu
 	const rightNullDue = right.status === 'due' && right.scheduledTurn === null;
 	if (leftNullDue !== rightNullDue) return leftNullDue ? -1 : 1;
 
-	return compareNullableTurn(left.scheduledTurn, right.scheduledTurn)
+	return compareNullableTurn(right.scheduledTurn, left.scheduledTurn)
 		|| compareRecentTimelineEvents(left, right);
 }
 
@@ -799,6 +961,31 @@ function normalizeLimit(value: number | undefined, fallback: number): number {
 
 function storyEventVisibilityCondition(includeSecret: boolean) {
 	return includeSecret ? undefined : inArray(storyEvents.visibility, PUBLIC_VISIBILITY_VALUES);
+}
+
+export function storyEventNarrativeCanonCondition() {
+	return sql`(
+		${storyEvents.status} in ('committed', 'scheduled', 'due')
+		and (${storyEvents.type} <> 'correction' or (
+			not (${storyEvents.metadata} ? 'syncOpId')
+			and coalesce(lower(${storyEvents.metadata}->>'transcriptOnly'), 'false') not in ('true', 'yes', '1')
+		))
+		and coalesce(lower(${storyEvents.metadata}->>'superseded'), 'false') not in ('true', 'yes', '1')
+		and coalesce(lower(${storyEvents.metadata}->>'nonCanon'), 'false') not in ('true', 'yes', '1')
+		and coalesce(lower(${storyEvents.metadata}->>'non_canon'), 'false') not in ('true', 'yes', '1')
+		and coalesce(lower(${storyEvents.metadata}->>'invalidated'), 'false') not in ('true', 'yes', '1')
+		and coalesce(lower(${storyEvents.metadata}->>'deleted'), 'false') not in ('true', 'yes', '1')
+		and nullif(trim(coalesce(
+			${storyEvents.metadata}->>'supersededById',
+			${storyEvents.metadata}->>'superseded_by_id',
+			${storyEvents.metadata}->>'supersededBy',
+			${storyEvents.metadata}->>'superseded_by',
+			''
+		)), '') is null
+		and regexp_replace(lower(coalesce(${storyEvents.metadata}->>'sourceType', ${storyEvents.metadata}->>'source_type', '')), '[^a-z0-9]+', '_', 'g') not in ('ooc', 'out_of_character')
+		and regexp_replace(lower(coalesce(${storyEvents.metadata}->>'actionType', ${storyEvents.metadata}->>'action_type', '')), '[^a-z0-9]+', '_', 'g') not in ('ooc', 'out_of_character')
+		and regexp_replace(lower(coalesce(${storyEvents.metadata}->>'narrativeMode', ${storyEvents.metadata}->>'narrative_mode', '')), '[^a-z0-9]+', '_', 'g') not in ('ooc', 'out_of_character')
+	)`;
 }
 
 function npcEventLinkVisibilityCondition(includeSecret: boolean) {

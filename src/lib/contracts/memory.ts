@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { actorPsychologySchema } from './actorPsychology';
+import { sceneCheckpointSelectionSchema } from './sceneCheckpoint';
 
 export const jsonObjectSchema = z.record(z.string(), z.unknown());
 export const jsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
@@ -133,6 +135,7 @@ const storyEventTypeEnumSchema = z.enum([
 	'betrayal',
 	'reveal',
 	'faction_move',
+	'faction_signal',
 	'injury',
 	'death',
 	'relationship_shift',
@@ -362,6 +365,7 @@ export const retrievedMemoryPacketSchema = z.object({
 	tokenEstimate: z.number().int().nonnegative(),
 	retrievalDebug: z.array(z.string()).default([]),
 	retrievalTrace: z.array(memoryRetrievalTraceItemSchema).default([]),
+	renderedItems: z.array(z.object({ id: z.string(), text: z.string() })).optional(),
 });
 
 export const storyStartWorkflowSchema = z.object({
@@ -408,6 +412,12 @@ export const storyDeleteResponseSchema = z.object({
 	warnings: z.array(z.string()).default([]),
 });
 
+export const storyRestoreResultSchema = z.object({
+	ok: z.boolean().default(true),
+	storyId: z.string(),
+	serverVersion: z.number().int().nonnegative().nullable().default(null),
+});
+
 export const bootstrapResponseSchema = z.object({
 	story: jsonObjectSchema,
 	serverVersion: z.number().int().nonnegative(),
@@ -434,6 +444,8 @@ export const bootstrapResponseSchema = z.object({
 		story: jsonObjectSchema,
 		entries: z.array(jsonObjectSchema).default([]),
 		entities: z.array(jsonObjectSchema).default([]),
+		threads: z.array(jsonObjectSchema).default([]),
+		recentEvents: z.array(jsonObjectSchema).default([]),
 		chapters: z.array(jsonObjectSchema).default([]),
 		arcs: z.array(jsonObjectSchema).default([]),
 		sagas: z.array(jsonObjectSchema).default([]),
@@ -492,6 +504,12 @@ export const storyEntriesPageResponseSchema = z.object({
 	entryCount: z.number().int().nonnegative().default(0),
 	hasMore: z.boolean().default(false),
 	nextBeforePosition: z.number().int().nullable().default(null),
+});
+
+export const storyEntriesAroundResponseSchema = z.object({
+	storyId: z.string(),
+	position: z.number().int(),
+	entries: z.array(jsonObjectSchema),
 });
 
 export const entityUpsertRequestSchema = z.object({
@@ -623,6 +641,7 @@ export const livingMemoryCommandResponseSchema = z.object({
 export const memoryRetrieveRequestSchema = z.object({
 	storyId: z.string(),
 	query: z.string().default(''),
+	includeHistorical: z.boolean().optional(),
 	currentTurn: z.number().int().nonnegative().optional(),
 	sceneEntityIds: z.array(z.string()).default([]),
 	locationId: z.string().nullable().optional(),
@@ -631,6 +650,7 @@ export const memoryRetrieveRequestSchema = z.object({
 	presentNpcIds: z.array(z.string()).default([]),
 	sourceTypes: z.array(memoryNodeTypeSchema).optional(),
 	includeSecret: z.boolean().default(false),
+	includeSemantic: z.boolean().optional(),
 	tokenBudget: z.number().int().min(160).max(2400).default(1200),
 });
 
@@ -704,10 +724,13 @@ export const indexedDbImportResponseSchema = z.object({
 	merged: z.array(z.object({ table: z.string(), sourceId: z.string(), targetId: z.string() })),
 });
 
+export const turnActionTypeSchema = z.enum(['do', 'say', 'think', 'story', 'pov', 'free', 'ooc']);
+
 export const turnRequestSchema = z.object({
 	storyId: z.string(),
 	clientTurnId: z.string(),
 	playerText: z.string().min(1),
+	actionType: turnActionTypeSchema.optional(),
 	localVersion: z.number().int().nonnegative().default(0),
 	providerProfile: z.object({
 		id: z.string().optional(),
@@ -715,6 +738,7 @@ export const turnRequestSchema = z.object({
 		providerType: z.string(),
 		baseUrl: z.string().optional(),
 		apiKey: z.string().default(''),
+		contextWindowTokens: z.number().int().min(1024).max(10_000_000).optional(),
 		customModels: z.array(z.string()).optional().default([]),
 		fetchedModels: z.array(z.string()).optional().default([]),
 		reasoningModels: z.array(z.string()).optional().default([]),
@@ -735,6 +759,8 @@ export const turnRequestSchema = z.object({
 		currentFactionId: z.string().nullable().optional(),
 		memoryTokenBudget: z.number().int().min(160).max(2400).optional(),
 		contextBudget: z.number().int().min(0).max(200000).optional(),
+		recentDialogueTokens: z.number().int().min(512).max(64000).optional(),
+		recentDialogueTurns: z.number().int().min(1).max(40).optional(),
 		chapterThreshold: z.number().int().min(5).max(200).optional(),
 		postChapterBuffer: z.number().int().min(0).max(100).optional(),
 		chaptersPerArc: z.number().int().min(2).max(50).optional(),
@@ -761,6 +787,9 @@ export const turnPerformanceSummarySchema = z.object({
 		requestTokens: z.number().int().nonnegative().nullable().default(null),
 		responseTokens: z.number().int().nonnegative().nullable().default(null),
 		totalTokens: z.number().int().nonnegative().nullable().default(null),
+		cachedInputTokens: z.number().int().nonnegative().nullable().default(null),
+		cacheWriteTokens: z.number().int().nonnegative().nullable().default(null),
+		providerCostUsd: z.number().nonnegative().nullable().default(null),
 	}),
 	waterfall: z.object({
 		turnId: z.string().nullable().default(null),
@@ -805,10 +834,71 @@ export const turnPerformanceSummarySchema = z.object({
 	})).default([]),
 });
 
+const contextPayloadSectionSchema = z.object({ id: z.string(), label: z.string(), tokens: z.number().int().nonnegative(), chars: z.number().int().nonnegative() });
+
+export const contextSelectionSchema = z.object({
+	version: z.literal(1),
+	sceneCheckpoint: sceneCheckpointSelectionSchema.optional(),
+	groups: z.array(z.object({
+		kind: z.string(), loaded: z.number().int().nonnegative(), selected: z.number().int().nonnegative(),
+		sent: z.number().int().nonnegative(), partial: z.number().int().nonnegative(), omitted: z.number().int().nonnegative(),
+		sentIds: z.array(z.string()), partialIds: z.array(z.string()), omittedIds: z.array(z.string()),
+	})),
+	sections: z.array(contextPayloadSectionSchema),
+	retrievals: z.array(z.object({ kind: z.string(), query: z.string(), reason: z.string(), sourceIds: z.array(z.string()), sent: z.boolean() })).optional(),
+	requests: z.array(z.object({
+		id: z.enum(['primary', 'roll_continuation']), label: z.string(),
+		sections: z.array(contextPayloadSectionSchema),
+		totalTokens: z.number().int().nonnegative(), totalChars: z.number().int().nonnegative(),
+		sourceSpans: z.array(z.object({ kind: z.string(), id: z.string(), section: z.enum(['system', 'context']), start: z.number().int().nonnegative(), end: z.number().int().nonnegative() })).optional(),
+	})).optional(),
+});
+export type ContextSelection = z.infer<typeof contextSelectionSchema>;
+
+export const turnPreviewResponseSchema = z.object({
+	inspection: z.literal(true),
+	storyId: z.string(),
+	clientTurnId: z.string(),
+	preparedAt: z.string(),
+	preparationMs: z.number().int().nonnegative(),
+	draftFingerprint: z.string(),
+	settingsFingerprint: z.string(),
+	model: z.object({
+		id: z.string().nullable(),
+		providerType: z.string(),
+		capacityTokens: z.number().int().positive(),
+		capacitySource: z.string(),
+	}),
+	prompt: z.object({
+		systemChars: z.number().int().nonnegative(),
+		systemDynamicChars: z.number().int().nonnegative(),
+		playerPromptChars: z.number().int().nonnegative(),
+		messageCount: z.number().int().nonnegative(),
+		messageChars: z.number().int().nonnegative(),
+		totalChars: z.number().int().nonnegative(),
+		tokenEstimate: z.number().int().nonnegative(),
+	}),
+	budgets: z.object({
+		contextTokens: z.number().int().nonnegative(),
+		recentDialogueTokens: z.number().int().nonnegative(),
+		recentDialogueTurns: z.number().int().nonnegative().optional(),
+		memoryTokens: z.number().int().nonnegative(),
+	}),
+	selection: contextSelectionSchema,
+	sourceReferences: z.array(z.object({
+		kind: z.string(),
+		id: z.string(),
+		status: z.enum(['sent', 'partial', 'omitted']),
+		position: z.number().int().nullable(),
+	})),
+	warnings: z.array(z.string()).default([]),
+});
+
 export const turnContextReceiptSchema = z.object({
 	turnId: z.string(),
 	storyId: z.string(),
 	truncated: z.boolean().default(false),
+	selection: contextSelectionSchema.optional(),
 	included: z.object({
 		recentEntries: z.number().int().nonnegative().default(0),
 		memoryNodes: z.number().int().nonnegative().default(0),
@@ -876,12 +966,73 @@ export const turnContextReceiptSchema = z.object({
 		dependencyCount: z.number().int().nonnegative().default(0),
 	})).default([]),
 	budgets: z.object({
+		dynamicContextTokensMax: z.number().int().nonnegative().optional(),
+		recentDialogueTokensMax: z.number().int().nonnegative().optional(),
+		recentDialogueTurnsMax: z.number().int().nonnegative().optional(),
 		memoryTokensUsed: z.number().int().nonnegative().default(0),
 		memoryTokensMax: z.number().int().nonnegative().default(0),
 		wikiCharsUsed: z.number().int().nonnegative().default(0),
 		wikiCharsMax: z.number().int().nonnegative().default(0),
 	}),
 });
+
+export const gmTurnReceiptSchema = z.object({
+	activeRecall: z.object({
+		status: z.enum(['not_requested', 'disabled', 'succeeded', 'insufficient_evidence', 'unavailable', 'timed_out', 'invalid']),
+		reason: z.string().nullable().default(null),
+		model: z.string().nullable().default(null),
+		searchedSourceIds: z.array(z.string()).default([]),
+		omissions: z.array(z.string()).default([]),
+	}).default({ status: 'not_requested', reason: null, model: null, searchedSourceIds: [], omissions: [] }),
+	actorDecisions: z.array(z.object({
+		actorId: z.string(),
+		actorName: z.string(),
+		psychology: actorPsychologySchema.optional(),
+		status: z.enum(['not_requested', 'disabled', 'proposed', 'insufficient_evidence', 'unavailable', 'timed_out', 'invalid']),
+		immediateAction: z.string().nullable().default(null),
+		objective: z.string().nullable().default(null),
+		condition: z.string().nullable().default(null),
+		rationale: z.string().nullable().default(null),
+		knowledgeSourceIds: z.array(z.string()).default([]),
+		selectedMemoryId: z.string().nullable().optional(),
+		selectedMemoryText: z.string().nullable().optional(),
+		reason: z.string().nullable().default(null),
+		model: z.string().nullable().default(null),
+	}).strict()).default([]),
+	steps: z.array(z.object({
+		id: z.string(),
+		label: z.string(),
+		status: z.enum(['pending', 'running', 'succeeded', 'skipped', 'failed']),
+		detail: z.string().nullable().optional(),
+	}).strict()).default([]),
+	tools: z.array(z.object({
+		command: z.string(),
+		label: z.string(),
+		round: z.number().int().nonnegative(),
+		ok: z.boolean(),
+		sourceIds: z.array(z.string()).default([]),
+		omissionReason: z.string().nullable().default(null),
+		failureReason: z.string().nullable().default(null),
+	}).strict()).default([]),
+	context: z.object({
+		recentEntries: z.number().int().nonnegative(),
+		memoryNodes: z.number().int().nonnegative(),
+		wikiChunks: z.number().int().nonnegative(),
+		timelineEvents: z.number().int().nonnegative(),
+		totalTokens: z.number().int().nonnegative().nullable(),
+		truncated: z.boolean(),
+	}).strict(),
+	changes: z.object({
+		statePatches: z.number().int().nonnegative(),
+		events: z.number().int().nonnegative(),
+		memoryNodes: z.number().int().nonnegative(),
+	}).strict(),
+	stateExtractionMode: z.enum(['deferred', 'sync', 'none']),
+	stateExtractionStatus: z.enum(['skipped', 'queued', 'running', 'succeeded', 'failed']).default('skipped'),
+	stateExtractionJobId: z.string().nullable().default(null),
+	stateExtractionError: z.string().nullable().default(null),
+	warningCount: z.number().int().nonnegative(),
+}).strict();
 
 export const turnResponseSchema = z.object({
 	narration: z.string(),
@@ -933,9 +1084,13 @@ export const turnResponseSchema = z.object({
 		requestTokens: z.number().int().nonnegative().nullable().default(null),
 		responseTokens: z.number().int().nonnegative().nullable().default(null),
 		totalTokens: z.number().int().nonnegative().nullable().default(null),
+		cachedInputTokens: z.number().int().nonnegative().nullable().optional(),
+		cacheWriteTokens: z.number().int().nonnegative().nullable().optional(),
+		providerCostUsd: z.number().nonnegative().nullable().default(null),
 	})).default([]),
 	performance: turnPerformanceSummarySchema.nullable().default(null),
 	contextReceipt: turnContextReceiptSchema.nullable().default(null),
+	gmTurnReceipt: gmTurnReceiptSchema.nullable().optional(),
 });
 
 export type StoryEventType = z.infer<typeof storyEventTypeSchema>;
@@ -959,8 +1114,11 @@ export type MemoryNode = z.infer<typeof memoryNodeSchema>;
 export type MemoryRetrievalTraceItem = z.infer<typeof memoryRetrievalTraceItemSchema>;
 export type RetrievedMemoryPacket = z.infer<typeof retrievedMemoryPacketSchema>;
 export type TurnContextReceipt = z.infer<typeof turnContextReceiptSchema>;
+export type TurnPreviewResponse = z.infer<typeof turnPreviewResponseSchema>;
+export type GmTurnReceipt = z.infer<typeof gmTurnReceiptSchema>;
 export type BootstrapResponse = z.infer<typeof bootstrapResponseSchema>;
 export type StoryEntriesPageResponse = z.infer<typeof storyEntriesPageResponseSchema>;
+export type StoryEntriesAroundResponse = z.infer<typeof storyEntriesAroundResponseSchema>;
 export type EntityCommandResponse = z.infer<typeof entityCommandResponseSchema>;
 export type EntityDeleteResponse = z.infer<typeof entityDeleteResponseSchema>;
 export type ChapterCommandResponse = z.infer<typeof chapterCommandResponseSchema>;
@@ -975,6 +1133,7 @@ export type LivingMemoryCommandResponse = z.infer<typeof livingMemoryCommandResp
 export type MemoryRetrieveRequest = z.infer<typeof memoryRetrieveRequestSchema>;
 export type SyncOperation = z.infer<typeof syncOperationSchema>;
 export type SyncChange = z.infer<typeof syncChangeSchema>;
+export type TurnActionType = z.infer<typeof turnActionTypeSchema>;
 export type TurnRequest = z.infer<typeof turnRequestSchema>;
 export type TurnPerformanceSummary = z.infer<typeof turnPerformanceSummarySchema>;
 export type TurnResponse = z.infer<typeof turnResponseSchema>;

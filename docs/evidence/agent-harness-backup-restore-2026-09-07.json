@@ -1,0 +1,34 @@
+{
+  "verifiedAt": "2026-09-07T09:43:44.6721878Z",
+  "mode": "disposable-postgresql-restore",
+  "build": {
+    "identity": "mtherios@0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 464,
+    "dirtyStatusSha256": "8ae46a7b748331629889cd8f9665b10c6e2de0dc7d1ee9c2ab291710e14defe4",
+    "sourceHashes": {
+      "scripts/harness-build-id.mjs": "e6b951ac9253b80de4646740a6048f02261b2dde939cbb8a86541475ab3c3b5c"
+    }
+  },
+  "backup": {
+    "path": ".cache-backups/harness-first-release-20260906/database.dump",
+    "format": "PostgreSQL custom dump (PGDMP)",
+    "sha256": "9205DE2D68496796B06B6F122E42C297F77182EFAFE8751C3D7CFC64343B337D",
+    "bytes": 90692251
+  },
+  "restore": {
+    "image": "pgvector/pgvector:pg16",
+    "target": "temporary container database",
+    "noOwner": true,
+    "noAcl": true,
+    "containerRemoved": true,
+    "tableCount": 35,
+    "storyCount": 11,
+    "entryCount": 10556,
+    "vectorExtension": true
+  },
+  "liveDatabaseUsed": false
+}

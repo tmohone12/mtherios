@@ -1,6 +1,23 @@
 import { MAX_BACKEND_CONTEXT_BUDGET, normalizeBackendContextBudget } from './backendTurnContext';
 
 export const DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET = 1200;
+export const DEFAULT_RECENT_DIALOGUE_TURNS = 20;
+export const MAX_RECENT_DIALOGUE_TURNS = 40;
+export const RECENT_DIALOGUE_SAFETY_TOKENS = 24_000;
+export const DEFAULT_RECENT_DIALOGUE_TOKENS = 12_000;
+export const MAX_RECENT_DIALOGUE_TOKENS = 64_000;
+
+export function normalizeRecentDialogueTurns(value: unknown): number {
+	return typeof value === 'number' && Number.isFinite(value)
+		? Math.max(1, Math.min(MAX_RECENT_DIALOGUE_TURNS, Math.floor(value)))
+		: DEFAULT_RECENT_DIALOGUE_TURNS;
+}
+
+export function normalizeRecentDialogueTokens(value: unknown): number {
+	return typeof value === 'number' && Number.isFinite(value)
+		? Math.max(512, Math.min(MAX_RECENT_DIALOGUE_TOKENS, Math.floor(value)))
+		: DEFAULT_RECENT_DIALOGUE_TOKENS;
+}
 
 export const CONTEXT_BUDGET_STEPS = [
 	0,

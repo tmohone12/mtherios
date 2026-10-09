@@ -62,7 +62,7 @@ export function normalizeEntityName(value: string): string {
 		.normalize('NFKD')
 		.replace(/[\u0300-\u036f]/g, '')
 		.toLowerCase()
-		.replace(/['']/g, '')
+		.replace(/['\u2018\u2019\u02bc]/g, '')
 		.replace(/\b(the|a|an)\b/g, ' ')
 		.replace(/[^a-z0-9]+/g, ' ')
 		.trim();
@@ -259,7 +259,8 @@ export async function resolveEntityIdentity(input: {
 	const db = input.db ?? getDb();
 	const maxCandidates = Math.max(20, Math.min(5000, Math.trunc(input.maxCandidates ?? 2000)));
 	const candidateAliases = uniqueStrings([input.candidate.name, ...(input.candidate.aliases ?? [])]);
-	const candidateNames = candidateAliases.map(normalizeEntityName).filter(Boolean);
+	// Proposed aliases cannot establish that a new character is an existing person.
+	const candidateNames = (input.candidate.type === 'character' ? [input.candidate.name] : candidateAliases).map(normalizeEntityName).filter(Boolean);
 	const sourceEntryIds = input.candidate.sourceEntryIds ?? [];
 	const sourceEventIds = input.candidate.sourceEventIds ?? [];
 	const sourcePatchIds = input.candidate.sourcePatchIds ?? [];
@@ -372,5 +373,34 @@ export async function resolveEntityIdentity(input: {
 		if (score >= 0.55) candidates.push(summarizeCandidate(entity, aliases, score, signals));
 	}
 
+	if (input.candidate.type === 'location') {
+		// Filter before ranking: a parent alias can tie an exact room match's score.
+		const explicitLocation = candidates.find((candidate) =>
+			candidate.type === 'location' && candidate.entityId === input.candidate.id
+		);
+		const canonicalName = normalizeEntityName(input.candidate.name);
+		const locationCandidates = explicitLocation ? [explicitLocation] : candidates.filter((candidate) =>
+			candidate.type === 'location' && normalizeEntityName(candidate.name) === canonicalName
+		);
+		if (!explicitLocation && locationCandidates.length > 1) {
+			return {
+				decision: 'ask',
+				entityId: null,
+				confidence: 0,
+				reason: 'Multiple locations share this canonical name; use a verified location id or reconcile the duplicates.',
+				candidates: locationCandidates.sort((a, b) => b.score - a.score || a.entityId.localeCompare(b.entityId)),
+			};
+		}
+		if (!locationCandidates.length && candidates.length) {
+			return {
+				decision: 'create',
+				entityId: null,
+				confidence: 0,
+				reason: 'Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.',
+				candidates: candidates.sort((a, b) => b.score - a.score),
+			};
+		}
+		return chooseEntityResolution({ requestedId: input.candidate.id, candidates: locationCandidates });
+	}
 	return chooseEntityResolution({ requestedId: input.candidate.id, candidates });
 }

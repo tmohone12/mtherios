@@ -1,0 +1,43 @@
+{
+  "createdAt": "2026-09-07T09:54:14.291Z",
+  "mode": "preview-load",
+  "build": {
+    "identity": "mtherios@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "externalId": null,
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 468,
+    "dirtyStatusSha256": "c8071327f883d47b0f36e0b3331a4449ade3eff3dfed530ee75dc0e8b9e000ce",
+    "sourceHashes": {
+      "scripts/bench-generation.mjs": "8b2edc3802c59f3b8187c5b21c9cce16217cd610704e4359a9f0abb114d4ecc8",
+      "scripts/bench-generation-core.mjs": "ce086282b6dc2b8a59cd582b87359377d12cf1cb67a32e2c48f3867b44ec4696",
+      "src/lib/server/turn/orchestrator.ts": "cd347862810b2272bc18dc22854c981044572eb6e9fd3043111dd0137700efac",
+      "src/lib/server/turn/provider.ts": "d1b8fe0ac1802923ac2aecbb853f916c039511ee9493ed2a2b40a9cfd372839f"
+    }
+  },
+  "url": "http://127.0.0.1:5177",
+  "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+  "samples": 8,
+  "concurrency": 4,
+  "durationMs": {
+    "p50": 1918,
+    "p95": 2845,
+    "max": 2845
+  },
+  "preparationMs": {
+    "p50": 1808,
+    "p95": 2059,
+    "max": 2059
+  },
+  "providerCalls": 0,
+  "writes": false,
+  "retrievalDeadlineMs": 3000,
+  "gate": {
+    "serialPreparationP95Ms": null,
+    "concurrentPreparationP95Ms": null,
+    "note": "Compare serial and concurrent reports for the same build/corpus; concurrency is not treated as a pass when it exceeds the proposed 1-second local target."
+  }
+}

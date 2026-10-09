@@ -168,8 +168,9 @@ export async function auditDueFactionProjects(input: {
 		const proposalId = `proposal_due_project_${stableSuffix(project.id)}`;
 		const warningId = `warning_due_project_${stableSuffix(project.id)}`;
 		const factionName = factionNameById.get(project.factionId) ?? project.factionId;
-		const proposedStatus = costCheck.ok ? 'completed' : 'blocked';
-		const confidence = costCheck.ok ? 0.78 : 0.62;
+		const progressComplete = project.progress >= 1;
+		const proposedStatus = !costCheck.ok ? 'blocked' : progressComplete ? 'completed' : 'active';
+		const confidence = progressComplete && costCheck.ok ? 0.78 : 0.62;
 		const auditMetadata = {
 			sourceType: 'due_faction_project_audit',
 			projectId: project.id,
@@ -193,7 +194,7 @@ export async function auditDueFactionProjects(input: {
 		proposalRows.push({
 			id: proposalId,
 			storyId: input.storyId,
-			proposalType: costCheck.ok ? 'faction_project_due_resolution' : 'faction_project_blocked_resolution',
+			proposalType: !costCheck.ok ? 'faction_project_blocked_resolution' : progressComplete ? 'faction_project_due_resolution' : 'faction_project_deadline_review',
 			targetTable: 'faction_projects',
 			targetRecordId: project.id,
 			proposedBy: 'faction_project_auditor',
@@ -210,8 +211,10 @@ export async function auditDueFactionProjects(input: {
 						type: 'faction_move',
 						status: 'proposed',
 						title: `${factionName}: ${project.project}`,
-						body: costCheck.ok
+						body: costCheck.ok && progressComplete
 							? `Due faction project can resolve: ${project.project}.`
+							: costCheck.ok
+								? `Faction project reached its deadline at ${Math.round(project.progress * 100)}% progress: ${project.project}.`
 							: `Due faction project appears blocked by resource constraints: ${project.project}.`,
 						factionIds: [project.factionId],
 						visibility: project.visibility,
@@ -222,10 +225,12 @@ export async function auditDueFactionProjects(input: {
 				},
 			],
 			reason: `Faction project "${project.project}" is due on turn ${project.dueTurn ?? currentTurn}.`,
-			suggestion: costCheck.ok
+			suggestion: costCheck.ok && progressComplete
 				? 'Review and apply this proposal to resolve the due faction project and create a faction movement event.'
+				: costCheck.ok
+					? 'Review the missed deadline and decide whether the faction extends, escalates, or abandons the project.'
 				: 'Review blocked resources before applying project consequences.',
-			status: costCheck.ok ? 'pending' : 'needs_review',
+			status: costCheck.ok && progressComplete ? 'pending' : 'needs_review',
 			decision: null,
 			validatedBy: null,
 			affectedEntityIds: [],
@@ -245,15 +250,15 @@ export async function auditDueFactionProjects(input: {
 			confidence,
 			now,
 		}));
-		if (!costCheck.ok) {
+		if (!costCheck.ok || !progressComplete) {
 			warningRows.push({
 				id: warningId,
 				storyId: input.storyId,
-				warningType: 'faction_project_resource_constraint',
+				warningType: !costCheck.ok ? 'faction_project_resource_constraint' : 'faction_project_deadline_missed',
 				level: 'warning',
-				title: `Due faction project may be blocked: ${project.project}`,
+				title: !costCheck.ok ? `Due faction project may be blocked: ${project.project}` : `Faction project missed its deadline: ${project.project}`,
 				status: 'open',
-				details: costCheck.warnings.join(' '),
+				details: !costCheck.ok ? costCheck.warnings.join(' ') : `Deadline reached at ${Math.round(project.progress * 100)}% progress.`,
 				entityIds: [],
 				factionIds: [project.factionId],
 				threadIds: [],

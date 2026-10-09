@@ -30,8 +30,7 @@ export const PATCH: RequestHandler = async (event) => {
 			args: {
 				type: params.type,
 				recordId: params.id,
-				updates: request.updates,
-				reason: request.reason,
+				...request,
 			},
 		}));
 	} catch (error) {

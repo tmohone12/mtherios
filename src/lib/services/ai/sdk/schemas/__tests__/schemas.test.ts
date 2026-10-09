@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { actionChoiceSchema, actionChoicesResultSchema } from '../actionchoices';
 import { suggestionSchema, suggestionsResultSchema } from '../suggestions';
 import { loreUpdateSchema, loreManagementResultSchema } from '../lorebook';
-import { styleReviewSchema } from '../style';
 import { chapterSummaryResultSchema, chapterAnalysisSchema, retrievalDecisionSchema } from '../memory';
 import {
 	plotInjectionSchema, factionActionSchema, rumorSchema,
@@ -11,56 +9,10 @@ import {
 import { arcSummarySchema } from '../arc';
 import { entryRefinementResultSchema } from '../entryRefinement';
 import { hasStrategicPlotContent, strategicWorldFrameSchema } from '../strategicWorldBrain';
-import { wikiLintResultSchema, wikiTextFixSchema } from '../wikiLint';
 import {
 	applyPlotMomentumAgencyGuard,
 	describesForcedPlayerAction,
 } from '../../../context/plotMomentumAgency';
-
-// ════════════════════════════════════════════════════════════════
-// Action Choices
-// ════════════════════════════════════════════════════════════════
-
-describe('actionChoiceSchema', () => {
-	it('accepts valid action choice', () => {
-		const data = { text: 'Charge the gate', type: 'bold' };
-		expect(actionChoiceSchema.parse(data)).toEqual(data);
-	});
-
-	it('accepts optional risk and brief', () => {
-		const data = { text: 'Sneak past', type: 'cautious', risk: 'low', brief: 'Stealthy approach' };
-		expect(actionChoiceSchema.parse(data)).toEqual(data);
-	});
-
-	it('rejects invalid type enum', () => {
-		expect(() => actionChoiceSchema.parse({ text: 'x', type: 'invalid' })).toThrow();
-	});
-
-	it('rejects missing text', () => {
-		expect(() => actionChoiceSchema.parse({ type: 'bold' })).toThrow();
-	});
-});
-
-describe('actionChoicesResultSchema', () => {
-	it('accepts 2-4 choices', () => {
-		const result = {
-			choices: [
-				{ text: 'Fight', type: 'bold' },
-				{ text: 'Flee', type: 'cautious' },
-			],
-		};
-		expect(actionChoicesResultSchema.parse(result).choices).toHaveLength(2);
-	});
-
-	it('rejects fewer than 2 choices', () => {
-		expect(() => actionChoicesResultSchema.parse({ choices: [{ text: 'x', type: 'bold' }] })).toThrow();
-	});
-
-	it('rejects more than 4 choices', () => {
-		const choices = Array.from({ length: 5 }, (_, i) => ({ text: `Choice ${i}`, type: 'bold' }));
-		expect(() => actionChoicesResultSchema.parse({ choices })).toThrow();
-	});
-});
 
 // ════════════════════════════════════════════════════════════════
 // Suggestions
@@ -131,41 +83,6 @@ describe('loreManagementResultSchema', () => {
 			summary: 'One new item',
 		};
 		expect(loreManagementResultSchema.parse(data).summary).toBe('One new item');
-	});
-});
-
-// ════════════════════════════════════════════════════════════════
-// Style Review
-// ════════════════════════════════════════════════════════════════
-
-describe('styleReviewSchema', () => {
-	it('accepts approved review with no issues', () => {
-		const data = { approved: true, issues: [] };
-		expect(styleReviewSchema.parse(data).approved).toBe(true);
-	});
-
-	it('accepts review with issues and all fields', () => {
-		const data = {
-			approved: false,
-			issues: [{
-				type: 'pov_break', description: 'Switched to first person',
-				severity: 'major', suggestion: 'Use second person',
-			}],
-			revisedText: 'You walk forward.',
-			overallQuality: 'fair',
-		};
-		const parsed = styleReviewSchema.parse(data);
-		expect(parsed.issues).toHaveLength(1);
-		expect(parsed.overallQuality).toBe('fair');
-	});
-
-	it('accepts all issue types', () => {
-		for (const type of ['pov_break', 'tense_shift', 'character_voice', 'repetition', 'pacing', 'tone_mismatch']) {
-			expect(styleReviewSchema.parse({
-				approved: false,
-				issues: [{ type, description: 'x', severity: 'minor' }],
-			})).toBeTruthy();
-		}
 	});
 });
 
@@ -500,7 +417,7 @@ describe('strategicWorldFrameSchema', () => {
 				urgency: 'emerging',
 				visibility: 'rumored',
 				clueTrail: [{ clue: 'Two rumors use the same phrase.', delivery: 'rumor', truth: 'The rumor was coordinated.' }],
-				pressureBeats: [{ title: 'Bread prices rise early', body: 'Bakers raise prices before public notice.', delayTurns: 1, urgency: 'urgent' }],
+				pressureBeats: [{ title: 'Bread prices rise early', body: 'Bakers raise prices before public notice.', delayTurns: 1, urgency: 'urgent', visibility: 'rumored' }],
 				sourceRefs: [{ sourceType: 'character', sourceId: 'character_mara', label: 'Mara Voss' }],
 			}],
 			plotActivationPlan: { activateNow: ['The Grain That Was Never Missing'], rationale: 'It touches the current market scene.' },
@@ -523,12 +440,37 @@ describe('strategicWorldFrameSchema', () => {
 		});
 		expect(parsed.plotCards[0].clueTrail[0]).toMatchObject({ delivery: 'rumor', visibility: 'subtle' });
 		expect(parsed.plotCards[0].pressureBeats[0].urgency).toBe('immediate');
+		expect(parsed.plotCards[0].pressureBeats[0].visibility).toBe('player_known');
 		expect(parsed.plotCards[0].sourceRefs[0]).toMatchObject({ sourceType: 'unknown', sourceId: 'character_mara' });
 		expect(parsed.activationPlan.activateNow).toEqual(['The Grain That Was Never Missing']);
 		expect(parsed.plotBrainWritePlan.timelineEvents[0]).toMatchObject({
 			title: 'Bread prices rise early',
 			plotCardId: 'plot_grain',
 		});
+	});
+
+	it('normalizes loose visibility labels without exposing unknown pressure', () => {
+		const parsed = strategicWorldFrameSchema.parse({
+			mainPlots: [{}],
+			schemeDirectives: [{ type: 'create_scheme', visibility: 'player-known', reason: 'A hidden plan advances.' }],
+			plotCards: [
+				{
+					title: 'Known pressure',
+					visibility: 'player-visible',
+					pressureBeats: [{ title: 'A guarded clue', body: 'The clue remains private.', visibility: 'not_public' }],
+				},
+				{ title: 'Hidden pressure', visibility: 'unknown_to_player' },
+			],
+			plotBrainWritePlan: {
+				timelineEvents: [{ title: 'A rumor surfaces', body: 'Players can hear it.', visibility: 'rumored' }],
+			},
+		});
+
+		expect(parsed.schemeDirectives[0].visibility).toBe('rumored');
+		expect(parsed.plotCards[0].visibility).toBe('player_known');
+		expect(parsed.plotCards[0].pressureBeats[0].visibility).toBe('secret');
+		expect(parsed.plotCards[1].visibility).toBe('secret');
+		expect(parsed.plotBrainWritePlan.timelineEvents[0].visibility).toBe('player_known');
 	});
 
 	it('accepts a strategic frame with scheme directives and clocks', () => {
@@ -714,7 +656,7 @@ describe('strategicWorldFrameSchema', () => {
 		expect(parsed.mainPlots[0].pressure).toBe('critical');
 		expect(parsed.mainPlots[0].expectedPayoff).toBe('future_arc');
 		expect(parsed.subplots[0].kind).toBe('character_arc');
-		expect(parsed.worldEventSuggestions[0].visibility).toBe('public');
+		expect(parsed.worldEventSuggestions[0].visibility).toBe('rumored');
 		expect(parsed.subplots[0].pressure).toBe('high');
 		expect(parsed.schemeDirectives[0]).toMatchObject({
 			type: 'create_scheme',
@@ -741,62 +683,6 @@ describe('strategicWorldFrameSchema', () => {
 	});
 });
 
-describe('wikiLintResultSchema', () => {
-	it('requires coverage, evidence, confidence, and entry ids', () => {
-		const parsed = wikiLintResultSchema.parse({
-			coverage: {
-				entryCount: 2,
-				relationshipCount: 1,
-				chapterCount: 3,
-				allEntriesIncluded: true,
-				notes: 'All active entries were included.',
-			},
-			contradictions: [{
-				entryId: 'entry_house',
-				entryName: 'House Veyr',
-				issue: 'The description says the house is extinct, but state lists active members.',
-				conflictingEntryId: null,
-				conflictsWith: 'House Veyr state.knownMembers',
-				severity: 'major',
-				evidence: ['entry_house desc/state'],
-				confidence: 0.91,
-			}],
-			staleClaims: [],
-			orphans: [],
-			missingEntries: [],
-			gapSuggestions: [],
-			textFixes: [{
-				entryId: 'entry_house',
-				entryName: 'House Veyr',
-				field: 'description',
-				originalText: 'extict',
-				correctedText: 'extinct',
-				reason: 'Spelling fix.',
-				evidence: ['entry_house description'],
-				confidence: 1,
-				safeToAutoApply: true,
-			}],
-			summary: 'One contradiction and one safe text fix.',
-		});
-
-		expect(parsed.coverage.allEntriesIncluded).toBe(true);
-		expect(parsed.contradictions[0].entryId).toBe('entry_house');
-	});
-
-	it('rejects no-op text fixes', () => {
-		expect(() => wikiTextFixSchema.parse({
-			entryId: 'entry_house',
-			entryName: 'House Veyr',
-			field: 'description',
-			originalText: 'unchanged',
-			correctedText: 'unchanged',
-			reason: 'No change.',
-			evidence: ['entry_house description'],
-			confidence: 0.5,
-			safeToAutoApply: true,
-		})).toThrow();
-	});
-});
 
 describe('relationDeltaSchema', () => {
 	it('accepts a normal delta', () => {

@@ -1,0 +1,417 @@
+ D .codex-run/app-dev.err.log
+ D .codex-run/app-dev.out.log
+ M .gitignore
+ D .playwright-cli/console-2026-06-14T18-30-41-493Z.log
+ D .playwright-cli/page-2026-06-14T18-30-41-541Z.yml
+ D .playwright-cli/page-2026-06-14T18-30-56-426Z.yml
+ D .playwright-cli/page-2026-06-14T18-31-08-053Z.yml
+ D .playwright-cli/page-2026-06-14T18-31-23-856Z.yml
+ D .playwright-cli/page-2026-06-14T18-31-41-649Z.yml
+ D .playwright-cli/page-2026-06-14T18-32-02-878Z.yml
+ M AGENTS READ THIS/AGENTS.md
+ M AGENTS READ THIS/ARCHITECTURE.md
+ M AGENTS READ THIS/PROJECT_ABOUT.md
+ M AGENTS READ THIS/VISION.md
+ M ARCHITECTURE.md
+ M README.md
+ M docs/database-seed-schema-prompt.md
+ M docs/local-wiki-core.md
+ M docs/lorebook-generation-prompt.md
+ M evals/scenarios/state-extraction.jsonl
+ D logs/app-dev-work.err.log
+ D logs/app-dev-work.out.log
+ D logs/ollama.err.log
+ D logs/ollama.out.log
+ M package-lock.json
+ M package.json
+ M scripts/app-status.mjs
+ M scripts/app-story.mjs
+ M scripts/bench-generation-core.mjs
+ M scripts/bench-generation.mjs
+ M scripts/eval-turns.mjs
+ M scripts/mtherios-mcp.mjs
+ M scripts/mtheriosd.mjs
+ M scripts/wiki-core/context.mjs
+ M scripts/wiki-core/index.mjs
+ M scripts/wiki-core/lib/embeddings.mjs
+ M scripts/wiki-core/lib/qdrant.mjs
+ M scripts/wiki-core/lib/search.mjs
+ M scripts/wiki-core/lib/vault.mjs
+ M src/app.css
+ M src/app.html
+ M src/lib/assets/favicon.svg
+ M src/lib/components/canon/CanonRepairCockpit.svelte
+ M src/lib/components/database/WorldExplorer.gateway.test.ts
+ M src/lib/components/database/WorldExplorer.svelte
+ M src/lib/components/layout/AppShell.svelte
+ M src/lib/components/library/LibraryPanel.svelte
+ M src/lib/components/memory/StoryMemoryPanel.svelte
+ M src/lib/components/settings/PromptsPanel.svelte
+ M src/lib/components/settings/ServiceConfigPanel.svelte
+ M src/lib/components/settings/SettingsModal.svelte
+ M src/lib/components/story/ActionInput.svelte
+ M src/lib/components/story/ContextWindow.svelte
+ M src/lib/components/story/StoryView.svelte
+ M src/lib/components/story/WorldDrawer.gateway.test.ts
+ M src/lib/components/story/WorldDrawer.svelte
+ M src/lib/components/story/runtimeRequiredTurn.test.ts
+ M src/lib/components/system/EnginePanel.svelte
+ M src/lib/components/system/TerminalPanel.svelte
+ M src/lib/components/wizard/OnboardingWizard.svelte
+ M src/lib/components/wizard/storyPromptPacks.test.ts
+ M src/lib/components/wizard/storyPromptPacks.ts
+ M src/lib/contracts/engine.ts
+ M src/lib/contracts/memory.test.ts
+ M src/lib/contracts/memory.ts
+ M src/lib/contracts/worldDatabase.ts
+ M src/lib/server/db/client.ts
+ M src/lib/server/db/schema.ts
+ M src/lib/server/db/worldDatabaseImport.test.ts
+ M src/lib/server/db/worldDatabaseImport.ts
+ M src/lib/server/db/worldDatabaseSchema.ts
+ M src/lib/server/engine/appStatus.ts
+ M src/lib/server/engine/benchGenerationCli.test.ts
+ M src/lib/server/engine/campaignVault.test.ts
+ M src/lib/server/engine/campaignVault.ts
+ M src/lib/server/engine/canonRepair.test.ts
+ M src/lib/server/engine/canonRepair.ts
+ M src/lib/server/engine/canonicalSearch.test.ts
+ M src/lib/server/engine/canonicalSearch.ts
+ M src/lib/server/engine/characterDrafts.test.ts
+ M src/lib/server/engine/characterDrafts.ts
+ M src/lib/server/engine/command.test.ts
+ M src/lib/server/engine/command.ts
+ M src/lib/server/engine/events.ts
+ M src/lib/server/engine/llmSettings.ts
+ M src/lib/server/engine/mcpTools.test.ts
+ M src/lib/server/engine/orchestrator.test.ts
+ M src/lib/server/engine/orchestrator.ts
+ M src/lib/server/engine/plotBrainPlanCommand.test.ts
+ M src/lib/server/engine/projections.test.ts
+ M src/lib/server/engine/projections.ts
+ M src/lib/server/engine/promptDiagnostics.ts
+ M src/lib/server/engine/serviceCommands.ts
+ M src/lib/server/engine/smallBrain.ts
+ M src/lib/server/engine/wikiCommands.ts
+ M src/lib/server/engine/worldRecords.test.ts
+ M src/lib/server/engine/worldRecords.ts
+ M src/lib/server/env.ts
+ M src/lib/server/evals/replayRunner.test.ts
+ M src/lib/server/evals/replayRunner.ts
+ M src/lib/server/events/timeline.test.ts
+ M src/lib/server/events/timeline.ts
+ M src/lib/server/factions/projects.test.ts
+ M src/lib/server/factions/projects.ts
+ M src/lib/server/jobs/outbox.test.ts
+ M src/lib/server/jobs/outbox.ts
+ M src/lib/server/jobs/processor.test.ts
+ M src/lib/server/jobs/processor.ts
+ M src/lib/server/memory/canonical.test.ts
+ M src/lib/server/memory/canonical.ts
+ M src/lib/server/memory/embeddings.test.ts
+ M src/lib/server/memory/embeddings.ts
+ M src/lib/server/memory/entityResolver.test.ts
+ M src/lib/server/memory/entityResolver.ts
+ M src/lib/server/memory/ranking.test.ts
+ M src/lib/server/memory/ranking.ts
+ M src/lib/server/memory/retrieval.test.ts
+ M src/lib/server/memory/retrieval.ts
+ M src/lib/server/plotBrain/planner.test.ts
+ M src/lib/server/plotBrain/planner.ts
+ M src/lib/server/plotBrain/reconciler.test.ts
+ M src/lib/server/plotBrain/reconciler.ts
+ M src/lib/server/turn/context.test.ts
+ M src/lib/server/turn/context.ts
+ M src/lib/server/turn/orchestrator.test.ts
+ M src/lib/server/turn/orchestrator.ts
+ M src/lib/server/turn/patchValidator.test.ts
+ M src/lib/server/turn/patchValidator.ts
+ M src/lib/server/turn/promptHarness.test.ts
+ M src/lib/server/turn/promptPacket.characterContext.test.ts
+ M src/lib/server/turn/promptPacket.ts
+ M src/lib/server/turn/provider.test.ts
+ M src/lib/server/turn/provider.ts
+ M src/lib/server/wiki/characterProjection.test.ts
+ M src/lib/server/wiki/storyVault.ts
+ M src/lib/server/wiki/wikiCore.ts
+ M src/lib/services/ai/background/runner.test.ts
+ M src/lib/services/ai/background/runner.ts
+ D src/lib/services/ai/context/magicDoctrine.ts
+ M src/lib/services/ai/context/modelWindows.ts
+ M src/lib/services/ai/context/mtheriosSummaryFormat.test.ts
+ M src/lib/services/ai/context/mtheriosSummaryFormat.ts
+ D src/lib/services/ai/context/narrationGuardrails.ts
+ D src/lib/services/ai/context/narratorOverview.ts
+ D src/lib/services/ai/context/npcKnowledge.ts
+ D src/lib/services/ai/context/politicalRealism.ts
+ M src/lib/services/ai/context/storyMemorySelector.ts
+ M src/lib/services/ai/context/strategicFramePromptCard.test.ts
+ M src/lib/services/ai/context/strategicFramePromptCard.ts
+ M src/lib/services/ai/context/strategicWorldBrainInput.test.ts
+ M src/lib/services/ai/context/strategicWorldBrainInput.ts
+ M src/lib/services/ai/generation/ArcCondensationService.ts
+ M src/lib/services/ai/generation/MemoryService.test.ts
+ M src/lib/services/ai/generation/MemoryService.ts
+ M src/lib/services/ai/generation/SuggestionsService.ts
+ M src/lib/services/ai/generation/WorldSimulationService.test.ts
+ M src/lib/services/ai/generation/WorldSimulationService.ts
+ M src/lib/services/ai/generation/strategicWorldFrame.test.ts
+ M src/lib/services/ai/generation/strategicWorldFrame.ts
+ M src/lib/services/ai/image/ImageGenerationService.ts
+ M src/lib/services/ai/sdk/schemas/__tests__/schemas.test.ts
+ M src/lib/services/ai/sdk/schemas/strategicWorldBrain.ts
+ D src/lib/services/ai/strategy/StrategicSchemeReconciler.ts
+ M src/lib/services/ai/tools/executor.test.ts
+ M src/lib/services/ai/tools/executor.ts
+ M src/lib/services/ai/tools/schemas.test.ts
+ M src/lib/services/ai/tools/schemas.ts
+ M src/lib/services/backendClientContext.test.ts
+ M src/lib/services/backendClientContext.ts
+ M src/lib/services/backendImport.ts
+ M src/lib/services/backendMemory.test.ts
+ M src/lib/services/backendMemory.ts
+ M src/lib/services/backendTurnContext.test.ts
+ M src/lib/services/backendTurnContext.ts
+ M src/lib/services/canonProposalDisplay.test.ts
+ M src/lib/services/canonProposalDisplay.ts
+ M src/lib/services/canonicalWrites.test.ts
+ M src/lib/services/canonicalWrites.ts
+ M src/lib/services/database.ts
+ M src/lib/services/engineStream.test.ts
+ M src/lib/services/engineStream.ts
+ M src/lib/services/memorySettings.ts
+ M src/lib/services/promptSettings.test.ts
+ M src/lib/services/promptSettings.ts
+ M src/lib/services/serverStories.test.ts
+ M src/lib/services/serverStories.ts
+ M src/lib/services/storySync.test.ts
+ M src/lib/services/storySync.ts
+ M src/lib/services/terminalSettings.test.ts
+ M src/lib/services/terminalSettings.ts
+ M src/lib/services/wikiExport.ts
+ M src/lib/services/wikiImport.ts
+ M src/lib/stores/settings.svelte.ts
+ M src/lib/stores/story.svelte.ts
+ M src/lib/types/index.ts
+ M src/lib/utils/__tests__/dice.test.ts
+ M src/lib/utils/dice.ts
+ M src/routes/+layout.svelte
+ M src/routes/api/debug/prompt-packet/[storyId]/+server.ts
+ M src/routes/api/legacyGatewayRoutes.test.ts
+ M src/routes/api/turn/stream/+server.ts
+ D tailwind.config.ts
+ M vite.config.ts
+?? .codex-run/chronology-stories.json
+?? .codex-run/golden-boy-after-context-repair.json
+?? .codex-run/golden-boy-before-context-repair.json
+?? .codex-run/golden-boy-context-after.json
+?? .codex-run/golden-boy-context-verified.json
+?? .codex-run/golden-boy-llm-settings.json
+?? .codex-run/golden-boy-preview-after.json
+?? .codex-run/golden-boy-prompt-prompt.txt
+?? .codex-run/golden-boy-prompt-system.txt
+?? .codex-run/golden-boy-records.txt
+?? .codex-run/golden-boy-repair-verification.json
+?? .codex-run/golden-boy-search-verified.json
+?? .codex-run/golden-boy-summary-plan-job.json
+?? .codex-run/golden-boy-summary-rebuild-job.json
+?? .codex-run/golden-boy-transcript.txt
+?? .codex-run/lore-context-final.json
+?? .codex-run/lore-context-live.json
+?? .codex-run/lore-preview-after.json
+?? .codex-run/lore-preview-before.json
+?? .codex-run/lore-preview-final.json
+?? .codex-run/lore-seeds-live.json
+?? .codex-run/speed-before-status.txt
+?? .codex-run/speed-live-preview.json
+?? .codex-run/speed-probe.mjs
+?? .codex-run/speed-provider-probe.json
+?? .codex-run/speed-provider-real-source-probe.json
+?? .codex-run/speed-real-source-probe.mjs
+?? .codex-run/speed-settings-before.json
+?? .codex-run/speed-vault-after.json
+?? .codex-run/speed-vault-before.json
+?? .codex-run/text-search-preview.json
+?? .codex-run/text-search-stopwords-preview.json
+?? .hermes/
+?? AGENTS READ THIS/NEWFEATURES.md
+?? AGENTS.md
+?? IDEA.md
+?? docs/agent-harness-durable-memory-release-2026-09-07.md
+?? docs/agent-harness-first-release-2026-09-06.md
+?? docs/agent-harness-implementation-plan-2026-09-06.md
+?? docs/agent-harness-memory-coverage-release-2026-09-06.md
+?? docs/agent-harness-preview-release-2026-09-06.md
+?? docs/agent-harness-recall-release-2026-09-07.md
+?? docs/agent-harness-release-path-2026-09-07.md
+?? docs/agent-harness-review-2026-09-06.md
+?? docs/agent-harness-scene-release-2026-09-06.md
+?? docs/agent-harness-temporal-release-2026-09-06.md
+?? docs/agent-harness-tool-boundary-release-2026-09-07.md
+?? docs/automatic-character-creation-2026-09-07.md
+?? docs/campaign-state-release-2026-09-14.md
+?? docs/chapter-arc-repair-plan-2026-09-12.md
+?? docs/character-party-director-fixes-2026-09-08.md
+?? docs/commitment-editor-verification-2026-09-14.md
+?? docs/evidence/
+?? docs/golden-boy-chronology-repair-2026-09-19.md
+?? docs/improvement-backlog.md
+?? docs/llm-specialist-implementation-plan-2026-09-13.md
+?? docs/location-lore-authoring.md
+?? docs/location-lore-implementation-plan-2026-09-07.md
+?? docs/location-lore-pilot-audit-2026-09-07.md
+?? docs/location-lore-release-2026-09-07.md
+?? docs/lore-tuning-library-2026-09-19.md
+?? docs/narration-output-limit-2026-09-17.md
+?? docs/performance-plan-2026-09-20.md
+?? docs/plot-editor-verification-2026-09-14.md
+?? docs/project-improvement-implementation-plan-2026-09-05.md
+?? docs/project-improvement-implementation-results-2026-09-05.md
+?? docs/project-improvement-scan-2026-09-05.md
+?? docs/project-qol-improvements-2026-09-07.md
+?? docs/recall-hardening-2026-09-17.md
+?? docs/superpowers/specs/2026-08-16-narrative-d20-and-portable-memory-design.md
+?? docs/terminal-settings-mirror-2026-09-17.md
+?? drizzle/0016_story_entry_position_unique.sql
+?? drizzle/0017_story_entry_full_text_search.sql
+?? drizzle/0018_llm_context_window_override.sql
+?? drizzle/0019_story_entry_search_vector.sql
+?? evals/memory/
+?? evals/performance/
+?? evals/qualification/
+?? evals/replay/
+?? evals/scenarios/scene-continuity.jsonl
+?? logs/recover-transcript-ui-check-20260904.sql
+?? output/
+?? scripts/apply-location-lore-pilot.mjs
+?? scripts/bench-memory.mjs
+?? scripts/harness-build-id.mjs
+?? scripts/qualify-location-lore.mjs
+?? scripts/reconcile-location-lore-pilot.mjs
+?? scripts/repair-golden-boy-chronology.mjs
+?? scripts/repair-golden-boy-chronology.test.mjs
+?? scripts/repair-veil-emperor-offer.mjs
+?? scripts/repair-veil-live-lore-followup.mjs
+?? scripts/repair-veil-live-lore-followup.test.mjs
+?? scripts/repair-veil-live-lore-v3.mjs
+?? scripts/repair-veil-live-lore-v3.test.mjs
+?? scripts/repair-veil-live-lore.mjs
+?? scripts/repair-veil-live-lore.test.mjs
+?? scripts/seed-veil-campaign-state.mjs
+?? scripts/serve-improvement-fixture.mjs
+?? scripts/test-auto-character-creation.mjs
+?? scripts/test-campaign-persistence.mjs
+?? scripts/test-character-source-persistence.mjs
+?? scripts/test-text-search.mjs
+?? scripts/verify-golden-boy-chronology.mjs
+?? scripts/verify-plot-editor.mjs
+?? scripts/wiki-core/lib/collection-lock.mjs
+?? scripts/wiki-core/lib/vault.test.mjs
+?? scripts/wiki-core/lore-context.test.mjs
+?? src/lib/components/database/LocationWorkspace.svelte
+?? src/lib/components/database/LoreEntryPreview.svelte
+?? src/lib/components/database/WorldExplorer.lifecycle.test.ts
+?? src/lib/components/library/LibraryPanel.gateway.test.ts
+?? src/lib/components/pwa/
+?? src/lib/components/story/CampaignFacts.svelte
+?? src/lib/components/story/CommitmentEditor.svelte
+?? src/lib/components/story/CommitmentManager.svelte
+?? src/lib/components/story/ContextSelection.svelte
+?? src/lib/components/story/MemoryProcessingStatus.svelte
+?? src/lib/components/story/PlayerCapabilities.svelte
+?? src/lib/components/story/PlotDirectorEditor.svelte
+?? src/lib/components/story/PlotDirectorPanel.svelte
+?? src/lib/components/story/ThreadManager.svelte
+?? src/lib/components/story/WorldSheet.svelte
+?? src/lib/components/story/actionInput.test.ts
+?? src/lib/components/story/actionInput.ts
+?? src/lib/components/workspaceQol.test.ts
+?? src/lib/contracts/agreements.ts
+?? src/lib/contracts/campaignState.test.ts
+?? src/lib/contracts/campaignState.ts
+?? src/lib/contracts/locationLore.ts
+?? src/lib/contracts/npcAgency.test.ts
+?? src/lib/contracts/npcAgency.ts
+?? src/lib/contracts/playerCapabilities.ts
+?? src/lib/contracts/plotEditing.ts
+?? src/lib/contracts/prompts.ts
+?? src/lib/contracts/sceneCheckpoint.ts
+?? src/lib/server/db/importIds.test.ts
+?? src/lib/server/db/importIds.ts
+?? src/lib/server/db/locationLoreImport.test.ts
+?? src/lib/server/db/storyEntryPositions.test.ts
+?? src/lib/server/db/storyEntryPositions.ts
+?? src/lib/server/db/textSearch.ts
+?? src/lib/server/engine/characterSourceDrafts.test.ts
+?? src/lib/server/engine/gmTools.test.ts
+?? src/lib/server/engine/gmTools.ts
+?? src/lib/server/engine/jobsRetryCommand.test.ts
+?? src/lib/server/engine/locationRecords.test.ts
+?? src/lib/server/engine/locationRecords.ts
+?? src/lib/server/engine/plotEditing.test.ts
+?? src/lib/server/engine/plotEditing.ts
+?? src/lib/server/engine/rebuildSummariesCommand.test.ts
+?? src/lib/server/engine/strategicFactionInput.test.ts
+?? src/lib/server/factions/autonomy.ts
+?? src/lib/server/jobs/chapterLifecycle.test.ts
+?? src/lib/server/jobs/failureClassification.ts
+?? src/lib/server/jobs/memoryCoverage.test.ts
+?? src/lib/server/jobs/memoryCoverage.ts
+?? src/lib/server/jobs/summaryGeneration.fallback.test.ts
+?? src/lib/server/jobs/summaryGeneration.test.ts
+?? src/lib/server/jobs/summaryGeneration.ts
+?? src/lib/server/jobs/summaryRebuild.test.ts
+?? src/lib/server/jobs/summaryRebuild.ts
+?? src/lib/server/memory/canonical.persistence.test.ts
+?? src/lib/server/memory/canonical.sync.test.ts
+?? src/lib/server/memory/locationLore.test.ts
+?? src/lib/server/memory/locationLore.ts
+?? src/lib/server/memory/retrievalSource.test.ts
+?? src/lib/server/memory/retrievalSource.ts
+?? src/lib/server/memory/sceneCheckpoint.test.ts
+?? src/lib/server/memory/sceneCheckpoint.ts
+?? src/lib/server/memory/temporal.test.ts
+?? src/lib/server/plotBrain/chapterThreads.test.ts
+?? src/lib/server/plotBrain/chapterThreads.ts
+?? src/lib/server/plotBrain/lifecycle.test.ts
+?? src/lib/server/plotBrain/lifecycle.ts
+?? src/lib/server/turn/characterEventMemory.ts
+?? src/lib/server/turn/classifierContext.test.ts
+?? src/lib/server/turn/classifierRepair.test.ts
+?? src/lib/server/turn/promptReceipt.test.ts
+?? src/lib/server/turn/promptReceipt.ts
+?? src/lib/server/turn/recentDialogue.test.ts
+?? src/lib/server/turn/recentDialogue.ts
+?? src/lib/server/wiki/qdrantSync.test.ts
+?? src/lib/server/wiki/storyIdentity.test.ts
+?? src/lib/server/wiki/storyIdentity.ts
+?? src/lib/services/ai/context/controlInput.ts
+?? src/lib/services/ai/context/factionEligibility.ts
+?? src/lib/services/ai/context/gmAuthority.ts
+?? src/lib/services/ai/context/parallelPov.test.ts
+?? src/lib/services/ai/context/parallelPov.ts
+?? src/lib/services/ai/context/plotBrainFreshness.test.ts
+?? src/lib/services/ai/context/plotBrainFreshness.ts
+?? src/lib/services/ai/context/sceneActorMention.test.ts
+?? src/lib/services/ai/context/sceneActorMention.ts
+?? src/lib/services/ai/generation/ArcCondensationService.test.ts
+?? src/lib/services/ai/image/ImageGenerationService.test.ts
+?? src/lib/services/chapterCadence.test.ts
+?? src/lib/services/chapterCadence.ts
+?? src/lib/services/database.timestamps.test.ts
+?? src/lib/stores/story.backendTurn.test.ts
+?? src/lib/stores/story.characterSave.test.ts
+?? src/lib/stores/story.details.test.ts
+?? src/lib/stores/story.prompt.test.ts
+?? src/lib/stores/story.strategicPrompt.test.ts
+?? src/lib/utils/__tests__/playerSheet.test.ts
+?? src/lib/utils/characterState.test.ts
+?? src/lib/utils/characterState.ts
+?? src/lib/utils/playerSheet.ts
+?? src/lib/utils/pwa.test.ts
+?? src/lib/utils/pwa.ts
+?? src/lib/utils/sceneEvidence.ts
+?? src/routes/api/settings/prompts/
+?? src/service-worker.ts
+?? static/icons/
+?? static/manifest.webmanifest

@@ -1,3 +1,5 @@
+import { assertLocalPath, resolveRuntimeOptions } from '../../runtime-config.mjs';
+
 export function parseArgs(argv) {
 	const flags = {};
 	const positional = [];
@@ -42,6 +44,8 @@ export function requireVaultAndRest(positional, usage) {
 		console.error(usage);
 		process.exit(1);
 	}
+	const runtime = resolveRuntimeOptions();
+	if (!runtime.allowSharedRuntime) assertLocalPath(vault, runtime.cwd);
 	return [vault, positional.slice(1)];
 }
 

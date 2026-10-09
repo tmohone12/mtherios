@@ -1,3 +1,4 @@
+import { readCampaignState } from '$lib/contracts/campaignState';
 import {
 	createStory,
 	deleteStory,
@@ -25,6 +26,7 @@ import {
 	contextCheckpointRevertResponseSchema,
 	createStoryResponseSchema,
 	storyDeleteResponseSchema,
+	storyRestoreResultSchema,
 	entityCommandResponseSchema,
 	entityDeleteResponseSchema,
 	livingMemoryCommandResponseSchema,
@@ -124,7 +126,7 @@ export interface DeleteBackendStoryResult {
 
 export const CONTROL_SURFACE_BOOTSTRAP_LIMITS = {
 	entryLimit: 80,
-	entityLimit: 120,
+	entityLimit: 200,
 	relationshipLimit: 200,
 	factionLimit: 80,
 	factionMembershipLimit: 160,
@@ -206,8 +208,10 @@ function cacheStatusArgs(options: Partial<EngineCacheStatusArgs> = {}): Record<s
 	return args;
 }
 
-export async function listBackendStories(options: { shelfId?: string | null } = {}): Promise<BackendStorySummary[]> {
-	const args = options.shelfId ? { shelfId: options.shelfId } : {};
+export async function listBackendStories(options: { shelfId?: string | null; includeArchived?: boolean } = {}): Promise<BackendStorySummary[]> {
+	const args: Record<string, unknown> = {};
+	if (options.shelfId) args.shelfId = options.shelfId;
+	if (options.includeArchived) args.includeArchived = true;
 	const response = await sendEngineCommand({
 		storyId: '__app__',
 		command: 'story.list',
@@ -469,7 +473,7 @@ export async function cacheBackendStoryFromBootstrap(
 	});
 }
 
-export async function refreshStoryCatalog(options: { shelfId?: string | null } = {}): Promise<Story[]> {
+export async function refreshStoryCatalog(options: { shelfId?: string | null } = {}, onBackendUnavailable?: (error: unknown) => void): Promise<Story[]> {
 	const localStories = await getAllStories();
 	let serverStories: Story[] = [];
 	let liveServerIds: Set<string> | null = null;
@@ -494,6 +498,7 @@ export async function refreshStoryCatalog(options: { shelfId?: string | null } =
 		}
 	} catch (error) {
 		console.warn('[ServerStories] Backend story catalog unavailable; using local cache:', error);
+		onBackendUnavailable?.(error);
 	}
 
 	const byId = new Map<string, Story>();
@@ -551,6 +556,7 @@ export async function cacheBackendStory(row: BackendStorySummary): Promise<Story
 		currentBgImage: null,
 		headerPrompt: row.headerPrompt ?? null,
 		playerReputation: typeof metadata.playerReputation === 'string' ? metadata.playerReputation : null,
+		campaignState: readCampaignState(metadata),
 		serverStoryId: row.id,
 		serverVersion: row.serverVersion ?? 1,
 		syncStatus: 'synced',
@@ -564,6 +570,8 @@ export async function cacheBackendStory(row: BackendStorySummary): Promise<Story
 	if (existing) {
 		await updateStory(localId, {
 			shelfId: story.shelfId,
+			createdAt: story.createdAt,
+			updatedAt: story.updatedAt,
 			title: story.title,
 			description: story.description,
 			genre: story.genre,
@@ -575,7 +583,7 @@ export async function cacheBackendStory(row: BackendStorySummary): Promise<Story
 			serverVersion: story.serverVersion,
 			syncStatus: 'synced',
 		});
-		return { ...existing, ...story, updatedAt: Date.now() };
+		return { ...existing, ...story };
 	}
 
 	await createStory(story);
@@ -589,7 +597,7 @@ export async function deleteStoryEverywhere(
 	let backendResult: DeleteBackendStoryResult | null = null;
 	if (story.serverStoryId) {
 		const args = {
-			mode: options.mode ?? 'purge',
+			mode: options.mode ?? 'archive',
 			exportBeforeDelete: options.exportBeforeDelete ?? false,
 		};
 		const response = await sendEngineCommand({
@@ -604,6 +612,22 @@ export async function deleteStoryEverywhere(
 	}
 	await deleteStory(story.id);
 	return backendResult;
+}
+
+export async function restoreBackendStory(serverStoryId: string): Promise<{ ok: boolean; storyId: string; serverVersion: number | null }> {
+	const response = await sendEngineCommand({
+		storyId: serverStoryId,
+		command: 'story.restore',
+		args: {},
+	});
+	if (response.status !== 'succeeded') {
+		throw new Error(response.error ?? 'Backend restore failed.');
+	}
+	const result = storyRestoreResultSchema.parse(response.result);
+	const rows = await listBackendStories({ includeArchived: true });
+	const row = rows.find((candidate) => candidate.id === serverStoryId);
+	if (row) await cacheBackendStory(row);
+	return { ok: result.ok, storyId: result.storyId, serverVersion: result.serverVersion };
 }
 
 function toStoryMode(value: unknown): StoryMode {

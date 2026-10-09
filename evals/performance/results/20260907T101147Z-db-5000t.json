@@ -1,0 +1,66 @@
+{
+  "createdAt": "2026-09-07T10:11:47.111Z",
+  "mode": "db-long-campaign",
+  "build": {
+    "identity": "mtherios@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "externalId": null,
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 475,
+    "dirtyStatusSha256": "589d801b1d107973afed16949cce04a140f495b860f3fe9eb284b383e6eecee5",
+    "sourceHashes": {
+      "scripts/bench-generation.mjs": "a5dd324b4900808ecf4014ba9d4b1e5498735891b00dcca8aad31533456f1f96",
+      "scripts/bench-generation-core.mjs": "2484d1abf00d4f50dd638af9215e4e1d3a15fc9a33e6720e4ddba05ccefd1a6f",
+      "src/lib/server/turn/orchestrator.ts": "cd347862810b2272bc18dc22854c981044572eb6e9fd3043111dd0137700efac",
+      "src/lib/server/turn/provider.ts": "d1b8fe0ac1802923ac2aecbb853f916c039511ee9493ed2a2b40a9cfd372839f",
+      "src/lib/server/memory/retrieval.ts": "452612f3dff7bd86e6cbcf40b4707e0062eb8f58c81cdeb02f1f42eebdec2e91"
+    }
+  },
+  "url": "http://127.0.0.1:5177",
+  "storyId": "bench_long_1788775902412_54f4f413",
+  "turns": 5000,
+  "entries": 10000,
+  "entryLimit": 80,
+  "seedDurationMs": 1164,
+  "gatewayDurationMs": 3534,
+  "verification": {
+    "ok": false,
+    "errors": [
+      "memory.retrieve reported a degraded source: candidates=0; filteredInactive=0; filteredUnsafe=0; selected=0; budget=600; droppedLowScore=0; droppedOverBudget=0; droppedRedundant=0; trace=0; Transcript recall: timed out; other memory sources retained."
+    ],
+    "entryCount": 10000,
+    "expectedEntryCount": 10000,
+    "projection": {
+      "limit": 80,
+      "length": 80,
+      "firstPosition": 9920,
+      "lastPosition": 9999
+    },
+    "transcript": {
+      "limit": 80,
+      "hasMore": true,
+      "nextBeforePosition": 9920,
+      "length": 80,
+      "firstPosition": 9920,
+      "lastPosition": 9999
+    },
+    "bootstrap": {
+      "entryCount": 10000,
+      "projectionCountEntries": 10000,
+      "selectedLength": 80
+    },
+    "memory": {
+      "nodeCount": 0,
+      "tokenEstimate": 1,
+      "degradedSources": [
+        "Transcript recall: timed out; other memory sources retained."
+      ]
+    }
+  },
+  "providerCalls": 0,
+  "writes": true,
+  "writeScope": "disposable benchmark story only; cleaned up after verification"
+}

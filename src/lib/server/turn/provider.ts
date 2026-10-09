@@ -1,12 +1,16 @@
+import { createHash } from 'node:crypto';
+import { getMtheriosAppConfig } from '$lib/server/app/config';
+import { isJevModel } from './jev';
 import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 import type { TurnRequest } from '$lib/contracts/memory';
 import type { ProviderType } from '$lib/types';
-import { getModelContextWindow } from '$lib/services/ai/context/modelWindows';
+import { getModelContextWindowInfo } from '$lib/services/ai/context/modelWindows';
 import {
 	getGoogleAgentPlatformBaseUrl,
 	getGoogleAgentPlatformHeaders,
 } from '$lib/server/ai/googleAgentPlatform';
 import { toWellFormedText } from './wellFormedText';
+import { countTokens } from '$lib/utils/tokens';
 
 type ProviderProfile = NonNullable<TurnRequest['providerProfile']>;
 
@@ -23,22 +27,35 @@ export interface ResponseSchemaOptions {
 	strict?: boolean;
 }
 
+export interface NativeToolDefinition { name: string; description: string; parameters: Record<string, unknown> }
+export interface NativeToolCall { id: string; name: string; arguments: Record<string, unknown> }
+
 export interface ServerGenerationOptions {
 	profile: ProviderProfile;
 	model?: string;
 	temperature?: number;
 	maxTokens?: number;
+	/** Narration may use the provider's output allowance instead of an app cap. */
+	providerOutputLimit?: boolean;
 	reasoningEffort?: string | null;
 	timeoutMs?: number;
 	maxRetries?: number;
 	system: string;
 	systemDynamic?: string;
+	/** Place changing turn context after dialogue on cache-ordered narration requests. */
+	contextAfterDialogue?: boolean;
+	/** Character offset where a second, shorter-lived system cache segment begins. */
+	systemCacheBoundary?: number;
 	messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
 	prompt: string;
 	responseFormat?: 'json_object';
 	responseSchema?: ResponseSchemaOptions;
+	tools?: NativeToolDefinition[];
+	/** Allow independent native tool calls in one provider response. */
+	parallelToolCalls?: boolean;
 	cache?: PromptCacheOptions;
 	onTextDelta?: (chunk: string) => void | Promise<void>;
+	signal?: AbortSignal;
 }
 
 export interface ServerGenerationUsage {
@@ -51,10 +68,12 @@ export interface ServerGenerationUsage {
 	outputTokens: number | null;
 	reasoningTokens: number | null;
 	estimatedCostUsd: number | null;
+	providerCostUsd: number | null;
 }
 
 export interface ServerGenerationResult {
 	text: string;
+	toolCalls?: NativeToolCall[];
 	model: string;
 	endpoint: string;
 	finishReason?: string | null;
@@ -72,6 +91,7 @@ export class ServerGenerationError extends Error {
 		usage?: ServerGenerationUsage;
 		statusCode?: number;
 		retryCount?: number;
+		retryAfterMs?: number;
 	};
 
 	constructor(
@@ -81,6 +101,7 @@ export class ServerGenerationError extends Error {
 			usage?: ServerGenerationUsage;
 			statusCode?: number;
 			retryCount?: number;
+			retryAfterMs?: number;
 		},
 	) {
 		super(message);
@@ -100,12 +121,31 @@ function isDeepSeekRuntimeModel(providerType: ProviderType, model: string | unde
 
 const DEFAULT_SERVER_GENERATION_TIMEOUT_MS = 120_000;
 const DEFAULT_SERVER_GENERATION_RETRIES = 1;
+const providerCooldowns = new Map<string, number>();
+
+export function getProviderCooldownRemainingMs(): number {
+	const now = Date.now();
+	for (const [key, until] of providerCooldowns) if (until <= now) providerCooldowns.delete(key);
+	return Math.max(0, ...[...providerCooldowns.values()].map(until => until - now));
+}
+
+function providerCooldownKey(profile: ProviderProfile, endpoint: string): string {
+	return createHash('sha256').update(`${endpoint}\0${profile.apiKey ?? ''}`).digest('hex');
+}
+
+function retryAfterMs(header: string | null, status: number): number {
+	const seconds = header && /^\d+(?:\.\d+)?$/.test(header.trim()) ? Number(header.trim()) * 1000 : NaN;
+	const date = header && !Number.isFinite(seconds) ? Date.parse(header) - Date.now() : NaN;
+	const requested = Number.isFinite(seconds) ? seconds : date;
+	return Math.min(300_000, Math.max(1000, Number.isFinite(requested) ? requested : status === 429 ? 30_000 : 1000));
+}
 
 export interface ProviderRuntimeCapabilities {
 	cacheMode: 'openai_implicit' | 'anthropic_breakpoint' | 'gemini_explicit' | 'openrouter' | 'none';
 	structuredOutputs: boolean;
 	nativeTokenCounting: boolean;
 	maxContextTokens: number;
+	contextWindowSource: 'explicit-override' | 'model-window-registry-or-default';
 }
 
 export function getProviderCapabilities(profile: ProviderProfile, model?: string): ProviderRuntimeCapabilities {
@@ -122,11 +162,13 @@ export function getProviderCapabilities(profile: ProviderProfile, model?: string
 				: providerType === 'google' || providerType === 'google-ai-studio' || providerType === 'google-vertex' || providerType === 'google-agent-platform'
 					? 'gemini_explicit'
 					: 'none';
+	const contextWindow = getModelContextWindowInfo(fallbackModelFor(profile, model), profile.contextWindowTokens);
 	return {
 		cacheMode,
 		structuredOutputs: !isAnthropic && !isDeepSeekModel && Boolean(provider?.capabilities.structuredOutput),
 		nativeTokenCounting: ['openai', 'openrouter', 'anthropic', 'anthropic-proxy', 'google', 'google-ai-studio', 'google-vertex', 'google-agent-platform', 'z-ai'].includes(providerType),
-		maxContextTokens: getModelContextWindow(fallbackModelFor(profile, model)),
+		maxContextTokens: contextWindow.tokens,
+		contextWindowSource: contextWindow.source,
 	};
 }
 
@@ -198,24 +240,27 @@ function wellFormedMessages(messages: Array<{ role: 'user' | 'assistant'; conten
 	}));
 }
 
-function buildAnthropicSystem(system: string, systemDynamic?: string): string | Array<Record<string, unknown>> {
+function cachedSystemBlocks(system: string, systemDynamic: string, boundary?: number): Array<Record<string, unknown>> {
+	const split = typeof boundary === 'number' && boundary > 0 && boundary < system.length;
+	return [
+		...(split ? [{ type: 'text', text: system.slice(0, boundary), cache_control: { type: 'ephemeral' } }] : []),
+		{ type: 'text', text: split ? system.slice(boundary) : system, cache_control: { type: 'ephemeral' } },
+		...(systemDynamic ? [{ type: 'text', text: systemDynamic }] : []),
+	];
+}
+
+function buildAnthropicSystem(system: string, systemDynamic?: string, boundary?: number): string | Array<Record<string, unknown>> {
 	if (systemDynamic && systemDynamic.length > 0 && system.length > 0) {
-		return [
-			{ type: 'text', text: system, cache_control: { type: 'ephemeral' } },
-			{ type: 'text', text: systemDynamic },
-		];
+		return cachedSystemBlocks(system, systemDynamic, boundary);
 	}
 	return combinedSystem(system, systemDynamic);
 }
 
-function buildOpenAiSystemMessage(profile: ProviderProfile, system: string, systemDynamic?: string): { role: 'system'; content: unknown } {
-	if (systemDynamic && systemDynamic.length > 0 && system.length > 0 && supportsOpenRouterStyleCaching(profile)) {
+function buildOpenAiSystemMessage(profile: ProviderProfile, system: string, systemDynamic?: string, boundary?: number, cacheStableSystem = false): { role: 'system'; content: unknown } {
+	if (system.length > 0 && (systemDynamic || cacheStableSystem) && supportsOpenRouterStyleCaching(profile)) {
 		return {
 			role: 'system',
-			content: [
-				{ type: 'text', text: system, cache_control: { type: 'ephemeral' } },
-				{ type: 'text', text: systemDynamic },
-			],
+			content: cachedSystemBlocks(system, systemDynamic ?? '', boundary),
 		};
 	}
 	return { role: 'system', content: combinedSystem(system, systemDynamic) };
@@ -270,6 +315,14 @@ function firstNumber(...values: unknown[]): number | null {
 	return null;
 }
 
+function firstNonNegativeNumber(...values: unknown[]): number | null {
+	for (const value of values) {
+		const parsed = optionalNumber(value);
+		if (parsed != null && parsed >= 0) return parsed;
+	}
+	return null;
+}
+
 function optionalString(value: unknown): string | null {
 	return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
@@ -277,11 +330,12 @@ function optionalString(value: unknown): string | null {
 function usageFromResponse(data: unknown, useAnthropic: boolean): ServerGenerationUsage {
 	const record = asRecord(data);
 	const usage = asRecord(record.usage);
+	const nanoPricing = asRecord(record.x_nanogpt_pricing);
 	const promptDetails = asRecord(usage.prompt_tokens_details);
 	const inputDetails = asRecord(usage.input_tokens_details);
 	const completionDetails = asRecord(usage.completion_tokens_details);
 	const outputDetails = asRecord(usage.output_tokens_details);
-	const inputTokens = useAnthropic
+	const uncachedInputTokens = useAnthropic
 		? optionalNumber(usage.input_tokens)
 		: firstNumber(usage.prompt_tokens, usage.input_tokens);
 	const outputTokens = useAnthropic
@@ -289,13 +343,17 @@ function usageFromResponse(data: unknown, useAnthropic: boolean): ServerGenerati
 		: firstNumber(usage.completion_tokens, usage.output_tokens);
 	const cachedInputTokens = useAnthropic
 		? optionalNumber(usage.cache_read_input_tokens)
-		: firstNumber(promptDetails.cached_tokens, inputDetails.cached_tokens);
+		: firstNumber(promptDetails.cached_tokens, inputDetails.cached_tokens, usage.prompt_cache_hit_tokens);
 	const cacheWriteTokens = firstNumber(
 		usage.cache_creation_input_tokens,
 		usage.cache_write_input_tokens,
+		promptDetails.cache_write_tokens,
 		inputDetails.cache_creation_tokens,
 		inputDetails.cache_write_tokens,
 	);
+	const inputTokens = useAnthropic && uncachedInputTokens != null
+		? uncachedInputTokens + (cachedInputTokens ?? 0) + (cacheWriteTokens ?? 0)
+		: uncachedInputTokens;
 	const reasoningTokens = firstNumber(
 		completionDetails.reasoning_tokens,
 		outputDetails.reasoning_tokens,
@@ -306,6 +364,14 @@ function usageFromResponse(data: unknown, useAnthropic: boolean): ServerGenerati
 			? inputTokens + outputTokens
 			: null
 		);
+	const providerCostUsd = firstNonNegativeNumber(
+		nanoPricing.currency === 'USD' ? nanoPricing.cost : null,
+		usage.cost,
+		usage.cost_usd,
+		usage.total_cost,
+		record.cost,
+		record.cost_usd,
+	);
 	return {
 		requestTokens: inputTokens,
 		responseTokens: outputTokens,
@@ -316,6 +382,7 @@ function usageFromResponse(data: unknown, useAnthropic: boolean): ServerGenerati
 		outputTokens,
 		reasoningTokens,
 		estimatedCostUsd: null,
+		providerCostUsd,
 	};
 }
 
@@ -338,6 +405,7 @@ function emptyUsage(): ServerGenerationUsage {
 		outputTokens: null,
 		reasoningTokens: null,
 		estimatedCostUsd: null,
+		providerCostUsd: null,
 	};
 }
 
@@ -353,6 +421,7 @@ async function readStreamingText(
 	let buffer = '';
 	let text = '';
 	let usage = emptyUsage();
+	let anthropicUsage: Record<string, unknown> = {};
 	let finishReason: string | null = null;
 	let timeToFirstTokenMs: number | null = null;
 
@@ -370,8 +439,10 @@ async function readStreamingText(
 			const delta = record.delta && typeof record.delta === 'object' ? record.delta as Record<string, unknown> : {};
 			if (typeof delta.text === 'string') chunk = delta.text;
 			finishReason = optionalString(delta.stop_reason) ?? optionalString(record.stop_reason) ?? finishReason;
-			if (record.type === 'message_delta') {
-				usage = usageFromResponse(record, true);
+			if (record.type === 'message_start' || record.type === 'message_delta') {
+				const nextUsage = asRecord(record.type === 'message_start' ? asRecord(record.message).usage : record.usage);
+				anthropicUsage = { ...anthropicUsage, ...Object.fromEntries(Object.entries(nextUsage).filter(([, value]) => value != null)) };
+				usage = usageFromResponse({ usage: anthropicUsage }, true);
 			}
 		} else {
 			const choices = Array.isArray(record.choices) ? record.choices : [];
@@ -435,14 +506,20 @@ function isTimeoutError(error: unknown): boolean {
 	return error instanceof Error && /timed out/i.test(error.message);
 }
 
-function makeGenerationAbortSignal(timeoutMs: number): { signal: AbortSignal; cleanup: () => void } {
+function makeGenerationAbortSignal(timeoutMs: number, externalSignal?: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
 	const controller = new AbortController();
+	const abortFromExternal = () => controller.abort(externalSignal?.reason);
+	if (externalSignal?.aborted) abortFromExternal();
+	else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
 	const timer = setTimeout(() => {
 		controller.abort(new Error(`Server LLM request timed out after ${timeoutMs}ms`));
 	}, timeoutMs);
 	return {
 		signal: controller.signal,
-		cleanup: () => clearTimeout(timer),
+		cleanup: () => {
+			clearTimeout(timer);
+			externalSignal?.removeEventListener('abort', abortFromExternal);
+		},
 	};
 }
 
@@ -455,6 +532,8 @@ function generationErrorMessage(error: unknown, timeoutMs: number): string {
 }
 
 export async function generateServerTextWithMetrics(options: ServerGenerationOptions): Promise<ServerGenerationResult> {
+	if (options.profile.providerType === 'ollama' && !getMtheriosAppConfig().localEmbeddingsEnabled) throw new Error('Ollama is off for this session. Enable Ollama/local embeddings at startup to use it.');
+	if (isJevModel(options.model)) throw new Error('Decision models use the Decisions API and are unavailable for text generation.');
 	if (requiresApiKey(options.profile) && !options.profile.apiKey?.trim()) {
 		throw new Error('Server turn generation requires an API profile with an API key.');
 	}
@@ -463,10 +542,19 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 	const model = fallbackModelFor(options.profile, options.model);
 	const temperature = options.temperature ?? 1;
 	const maxTokens = options.maxTokens ?? 4096;
-	const requestedReasoningEffort = options.reasoningEffort?.trim().toLowerCase();
+	let requestedReasoningEffort = options.reasoningEffort?.trim().toLowerCase();
+	// GLM-5.3 requires thinking. Older persisted "off" settings must remain usable.
+	// https://docs.z.ai/guides/llm/glm-5.3 (migration guidance)
+	const requiresGlmThinking = /(?:^|\/)glm-5\.3(?:$|[-:])/i.test(model);
+	if (requiresGlmThinking && ['off', 'none', 'minimal'].includes(requestedReasoningEffort ?? '')) requestedReasoningEffort = 'low';
 	const providerType = options.profile.providerType as ProviderType;
 	const reasoningControl = requestedReasoningEffort && providerType === 'nanogpt'
 		? { reasoning_effort: requestedReasoningEffort === 'off' ? 'none' : requestedReasoningEffort === 'max' ? 'xhigh' : requestedReasoningEffort }
+		// OpenRouter translates its own reasoning object; native thinking flags can be ignored.
+		: requestedReasoningEffort && providerType === 'openrouter'
+			? { reasoning: { effort: requestedReasoningEffort === 'off' ? 'none' : requestedReasoningEffort } }
+		: requiresGlmThinking && requestedReasoningEffort
+			? { thinking: { type: 'enabled' }, reasoning_effort: ['max', 'xhigh'].includes(requestedReasoningEffort) ? 'max' : requestedReasoningEffort === 'low' ? 'low' : 'high' }
 		: isDeepSeekRuntimeModel(providerType, model) && requestedReasoningEffort
 			? requestedReasoningEffort === 'off'
 				? { thinking: { type: 'disabled' } }
@@ -479,16 +567,20 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 		: baseUrlFor(options.profile);
 	const messages = wellFormedMessages(options.messages ?? []);
 	const system = toWellFormedText(options.system);
-	const systemDynamic = options.systemDynamic == null ? undefined : toWellFormedText(options.systemDynamic);
-	const prompt = toWellFormedText(options.prompt);
+	const contextAfterDialogue = options.contextAfterDialogue === true && ['nanogpt', 'openrouter'].includes(providerType);
+	const turnContext = options.systemDynamic == null ? undefined : toWellFormedText(options.systemDynamic);
+	const systemDynamic = contextAfterDialogue ? undefined : turnContext;
+	const prompt = toWellFormedText(contextAfterDialogue && turnContext
+		? `Current turn context (newer than the dialogue above; apply source priority when details conflict):\n${turnContext}\n\n${options.prompt}`
+		: options.prompt);
 	const timeoutMs = generationTimeoutMs(options.timeoutMs);
 	const maxRetries = generationRetryLimit(options.maxRetries);
 
 	const endpoint = useAnthropic
 		? `${baseUrl || 'https://api.anthropic.com'}/v1/messages`
 		: `${baseUrl}/chat/completions`;
-	const inputChars = promptChars(options);
-	const shouldStream = Boolean(options.onTextDelta) && options.responseFormat !== 'json_object' && !options.responseSchema;
+	const inputChars = promptChars({ ...options, systemDynamic, prompt });
+	const shouldStream = Boolean(options.onTextDelta) && options.responseFormat !== 'json_object' && !options.responseSchema && !options.tools?.length;
 
 	const body = useAnthropic
 		? {
@@ -496,45 +588,73 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			max_tokens: maxTokens,
 			temperature,
 			...(shouldStream ? { stream: true } : {}),
-			system: buildAnthropicSystem(system, systemDynamic),
+			system: buildAnthropicSystem(system, systemDynamic, options.systemCacheBoundary),
 			messages: [
 				...messages,
 				{ role: 'user', content: prompt },
 			],
+			...(options.tools?.length ? { tools: options.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
 		}
 		: {
 			model,
 			temperature,
-			max_tokens: maxTokens,
+			...(options.providerOutputLimit ? {} : { max_tokens: maxTokens }),
 			messages: [
-				buildOpenAiSystemMessage(options.profile, system, systemDynamic),
+				buildOpenAiSystemMessage(options.profile, system, systemDynamic, options.systemCacheBoundary, contextAfterDialogue),
 				...messages,
 				{ role: 'user', content: prompt },
 			],
 			...buildOpenAiPromptCacheFields(options.profile, options.cache),
+			...(options.profile.providerType === 'openrouter' && options.cache?.key
+				? { session_id: options.cache.key.slice(0, 256) } : {}),
 			...reasoningControl,
 			...(shouldStream ? { stream: true, stream_options: { include_usage: true } } : {}),
 			...buildOpenAiResponseFormat(options),
+			...(options.tools?.length ? { tools: options.tools.map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } })), parallel_tool_calls: options.parallelToolCalls === true } : {}),
 		};
 
+	// Count the final serialized request, including schema, observations and framing.
+	// Every generation passes here, including roll continuations and JSON repair.
+	const serializedBody = JSON.stringify(body);
+	const requestTokens = countTokens(serializedBody);
+	const contextWindow = getProviderCapabilities(options.profile, model).maxContextTokens;
+	// Anthropic requires max_tokens. Compatible APIs can choose their own output
+	// allowance; an old saved maxTokens value must not cap or reject that request.
+	const reservedOutput = options.providerOutputLimit && !useAnthropic ? 0 : maxTokens;
+	if (requestTokens + reservedOutput + 512 > contextWindow) {
+		throw new ServerGenerationError(`Request exceeds the model context allowance: approximately ${requestTokens} input tokens + ${reservedOutput} reserved output + 512 framing reserve > ${contextWindow}. Reduce Recent Dialogue or the scene and memory budget.`, {
+			model, endpoint, durationMs: Date.now() - startTime, promptChars: inputChars, statusCode: 413, retryCount: 0,
+		});
+	}
 	const headers = useAnthropic
 		? anthropicHeaders(options.profile)
 		: useGoogleAgentPlatform
 			? { 'Content-Type': 'application/json', ...await getGoogleAgentPlatformHeaders() }
 			: openAiHeaders(options.profile);
+	const cooldownKey = providerCooldownKey(options.profile, endpoint);
 	let lastError: unknown;
 	for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-		const abort = makeGenerationAbortSignal(timeoutMs);
+		const coolingUntil = providerCooldowns.get(cooldownKey) ?? 0;
+		if (coolingUntil > Date.now()) {
+			throw new ServerGenerationError('Provider cooling down after a rate limit; retry later.', {
+				model, endpoint, durationMs: Date.now() - startTime, promptChars: inputChars,
+				statusCode: 429, retryCount: attempt, retryAfterMs: coolingUntil - Date.now(),
+			});
+		}
+		const abort = makeGenerationAbortSignal(timeoutMs, options.signal);
 		try {
 		const response = await fetch(endpoint, {
 			method: 'POST',
 			headers,
-			body: JSON.stringify(body),
+			body: serializedBody,
 			signal: abort.signal,
 		});
 
 		if (!response.ok) {
 			const text = await response.text().catch(() => '');
+			const retryDelay = (response.status === 429 || response.headers.has('Retry-After'))
+				? retryAfterMs(response.headers.get('Retry-After'), response.status) : 0;
+			if (retryDelay) providerCooldowns.set(cooldownKey, Date.now() + retryDelay);
 			const error = new ServerGenerationError(`Server LLM request failed (${response.status}): ${text || response.statusText}`, {
 				model,
 				endpoint,
@@ -542,8 +662,9 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 				promptChars: inputChars,
 				statusCode: response.status,
 				retryCount: attempt,
+				...(retryDelay ? { retryAfterMs: retryDelay } : {}),
 			});
-			if (attempt < maxRetries && isTransientStatus(response.status)) {
+			if (!retryDelay && attempt < maxRetries && isTransientStatus(response.status)) {
 				lastError = error;
 				continue;
 			}
@@ -559,8 +680,13 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			: useAnthropic
 				? (data.content ?? []).map((block: { text?: string }) => block.text ?? '').join('').trim()
 				: String(data.choices?.[0]?.message?.content ?? '').trim();
+		const toolCalls: NativeToolCall[] = streamed ? [] : useAnthropic
+			? (data.content ?? []).filter((block: { type?: string }) => block.type === 'tool_use').map((block: { id: string; name: string; input: Record<string, unknown> }) => ({ id: block.id, name: block.name, arguments: block.input }))
+			: (data.choices?.[0]?.message?.tool_calls ?? []).map((call: { id: string; function: { name: string; arguments: string } }) => ({ id: call.id, name: call.function.name, arguments: JSON.parse(call.function.arguments) }));
+		if (toolCalls.some(call => !call.id || !call.name || !call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments))) throw new Error('Provider returned an invalid tool call.');
 		return {
 			text,
+			...(toolCalls.length ? { toolCalls } : {}),
 			model,
 			endpoint,
 			finishReason: streamed ? streamed.finishReason : finishReasonFromResponse(data, useAnthropic),

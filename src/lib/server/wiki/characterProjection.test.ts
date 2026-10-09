@@ -76,6 +76,15 @@ describe('character projection markdown service', () => {
 		expect(markdown).not.toContain('## Canon State');
 	});
 
+	it('uses the supplied canonical biography for the compact archive bio', () => {
+		const markdown = buildCharacterProjectionMarkdown({
+			...sampleInput,
+			description: 'The canonical player biography.',
+		});
+
+		expect(markdown).toContain('[bio]: The canonical player biography.');
+	});
+
 	it('does not duplicate character pages by stable ID and preserves human edits during regeneration', async () => {
 		const root = await mkdtemp(path.join(os.tmpdir(), 'mtherios-char-proj-'));
 		tempRoots.push(root);

@@ -8,12 +8,15 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { initVault } from './wiki-core/lib/init.mjs';
 
-const DEFAULT_DATABASE_URL = 'postgres://mtherios:mtherios@127.0.0.1:5432/mtherios';
+import { resolveRuntimeOptions, buildRuntimeEnv, safeRuntimeSummary } from './runtime-config.mjs';
+import { readBuildIdentity } from './build.mjs';
 
 export async function main(argv = process.argv.slice(2)) {
-	const options = await resolveOptions(argv);
+	const options = resolveRuntimeOptions(argv);
+	if (options.printConfig) { console.log(JSON.stringify(safeRuntimeSummary(options), null, 2)); return; }
 	await prepareDataRoot(options);
 	const env = buildRuntimeEnv(options);
+	await startLocalModels(options, env);
 
 	printBanner(options);
 
@@ -25,128 +28,50 @@ export async function main(argv = process.argv.slice(2)) {
 	await runBuiltServer(options, env);
 }
 
-async function resolveOptions(argv) {
-	const { flags } = parseArgs(argv);
-	const cwd = path.resolve(flags.cwd ?? process.cwd());
-	const configPath = path.resolve(cwd, flags.config ?? process.env.MTHERIOS_CONFIG ?? 'mtherios.config.json');
-	const fileConfig = await readJsonIfExists(configPath);
-
-	const dataRoot = path.resolve(cwd, flags['data-root'] ?? process.env.MTHERIOS_DATA_ROOT ?? fileConfig.dataRoot ?? './data');
-	const vaultRoot = path.resolve(dataRoot, flags['vault-root'] ?? process.env.MTHERIOS_VAULT_ROOT ?? fileConfig.vaultRoot ?? './vaults');
-	const defaultVault = path.resolve(vaultRoot, flags.vault ?? process.env.MTHERIOS_DEFAULT_VAULT ?? fileConfig.defaultVault ?? './default');
-	const host = String(flags.host ?? process.env.HOST ?? fileConfig.host ?? '127.0.0.1');
-	const port = Number(flags.port ?? process.env.PORT ?? fileConfig.port ?? 5173);
-	const qdrantUrl = String(flags['qdrant-url'] ?? process.env.QDRANT_URL ?? fileConfig.qdrantUrl ?? 'http://127.0.0.1:6333');
-	const qdrantCollection = String(flags.collection ?? process.env.QDRANT_COLLECTION ?? fileConfig.qdrantCollection ?? 'mtherios_wiki');
-	const ollamaUrl = String(flags['ollama-url'] ?? process.env.OLLAMA_URL ?? fileConfig.ollamaUrl ?? 'http://127.0.0.1:11434');
-	const wikiEmbedProvider = String(flags['wiki-embed-provider'] ?? process.env.WIKI_EMBED_PROVIDER ?? fileConfig.wikiEmbedProvider ?? 'openrouter');
-	const wikiEmbedModel = String(flags['wiki-embed-model'] ?? process.env.WIKI_EMBED_MODEL ?? fileConfig.wikiEmbedModel ?? 'openai/text-embedding-3-small');
-	const wikiEmbedBaseUrl = String(flags['wiki-embed-base-url'] ?? process.env.WIKI_EMBED_BASE_URL ?? fileConfig.wikiEmbedBaseUrl ?? 'https://openrouter.ai/api/v1');
-	const wikiEmbedApiKey = String(flags['wiki-embed-api-key'] ?? process.env.WIKI_EMBED_API_KEY ?? fileConfig.wikiEmbedApiKey ?? process.env.OPENROUTER_API_KEY ?? fileConfig.llmApiKeys?.OPENROUTER_API_KEY ?? '');
-	const wikiAutoIndexStoryVaults = booleanOption(flags['wiki-auto-index'], process.env.MTHERIOS_WIKI_AUTO_INDEX, fileConfig.wikiAutoIndexStoryVaults, false);
-	const wikiAutoLintStoryVaults = booleanOption(flags['wiki-auto-lint'], process.env.MTHERIOS_WIKI_AUTO_LINT, fileConfig.wikiAutoLintStoryVaults, false);
-	const databaseUrl = String(flags['database-url'] ?? process.env.DATABASE_URL ?? fileConfig.databaseUrl ?? DEFAULT_DATABASE_URL);
-	const jobWorker = booleanOption(flags['job-worker'], process.env.MTHERIOS_JOB_WORKER, fileConfig.jobWorker, true);
-	const jobIntervalMs = Math.max(1000, Number(flags['job-interval-ms'] ?? process.env.MTHERIOS_JOB_INTERVAL_MS ?? fileConfig.jobIntervalMs ?? 5000));
-	const jobTimeoutMs = Math.max(5000, Number(flags['job-timeout-ms'] ?? process.env.MTHERIOS_JOB_TIMEOUT_MS ?? fileConfig.jobTimeoutMs ?? 10 * 60_000));
-	const jobBatchLimit = Math.max(1, Math.min(100, Number(flags['job-batch-limit'] ?? process.env.MTHERIOS_JOB_BATCH_LIMIT ?? fileConfig.jobBatchLimit ?? 1)));
-	const jobStaleLockMs = Math.max(60_000, Number(flags['job-stale-lock-ms'] ?? process.env.MTHERIOS_JOB_STALE_LOCK_MS ?? fileConfig.jobStaleLockMs ?? 30 * 60_000));
-	const chapterThreshold = Math.max(1, Number(flags['chapter-threshold'] ?? process.env.MTHERIOS_CHAPTER_THRESHOLD ?? fileConfig.chapterThreshold ?? 20));
-	const postChapterBuffer = Math.max(0, Number(flags['post-chapter-buffer'] ?? process.env.MTHERIOS_POST_CHAPTER_BUFFER ?? fileConfig.postChapterBuffer ?? 10));
-	const chaptersPerArc = Math.max(1, Number(flags['chapters-per-arc'] ?? process.env.MTHERIOS_CHAPTERS_PER_ARC ?? fileConfig.chaptersPerArc ?? 5));
-	const memoryEmbeddingProvider = String(flags['memory-embedding-provider'] ?? process.env.MEMORY_EMBEDDING_PROVIDER ?? fileConfig.memoryEmbeddingProvider ?? '');
-	const memoryEmbeddingModel = String(flags['memory-embedding-model'] ?? process.env.MEMORY_EMBEDDING_MODEL ?? fileConfig.memoryEmbeddingModel ?? '');
-	const memoryEmbeddingBaseUrl = String(flags['memory-embedding-base-url'] ?? process.env.MEMORY_EMBEDDING_BASE_URL ?? fileConfig.memoryEmbeddingBaseUrl ?? '');
-	const memoryEmbeddingApiKey = String(flags['memory-embedding-api-key'] ?? process.env.MEMORY_EMBEDDING_API_KEY ?? fileConfig.memoryEmbeddingApiKey ?? (memoryEmbeddingProvider === 'openrouter' ? process.env.OPENROUTER_API_KEY ?? fileConfig.llmApiKeys?.OPENROUTER_API_KEY : '') ?? '');
-	const memoryEmbeddingUrl = String(flags['memory-embedding-url'] ?? process.env.MEMORY_EMBEDDING_URL ?? fileConfig.memoryEmbeddingUrl ?? '');
-	const memoryEmbeddingBatch = Math.max(1, Number(flags['memory-embedding-batch'] ?? process.env.MEMORY_EMBEDDING_BATCH ?? fileConfig.memoryEmbeddingBatch ?? 8));
-	const memoryEmbeddingDimensions = Math.max(1, Number(flags['memory-embedding-dimensions'] ?? process.env.MEMORY_EMBEDDING_DIMENSIONS ?? fileConfig.memoryEmbeddingDimensions ?? 1536));
-
-	return {
-		cwd,
-		configPath,
-		dataRoot,
-		vaultRoot,
-		defaultVault,
-		host,
-		port,
-		qdrantUrl,
-		qdrantCollection,
-		ollamaUrl,
-		wikiEmbedProvider,
-		wikiEmbedModel,
-		wikiEmbedBaseUrl,
-		wikiEmbedApiKey,
-		wikiAutoIndexStoryVaults,
-		wikiAutoLintStoryVaults,
-		databaseUrl,
-		jobWorker,
-		jobIntervalMs,
-		jobTimeoutMs,
-		jobBatchLimit,
-		jobStaleLockMs,
-		chapterThreshold,
-		postChapterBuffer,
-		chaptersPerArc,
-		memoryEmbeddingProvider,
-		memoryEmbeddingModel,
-		memoryEmbeddingBaseUrl,
-		memoryEmbeddingApiKey,
-		memoryEmbeddingUrl,
-		memoryEmbeddingBatch,
-		memoryEmbeddingDimensions,
-		dev: Boolean(flags.dev),
-		strictPort: flags.strictPort !== false,
-	};
-}
-
-function booleanOption(flagValue, envValue, configValue, fallback = false) {
-	if (flagValue === false) return false;
-	if (flagValue === true) return true;
-	if (typeof flagValue === 'string') return flagValue === 'true' || flagValue === '1';
-	if (typeof envValue === 'string') return envValue === 'true' || envValue === '1';
-	if (typeof configValue === 'boolean') return configValue;
-	return fallback;
-}
-
-function parseArgs(argv) {
-	const flags = {};
-	const positional = [];
-
-	for (let i = 0; i < argv.length; i += 1) {
-		const arg = argv[i];
-		if (!arg.startsWith('--')) {
-			positional.push(arg);
-			continue;
-		}
-
-		const raw = arg.slice(2);
-		const eq = raw.indexOf('=');
-		const key = eq === -1 ? raw : raw.slice(0, eq);
-		const inlineValue = eq === -1 ? null : raw.slice(eq + 1);
-		if (key.startsWith('no-')) {
-			flags[key.slice(3)] = false;
-		} else if (inlineValue !== null) {
-			flags[key] = inlineValue;
-		} else if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
-			flags[key] = argv[i + 1];
-			i += 1;
-		} else {
-			flags[key] = true;
+async function startLocalModels(options, env) {
+	if (options.localEmbeddingsEnabled && (options.wikiEmbedProvider === 'ollama' || options.memoryEmbeddingProvider === 'ollama')) {
+		if (!await localEndpointUp(`${options.ollamaUrl.replace(/\/$/, '')}/api/tags`)) {
+			const child = spawn('ollama', ['serve'], { cwd: options.cwd, env, stdio: 'ignore', windowsHide: true, detached: true });
+			child.on('error', error => console.warn(`[models] Ollama could not start: ${error.message}`));
+			child.unref();
+			if (child.pid) {
+				await fs.mkdir(path.join(options.dataRoot, 'models'), { recursive: true });
+				await fs.writeFile(path.join(options.dataRoot, 'models', 'ollama.pid'), String(child.pid));
+			}
+			console.log('[models] starting Ollama for local embeddings');
 		}
 	}
-
-	return { flags, positional };
+	if (!options.localKevEnabled) return;
+	const kevDir = path.join(options.dataRoot, 'models', 'kev');
+	const python = path.join(kevDir, process.platform === 'win32' ? '.venv-rocm/Scripts/python.exe' : '.venv/bin/python');
+	if (!fssync.existsSync(python)) return;
+	const pidPath = path.join(kevDir, 'serve.pid');
+	const previousPid = Number(await fs.readFile(pidPath, 'utf8').catch(() => ''));
+	if (previousPid && processAlive(previousPid)) return;
+	if (await localEndpointUp('http://127.0.0.1:8008/v1/models')) return;
+	const stdout = fssync.openSync(path.join(options.dataRoot, 'logs', 'kev.stdout.log'), 'a');
+	const stderr = fssync.openSync(path.join(options.dataRoot, 'logs', 'kev.stderr.log'), 'a');
+	const child = spawn(python, ['-m', 'kev.serve', '--run', 'jaredpalmer/kev-9b', '--port', '8008'], {
+		cwd: kevDir, windowsHide: true, detached: true, stdio: ['ignore', stdout, stderr],
+		env: { ...env, HF_HOME: env.HF_HOME || path.join(options.dataRoot, 'models', 'hf'),
+			KEV_PREFIX_CACHE: env.KEV_PREFIX_CACHE ?? '0', KEV_CUDA_GRAPHS: env.KEV_CUDA_GRAPHS ?? '0', KEV_FUSED: env.KEV_FUSED ?? '0' },
+	});
+	fssync.closeSync(stdout);
+	fssync.closeSync(stderr);
+	child.on('error', error => console.warn(`[models] Kev could not start: ${error.message}`));
+	child.unref();
+	if (child.pid) await fs.writeFile(pidPath, String(child.pid));
+	console.log('[models] starting local Kev-9B decision server');
 }
 
-async function readJsonIfExists(configPath) {
-	try {
-		const raw = await fs.readFile(configPath, 'utf8');
-		return JSON.parse(raw);
-	} catch (error) {
-		if (error?.code === 'ENOENT') return {};
-		throw new Error(`Could not read ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
-	}
+async function localEndpointUp(url) {
+	try { return (await fetch(url, { signal: AbortSignal.timeout(1000) })).ok; }
+	catch { return false; }
+}
+
+function processAlive(pid) {
+	try { process.kill(pid, 0); return true; }
+	catch { return false; }
 }
 
 async function prepareDataRoot(options) {
@@ -158,63 +83,25 @@ async function prepareDataRoot(options) {
 	await fs.mkdir(path.join(options.dataRoot, 'logs'), { recursive: true });
 
 	await initVault(options.defaultVault, {
-		title: 'Mtherios Default Vault',
+		title: 'MythEngine Default Vault',
 		description: 'Default standalone Obsidian-style vault for terminal-owned lore sources, maintained wiki pages, and local LLM search.',
-		owner: 'Mtherios terminal app process',
+		owner: 'MythEngine terminal app process',
 	});
-}
-
-function buildRuntimeEnv(options) {
-	return {
-		...process.env,
-		NODE_ENV: process.env.NODE_ENV ?? (options.dev ? 'development' : 'production'),
-		HOST: options.host,
-		PORT: String(options.port),
-		DATABASE_URL: options.databaseUrl,
-		MTHERIOS_CONFIG: options.configPath,
-		MTHERIOS_DATA_ROOT: options.dataRoot,
-		MTHERIOS_VAULT_ROOT: options.vaultRoot,
-		MTHERIOS_DEFAULT_VAULT: options.defaultVault,
-		MTHERIOS_ALLOW_EXTERNAL_VAULTS: process.env.MTHERIOS_ALLOW_EXTERNAL_VAULTS ?? 'false',
-		QDRANT_URL: options.qdrantUrl,
-		QDRANT_COLLECTION: options.qdrantCollection,
-		OLLAMA_URL: options.ollamaUrl,
-		MTHERIOS_WIKI_AUTO_INDEX: options.wikiAutoIndexStoryVaults ? 'true' : 'false',
-		MTHERIOS_WIKI_AUTO_LINT: options.wikiAutoLintStoryVaults ? 'true' : 'false',
-		MTHERIOS_JOB_WORKER: options.jobWorker ? 'true' : 'false',
-		MTHERIOS_JOB_INTERVAL_MS: String(options.jobIntervalMs),
-		MTHERIOS_JOB_TIMEOUT_MS: String(options.jobTimeoutMs),
-		MTHERIOS_JOB_BATCH_LIMIT: String(options.jobBatchLimit),
-		MTHERIOS_JOB_STALE_LOCK_MS: String(options.jobStaleLockMs),
-		MTHERIOS_CHAPTER_THRESHOLD: String(options.chapterThreshold),
-		MTHERIOS_POST_CHAPTER_BUFFER: String(options.postChapterBuffer),
-		MTHERIOS_CHAPTERS_PER_ARC: String(options.chaptersPerArc),
-		MEMORY_EMBEDDING_PROVIDER: options.memoryEmbeddingProvider,
-		MEMORY_EMBEDDING_MODEL: options.memoryEmbeddingModel,
-		MEMORY_EMBEDDING_BASE_URL: options.memoryEmbeddingBaseUrl,
-		MEMORY_EMBEDDING_API_KEY: options.memoryEmbeddingApiKey,
-		MEMORY_EMBEDDING_URL: options.memoryEmbeddingUrl,
-		MEMORY_EMBEDDING_BATCH: String(options.memoryEmbeddingBatch),
-		MEMORY_EMBEDDING_DIMENSIONS: String(options.memoryEmbeddingDimensions),
-		WIKI_EMBED_PROVIDER: options.wikiEmbedProvider,
-		WIKI_EMBED_MODEL: options.wikiEmbedModel,
-		WIKI_EMBED_BASE_URL: options.wikiEmbedBaseUrl,
-		WIKI_EMBED_API_KEY: options.wikiEmbedApiKey,
-	};
 }
 
 function printBanner(options) {
 	console.log('');
-	console.log('Mtherios terminal app process');
+	console.log('MythEngine terminal app process');
 	console.log(`  app:      http://${options.host}:${options.port}`);
+	console.log(`  local AI: Kev ${options.localKevEnabled ? 'on' : 'off'}, Ollama/embeddings ${options.localEmbeddingsEnabled ? 'on' : 'off'}`);
 	console.log(`  data:     ${options.dataRoot}`);
 	console.log(`  vaults:   ${options.vaultRoot}`);
 	console.log(`  default:  ${options.defaultVault}`);
 	console.log(`  qdrant:   ${options.qdrantUrl} / ${options.qdrantCollection}`);
 	console.log(`  database: ${redactDatabaseUrl(options.databaseUrl)}`);
-	console.log(`  jobs:     ${options.jobWorker ? `enabled every ${options.jobIntervalMs}ms, limit ${options.jobBatchLimit}, timeout ${options.jobTimeoutMs}ms` : 'disabled'}`);
-	console.log(`  wiki:     ${options.wikiEmbedProvider} / ${options.wikiEmbedModel}, auto-index ${options.wikiAutoIndexStoryVaults ? 'on' : 'off'}, auto-lint ${options.wikiAutoLintStoryVaults ? 'on' : 'off'}`);
-	console.log(`  memory:   chapters every ${options.chapterThreshold} entries (+${options.postChapterBuffer} buffer), arcs every ${options.chaptersPerArc} chapters`);
+	console.log(`  jobs:     ${options.jobWorker ? `enabled (${options.jobWorkerScope}) every ${options.jobIntervalMs}ms, limit ${options.jobBatchLimit}, timeout ${options.jobTimeoutMs}ms` : 'disabled'}`);
+	console.log(`  wiki:     ${options.wikiEmbedProvider} / ${options.wikiEmbedModel}, auto-index ${options.wikiAutoIndexStoryVaults ? 'on' : 'off'}`);
+	console.log(`  memory:   chapters every ${options.chapterThreshold} completed turns, arcs every ${options.chaptersPerArc} chapters`);
 	console.log(`  vectors:  ${options.memoryEmbeddingProvider && options.memoryEmbeddingModel ? `${options.memoryEmbeddingProvider} / ${options.memoryEmbeddingModel} (${options.memoryEmbeddingDimensions}d)` : 'disabled'}`);
 	console.log('');
 }
@@ -258,6 +145,13 @@ async function runBuiltServer(options, env) {
 		throw new Error('Missing build/handler.js. Run `npm run build` before `npm run app:start`.');
 	}
 
+	const build = readBuildIdentity(options.cwd);
+	Object.assign(env, {
+		ORIGIN: env.ORIGIN ?? new URL(options.appUrl).origin,
+		MYTHENGINE_BUILD_SOURCE: 'local-checkout',
+		MYTHENGINE_BUILD_ID: build.sourceSha256,
+		MYTHENGINE_BUILD_ARTIFACT: build.artifactSha256,
+	});
 	Object.assign(process.env, env);
 	const { handler } = await import(pathToFileURL(handlerPath).href);
 	const server = createServer((request, response) => {
@@ -278,7 +172,7 @@ async function runBuiltServer(options, env) {
 		server.listen(options.port, options.host, resolve);
 	});
 
-	console.log(`Mtherios is listening on http://${options.host}:${options.port}`);
+	console.log(`MythEngine is listening on http://${options.host}:${options.port}`);
 	startJobWorker(options);
 }
 
@@ -288,7 +182,7 @@ function startJobWorker(options) {
 	let timer = null;
 	let consecutiveErrors = 0;
 	const endpoint = `http://${options.host}:${options.port}/api/app/jobs/run`;
-	const workerId = `mtheriosd_${process.pid}`;
+	const workerId = `mythengined_${process.pid}`;
 
 	const schedule = (delay = options.jobIntervalMs) => {
 		if (stopped) return;
@@ -302,7 +196,7 @@ function startJobWorker(options) {
 			const response = await fetch(endpoint, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ workerId, limit: options.jobBatchLimit }),
+				body: JSON.stringify({ workerId, limit: options.jobBatchLimit, scope: options.jobWorkerScope }),
 				signal: AbortSignal.timeout(options.jobTimeoutMs),
 			});
 			if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -349,8 +243,8 @@ function waitForChild(child) {
 		child.once('exit', (code, signal) => {
 			process.removeListener('SIGINT', forward);
 			process.removeListener('SIGTERM', forward);
-			if (code && code !== 0) reject(new Error(`Mtherios dev child exited with code ${code}`));
-			else if (signal) reject(new Error(`Mtherios dev child exited from signal ${signal}`));
+			if (code && code !== 0) reject(new Error(`MythEngine dev child exited with code ${code}`));
+			else if (signal) reject(new Error(`MythEngine dev child exited from signal ${signal}`));
 			else resolve();
 		});
 		child.once('error', reject);

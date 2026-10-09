@@ -1,0 +1,62 @@
+{
+  "createdAt": "2026-09-07T10:44:32.127Z",
+  "mode": "db-long-campaign",
+  "build": {
+    "identity": "mtherios@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "externalId": null,
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 501,
+    "dirtyStatusSha256": "ceff5f9a1e9464529c9c193d2c4292b911160f88014ba169e0a961ea24ec5597",
+    "sourceHashes": {
+      "scripts/bench-generation.mjs": "2c83a562c1f2d4d2d998d7db81a55d306c539efeeeecae53b0bfbd4281d08f06",
+      "scripts/bench-generation-core.mjs": "c09fed5007630df6d4141425b42f5c47abd6b4ab8138d53d4897dad0644f007f",
+      "src/lib/server/turn/orchestrator.ts": "cd347862810b2272bc18dc22854c981044572eb6e9fd3043111dd0137700efac",
+      "src/lib/server/turn/provider.ts": "d1b8fe0ac1802923ac2aecbb853f916c039511ee9493ed2a2b40a9cfd372839f",
+      "src/lib/server/memory/retrieval.ts": "34ed9b2892c440385778ccf25a59d4fb6480d0c39e02cfc507a97ac6c57080fd"
+    }
+  },
+  "url": "http://127.0.0.1:5177",
+  "storyId": "bench_long_mixed2_20260907",
+  "turns": 5000,
+  "entries": 10000,
+  "entryLimit": 80,
+  "seedDurationMs": 1067,
+  "gatewayDurationMs": 160,
+  "verification": {
+    "ok": true,
+    "errors": [],
+    "entryCount": 10000,
+    "expectedEntryCount": 10000,
+    "projection": {
+      "limit": 80,
+      "length": 80,
+      "firstPosition": 9920,
+      "lastPosition": 9999
+    },
+    "transcript": {
+      "limit": 80,
+      "hasMore": true,
+      "nextBeforePosition": 9920,
+      "length": 80,
+      "firstPosition": 9920,
+      "lastPosition": 9999
+    },
+    "bootstrap": {
+      "entryCount": 10000,
+      "projectionCountEntries": 10000,
+      "selectedLength": 80
+    },
+    "memory": {
+      "nodeCount": 4,
+      "tokenEstimate": 203,
+      "degradedSources": []
+    }
+  },
+  "providerCalls": 0,
+  "writes": true,
+  "writeScope": "disposable benchmark story only; cleaned up after verification"
+}

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
+import { resolveAppUrl } from './runtime-config.mjs';
+
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
-const DEFAULT_PORT = process.env.PORT || '5173';
-const DEFAULT_URL = process.env.MTHERIOS_APP_URL || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
+const DEFAULT_URL = resolveAppUrl();
 const BOOLEAN_FLAGS = new Set([
 	'all',
 	'allowRaw',
@@ -17,7 +17,6 @@ const BOOLEAN_FLAGS = new Set([
 	'includeFresh',
 	'index',
 	'json',
-	'lint',
 	'orphans',
 	'recreate',
 	'replace',
@@ -44,8 +43,6 @@ async function main(argv = process.argv.slice(2)) {
 			return printArchive(await archiveStoryWiki(url, flags), json);
 		case 'index':
 			return printIndexOrJob(await runWikiIndex(url, flags), json);
-		case 'lint':
-			return printLintOrJob(await runWikiLint(url, flags), json);
 		case 'ingest':
 		case 'ingest-source':
 		case 'source':
@@ -150,13 +147,10 @@ async function runStoryWikiJob(url, command, flags) {
 			all,
 			runNow: all ? flags.runNow === true : flags.runNow !== false,
 			index: command === 'index' || flags.index === true,
-			lint: command === 'lint' || flags.lint === true,
 			recreate: flags.recreate === true,
 			dryRun: flags.dryRun === true,
 			clean: flags.clean !== false,
 			includeFresh: flags.includeFresh === true,
-			thinChars: readNumber(flags.thinChars),
-			orphanLayer: flags.orphanLayer === 'all' ? 'all' : 'derived',
 			provider: optionalString(flags.provider),
 			model: optionalString(flags.model),
 			limit: readNumber(flags.limit),
@@ -207,23 +201,6 @@ async function runWikiIndex(url, flags) {
 				overlapChars: readNumber(flags.overlapChars),
 			}),
 			timeoutMs: 10 * 60_000,
-		}),
-	};
-}
-
-async function runWikiLint(url, flags) {
-	const storyId = readStoryId(flags, false);
-	if (storyId) return runStoryWikiJob(url, 'lint', flags);
-	return {
-		direct: true,
-		result: await requestJson(url, '/api/wiki/lint', {
-			method: 'POST',
-			body: JSON.stringify({
-				...wikiTargetPayload(flags),
-				thinChars: readNumber(flags.thinChars),
-				orphanLayer: flags.orphanLayer === 'all' ? 'all' : 'derived',
-			}),
-			timeoutMs: 120_000,
 		}),
 	};
 }
@@ -472,7 +449,7 @@ function printStories(payload, json) {
 	if (json) return printJson(payload);
 	const stories = Array.isArray(payload.stories) ? payload.stories : [];
 	console.log('');
-	console.log('Mtherios terminal world databases');
+	console.log('MythEngine terminal world databases');
 	if (stories.length === 0) {
 		console.log('  no stories found in the terminal database');
 		console.log('');
@@ -488,16 +465,14 @@ function printStatus(payload, json) {
 	if (json) return printJson(payload);
 	console.log('');
 	if (payload.storyId) {
-		const lint = payload.lint ?? {};
 		console.log(`Story wiki: ${payload.storyTitle || payload.storyId}`);
 		console.log(`  story:    ${payload.storyId}`);
 		console.log(`  vault:    ${freshLabel(payload.vaultFresh, payload.exists)}`);
 		console.log(`  qdrant:   ${freshLabel(payload.indexFresh, Boolean(payload.indexedVersion))}`);
-		console.log(`  health:   ${lintLabel(lint)}`);
 		console.log(`  version:  backend v${payload.serverVersion ?? 0}, indexed v${payload.indexedVersion ?? '-'}`);
 		console.log(`  path:     ${payload.vaultPath}`);
 	} else {
-		console.log('Mtherios wiki runtime');
+		console.log('MythEngine wiki runtime');
 		console.log(`  vaults:   ${payload.vaultRoot || 'unknown'}`);
 		console.log(`  default:  ${payload.defaultVault || 'unknown'}${payload.defaultVaultExists ? '' : ' (missing)'}`);
 		console.log(`  qdrant:   ${payload.qdrantUrl || 'unknown'} / ${payload.qdrantCollection || 'unknown'}`);
@@ -517,7 +492,6 @@ function printJob(payload, json) {
 		console.log(`  story:    ${status.storyId}`);
 		console.log(`  vault:    ${freshLabel(status.vaultFresh, status.exists)}`);
 		console.log(`  qdrant:   ${freshLabel(status.indexFresh, Boolean(status.indexedVersion))}`);
-		console.log(`  health:   ${lintLabel(status.lint ?? {})}`);
 		console.log(`  path:     ${status.vaultPath}`);
 	}
 	console.log('');
@@ -565,21 +539,6 @@ function printIndexOrJob(payload, json) {
 	if (payload.result?.output) {
 		console.log(`  ${String(payload.result.output).trim().split(/\r?\n/).slice(-3).join('\n  ')}`);
 	}
-	console.log('');
-}
-
-function printLintOrJob(payload, json) {
-	if (!payload.direct) return printJob(payload, json);
-	if (json) return printJson(payload.result);
-	const summary = payload.result?.summary ?? {};
-	console.log('');
-	console.log(`Wiki lint: ${payload.result?.ok ? 'ok' : 'issues found'}`);
-	console.log(`  pages:      ${summary.pageCount ?? '?'}`);
-	console.log(`  issues:     ${summary.issueCount ?? '?'}`);
-	console.log(`  duplicates: ${summary.duplicateTitles ?? '?'}`);
-	console.log(`  broken:     ${summary.brokenLinks ?? '?'}`);
-	console.log(`  orphans:    ${summary.orphanPages ?? '?'}`);
-	console.log(`  thin:       ${summary.thinPages ?? '?'}`);
 	console.log('');
 }
 
@@ -702,7 +661,6 @@ function printBrief(payload, json) {
 	console.log(`Wiki brief: ${payload.task || ''}`);
 	console.log(`  mode:  ${payload.mode || 'maintain'}`);
 	console.log(`  pages: ${payload.context?.pageCount ?? '?'}`);
-	console.log(`  lint:  ${payload.lint?.ok ? 'ok' : 'issues found'}`);
 	console.log('');
 }
 
@@ -741,15 +699,6 @@ function freshLabel(fresh, exists) {
 	return exists ? 'stale' : 'missing';
 }
 
-function lintLabel(lint) {
-	if (!lint.exists) return 'not run';
-	const issueCount = typeof lint.issueCount === 'number' ? lint.issueCount : '?';
-	if (!lint.fresh) return `stale, ${issueCount} issue(s)`;
-	if (lint.ok === true) return 'healthy';
-	if (lint.ok === false) return `${issueCount} issue(s)`;
-	return `recorded, ${issueCount} issue(s)`;
-}
-
 function formatScore(value) {
 	const number = Number(value);
 	return Number.isFinite(number) ? number.toFixed(3) : '-';
@@ -769,22 +718,21 @@ function printHelp() {
   npm run app:wiki -- stories [--json]
   npm run app:wiki -- status [--story <storyId>] [--json]
   npm run app:wiki -- init [--vault <path>] [--title "Vault Title"] [--status] [--force]
-  npm run app:wiki -- sync --story <storyId> [--index] [--lint] [--no-run-now]
-  npm run app:wiki -- sync --all [--index] [--lint] [--run-now]
+  npm run app:wiki -- sync --story <storyId> [--index] [--no-run-now]
+  npm run app:wiki -- sync --all [--index] [--run-now]
   npm run app:wiki -- archive --story <storyId> [--out story.wiki.zip]
   npm run app:wiki -- index [--story <storyId>|--vault <path>] [--collection <name>] [--recreate]
-  npm run app:wiki -- lint [--story <storyId>|--vault <path>] [--thin-chars 240] [--orphan-layer derived|all]
   npm run app:wiki -- ingest [--vault <path>] --source-file article.md [--title "Article Title"] [--tags a,b]
   npm run app:wiki -- pages [--story <storyId>|--vault <path>] [--layer wiki] [--orphans] [--json]
   npm run app:wiki -- write [--vault <path>] --title "Page Title" --content-file page.md [--mode create|replace|append] [--log "..."]
   npm run app:wiki -- search [--story <storyId>|--vault <path>] "query" [--follow-depth 1] [--exact] [--json]
-  npm run app:wiki -- brief [--story <storyId>|--vault <path>] "task or query" [--mode maintain|answer|ingest|lint|explore] [--json]
+  npm run app:wiki -- brief [--story <storyId>|--vault <path>] "task or query" [--mode maintain|answer|ingest|explore] [--json]
   npm run app:wiki -- follow [--story <storyId>|--vault <path>] "Page Title" [--depth 2] [--json]
   npm run app:wiki -- page [--story <storyId>|--vault <path>] "Page Title" [--json]
   npm run app:wiki -- context [--story <storyId>|--vault <path>] "query" [--follow-depth 2] [--json]
 
 Options:
-  --url <url>       Running Mtherios terminal app URL. Default: ${DEFAULT_URL}
+  --url <url>       Running MythEngine terminal app URL. Default: ${DEFAULT_URL}
   --story <id>      Terminal world database/story id.
   --vault <path>    Vault under the configured vault root. Omit story/vault to use the default vault.
   --collection <n>  Qdrant collection override for non-story vaults.

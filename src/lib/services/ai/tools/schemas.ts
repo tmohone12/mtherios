@@ -7,11 +7,19 @@
  */
 
 import { z } from 'zod';
+import { campaignStateChangeSchema } from '$lib/contracts/campaignState';
+import { npcAgencySchema } from '$lib/contracts/npcAgency';
 
 // ── Zod Validation Schemas ──
 
 export const worldStateCharacterSchema = z.object({
 	name: z.string(),
+	entityId: z.string().min(1).optional(),
+	creation_evidence: z.string().trim().min(12).max(1200).optional(),
+	faction_evidence: z.array(z.object({
+		faction: z.string().trim().min(1).max(240),
+		quote: z.string().trim().min(12).max(1200),
+	})).max(8).optional(),
 	aliases: z.array(z.string()).optional().default([]),
 	status: z.enum(['active', 'departed', 'deceased', 'inactive']).optional(),
 	description: z.string().nullable().optional().default(null),
@@ -20,6 +28,10 @@ export const worldStateCharacterSchema = z.object({
 	present: z.boolean().optional(),
 	pressures: z.array(z.string()).optional().default([]),
 	faction_tags: z.array(z.string()).optional().default([]),
+	party_member: z.boolean().optional(),
+	party_role: z.string().nullable().optional(),
+	affinity_delta: z.number().int().min(-20).max(20).optional(),
+	affinity_reason: z.string().min(3).max(500).nullable().optional(),
 	currentLocation: z.string().nullable().optional(),
 	current_location: z.string().nullable().optional(),
 	currentAction: z.string().nullable().optional(),
@@ -27,8 +39,14 @@ export const worldStateCharacterSchema = z.object({
 	emotionalState: z.string().nullable().optional(),
 	emotional_state: z.string().nullable().optional(),
 	appearance: z.string().nullable().optional(),
+	presentation: z.string().nullable().optional(),
+	personality: z.string().nullable().optional(),
+	rank: z.string().nullable().optional(),
 	background: z.string().nullable().optional(),
 	goals: z.array(z.string()).optional().default([]),
+	...npcAgencySchema.shape,
+	independentActionEvidence: z.string().trim().min(12).max(1600).optional(),
+	independentActionVisibility: z.enum(['public', 'player_known', 'secret']).optional(),
 	speechStyle: z.string().nullable().optional(),
 	speech_style: z.string().nullable().optional(),
 	eventMemory: z.object({
@@ -37,6 +55,17 @@ export const worldStateCharacterSchema = z.object({
 		knew: z.array(z.string()).optional().default([]),
 		knows: z.array(z.string()).optional().default([]),
 	}).optional(),
+}).superRefine((character, context) => {
+	if (character.lastIndependentAction && !character.independentActionEvidence) {
+		context.addIssue({ code: 'custom', path: ['independentActionEvidence'], message: 'A completed independent move requires narration evidence.' });
+	}
+	if (character.affinity_delta && !character.affinity_reason?.trim()) {
+		context.addIssue({
+			code: 'custom',
+			path: ['affinity_reason'],
+			message: 'affinity_reason is required when affinity_delta is nonzero.',
+		});
+	}
 });
 
 export const worldStateLocationConnectionSchema = z.object({
@@ -46,11 +75,12 @@ export const worldStateLocationConnectionSchema = z.object({
 });
 
 export const worldStateLocationSchema = z.object({
+	entityId: z.string().trim().min(1).optional(),
 	name: z.string(),
 	description: z.string().nullable().optional().default(null),
 	current: z.boolean().optional().default(false),
 	region: z.string().nullable().optional(),
-	connections: z.array(worldStateLocationConnectionSchema).optional().default([]),
+	connections: z.array(worldStateLocationConnectionSchema).optional(),
 });
 
 export const worldStateItemSchema = z.object({
@@ -134,7 +164,7 @@ export const worldStateMeterChangeSchema = z.object({
 });
 
 export const worldStateAgreementChangeSchema = z.object({
-	action: z.enum(['create', 'update', 'break', 'fulfill', 'expire']),
+	action: z.enum(['create', 'update', 'break', 'fulfill', 'expire', 'annul', 'supersede']),
 	// Identify existing agreement: by id (preferred for update/break/fulfill) or
 	// by parties+category (fallback for retroactive updates when GM didn't track the id).
 	id: z.string().nullable().optional(),
@@ -144,7 +174,7 @@ export const worldStateAgreementChangeSchema = z.object({
 		'marriage', 'bond', 'contract', 'vassalage', 'bargain-with-entity',
 	]).optional(),
 	terms: z.string().nullable().optional(),
-	secrecy: z.enum(['public', 'known', 'secret']).optional().default('public'),
+	secrecy: z.enum(['public', 'known', 'secret']).optional(),
 	consequences: z.array(z.string()).optional().default([]),
 	reason: z.string().nullable().optional().default(null),
 });
@@ -196,6 +226,7 @@ export const worldStateLorebookEntrySchema = z.object({
 });
 
 export const worldStateUpdateSchema = z.object({
+	campaign_state: z.array(campaignStateChangeSchema).max(8).optional(),
 	characters: z.array(worldStateCharacterSchema).optional().default([]),
 	locations: z.array(worldStateLocationSchema).optional().default([]),
 	items: z.array(worldStateItemSchema).optional().default([]),
@@ -362,11 +393,13 @@ export const GM_TOOLS = [
 				properties: {
 					characters: {
 						type: 'array',
-						description: 'Update only established canonical characters that are already present in context or clearly resolved by name/alias. Do not use this to invent new character canon; unknown names become reviewable references until approved.',
+						description: 'Update existing characters or register significant named NPCs established by the GM narration. New characters require creation_evidence copied from narration; affiliations require faction_evidence. Backend validation resolves identity before saving.',
 						items: {
 							type: 'object',
 							properties: {
 								name: { type: 'string' },
+								creation_evidence: { type: 'string', description: 'For a new named NPC, copy one verbatim narration passage of 12–1200 characters naming them and establishing their role or action; do not copy the whole scene. Do not register generic crowds, hypothetical people, or names mentioned only in passing.' },
+								faction_evidence: { type: 'array', items: { type: 'object', properties: { faction: { type: 'string' }, quote: { type: 'string' } }, required: ['faction', 'quote'], additionalProperties: false }, description: 'Exact faction name and verbatim narration passage explicitly establishing this character belongs to, serves, leads, or represents it. Co-location, ancestry and species alone are not membership.' },
 								aliases: {
 									type: 'array',
 									items: { type: 'string' },
@@ -390,9 +423,24 @@ export const GM_TOOLS = [
 									items: { type: 'string' },
 									description: 'Faction names or ids this character belongs to, serves, leads, commands, publicly represents, or is sworn to. Use only when established by the scene or existing context.',
 								},
-								appearance: { type: 'string', description: 'Durable visual portrayal details that changed or became clear this turn. Omit when unchanged.' },
+								party_member: { type: 'boolean', description: 'Set true only when this established character clearly joins or travels with the active party; set false only when they clearly leave. Omit when unchanged.' },
+								party_role: { type: 'string', description: 'Optional short practical role in the active party, such as Scout, Guide, Face, or Healer. Omit when unchanged.' },
+								affinity_delta: { type: 'integer', minimum: -20, maximum: 20, description: 'Change to this established NPC\'s durable affinity toward the player. Omit unless the interaction clearly changed trust or attachment. Typical shift is 1-3; 4-7 meaningful; 8-12 major; 13-20 life-defining.' },
+								affinity_reason: { type: 'string', description: 'Concrete evidence for affinity_delta. Required whenever affinity_delta is nonzero; describe the action or consequence, not a personality judgment.' },
+								entityId: { type: 'string', description: 'Exact canonical character ID from supplied context. Omit ambiguous characters.' },
+								appearance: { type: 'string', description: 'Stable physical features, not current clothing. Omit when unchanged.' },
+								presentation: { type: 'string', description: 'Current clothing, grooming, visible injuries, or disguise. Omit when unchanged.' },
+								personality: { type: 'string', description: 'Explicitly established enduring personality, not an inference from one action.' },
+								rank: { type: 'string', description: 'Explicitly established title or rank. Omit when unchanged.' },
 								background: { type: 'string', description: 'Durable backstory/context that became clear this turn. Omit when unchanged.' },
 								goals: { type: 'array', items: { type: 'string' }, description: 'Current concrete goals this established character is pursuing. Omit when unchanged.' },
+								currentGoal: { type: ['string', 'null'], maxLength: 600, description: 'Immediate established objective. Omit if unchanged; null clears a completed or abandoned objective.' },
+								currentPlan: { type: ['string', 'null'], maxLength: 600, description: 'Current intended approach to the goal, not an accomplished event. Omit if unchanged; null clears it.' },
+								lastIndependentAction: { type: ['string', 'null'], maxLength: 600, description: 'Consequential independent move completed this turn. Copy an exact excerpt from independentActionEvidence, never a future intention or recap.' },
+								nextOpportunity: { type: ['string', 'null'], maxLength: 600, description: 'Established time, trigger or opening to act. Not a guaranteed outcome; null clears an elapsed or abandoned opportunity.' },
+								constraint: { type: ['string', 'null'], maxLength: 600, description: 'Established limit on the NPC pursuit, such as a refusal, obligation or resource limit. Omit if unchanged; null clears it.' },
+								independentActionEvidence: { type: 'string', maxLength: 1600, description: 'Verbatim narration passage naming the acting NPC and containing lastIndependentAction. Required for a completed move.' },
+								independentActionVisibility: { type: 'string', enum: ['public', 'player_known', 'secret'], description: 'Who can know the completed move. Does not grant knowledge of private motives.' },
 								speechStyle: { type: 'string', description: 'Durable voice, diction, or speaking manner. Omit when unchanged.' },
 								eventMemory: {
 									type: 'object',
@@ -549,11 +597,11 @@ export const GM_TOOLS = [
 					},
 					agreements: {
 						type: 'array',
-						description: 'Record or update binding commitments between parties: treaties, alliances, oaths, debts, promises, marriages, vassalage, contracts, or bargains with supernatural entities. Use action=create when a new commitment is made; action=break when someone violates it; action=fulfill when the debt/promise is paid; action=update to revise terms; action=expire when it lapses. Currently active agreements are listed in the state snapshot so you can reason about them.',
+						description: 'Record or update binding commitments between parties: treaties, alliances, oaths, debts, promises, marriages, vassalage, contracts, or bargains with supernatural entities. Use action=create when a new commitment is made; action=break when someone violates it; action=fulfill when the debt/promise is paid; action=update to revise terms; action=expire when it lapses; action=annul when cancelled; action=supersede when replaced. Currently active agreements are listed in the state snapshot so you can reason about them.',
 						items: {
 							type: 'object',
 							properties: {
-								action: { type: 'string', enum: ['create', 'update', 'break', 'fulfill', 'expire'], description: 'What to do with this agreement' },
+								action: { type: 'string', enum: ['create', 'update', 'break', 'fulfill', 'expire', 'annul', 'supersede'], description: 'What to do with this agreement' },
 								id: { type: 'string', description: 'Existing agreement id (required for update/break/fulfill/expire unless parties+category match uniquely)' },
 								parties: { type: 'array', items: { type: 'string' }, description: 'Named parties to the agreement — display names matching lorebook entries when possible' },
 								category: { type: 'string', enum: ['treaty', 'pact', 'alliance', 'oath', 'debt', 'promise', 'marriage', 'bond', 'contract', 'vassalage', 'bargain-with-entity'] },
@@ -567,7 +615,7 @@ export const GM_TOOLS = [
 					},
 					lorebook_entries: {
 						type: 'array',
-						description: 'Create rich lorebook entries for significant non-character world elements introduced or deepened this turn. Do not create character entries from narration extraction; character canon is created through human approval or explicit character controls. Write full descriptions (2-5 sentences), include aliases and keywords for retrieval, and hidden_info for secrets the player does not know.',
+						description: 'Create rich lorebook entries for significant non-character world elements introduced or deepened this turn. Register new NPCs through characters with creation_evidence so backend identity and evidence validation can run. Write full descriptions (2-5 sentences), include aliases and keywords for retrieval, and hidden_info for secrets the player does not know.',
 						items: {
 							type: 'object',
 							properties: {
@@ -618,17 +666,6 @@ export const GM_TOOLS = [
 						},
 					},
 				},
-			},
-		},
-	},
-	{
-		type: 'function' as const,
-		function: {
-			name: 'refresh_plot_momentum',
-			description: 'Request a fresh plot momentum analysis mid-generation. Call this if the scene has shifted dramatically and the existing momentum guidance no longer applies. The service will re-read current state, factions, and history and return updated plot branches and strategy.',
-			parameters: {
-				type: 'object',
-				properties: {},
 			},
 		},
 	},

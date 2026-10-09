@@ -5,7 +5,6 @@
 		BookOpen,
 		Check,
 		ClipboardList,
-		FileText,
 		GitMerge,
 		Plus,
 		RefreshCw,
@@ -17,7 +16,6 @@
 		type ResolverApplyResult,
 		addEntityAlias,
 		createEntityThroughResolver,
-		lintCanonWiki,
 		mergeEntities,
 		previewEntityResolution,
 		readCanonPage,
@@ -88,7 +86,6 @@
 	let mergeSourceId = $state('');
 	let mergeReason = $state('Duplicate entity merged through the cockpit.');
 
-	let wikiLintReport = $state<JsonRecord | null>(null);
 	let continuityAuditReport = $state<JsonRecord | null>(null);
 
 	const selectedStory = $derived(stories.find((story) => story.id === selectedStoryId) ?? null);
@@ -397,20 +394,6 @@
 		}
 	}
 
-	async function runWikiLint() {
-		if (!selectedStoryId) return;
-		busy = true;
-		status = '';
-		try {
-			wikiLintReport = asRecord(await lintCanonWiki(selectedStoryId));
-			status = 'Wiki lint complete.';
-		} catch (error) {
-			status = error instanceof Error ? error.message : String(error);
-		} finally {
-			busy = false;
-		}
-	}
-
 	async function runAudit() {
 		if (!selectedStoryId) return;
 		busy = true;
@@ -433,18 +416,19 @@
 	});
 </script>
 
-<div class="flex h-full min-h-0 flex-col bg-[var(--bg-primary)] text-[var(--text-primary)]">
-	<header class="flex flex-col gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-3 lg:flex-row lg:items-center lg:gap-3">
+<div class="canon-workspace flex h-full min-h-0 flex-col bg-[var(--bg-primary)] text-[var(--text-primary)]">
+	<header class="canon-header">
 		<div class="flex min-w-0 items-center gap-2">
-			<ClipboardList class="h-5 w-5 text-[var(--text-accent)]" />
 			<div class="min-w-0">
-				<div class="font-display text-sm tracking-wide text-[var(--text-accent)]">Canon Repair Cockpit</div>
-				<div class="truncate text-xs text-[var(--text-muted)]">{selectedStory?.title ?? 'No story selected'}</div>
+				<p class="workspace-eyebrow">Keep your world consistent</p>
+				<h2>Canon review.</h2>
+				<p class="workspace-subtitle">{selectedStory?.title ?? 'Choose a story'} <span aria-hidden="true">·</span> Review changes, resolve identities, and trace your sources.</p>
 			</div>
 		</div>
 
 		<select
 			bind:value={selectedStoryId}
+			aria-label="Story for canon review"
 			onchange={async () => {
 				await loadProposals();
 				if (activeMode === 'pages' && pageQuery.trim()) await loadPages();
@@ -465,6 +449,7 @@
 						? 'border-[var(--color-gold-600)] bg-[rgba(212,168,83,0.12)] text-[var(--text-accent)]'
 						: 'border-[var(--border-primary)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
 					onclick={() => activeMode = tab.id}
+					aria-pressed={activeMode === tab.id}
 				>
 					<tab.icon class="h-3.5 w-3.5" />
 					<span>{tab.label}</span>
@@ -483,7 +468,7 @@
 		<div class="border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 py-2 text-xs text-[var(--text-accent)]">{status}</div>
 	{/if}
 
-	<div class="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.1fr)]">
+	<div class="canon-body">
 		<aside class="min-h-0 overflow-y-auto border-r border-[var(--border-primary)] bg-[var(--bg-secondary)]">
 			{#if activeMode === 'pages'}
 				<div class="space-y-3 p-4">
@@ -491,7 +476,7 @@
 						<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Search canon pages</div>
 						<div class="flex gap-2">
 							<input bind:value={pageQuery} class="min-w-0 flex-1 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-xs" placeholder="Search pages" onkeydown={(event) => event.key === 'Enter' && loadPages()} />
-							<button class="rounded-md border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={loadPages}>
+							<button class="rounded-md border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={loadPages} aria-label="Search canon pages">
 								<Search class="h-4 w-4" />
 							</button>
 						</div>
@@ -614,7 +599,7 @@
 						<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Entity search</div>
 						<div class="flex gap-2">
 							<input bind:value={entityQuery} class="min-w-0 flex-1 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-xs" placeholder="Search entities" onkeydown={(event) => event.key === 'Enter' && loadEntities()} />
-							<button class="rounded-md border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={loadEntities}>
+							<button class="rounded-md border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={loadEntities} aria-label="Search entities">
 								<Search class="h-4 w-4" />
 							</button>
 						</div>
@@ -656,20 +641,10 @@
 			{:else if activeMode === 'audit'}
 				<div class="space-y-3 p-4">
 					<div class="flex flex-wrap gap-2">
-						<button class="rounded-md border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={runWikiLint}>
-							<FileText class="mr-1 inline h-4 w-4" /> Wiki Lint
-						</button>
 						<button class="rounded-md border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={runAudit}>
 							<AlertTriangle class="mr-1 inline h-4 w-4" /> Continuity Audit
 						</button>
 					</div>
-
-					{#if wikiLintReport}
-						<div class="space-y-2 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
-							<div class="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">Wiki lint</div>
-							<pre class="max-h-72 overflow-auto whitespace-pre-wrap text-xs text-[var(--text-secondary)]">{JSON.stringify(wikiLintReport, null, 2)}</pre>
-						</div>
-					{/if}
 
 					{#if continuityAuditReport}
 						<div class="space-y-2 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
@@ -774,3 +749,24 @@
 		</section>
 	</div>
 </div>
+
+<style>
+	.canon-header { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; flex-shrink: 0; padding: 32px 32px 24px; border-bottom: 1px solid var(--border-secondary); }
+	.canon-header > div:first-child { flex-basis: 100%; margin-bottom: 6px; }
+	.canon-header h2 { font: 400 34px/1.15 var(--font-display); letter-spacing: -.025em; }
+	.canon-header select { min-height: 39px; padding-inline: 12px; background: var(--bg-secondary); }
+	.canon-header button { min-height: 37px; }
+	.canon-body { display: grid; grid-template-columns: minmax(280px, .85fr) minmax(0, 1.15fr); min-height: 0; flex: 1; }
+	.canon-body > aside { background: var(--bg-secondary); }
+	.canon-body > aside > div, .canon-body > section > div { padding: 24px; }
+	.canon-body pre { font-size: 11px; line-height: 1.8; }
+	.canon-body input, .canon-body textarea { background: var(--bg-primary); padding: 10px 12px; }
+	@media (max-width: 1023px) {
+		.canon-workspace { overflow-y: auto; }
+		.canon-header { padding: 24px 20px 20px; }
+		.canon-body { display: flex; flex-direction: column; flex: none; min-height: 0; }
+		.canon-body > aside { max-height: 420px; min-height: 200px; border-right: 0; border-bottom: 1px solid var(--border-secondary); }
+		.canon-body > section { overflow: visible; }
+		.canon-body > aside > div, .canon-body > section > div { padding: 20px; }
+	}
+</style>

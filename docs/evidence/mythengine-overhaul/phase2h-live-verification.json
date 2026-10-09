@@ -1,0 +1,282 @@
+{
+  "recordedAt": "2026-09-22T16:48:28.660Z",
+  "checks": [
+    "Schema previews report incompatibility and reject stale record snapshots; reviewed defaults preserve existing canonical data",
+    "New records receive defaults, existing values survive changed defaults, and wrong field types cannot enter canonical records",
+    "Custom-field replacement removes optional values without losing other metadata; CLI and MCP read the same canonical values",
+    "Content-only import rejects unresolved canonical recovery identities and rolls back all partial content",
+    "Full campaign transfer remaps custom and canonical recovery receipts, retains schemas and restores only the original batch",
+    "Shared content-only snapshots carry usable custom-document recovery receipts",
+    "Imported receipts cannot claim existing destination folders or members omitted from their bundle",
+    "Game move previews the transitive shared dependency closure and reports destination type conflicts",
+    "Stale dependency previews fail and a late game-migration audit failure rolls back ownership, copies, history and receipts",
+    "Game move preserves game/canonical/document IDs, remaps only shared copies, moves jobs/history and keeps archived batch recovery usable",
+    "A running turn blocks migration without changing the game"
+  ],
+  "existingStories": [
+    {
+      "id": "story_4c39f4c1-cd13-4488-a481-1dde5690df89",
+      "server_version": 1249
+    }
+  ],
+  "fixturesRemoved": true,
+  "runtime": {
+    "ok": true,
+    "mode": "terminal-process",
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "3ecff85f49967bbf79b9400b060373506dd590118e3c426f8739429b74c6a47d",
+      "externalId": "aa5c536e90ffcf2a05dfd0de64035b4549df6072e52aea72582526492fd0e765"
+    },
+    "scope": {
+      "storyId": null
+    },
+    "runtime": {
+      "pid": 60692,
+      "uptimeSeconds": 3,
+      "timestamp": "2026-09-22T16:48:31.246Z"
+    },
+    "config": {
+      "dataRoot": "E:\\DEV\\Projects\\MythEngine\\data",
+      "vaultRoot": "E:\\DEV\\Projects\\MythEngine\\data\\vaults",
+      "defaultVault": "E:\\DEV\\Projects\\MythEngine\\data\\vaults\\default",
+      "allowExternalVaults": false,
+      "qdrantUrl": "http://127.0.0.1:6335",
+      "qdrantCollection": "mythengine_wiki",
+      "ollamaUrl": "http://127.0.0.1:11434",
+      "wikiEmbedProvider": "openrouter",
+      "wikiEmbedModel": "openai/text-embedding-3-small",
+      "wikiAutoIndexStoryVaults": false,
+      "wikiAutoLintStoryVaults": false,
+      "jobWorkerEnabled": false,
+      "jobIntervalMs": 5000,
+      "chapterThreshold": 20,
+      "postChapterBuffer": 0,
+      "chaptersPerArc": 10,
+      "memoryEmbeddingsConfigured": false,
+      "memoryEmbeddingProvider": null,
+      "memoryEmbeddingModel": null,
+      "memoryEmbeddingDimensions": 1536,
+      "memoryEmbeddingBatchSize": 8,
+      "databaseConfigured": true
+    },
+    "services": {
+      "qdrant": {
+        "ok": true,
+        "status": 200,
+        "collections": [],
+        "totalCollections": 0,
+        "totalPoints": 0,
+        "orphanedStoryCollections": 0,
+        "legacyStoryCollections": 0
+      },
+      "ollama": {
+        "ok": false,
+        "error": "fetch failed"
+      }
+    },
+    "jobs": {
+      "total": 31,
+      "memoryProcessing": {
+        "complete": 0,
+        "failed": 0,
+        "waiting": 3,
+        "running": 0
+      },
+      "memoryStageFreshness": {
+        "checkpoint": {
+          "status": "updating",
+          "jobCount": 4,
+          "completedCount": 0,
+          "activeCount": 4,
+          "failedCount": 0,
+          "latestUpdatedAt": "2026-09-22 01:45:31.88+00",
+          "latestSourceVersion": null
+        },
+        "consolidation": {
+          "status": "updating",
+          "jobCount": 3,
+          "completedCount": 0,
+          "activeCount": 3,
+          "failedCount": 0,
+          "latestUpdatedAt": "2026-09-22 01:45:31.938+00",
+          "latestSourceVersion": 1249
+        },
+        "optionalIndex": {
+          "status": "updating",
+          "jobCount": 7,
+          "completedCount": 0,
+          "activeCount": 7,
+          "failedCount": 0,
+          "latestUpdatedAt": "2026-09-22 01:45:31.938+00",
+          "latestSourceVersion": 1249
+        }
+      },
+      "queued": 29,
+      "retry": 0,
+      "running": 0,
+      "complete": 2,
+      "failed": 0,
+      "ready": 29,
+      "delayed": 0,
+      "storyCount": 1,
+      "byStatus": {
+        "queued": 29,
+        "complete": 2
+      },
+      "byType": {
+        "sync_story_vault": 1,
+        "index_canonical_records": 4,
+        "extract_turn_state": 3,
+        "continuity_audit": 3,
+        "refresh_scene_checkpoint": 4,
+        "summarize_chapter": 3,
+        "plan_plot_brain": 3,
+        "create_memory_nodes_from_events": 3,
+        "validate_agent_settings": 2,
+        "rebuild_retrieval_projection": 1,
+        "update_faction_pressure": 3,
+        "embed_memory_nodes": 1
+      },
+      "readyByType": {
+        "sync_story_vault": 1,
+        "index_canonical_records": 4,
+        "extract_turn_state": 3,
+        "continuity_audit": 3,
+        "refresh_scene_checkpoint": 4,
+        "summarize_chapter": 3,
+        "plan_plot_brain": 3,
+        "create_memory_nodes_from_events": 3,
+        "rebuild_retrieval_projection": 1,
+        "update_faction_pressure": 3,
+        "embed_memory_nodes": 1
+      },
+      "failedByType": {},
+      "failureClasses": [],
+      "oldestReadyAt": "2026-09-22 01:38:18.083+00",
+      "nextRunAfter": null,
+      "recentFailures": [],
+      "runningJobs": []
+    },
+    "wiki": {
+      "totalStories": 1,
+      "vaultFresh": 0,
+      "vaultStale": 1,
+      "vaultMissing": 0,
+      "indexFresh": 0,
+      "indexStale": 0,
+      "indexMissing": 1,
+      "lintFresh": 0,
+      "lintStale": 0,
+      "lintMissing": 1,
+      "attention": [
+        {
+          "storyId": "story_4c39f4c1-cd13-4488-a481-1dde5690df89",
+          "storyTitle": "The Journey",
+          "serverVersion": 1249,
+          "manifestVersion": 1247,
+          "indexedVersion": null,
+          "exists": true,
+          "vaultFresh": false,
+          "indexFresh": false,
+          "lintExists": false,
+          "lintFresh": false,
+          "vaultPath": "E:\\DEV\\Projects\\MythEngine\\data\\vaults\\stories\\story_4c39f4c1_cd13_4488_a481_1dde5690df89_aaae5c9f58e62d4b",
+          "collection": "mythengine_wiki_story_4c39f4c1_cd13_4488_a481_1dde5690df89_aaae5c9f58e62d4b",
+          "updatedAt": "2026-09-22 01:45:31.886+00"
+        }
+      ]
+    }
+  },
+  "originalPid": 53564,
+  "browser": {
+    "verifiedAt": "2026-09-22",
+    "sourceBuild": "e7a373318a5c64013871f120150e265cf5e1d4dd5ce46cae2e0fe3daa24ab994",
+    "checks": [
+      "Required canonical field preview showed the incompatible existing NPC before migration",
+      "Apply missing defaults and one-record confirmation saved the schema and health 12",
+      "Canonical custom-field editor saved health 18 and note UI verified; layout rendered Health 18",
+      "Move game preview initially included the referenced travel rule; selecting optional lore invalidated the preview",
+      "A fresh preview included two shared copies; apply switched to the destination project",
+      "After reload, the destination game and same NPC retained the schema, saved values and rendered layout",
+      "Server reads confirmed unchanged game-owned IDs, preserved unrelated metadata and remapped shared references"
+    ],
+    "fixtureRemoved": true,
+    "fixture": {
+      "projectId": "shelf_de5f590a-65aa-4ce6-9d8b-e4b7eefd26c7",
+      "gameId": "story_add45418-937d-431b-a22a-4c1e68903781",
+      "destinationProjectId": "shelf_2a867f91-24d7-464d-a97e-59a0fab67ffe",
+      "npcId": "entity_ce2b0874-02b5-48a3-91b6-11bdaa2ae6ea",
+      "docId": "7b4ab0bd-7d16-4cf8-ba5f-ea3e092a4f17",
+      "sharedId": "ddb3d2f8-8d29-4bd7-8341-b9e5320430e0",
+      "extraId": "3366b8d0-9f2d-47f7-a519-1ef2053822b7"
+    },
+    "note": "Browser verification preceded final server-only import hardening. All eleven API checks were repeated on the final build."
+  },
+  "tests": {
+    "files": {
+      "passed": 157,
+      "failed": 1,
+      "total": 158
+    },
+    "tests": {
+      "passed": 1552,
+      "failed": 3,
+      "total": 1555
+    },
+    "inheritedFailures": [
+      "promptHarness: retains all nine full chapters while they await the next arc",
+      "promptHarness: omits an arc that cannot fit whole and reports the missing history",
+      "promptHarness: budgets rendered arc memory while retaining the newest covered chapter"
+    ],
+    "check": "0 errors, 0 warnings",
+    "build": "passed"
+  },
+  "databaseBackup": "E:/DEV/Projects/MythEngine/data/phase2h-before.sql",
+  "originalProtection": {
+    "filesChecked": 760,
+    "differencesFromInitialClone": [
+      {
+        "path": "src/lib/components/story/WorldSheet.svelte",
+        "sha256": "2674c57c8be4ffb54910d8562f31ad36d26cb3b4dfcc602261785d0e325c1e8c",
+        "lastWriteTime": "2026-09-22T03:16:30.069Z"
+      },
+      {
+        "path": "src/lib/services/ai/image/ImageGenerationService.test.ts",
+        "sha256": "bf30818551335ab938149e5977153d38f619478f3d6c904b32daf25e56375f2f",
+        "lastWriteTime": "2026-09-22T03:18:10.314Z"
+      },
+      {
+        "path": "src/lib/services/ai/image/ImageGenerationService.ts",
+        "sha256": "a84112b1f744b96b2e9d28d1b6323444ea9bbfae483b04f00bd3b18bf9bbde24",
+        "lastWriteTime": "2026-09-22T03:16:30.069Z"
+      },
+      {
+        "path": "src/lib/stores/story.characterSave.test.ts",
+        "sha256": "cc68a413071fa11765c59cda7c756a510f3acea559624b9dabdd71f6b5fc04ce",
+        "lastWriteTime": "2026-09-22T03:17:26.902Z"
+      },
+      {
+        "path": "src/lib/stores/story.svelte.ts",
+        "sha256": "63a3c76462cf23500f02d3455776ab05576bf3ba3e958a75306ee3fee5e3b459",
+        "lastWriteTime": "2026-09-22T03:17:26.901Z"
+      }
+    ],
+    "allDriftPredatesThisMilestone": true,
+    "notWrittenByThisMilestone": true,
+    "pid": 53564
+  },
+  "finalRuntime": {
+    "pid": 60692,
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "3ecff85f49967bbf79b9400b060373506dd590118e3c426f8739429b74c6a47d",
+      "externalId": "aa5c536e90ffcf2a05dfd0de64035b4549df6072e52aea72582526492fd0e765"
+    },
+    "storyCount": 1
+  }
+}

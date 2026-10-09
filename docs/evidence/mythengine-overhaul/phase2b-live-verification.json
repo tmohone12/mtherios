@@ -1,0 +1,187 @@
+{
+  "recordedAt": "2026-09-22T00:28:10.363Z",
+  "checks": [
+    "Migration backfills existing entity and faction baselines without invented history",
+    "All four canonical adapters create catalog identity and baseline in the source transaction",
+    "Direct/background-style SQL updates are captured even without a server-version bump",
+    "Atomic domain/metadata save preserves nested data; hiding leaves canonical gameplay records intact",
+    "Scope isolation and competing canonical writes enforce the composite revision",
+    "History failure rolls back domain data, metadata, game version, audit and outbox together",
+    "Campaign import remaps canonical targets and preserves catalog folder/context/hide metadata",
+    "Deleting an underlying record leaves its retained catalog snapshot until campaign deletion",
+    "Retyping away and back retains catalog identity and complete cutover history",
+    "Ownership constraints reject unplanned cross-game/cross-project moves"
+  ],
+  "fixturesRemoved": true,
+  "originalPid": 39068,
+  "runtime": {
+    "ok": true,
+    "mode": "terminal-process",
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "5696cda3a5b3bcb133eca10666f51dc90bf2470c012e0dc868947355a24a4698",
+      "externalId": "26c6260cf1b1b56232bb37864cd44687b544f394fc97974162ee49eb84186bc6"
+    },
+    "scope": {
+      "storyId": null
+    },
+    "runtime": {
+      "pid": 55328,
+      "uptimeSeconds": 5,
+      "timestamp": "2026-09-22T00:28:12.190Z"
+    },
+    "config": {
+      "dataRoot": "E:\\DEV\\Projects\\MythEngine\\data",
+      "vaultRoot": "E:\\DEV\\Projects\\MythEngine\\data\\vaults",
+      "defaultVault": "E:\\DEV\\Projects\\MythEngine\\data\\vaults\\default",
+      "allowExternalVaults": false,
+      "qdrantUrl": "http://127.0.0.1:6335",
+      "qdrantCollection": "mythengine_wiki",
+      "ollamaUrl": "http://127.0.0.1:11434",
+      "wikiEmbedProvider": "openrouter",
+      "wikiEmbedModel": "openai/text-embedding-3-small",
+      "wikiAutoIndexStoryVaults": false,
+      "wikiAutoLintStoryVaults": false,
+      "jobWorkerEnabled": false,
+      "jobIntervalMs": 5000,
+      "chapterThreshold": 20,
+      "postChapterBuffer": 0,
+      "chaptersPerArc": 10,
+      "memoryEmbeddingsConfigured": false,
+      "memoryEmbeddingProvider": null,
+      "memoryEmbeddingModel": null,
+      "memoryEmbeddingDimensions": 1536,
+      "memoryEmbeddingBatchSize": 8,
+      "databaseConfigured": true
+    },
+    "services": {
+      "qdrant": {
+        "ok": true,
+        "status": 200,
+        "collections": [],
+        "totalCollections": 0,
+        "totalPoints": 0,
+        "orphanedStoryCollections": 0,
+        "legacyStoryCollections": 0
+      },
+      "ollama": {
+        "ok": false,
+        "error": "fetch failed"
+      }
+    },
+    "jobs": {
+      "total": 2,
+      "memoryProcessing": {
+        "complete": 0,
+        "failed": 0,
+        "waiting": 0,
+        "running": 0
+      },
+      "memoryStageFreshness": {
+        "checkpoint": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        },
+        "consolidation": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        },
+        "optionalIndex": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        }
+      },
+      "queued": 0,
+      "retry": 0,
+      "running": 0,
+      "complete": 2,
+      "failed": 0,
+      "ready": 0,
+      "delayed": 0,
+      "storyCount": 0,
+      "byStatus": {
+        "complete": 2
+      },
+      "byType": {
+        "validate_agent_settings": 2
+      },
+      "readyByType": {},
+      "failedByType": {},
+      "failureClasses": [],
+      "oldestReadyAt": null,
+      "nextRunAfter": null,
+      "recentFailures": [],
+      "runningJobs": []
+    },
+    "wiki": {
+      "totalStories": 0,
+      "vaultFresh": 0,
+      "vaultStale": 0,
+      "vaultMissing": 0,
+      "indexFresh": 0,
+      "indexStale": 0,
+      "indexMissing": 0,
+      "lintFresh": 0,
+      "lintStale": 0,
+      "lintMissing": 0,
+      "attention": []
+    }
+  },
+  "browser": {
+    "canonicalSave": true,
+    "nestedSiblingsPreserved": true,
+    "staleSaveRejected": true,
+    "concurrentDescriptionRetained": true,
+    "historyFourRevisions": true,
+    "savedListLabelUpdated": true,
+    "finalRecordVersion": 3,
+    "finalMetadataRevision": 5,
+    "fixtureRemoved": true,
+    "url": "http://127.0.0.1:5174/",
+    "samples": [
+      {
+        "id": "67bebf5a-6142-4250-b793-abd06af0116b",
+        "title": "Example travel cloak",
+        "revision": 1
+      },
+      {
+        "id": "b711e70f-2562-4a15-a455-8b5767e1750c",
+        "title": "Example table rules",
+        "revision": 3
+      }
+    ]
+  },
+  "originalProtection": {
+    "filesChecked": 760,
+    "changed": [],
+    "pid": 39068
+  },
+  "finalRuntime": {
+    "pid": 59408,
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "9e1b1b86baf0ecfe24df23dff811b74f573efccdb0d32fba5108e05715d612b3",
+      "externalId": "b7f8cdbceb0bde1e1c6702ba9ea28183ae4e331a68fce59065c3f09b7c1159cc"
+    },
+    "storyCount": 0
+  }
+}

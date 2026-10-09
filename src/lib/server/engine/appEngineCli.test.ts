@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 async function importScriptModule(filePath: string): Promise<unknown> {
 	const source = await readFile(resolve(process.cwd(), filePath), 'utf8');
-	const importableSource = source.replace(/^#![^\n]*(\r?\n)/, '');
+	const importableSource = source.replace(/^#![^\n]*(\r?\n)/, '').replaceAll("'./runtime-config.mjs'", JSON.stringify(pathToFileURL(resolve('scripts/runtime-config.mjs')).href));
 	return import(`data:text/javascript;base64,${Buffer.from(importableSource).toString('base64')}`);
 }
 

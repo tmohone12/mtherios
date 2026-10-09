@@ -1,0 +1,29 @@
+{
+  "observedAt": "2026-09-23T10:33:38.385Z",
+  "batchId": "assistant_batch_21be8354-2e91-4dd7-b7aa-cb0a691030cf",
+  "childId": "assistant_batch_child_74d541a3-283f-4d9e-b42b-8ace4f34cd76",
+  "model": "zai-org/glm-5:thinking",
+  "targetCount": 3,
+  "partialBeforeRestart": 1,
+  "finalApplied": 3,
+  "providerAttemptedAt": "2026-09-23T10:33:28.404Z",
+  "providerCalls": 1,
+  "usage": {
+    "model": "zai-org/glm-5:thinking",
+    "durationMs": 5956,
+    "inputTokens": 343,
+    "totalTokens": 578,
+    "finishReason": "stop",
+    "outputTokens": 235,
+    "requestTokens": 343,
+    "responseTokens": 235,
+    "providerCostUsd": 0,
+    "reasoningTokens": 85,
+    "cacheWriteTokens": 0,
+    "estimatedCostUsd": 0.004065,
+    "cachedInputTokens": 0
+  },
+  "secondWorkerReusedSavedUsage": true,
+  "secondWorkerProviderCallForbidden": true,
+  "fixtureDeleted": true
+}

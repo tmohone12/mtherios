@@ -104,7 +104,7 @@ export class ImageGenerationService {
 	 * Strips dialogue, internal thoughts, and game mechanics to focus on
 	 * what a painter would actually depict.
 	 */
-	private extractVisualScene(narrative: string, context?: SceneContext): string {
+	sceneDescription(narrative: string, context?: SceneContext): string {
 		// Take last ~600 chars (most recent scene beat)
 		const raw = narrative.slice(-600);
 
@@ -172,6 +172,8 @@ export class ImageGenerationService {
 		context?: SceneContext,
 		style?: string,
 		entryId?: string,
+		storyId?: string,
+		options?: { exactPrompt?: boolean },
 	): Promise<ImageGenerationResult> {
 		log('generateSceneImage', { narrativeLen: narrative.length });
 
@@ -179,10 +181,14 @@ export class ImageGenerationService {
 		const { width, height } = this.parseSize(settings.uiSettings.imageSize || '1024x1024');
 
 		try {
+			const scene = options?.exactPrompt ? narrative : this.sceneDescription(narrative, context);
+			const characterPrompt = (settings.uiSettings.imageCharacterPrompt || '').trim();
+			const imagePrompt = characterPrompt
+				? `${characterPrompt}. ${scene}, ${resolvedStyle}`
+				: `${scene}, ${resolvedStyle}`;
 			const profilesJson = await getSetting('apiProfiles');
 			const activeProfileId = await getSetting('activeProfileId');
-			if (!profilesJson) return { image: null, error: 'No API profiles configured.' };
-			const profiles: APIProfile[] = JSON.parse(profilesJson);
+			const profiles: APIProfile[] = profilesJson ? JSON.parse(profilesJson) : [];
 
 			// Image generation can use a dedicated profile separate from narrative.
 			// Falls back to the active narrative profile, then the first available.
@@ -191,28 +197,23 @@ export class ImageGenerationService {
 			// imageProfileId pointed to a deleted profile.
 			const profile =
 				profiles.find(p => p.id === settings.uiSettings.imageProfileId)
-				?? profiles.find(p => p.id === activeProfileId)
-				?? profiles[0];
-			if (!profile) return { image: null, error: 'No API profile found.' };
+					?? profiles.find(p => p.id === activeProfileId)
+					?? profiles[0];
 
-			const scene = this.extractVisualScene(narrative, context);
-			const characterPrompt = (settings.uiSettings.imageCharacterPrompt || '').trim();
-			const imagePrompt = characterPrompt
-				? `${characterPrompt}. ${scene}, ${resolvedStyle}`
-				: `${scene}, ${resolvedStyle}`;
-
-			const providerType = profile.providerType as ProviderType;
-			const providerConfig = PROVIDERS[providerType];
+			const providerType = profile?.providerType as ProviderType | undefined;
+			const providerConfig = providerType ? PROVIDERS[providerType] : undefined;
 			const modelOverride = settings.uiSettings.imageModel || '';
 
-			log('generateSceneImage', { provider: providerType, hasKey: !!profile.apiKey });
+			log('generateSceneImage', { provider: providerType ?? 'pollinations-fallback', hasKey: !!profile?.apiKey });
 
 			let image: GeneratedImage | null = null;
 
 			const resolveModel = (fallback: string) => modelOverride || providerConfig?.imageDefaults?.defaultModel || fallback;
 
 			// Provider-specific image generation
-			if (providerType === 'nanogpt' && profile.apiKey) {
+			if (!profile) {
+				image = await this.generateViaPollinations(imagePrompt);
+			} else if (providerType === 'nanogpt' && profile.apiKey) {
 				image = await this.generateViaOpenAICompat(
 					'https://nano-gpt.com/api/v1/images/generations',
 					profile.apiKey,
@@ -265,14 +266,14 @@ export class ImageGenerationService {
 			}
 
 			if (!image) {
-				return { image: null, error: `Image generation returned no result (${providerType}).` };
+				return { image: null, error: `Image generation returned no result (${providerType ?? 'pollinations'}).` };
 			}
 
-			// Persist to IndexedDB if we have a story and entry context
-			if (entryId && story.currentStory) {
-				story.addImage({
+			// Persist only when the request still belongs to the active story.
+			if (entryId && storyId && story.currentStory?.id === storyId) {
+				await story.addImage({
 					id: uuid(),
-					storyId: story.currentStory.id,
+					storyId,
 					entryId,
 					sourceText: narrative.slice(-200),
 					prompt: imagePrompt,
@@ -291,6 +292,11 @@ export class ImageGenerationService {
 			log('Image generation failed', { error: e });
 			return { image: null, error: msg };
 		}
+	}
+
+	/** Portrait context is already composed from the saved record; do not treat it as scene prose. */
+	async generatePortraitImage(prompt: string): Promise<ImageGenerationResult> {
+		return this.generateSceneImage(prompt, undefined, undefined, undefined, undefined, { exactPrompt: true });
 	}
 
 	private async generateViaOpenAICompat(

@@ -1,6 +1,4 @@
+param([switch]$LocalKev,[switch]$LocalEmbeddings,[switch]$NoPrompt)
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
-Set-Location $PSScriptRoot
-npm install
-npm run app:dev
+$ErrorActionPreference='Stop'
+& 'E:\DEV\Projects\MythEngine-runtime\Start-MythEngine.ps1' @PSBoundParameters -OpenBrowser

@@ -74,7 +74,8 @@ function countOccurrences(haystack: string, needle: string): number {
 export function buildPromptHarnessReport(scenario: TurnPromptHarnessScenario): PromptHarnessReport {
 	const currentEntryId = scenario.currentEntryId ?? 'entry_harness_current';
 	const retrieved = scenario.retrieved ?? emptyRetrievedMemoryPacket(scenario.ctx.story.id, scenario.playerText);
-	const promptPacket = buildServerTurnPrompt(scenario.ctx, retrieved, currentEntryId, scenario.options);
+	const promptPacket = buildServerTurnPrompt(scenario.ctx, retrieved, currentEntryId,
+		{ playerAction: scenario.playerText, ...scenario.options });
 	const extractionPrompt = buildStateExtractionPrompt(
 		scenario.playerText,
 		scenario.narrationForExtraction ?? 'Harness placeholder narration. A few minutes pass and the scene state changes plainly.',

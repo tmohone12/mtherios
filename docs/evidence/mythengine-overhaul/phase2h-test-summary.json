@@ -1,0 +1,19 @@
+{
+  "files": {
+    "passed": 157,
+    "failed": 1,
+    "total": 158
+  },
+  "tests": {
+    "passed": 1552,
+    "failed": 3,
+    "total": 1555
+  },
+  "inheritedFailures": [
+    "promptHarness: retains all nine full chapters while they await the next arc",
+    "promptHarness: omits an arc that cannot fit whole and reports the missing history",
+    "promptHarness: budgets rendered arc memory while retaining the newest covered chapter"
+  ],
+  "check": "0 errors, 0 warnings",
+  "build": "passed"
+}

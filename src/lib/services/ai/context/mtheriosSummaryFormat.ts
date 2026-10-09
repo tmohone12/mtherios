@@ -1,3 +1,5 @@
+import { isNarrativeCommandInput, isNarrativeControlInput } from './controlInput';
+
 const UNKNOWN = 'not established in the source yet';
 
 export interface MtheriosCharacterState {
@@ -10,6 +12,7 @@ export interface MtheriosMemorySummaryInput {
 	checkpoint?: string | null;
 	sourceCoverage?: string[];
 	currentScene?: string | null;
+	recentStoryNarrative?: string | null;
 	recentStoryState?: string[];
 	characterStates?: MtheriosCharacterState[];
 	activeThreads?: string[];
@@ -54,7 +57,7 @@ export function buildMtheriosSummaryInstruction(scope: 'chapter' | 'arc' | 'saga
 		'Rules:',
 		'- The memory system is the spine of continuity. Write a useful record of what happened, not a process log.',
 		'- SOURCE COVERAGE is audit metadata only; keep machine details out of RECENT STORY STATE.',
-		'- RECENT STORY STATE should read like a clear chapter synopsis in past tense, preserving causal context: exile wounds, promises, family pressure, political danger, relationship changes, and consequences.',
+		'- RECENT STORY STATE must account for the entire covered source window in chronological order. Preserve every meaningful action and outcome, exchange, discovery, decision, promise, relationship change, failure, and resolution, including quiet scenes. Compress repeated wording and decoration, not events or causal context.',
 		'- For chapter summaries, include a final sentence in RECENT STORY STATE using this exact label: "Time passed in this chapter: ...". Infer it from timestamps when possible; otherwise say "not established".',
 		'- For arc summaries, synthesize the covered chapter summaries into a readable arc synopsis instead of listing clipped checkpoint fragments.',
 		'- CHARACTER STATE is mandatory for important present, recently active, or relevant absent characters.',
@@ -103,12 +106,28 @@ function sectionSentinel(value: string): boolean {
 		|| /^not established$/i.test(value);
 }
 
-function sectionToInline(section: string): string {
-	const lines = section
+export function replaceMtheriosStoryNarrative(summary: string, narrative: string): string {
+	const text = summary.trim();
+	const start = new RegExp('\\[RECENT STORY STATE\\s*=\\s*\\n?', 'i').exec(text);
+	if (!start) return formatMtheriosMemorySummary({ recentStoryNarrative: narrative });
+	const bodyStart = start.index + start[0].length;
+	const rest = text.slice(bodyStart);
+	const next = rest.search(new RegExp('(?:\\n|\\s)\\s*\\[(?:CHARACTER STATE|ACTIVE THREADS|TONE TO CONTINUE)\\s*=', 'i'));
+	if (next < 0) return `${text.slice(0, bodyStart)}${narrative.trim()}\n]`;
+	return `${text.slice(0, bodyStart)}${narrative.trim()}\n\n${rest.slice(next).trimStart()}`;
+}
+
+function oocControlLine(value: string): boolean {
+	const text = value.trim().replace(/^(?:opening|middle|ending|recent|current)\s*:\s*/i, '');
+	return isNarrativeControlInput(text) || isNarrativeCommandInput(text);
+}
+
+function sectionToSynopsis(section: string): string {
+	return section
 		.split(/\r?\n/)
 		.map((line) => cleanBullet(line))
-		.filter((line) => line && !sectionSentinel(line));
-	return clean(lines.join(' '), '');
+		.filter((line) => line && !sectionSentinel(line) && !oocControlLine(line))
+		.join(' ');
 }
 
 function stripLegacyMemoryNoise(summary: string): string {
@@ -125,15 +144,26 @@ function stripLegacyMemoryNoise(summary: string): string {
 
 export function summarizeMtheriosMemoryForRollup(summary: string | null | undefined): string {
 	const raw = summary ?? '';
-	const story = sectionToInline(extractMtheriosSummarySection(raw, 'RECENT STORY STATE'));
-	const characters = sectionToInline(extractMtheriosSummarySection(raw, 'CHARACTER STATE'));
-	const threads = sectionToInline(extractMtheriosSummarySection(raw, 'ACTIVE THREADS'));
-	const parts = [
+	const storySection = extractMtheriosSummarySection(raw, 'RECENT STORY STATE');
+	const story = sectionToSynopsis(storySection || [
+		extractMtheriosSummarySection(raw, 'BEGINNING'),
+		extractMtheriosSummarySection(raw, 'RECENT'),
+	].filter(Boolean).join('\n'));
+	const scene = sectionToSynopsis(extractMtheriosSummarySection(raw, 'CURRENT SCENE') || extractMtheriosSummarySection(raw, 'CURRENTLY'));
+	const characters = sectionToSynopsis(extractMtheriosSummarySection(raw, 'CHARACTER STATE') || extractMtheriosSummarySection(raw, '{{char}}'));
+	const threads = sectionToSynopsis(extractMtheriosSummarySection(raw, 'ACTIVE THREADS'));
+	// Budget whole records at the caller. Sampling here permanently removes
+	// source facts before either rollup generation or retrieval can use them.
+	return [
 		story,
+		scene ? `Scene at this checkpoint: ${scene}` : '',
 		characters ? `Characters: ${characters}` : '',
-		threads ? `Open threads: ${threads}` : '',
-	].filter(Boolean);
-	return parts.length ? clean(parts.join(' '), '') : stripLegacyMemoryNoise(raw);
+		threads ? `Threads at this checkpoint: ${threads}` : '',
+	].filter(Boolean).join(' ') || stripLegacyMemoryNoise(raw);
+}
+
+export function summarizeMtheriosMemoryForContext(summary: string | null | undefined): string {
+	return summarizeMtheriosMemoryForRollup(summary);
 }
 
 function clean(value: string | null | undefined, fallback = UNKNOWN): string {
@@ -195,13 +225,14 @@ export function formatMtheriosMemorySummary(input: MtheriosMemorySummaryInput): 
 	const sourceCoverage = input.sourceCoverage ?? [];
 	const currentScene = input.currentScene ?? input.currently;
 	const recentStoryState = input.recentStoryState ?? input.recent ?? [];
+	const recentStoryNarrative = clean(input.recentStoryNarrative, '');
 	const activeThreads = input.activeThreads ?? input.importantStrings ?? [];
 
 	return [
 		`[CHECKPOINT = ${clean(checkpoint, 'Continuity checkpoint for the covered story window.')}]`,
 		`[SOURCE COVERAGE =\n${bulletLines(sourceCoverage, 'No source coverage metadata was recorded.')}\n]`,
 		`[CURRENT SCENE = ${clean(currentScene, 'date/time unknown | location unknown | weather or conditions unknown')}]`,
-		`[RECENT STORY STATE =\n${bulletLines(recentStoryState, 'No new events were established in this memory window.')}\n]`,
+		`[RECENT STORY STATE =\n${recentStoryNarrative || bulletLines(recentStoryState, 'No new events were established in this memory window.')}\n]`,
 		`[CHARACTER STATE =\n${characterStateLines(input)}\n]`,
 		`[ACTIVE THREADS =\n${bulletLines(activeThreads, 'No durable threats, promises, objects, or setting rules were established in this window.')}\n]`,
 		`[TONE TO CONTINUE = ${clean(input.toneToContinue, 'Continue from the established scene pressure, character choices, and unresolved consequences.')}]`,

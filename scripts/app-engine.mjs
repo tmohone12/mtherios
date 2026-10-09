@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // @ts-nocheck
 
+import { resolveAppUrl } from './runtime-config.mjs';
+
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
-const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
-const DEFAULT_PORT = process.env.PORT || '5173';
-const DEFAULT_URL = process.env.MTHERIOS_APP_URL || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
+const DEFAULT_URL = resolveAppUrl();
 const BOOLEAN_FLAGS = new Set(['json', 'includeSecret', 'execute']);
 
 export async function main(argv = process.argv.slice(2)) {

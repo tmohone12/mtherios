@@ -1,0 +1,106 @@
+{
+  "verifiedAt": "2026-09-07T22:12:23.784Z",
+  "runtime": "http://127.0.0.1:5173",
+  "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+  "query": "Continue walking through the courtyard.",
+  "primarySceneHeader": "[ 🕰️ Time 09:33 | 🗓️ Day Twenty-Seventh, Moon 6, 299 AC | 📍 Volantis — the eastern palace, first great courtyard | 🌤️ Late morning, hot, the river wind carrying smoke and spice ]",
+  "locationSectionOpening": "Location and inherited lore:\nScene containment: Volantis > Volantis — the eastern palace, first great courtyard.\nThese places contain the scene; containment does not imply co-presence or travel time. Apply rules with their stated conditions and sources. Customs describe expectations, not guaranteed individual behavior.\nCurrent Volantis canon: politicalForm: Archonate under Aurion Belaerys, with appointed triarchs administering routine government\n- Inherited from Volantis [fact:location_fact_31ac",
+  "governanceRetained": true,
+  "locationRecords": [
+    {
+      "kind": "locationPlaces",
+      "id": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "start": 6932,
+      "end": 7060
+    },
+    {
+      "kind": "locationLore",
+      "id": "location_fact_31accc3d-c623-4488-a0c6-8383a7ff374a",
+      "start": 7061,
+      "end": 8235
+    },
+    {
+      "kind": "locationLore",
+      "id": "location_fact_130d3024-f1e6-4a1a-96c8-0c150fbf381f",
+      "start": 8236,
+      "end": 9109
+    },
+    {
+      "kind": "locationLore",
+      "id": "location_fact_a82d9ab7-404a-494c-91bc-61bc6b62a2c2",
+      "start": 9110,
+      "end": 9871
+    },
+    {
+      "kind": "locationLore",
+      "id": "location_fact_00907fde-f165-4137-9d3b-dbef7ea1afbb",
+      "start": 9872,
+      "end": 10156
+    },
+    {
+      "kind": "locationLore",
+      "id": "location_fact_11686944-a791-45d7-a098-c8d0ded834ab",
+      "start": 10157,
+      "end": 10479
+    },
+    {
+      "kind": "locationLore",
+      "id": "location_fact_1ff7ff35-34b3-4c3e-9147-4d9f5c529855",
+      "start": 10480,
+      "end": 10762
+    },
+    {
+      "kind": "locationLore",
+      "id": "location_fact_930f070b-4d53-4736-bae4-437253600393",
+      "start": 10763,
+      "end": 11024
+    },
+    {
+      "kind": "locationPlaces",
+      "id": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "start": 11025,
+      "end": 11115
+    }
+  ],
+  "omissionsExplicit": true,
+  "providerGenerationCalled": false,
+  "productionPid": 6424,
+  "health": {
+    "ok": true,
+    "configured": true,
+    "database": "mtherios",
+    "table_count": 35
+  },
+  "story": {
+    "id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+    "server_version": 3341,
+    "current_turn": 1253,
+    "current_location_id": "entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587",
+    "current_world_time": "Day Twenty-Seventh, Moon 6, 299 AC | 09:33"
+  },
+  "primaryFlags": [
+    {
+      "id": "entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587",
+      "current": "true",
+      "legacy": "true"
+    }
+  ],
+  "transcriptHead": {
+    "id": "narration_711e2d27-46d7-4d88-a739-987b38433d5c",
+    "position": 2499
+  },
+  "separateCampaign": {
+    "id": "story_332449d7-f704-4f56-aa31-097dbec8d0ce",
+    "server_version": 3203
+  },
+  "retiredDuplicateCount": 30,
+  "projectionJobsPending": 0,
+  "disposableStoriesRemoved": true,
+  "historicalCurrentStateExcluded": true,
+  "evidenceLinkVerified": "patches/location_patch_38fe6bcd-e5c0-4384-8159-2b1395dfa032",
+  "browserScreenshots": [
+    "output/playwright/location-lore-mobile.png",
+    "output/playwright/location-lore-desktop.png"
+  ],
+  "previewStopped": true
+}

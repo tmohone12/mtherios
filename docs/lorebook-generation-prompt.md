@@ -2,6 +2,8 @@
 
 Copy this prompt into an LLM when you want it to build a lorebook from story notes, chapters, wiki text, setting documents, or raw narrative.
 
+For cities, sublocations and inherited rules, use the [location authoring contract](location-lore-authoring.md) and the full world database format. The compact character/faction prompt below does not carry a location hierarchy or scoped facts.
+
 ```text
 You are a lorebook architect for an interactive fiction app.
 

@@ -8,7 +8,6 @@ import {
 	indexWiki,
 	ingestWiki,
 	initWiki,
-	lintWiki,
 	pageWiki,
 	pagesWiki,
 	searchWiki,
@@ -19,7 +18,6 @@ import {
 	type WikiIndexInput,
 	type WikiIngestInput,
 	type WikiInitInput,
-	type WikiLintInput,
 	type WikiPageInput,
 	type WikiPagesInput,
 	type WikiSearchInput,
@@ -39,7 +37,6 @@ export type WikiCoreAction =
 	| 'index'
 	| 'ingest'
 	| 'init'
-	| 'lint'
 	| 'page'
 	| 'pages'
 	| 'search'
@@ -56,7 +53,7 @@ function storyScopedInput(storyId: string, input: unknown): JsonRecord {
 	if (storyId === '__wiki__' || storyId === '__app__') return record;
 	return {
 		...record,
-		storyId: typeof record.storyId === 'string' && record.storyId.trim() ? record.storyId : storyId,
+		storyId,
 	};
 }
 
@@ -74,8 +71,6 @@ export async function runWikiAction(action: WikiCoreAction, input: unknown): Pro
 			return await ingestWiki(asRecord(input) as WikiIngestInput);
 		case 'init':
 			return await initWiki(asRecord(input) as WikiInitInput);
-		case 'lint':
-			return await lintWiki(asRecord(input) as WikiLintInput);
 		case 'page':
 			return await pageWiki(asRecord(input) as WikiPageInput);
 		case 'pages':

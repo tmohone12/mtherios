@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export function embeddingConfig(overrides = {}) {
 	const provider = overrides.provider ?? process.env.WIKI_EMBED_PROVIDER ?? 'openrouter';
 	return {
@@ -8,6 +10,7 @@ export function embeddingConfig(overrides = {}) {
 		openAiApiKey: overrides.openAiApiKey ?? process.env.WIKI_EMBED_API_KEY ?? (provider === 'openrouter' ? process.env.OPENROUTER_API_KEY : '') ?? process.env.OPENAI_API_KEY ?? '',
 		customUrl: overrides.customUrl ?? process.env.WIKI_EMBED_URL ?? '',
 		batchSize: Number(overrides.batchSize ?? process.env.WIKI_EMBED_BATCH ?? 8),
+		dimensions: Math.max(1, Number(overrides.dimensions ?? process.env.WIKI_EMBED_DIMENSIONS ?? 768)),
 	};
 }
 
@@ -19,8 +22,34 @@ export async function embedText(text, config = embeddingConfig()) {
 export async function embedMany(texts, config = embeddingConfig()) {
 	if (texts.length === 0) return [];
 	if (config.customUrl) return embedCustom(texts, config);
+	if (config.provider === 'local' || config.provider === 'local-hash') return texts.map((text) => localHashEmbedding(text, config.dimensions));
 	if (config.provider === 'openai' || config.provider === 'openai-compatible' || config.provider === 'openrouter') return embedOpenAi(texts, config);
-	return embedOllama(texts, config);
+	if (config.provider === 'ollama') {
+		if (process.env.MYTHENGINE_LOCAL_EMBEDDINGS !== 'true' && process.env.MTHERIOS_LOCAL_EMBEDDINGS !== 'true') throw new Error('Local embeddings are off for this session.');
+		return embedOllama(texts, config);
+	}
+	throw new Error(config.provider === 'disabled' ? 'Local embeddings are off for this session; exact search remains available.' : `Unsupported embedding provider: ${config.provider}`);
+}
+
+export function localHashEmbedding(text, dimensions = 768) {
+	const size = Math.max(1, Math.trunc(dimensions));
+	const tokens = text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+	const features = [
+		...tokens.map((token) => ({ value: token, weight: 1 })),
+		...tokens.slice(1).map((token, index) => ({ value: `${tokens[index]} ${token}`, weight: 0.7 })),
+	];
+	const vector = new Float64Array(size);
+	for (const feature of features) {
+		const hash = createHash('sha256').update(feature.value).digest();
+		const index = hash.readUInt32BE(0) % size;
+		vector[index] += (hash[4] & 1 ? 1 : -1) * feature.weight;
+	}
+	let norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+	if (!norm) {
+		vector[0] = 1;
+		norm = 1;
+	}
+	return Array.from(vector, (value) => value / norm);
 }
 
 async function embedCustom(texts, config) {
@@ -49,7 +78,8 @@ async function embedOllama(texts, config) {
 	const embedResponse = await fetch(`${base}/api/embed`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ model: config.model, input: texts.length === 1 ? texts[0] : texts }),
+		body: JSON.stringify({ model: config.model, input: texts.length === 1 ? texts[0] : texts,
+			...(process.env.OLLAMA_EMBED_NUM_GPU ? { options: { num_gpu: Number(process.env.OLLAMA_EMBED_NUM_GPU) } } : {}) }),
 	});
 
 	if (embedResponse.ok) {

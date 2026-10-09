@@ -1,0 +1,44 @@
+{
+  "createdAt": "2026-09-07T12:35:46.241Z",
+  "mode": "deterministic-campaign-qualification",
+  "build": {
+    "identity": "mtherios@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "externalId": null,
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 532,
+    "dirtyStatusSha256": "5dab27f6c80ffcd0db02af265cd44b1853d35738dcf10cbe5576626719faf6d9",
+    "sourceHashes": {
+      "scripts/test-campaign-persistence.mjs": "e7ee3cf06a002e604e7a7ae2b964058cf37ab1fa2192b2d91d011e677ccd7b3b",
+      "src/lib/server/memory/retrieval.ts": "834cf78c6a2d465acc63e792ba6dd281c9803cbb403ac7649b01aa27e5764e49",
+      "src/lib/server/turn/patchValidator.ts": "42d4329059f6cd67a4d2dc7ef6d8d99343e3808960ab91f89590acea528fe761",
+      "src/lib/server/db/worldDatabaseImport.ts": "cf670627f79b3eb242c928b02dca2726b2f19306d7b6d4f9ed82528f732e9319",
+      "src/lib/server/jobs/outbox.ts": "fdac99246a68830c96afc64690533a9f24891cc34e12c3f3383074151dc8c4c6",
+      "src/lib/server/jobs/failureClassification.ts": "a95d71f6442562dacc9f5fc7a5c7cc0d4405de4263c9757a8d26bc6409334005"
+    }
+  },
+  "fixture": {
+    "turns": 1000,
+    "entries": 2000,
+    "modelCalls": 0
+  },
+  "ok": true,
+  "checks": [
+    "Cancelled provider generation aborts in-flight I/O and rejects without a retry or model call",
+    "Current-format export and preserved-ID import into a separate database retain transcript, canon and source links",
+    "Separate-copy import remaps identities consistently across relationships and evidence",
+    "Legacy limit imports the final entry; limit-plus-one creates no story, transcript rows or jobs",
+    "Concurrent export stays on one committed snapshot; read-committed negative control detects the defect",
+    "One competing retry wins; source scope, stale versions and unsupported types are rejected; applied extraction does not duplicate canon",
+    "Both event-memory handlers and embedding updates recover after a committed partial write without duplicate projections",
+    "Historical search retains stemmed matches and filters secret/noncanon/OOC parents before the page limit; narrative slash-command output remains eligible",
+    "Agreement relevance ranks canonical IDs, names, aliases, stemmed action and due sources before limit 80; unrelated protagonist promises and future/foreign/fulfilled obligations do not crowd out older relevant rows",
+    "After 150 turns, fulfillment/annulment/revision survive connection restart and remapped-ID export/import; old and repeated jobs cannot revive duties; current prompts exclude resolved obligations and historical recall labels them",
+    "Scene checkpoint retains a middle-passage promise beyond 150 turns in a fresh Node process without changing dialogue; edits, secrecy, deletion, scene changes and remapped import invalidate stale excerpts; the real worker rebuilds latest evidence even for an old queued job",
+    "A deterministic 1,000-turn campaign preserves mid-campaign obligations, long-gap retrieval, conflicting rumors and GM correction evidence, alternate-POV privacy, fulfillment, restart, and remapped import without provider calls"
+  ],
+  "isolated": true
+}

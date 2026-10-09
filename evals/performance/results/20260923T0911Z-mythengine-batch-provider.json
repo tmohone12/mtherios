@@ -1,0 +1,45 @@
+{
+  "model": "zai-org/glm-5:thinking",
+  "priceUpperBoundsUsdPerMillion": {
+    "input": 5,
+    "output": 10
+  },
+  "maxCostUsdPerBatch": 1,
+  "targetCount": 97,
+  "serial": {
+    "elapsedMs": 185447,
+    "outcomes": {
+      "applied": 97,
+      "conflict": 0,
+      "failed": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "pending": 0,
+      "running": 0
+    },
+    "children": 10,
+    "providerAttempts": 10,
+    "providerReportedCostUsd": 0,
+    "conservativeEstimatedCostUsd": 0.13724000000000003,
+    "inputTokens": 7400,
+    "outputTokens": 10024
+  },
+  "parallel": {
+    "elapsedMs": 140006,
+    "outcomes": {
+      "applied": 97,
+      "conflict": 0,
+      "failed": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "pending": 0,
+      "running": 0
+    },
+    "children": 10,
+    "providerAttempts": 10,
+    "providerReportedCostUsd": 0,
+    "conservativeEstimatedCostUsd": 0.137435,
+    "inputTokens": 7303,
+    "outputTokens": 10092
+  }
+}

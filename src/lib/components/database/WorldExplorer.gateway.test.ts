@@ -17,7 +17,7 @@ describe('WorldExplorer control-surface boundary', () => {
 		const source = readFileSync(resolve('src/lib/components/database/WorldExplorer.svelte'), 'utf8');
 
 		expect(source).toContain('Character State');
-		for (const label of ['Bio', 'Appearance', 'Personality', 'Rank', 'Disposition', 'Affinity', 'Goals', 'Faction Tags', 'Known Facts']) {
+		for (const label of ['Bio', 'Appearance (stable features)', 'Personality', 'Rank', 'Disposition', 'Affinity', 'Goals', 'Faction Tags', 'Known Facts', 'Current presentation (clothing / injuries)', 'Voice / speech style']) {
 			expect(source).toContain(`<span>${label}</span>`);
 		}
 		expect(source).toContain('factionTags');
@@ -68,7 +68,7 @@ describe('WorldExplorer control-surface boundary', () => {
 		expect(source).toContain('isNpcCandidateProposal');
 		expect(source).toContain('character_reference_review');
 		expect(source).toContain("recordCommandType(sectionId = activeSection)");
-		expect(source).toContain("type: recordCommandType()");
+		expect(source).toContain("type: recordCommandType(sectionId)");
 		expect(source).toContain("reviewPatchProposal('approved')");
 	});
 
@@ -86,5 +86,28 @@ describe('WorldExplorer control-surface boundary', () => {
 		expect(source).toContain('openSearchResult(result)');
 		expect(source).toContain("reviewPatchProposal('approved')");
 		expect(source).toContain("reviewPatchProposal('rejected')");
+	});
+
+	it('exposes the four evidence tools through the shared command route', () => {
+		const source = readFileSync(resolve('src/lib/components/database/WorldExplorer.svelte'), 'utf8');
+
+		expect(source).toContain('GM Toolkit');
+		expect(source).toContain("command = 'world.actor.brief'");
+		expect(source).toContain("command = 'world.scene.check'");
+		expect(source).toContain("command = 'world.relationship.web'");
+		expect(source).toContain("command = 'plot.thread.board'");
+		expect(source).toContain('Evidence receipt');
+	});
+
+	it('requires the human character seeds and sends creation to review instead of canon', () => {
+		const source = readFileSync(resolve('src/lib/components/database/WorldExplorer.svelte'), 'utf8');
+
+		expect(source).toContain("'world.character.draftCreate'");
+		expect(source).toContain('Narrative purpose *');
+		expect(source).toContain("body.status === 'existing'");
+		expect(source).toContain("await openRecord('characters', body.recordId)");
+		expect(source).toContain("await openRecord('patchProposals', proposalId)");
+		expect(source).toContain('Characters established during play are saved automatically after validation');
+		expect(source).toContain('Preview and approve it here.');
 	});
 });

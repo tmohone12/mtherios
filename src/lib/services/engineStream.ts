@@ -62,6 +62,7 @@ export const ENGINE_STREAM_EVENT_TYPES = [
 	'timeline.eventsDue',
 	'job.status',
 	'state.changed',
+	'gm.activity',
 	'narration.chunk',
 ] as const;
 
@@ -179,6 +180,17 @@ export function shouldRefreshCampaignProjection(event: EngineStreamEvent | null 
 	if (event.type === 'campaign.status') return true;
 	if (event.type === 'state.changed') return true;
 	if (event.type === 'timeline.eventScheduled' || event.type === 'timeline.eventsDue') return true;
+	if (event.type === 'job.status' && (event.data.status === 'completed' || event.data.status === 'failed')) {
+		return [
+			'extract_turn_state',
+			'summarize_chapter',
+			'create_memory_nodes_from_events',
+			'update_faction_pressure',
+			'evaluate_world_sim_tick',
+			'continuity_audit',
+			'plan_plot_brain',
+		].includes(asString(event.data.type));
+	}
 	if (event.type === 'command.succeeded') {
 		return Object.keys(asRecord(event.data.projectionChanges)).length > 0;
 	}

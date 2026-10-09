@@ -1,0 +1,86 @@
+{
+  "createdAt": "2026-09-07T11:10:59.741Z",
+  "mode": "db-memory-load",
+  "build": {
+    "identity": "mtherios@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "externalId": null,
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 515,
+    "dirtyStatusSha256": "603909f027fc30088ab0aec28fad880594f0fc271a88d6bcca45a705f217cdd8",
+    "sourceHashes": {
+      "scripts/bench-generation.mjs": "16a5ad17983343701ff074c122b3c262501fed750a920ebb04bb0cea79de4981",
+      "scripts/bench-generation-core.mjs": "c09fed5007630df6d4141425b42f5c47abd6b4ab8138d53d4897dad0644f007f",
+      "src/lib/server/turn/orchestrator.ts": "cd347862810b2272bc18dc22854c981044572eb6e9fd3043111dd0137700efac",
+      "src/lib/server/turn/provider.ts": "d1b8fe0ac1802923ac2aecbb853f916c039511ee9493ed2a2b40a9cfd372839f",
+      "src/lib/server/memory/retrieval.ts": "be619f82871823ab4803c9ad7b528813114935af9c4a30f5607e28da6094c6f2"
+    }
+  },
+  "url": "http://127.0.0.1:5177",
+  "storyId": "bench_long_1788779458385_bbadd15a",
+  "turns": 5000,
+  "entries": 10000,
+  "samples": 8,
+  "concurrency": 4,
+  "seedDurationMs": 1237,
+  "durationMs": {
+    "p50": 46,
+    "p95": 72,
+    "max": 72
+  },
+  "maxNodes": 4,
+  "responses": [
+    {
+      "nodeCount": 4,
+      "tokenEstimate": 210,
+      "degradedSources": []
+    },
+    {
+      "nodeCount": 4,
+      "tokenEstimate": 210,
+      "degradedSources": []
+    },
+    {
+      "nodeCount": 4,
+      "tokenEstimate": 210,
+      "degradedSources": []
+    },
+    {
+      "nodeCount": 4,
+      "tokenEstimate": 210,
+      "degradedSources": []
+    },
+    {
+      "nodeCount": 4,
+      "tokenEstimate": 210,
+      "degradedSources": []
+    },
+    {
+      "nodeCount": 4,
+      "tokenEstimate": 210,
+      "degradedSources": []
+    },
+    {
+      "nodeCount": 4,
+      "tokenEstimate": 210,
+      "degradedSources": []
+    },
+    {
+      "nodeCount": 4,
+      "tokenEstimate": 210,
+      "degradedSources": []
+    }
+  ],
+  "degradedSources": [],
+  "providerCalls": 0,
+  "writes": true,
+  "writeScope": "disposable benchmark story only; cleaned up after verification",
+  "gate": {
+    "maxNodes": 32,
+    "degradedSources": 0,
+    "note": "Identical retrieval requests should share active work and retain an explicit receipt."
+  }
+}

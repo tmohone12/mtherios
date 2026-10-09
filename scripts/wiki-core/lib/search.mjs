@@ -9,21 +9,24 @@ export async function searchVault(vault, query, {
 	provider = null,
 	model = null,
 	collection = null,
+	layer = null,
 } = {}) {
-	const exactRows = exactSearch(vault, query, limit);
+	const searchPages = layer ? vault.pages.filter(page => page.layer === layer) : vault.pages;
+	const searchView = layer ? { ...vault, pages: searchPages, byPath: new Map(searchPages.map(page => [page.relPath, page])) } : vault;
+	const exactRows = exactSearch(searchView, query, limit);
 	let semanticRows = [];
 	let semanticError = null;
 
 	if (!exact) {
 		try {
 			const vector = await embedText(query, embeddingConfig({ provider, model }));
-			semanticRows = await searchPoints(vector, qdrantConfig({ collection }), { limit });
+			semanticRows = await searchPoints(vector, qdrantConfig({ collection }), { limit, layer });
 		} catch (error) {
 			semanticError = error instanceof Error ? error.message : String(error);
 		}
 	}
 
-	const merged = mergeResults(vault, semanticRows, exactRows, limit);
+	const merged = mergeResults(searchView, semanticRows, exactRows, limit);
 	const results = merged.map((row) => {
 		const graph = followGraph(vault, row.path, followDepth);
 		return {

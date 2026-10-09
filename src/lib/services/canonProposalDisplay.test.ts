@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { formatProposalDescription, formatProposalSubline, formatProposalSummary } from './canonProposalDisplay';
+import { formatProposalDescription, formatProposalSubline, formatProposalSummary, proposalRecordView } from './canonProposalDisplay';
 
 describe('canon proposal display helpers', () => {
+	it('reads SQL proposal rows for candidate filtering and readable review labels without changing editor data', () => {
+		const row = {
+			id: 'proposal_envoy', proposal_type: 'character_reference_review', target_table: 'entities',
+			target_record_id: 'Unidentified Envoy', proposed_by: 'chapter.character_update',
+			status: 'needs_review', source_entry_ids: ['entry_arrival'],
+			operations: [{ op: 'review', path: '/entities/character', value: { name: 'Unidentified Envoy', description: 'An envoy arriving at the gate.' } }],
+		};
+		const before = structuredClone(row);
+		expect(proposalRecordView(row)).toMatchObject({
+			proposalType: 'character_reference_review', targetTable: 'entities', targetRecordId: 'Unidentified Envoy',
+			proposedBy: 'chapter.character_update', sourceEntryIds: ['entry_arrival'], status: 'needs_review',
+		});
+		expect(formatProposalSummary(row)).toBe('Unidentified Envoy (not yet canon)');
+		expect(formatProposalSummary({ ...row, operations: [] })).toBe('Unidentified Envoy (not yet canon)');
+		expect(formatProposalSubline(row)).toBe('needs_review / character_reference_review / source entry_arrival');
+		expect(formatProposalDescription(row)).toBe('An envoy arriving at the gate.');
+		expect(proposalRecordView({ ...row, targetRecordId: 'Resolved Envoy' }).targetRecordId).toBe('Resolved Envoy');
+		expect(row).toEqual(before);
+	});
+
 	it('labels unresolved character review proposals with name and source context', () => {
 		const agreement = {
 			id: 'proposal_unknown_envoy',

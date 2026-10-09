@@ -8,6 +8,9 @@ interface EngineCommandResponse {
 	error?: string | null;
 }
 
+/** A reached backend rejected the import; this must not become offline success. */
+export class BackendImportRejectedError extends Error {}
+
 async function postEngineCommand(storyId: string, command: string, args: unknown): Promise<unknown> {
 	const response = await fetch('/api/engine/command', {
 		method: 'POST',
@@ -16,10 +19,12 @@ async function postEngineCommand(storyId: string, command: string, args: unknown
 	});
 	const body = await response.json().catch(() => ({})) as EngineCommandResponse;
 	if (!response.ok) {
-		throw new Error(typeof body.error === 'string' ? body.error : `Terminal request failed: ${response.status}`);
+		const message = typeof body.error === 'string' ? body.error : `Terminal request failed: ${response.status}`;
+		if (response.status >= 400 && response.status < 500) throw new BackendImportRejectedError(message);
+		throw new Error(message);
 	}
 	if (body.status !== 'succeeded') {
-		throw new Error(body.error ?? `Engine command failed: ${command}`);
+		throw new BackendImportRejectedError(body.error ?? `Engine command failed: ${command}`);
 	}
 	return body.result;
 }
@@ -41,6 +46,7 @@ function isFullDatabaseBundle(bundle: unknown): boolean {
 export async function importStoryBundleToBackend(
 	bundle: unknown,
 	localStoryId: string,
+	merge?: { sourceProjectId: string; destinationProjectId: string },
 ): Promise<{
 	serverStoryId: string;
 	serverVersion: number;
@@ -51,7 +57,7 @@ export async function importStoryBundleToBackend(
 		storyIdFromImportBundle(bundle),
 		fullDatabase ? 'database.importWorldBundle' : 'story.importIndexedDb',
 		fullDatabase
-			? { bundle, options: { preserveIds: false, replaceExisting: false, syncWiki: true } }
+			? { bundle, options: { preserveIds: false, replaceExisting: false, syncWiki: true, ...(merge ?? {}) } }
 			: { bundle, options: { preserveIds: true, rebuildMemoryNodes: true } },
 	);
 	const imported = fullDatabase
@@ -60,6 +66,7 @@ export async function importStoryBundleToBackend(
 	await updateStory(localStoryId, {
 		serverStoryId: imported.storyId,
 		serverVersion: imported.serverVersion,
+		...(fullDatabase && 'projectId' in imported && imported.projectId ? { shelfId: imported.projectId } : {}),
 		syncStatus: 'synced',
 	});
 	return {

@@ -10,6 +10,7 @@ const { storyMock, canonicalMocks, databaseMocks } = vi.hoisted(() => {
 		items: [] as any[],
 		entries: [] as any[],
 		worldEvents: [] as any[],
+		rumors: [] as any[],
 		entryRelationships: [] as any[],
 		addCharacter: vi.fn(),
 		updateCharacterFromClassification: vi.fn(),
@@ -68,14 +69,10 @@ vi.mock('$lib/services/terminalWiki', () => ({
 
 vi.mock('$lib/services/database', () => databaseMocks);
 vi.mock('$lib/services/canonicalWrites', () => canonicalMocks);
-
-vi.mock('$lib/services/ai/scheme/SchemeService', () => ({
-	shouldEvaluate: vi.fn(() => false),
-	evaluate: vi.fn(),
-	tick: vi.fn(),
-}));
+vi.mock('$lib/services/ai/sdk/generate', () => ({ generateStructuredWithTools: vi.fn() }));
 
 import { executeToolCall } from './executor';
+import { generateStructuredWithTools } from '$lib/services/ai/sdk/generate';
 
 function resetStoryMock() {
 	vi.clearAllMocks();
@@ -101,6 +98,7 @@ function resetStoryMock() {
 	storyMock.items = [];
 	storyMock.entries = [];
 	storyMock.worldEvents = [];
+	storyMock.rumors = [];
 	storyMock.entryRelationships = [];
 	storyMock.addCharacter.mockResolvedValue(null);
 	storyMock.updateCharacterFromClassification.mockResolvedValue(undefined);
@@ -180,6 +178,79 @@ describe('executeToolCall update_world_state', () => {
 		expect(storyMock.updatePresence).toHaveBeenCalledWith(['Established Ally'], 'Old Gate');
 	});
 
+	it('advances local time without ticking antagonist schemes', async () => {
+		expect(JSON.parse(await executeToolCall('update_world_state', { time_delta: '1 day' }))).toEqual({ success: true });
+		expect(generateStructuredWithTools).not.toHaveBeenCalled();
+		expect(databaseMocks.updateStory).toHaveBeenCalled();
+	});
+
+	it('persists the full supported character continuity patch and applies affinity once per evidence entry', async () => {
+		storyMock.entries = [{ id: 'entry_turn_12', position: 12 }];
+		storyMock.lorebookEntries = [{
+			id: 'char-established',
+			storyId: 'story-1',
+			name: 'Established Ally',
+			type: 'character',
+			aliases: ['The Ally'],
+			state: {
+				type: 'character',
+				relationship: { level: 40, status: 'ally', history: [] },
+				eventMemory: { saw: ['the old seal'] },
+			},
+		} as any];
+		const update = {
+			characters: [{
+				name: 'Established Ally',
+				aliases: ['Harbor Witness'],
+				relationship: 'wary ally',
+				present: true,
+				pressures: ['The guild is closing in.'],
+				faction_tags: ['Harbor Guild'],
+				affinity_delta: -4,
+				affinity_reason: 'The player exposed the seal.',
+				current_location: 'Counting Room',
+				current_action: 'guarding the ledger',
+				emotional_state: 'controlled fear',
+				appearance: 'salt-stained blue coat',
+				background: 'Former guild auditor.',
+				goals: ['Protect her brother.'],
+				speech_style: 'precise and guarded',
+				eventMemory: { saw: ['the new ledger'], knows: ['who broke the seal'] },
+			}],
+		};
+
+		expect(JSON.parse(await executeToolCall('update_world_state', update))).toEqual({ success: true });
+		const [, patch] = canonicalMocks.patchCanonicalLorebookEntry.mock.calls[0];
+
+		expect(patch.aliases).toEqual(['The Ally', 'Harbor Witness']);
+		expect(patch.state).toMatchObject({
+			currentDisposition: 'wary ally',
+			present: true,
+			isPresent: true,
+			pressures: ['The guild is closing in.'],
+			factionTags: ['Harbor Guild'],
+			currentLocation: 'Counting Room',
+			currentAction: 'guarding the ledger',
+			emotionalState: 'controlled fear',
+			appearance: 'salt-stained blue coat',
+			bio: 'Former guild auditor.',
+			goals: ['Protect her brother.'],
+			speechStyle: 'precise and guarded',
+			relationship: {
+				level: 36,
+				status: 'wary ally',
+				history: [expect.objectContaining({ delta: -4, entryId: 'entry_turn_12' })],
+			},
+			eventMemory: {
+				saw: ['the old seal', 'the new ledger'],
+				knows: ['who broke the seal'],
+			},
+		});
+
+		await executeToolCall('update_world_state', update);
+		expect(canonicalMocks.patchCanonicalLorebookEntry).toHaveBeenCalledOnce();
+	});
+
 	it('keeps unknown faction members as unresolved context instead of dropping or creating them', async () => {
 		storyMock.lorebookEntries = [
 			{
@@ -244,5 +315,18 @@ describe('executeToolCall roll_check', () => {
 		expect(result.ok).toBe(true);
 		expect(result.result.dc).toBe(15);
 		expect(result.diceMarker).toContain('{{dice:1d20+3|');
+	});
+
+	it('uses the protagonist sheet for ability checks', async () => {
+		storyMock.protagonist = { metadata: { playerSheet: { abilities: { dex: 16 } } } };
+		const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+		try {
+			const result = JSON.parse(await executeToolCall('roll_check', {
+				notation: '1d20+99', dc: 15, ability: 'Stealth', description: 'Cross the rain-slick roof',
+			}));
+			expect(result.result.notation).toBe('1d20+3');
+		} finally {
+			random.mockRestore();
+		}
 	});
 });

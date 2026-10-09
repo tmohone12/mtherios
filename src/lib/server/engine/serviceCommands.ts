@@ -1,5 +1,9 @@
 import {
 	engineJobStatusArgsSchema,
+	engineRetryJobArgsSchema,
+	engineMemoryRecoveryArgsSchema,
+	engineRebuildSummariesArgsSchema,
+	SUMMARY_REBUILD_GENERATION_POLICY,
 	enginePlotBrainPlanArgsSchema,
 	engineRollupArcJobArgsSchema,
 	engineStoryVaultSyncJobArgsSchema,
@@ -20,18 +24,24 @@ import {
 } from '$lib/contracts/memory';
 import { retrieveMemoryPacket } from '$lib/server/memory/retrieval';
 import { applySyncOperation, getSyncChanges } from '$lib/server/memory/canonical';
-import { enqueueBackendJob } from '$lib/server/jobs/outbox';
-import { getBackendJobStats, runBackendJobNow, runDueBackendJobs } from '$lib/server/jobs/processor';
+import { backendJobRetryBlockReason, enqueueBackendJob, enqueueStoryVaultSyncJob, factionWorkerJobTypes, retryBackendJob } from '$lib/server/jobs/outbox';
+import { getBackendJobStats, recoverMemoryCoverage, runBackendJobNow, runDueBackendJobs } from '$lib/server/jobs/processor';
 import { getMtheriosAppConfig } from '$lib/server/app/config';
 import { listStoryVaultFreshnessItems } from '$lib/server/wiki/storyVault';
 import { getDb } from '$lib/server/db/client';
-import { agreements, arcs, backendJobs, chapters, entities, factionGoals, factionProjects, factions, memoryNodes, storyEntries, storyEvents, stories, storyThreads } from '$lib/server/db/schema';
+import { agreements, arcs, backendJobs, chapters, entities, factionGoals, factionMemberships, factionProjects, factionResources, factions, memoryNodes, relationships, storyEntries, storyEvents, stories, storyThreads } from '$lib/server/db/schema';
 import type { StrategicWorldBrainInput } from '$lib/services/ai/context/strategicWorldBrainInput';
+import { summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
+import { filterClosedStrategicCards } from '$lib/services/ai/context/strategicFramePromptCard';
 import { strategicWorldFrameSchema } from '$lib/services/ai/sdk/schemas/strategicWorldBrain';
-import { applyPlotBrainReconciliationPlan, buildPlotBrainReconciliationPlan, type PlotBrainApplyResult, type PlotBrainReconciliationInput, type PlotBrainReconciliationPlan } from '$lib/server/plotBrain/reconciler';
+import { applyPlotBrainReconciliationPlan, buildPlotBrainReconciliationPlan, frameStoryThreadIds, retirePlotBrainFrame, type PlotBrainApplyResult, type PlotBrainReconciliationInput, type PlotBrainReconciliationPlan } from '$lib/server/plotBrain/reconciler';
 import { planStrategicWorldFrameWithTerminal } from '$lib/server/plotBrain/planner';
+import { isWorldSimEligibleFaction } from '$lib/server/factions/autonomy';
+import { isNarrativeTimelineEvent } from '$lib/server/events/timeline';
+import { filterNarrativeContextEntries, loadCanonicalCharacters, NARRATOR_RECENT_ENTRY_LIMIT } from '$lib/server/turn/context';
+import { containsSceneActorMention } from '$lib/services/ai/context/sceneActorMention';
 import type { Agreement, Arc, Chapter, Entry, FactionActionRecord, FactionGoal, POV, RumorRecord, Scheme, Story, StoryEntry, StoryMode, StoryThread, StrategicBrainTrigger, StrategicWorldFrame, Tense, WorldEvent } from '$lib/types';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 
 type JsonRecord = Record<string, unknown>;
 type ServiceDb = ReturnType<typeof getDb>;
@@ -71,6 +81,7 @@ export interface RunDueJobsCommandInput {
 	workerId?: string;
 	limit?: number;
 	allStories?: boolean;
+	scope?: 'all' | 'faction';
 }
 
 export interface JobStatusCommandInput extends EngineJobStatusArgs {
@@ -110,8 +121,8 @@ function storyMode(value: unknown): StoryMode {
 	return value === 'creative-writing' ? 'creative-writing' : 'adventure';
 }
 
-function strategicTrigger(value: EnginePlotBrainPlanArgs['trigger']): StrategicBrainTrigger {
-	return (value === 'world_tick' || value === 'scheduled_refresh') ? 'manual' : value;
+export function strategicTrigger(value: EnginePlotBrainPlanArgs['trigger']): StrategicBrainTrigger {
+	return value;
 }
 
 function storyMetadataFrame(metadata: unknown): StrategicWorldFrame | null {
@@ -119,7 +130,7 @@ function storyMetadataFrame(metadata: unknown): StrategicWorldFrame | null {
 	const plotBrain = asRecord(root.plotBrain);
 	const candidate = asRecord(plotBrain.lastFrame ?? root.strategicWorldFrame);
 	const parsed = strategicWorldFrameSchema.safeParse(candidate);
-	return parsed.success ? parsed.data as unknown as StrategicWorldFrame : null;
+	return parsed.success ? filterClosedStrategicCards(parsed.data as unknown as StrategicWorldFrame, metadata) : null;
 }
 
 function mapStory(row: typeof stories.$inferSelect): Story {
@@ -169,15 +180,7 @@ function mapStoryEntry(row: typeof storyEntries.$inferSelect): StoryEntry {
 }
 
 function mapChapter(row: typeof chapters.$inferSelect): Chapter {
-	const summary = [
-		row.sceneOutcome,
-		...asStringArray(row.irreversibleChanges).map(item => `Irreversible: ${item}`),
-		...asStringArray(row.promisesDebtsOaths).map(item => `Promise/debt/oath: ${item}`),
-		...asStringArray(row.discoveredClues).map(item => `Clue: ${item}`),
-		...asStringArray(row.relationshipChanges).map(item => `Relationship: ${item}`),
-		...row.npcKnowledgeChanges.map(item => `NPC knowledge: ${JSON.stringify(item)}`),
-		...asStringArray(row.factionChanges).map(item => `Faction: ${item}`),
-	].filter(Boolean).join(' ');
+	const metadata = asRecord(row.metadata);
 	return {
 		id: row.id,
 		storyId: row.storyId,
@@ -186,14 +189,15 @@ function mapChapter(row: typeof chapters.$inferSelect): Chapter {
 		startEntryId: asStringArray(row.sourceEntryIds)[0] ?? '',
 		endEntryId: asStringArray(row.sourceEntryIds).slice(-1)[0] ?? '',
 		entryCount: asStringArray(row.sourceEntryIds).length,
-		summary,
+		sourceEntryIds: asStringArray(row.sourceEntryIds),
+		summary: summarizeMtheriosMemoryForRollup(row.sceneOutcome),
 		startTime: null,
 		endTime: null,
-		keywords: [],
-		characters: [],
-		locations: [],
+		keywords: asStringArray(metadata.legacyKeywords),
+		characters: asStringArray(metadata.legacyCharacters),
+		locations: asStringArray(metadata.legacyLocations),
 		plotThreads: asStringArray(row.openThreads),
-		emotionalTone: null,
+		emotionalTone: typeof metadata.emotionalTone === 'string' ? metadata.emotionalTone : null,
 		branchId: null,
 		createdAt: toTimestamp(row.createdAt),
 	};
@@ -232,7 +236,7 @@ function mapEntity(row: typeof entities.$inferSelect): Entry {
 		type: row.type as Entry['type'],
 		description: row.description ?? '',
 		hiddenInfo: row.visibility === 'secret' ? row.description ?? null : null,
-		aliases: [],
+		aliases: asStringArray(state.aliases),
 		state: state as unknown as Entry['state'],
 		adventureState: null,
 		creativeState: null,
@@ -248,19 +252,54 @@ function mapEntity(row: typeof entities.$inferSelect): Entry {
 	};
 }
 
-function mapFactionEntry(
+export function mapFactionEntry(
 	faction: typeof factions.$inferSelect,
 	entityById: Map<string, typeof entities.$inferSelect>,
 	goalsByFactionId: Map<string, Array<typeof factionGoals.$inferSelect>>,
+	normalized: {
+		memberships?: Array<typeof factionMemberships.$inferSelect>;
+		resources?: Array<typeof factionResources.$inferSelect>;
+		relations?: Array<typeof relationships.$inferSelect>;
+		factionNames?: Map<string, string>;
+		includeSecret?: boolean;
+	} = {},
 ): Entry {
 	const entity = faction.entityId ? entityById.get(faction.entityId) : null;
-	const resources = asRecord(faction.resources);
-	const goalsForFaction: FactionGoal[] = (goalsByFactionId.get(faction.id) ?? []).map(goal => ({
+	const state = asRecord(entity?.state);
+	const metadata = asRecord(faction.metadata);
+	const resources = { ...asRecord(faction.resources), ...asRecord(state.resources) };
+	const resourceRows = (normalized.resources ?? []).filter(row => row.factionId === faction.id);
+	const visibleResources = resourceRows.filter(row => normalized.includeSecret || row.visibility !== 'secret');
+	for (const row of resourceRows) delete resources[row.kind || row.name];
+	for (const row of visibleResources) {
+		const key = row.kind || row.name;
+		if (visibleResources.filter(other => (other.kind || other.name) === key).length === 1 && row.amount !== null && Number.isFinite(row.amount)) resources[key] = row.amount;
+	}
+	const membershipRows = (normalized.memberships ?? []).filter(row => row.factionId === faction.id);
+	const visibleMembers = membershipRows.filter(row => row.status === 'active' && (normalized.includeSecret || row.visibility !== 'secret'));
+	const storedGoals = goalsByFactionId.get(faction.id);
+	const goalsForFaction: FactionGoal[] = storedGoals ? storedGoals
+		.filter(goal => ['active', 'in_progress'].includes(goal.status) && (normalized.includeSecret || goal.secrecy !== 'secret'))
+		.sort((a, b) => b.priority - a.priority)
+		.slice(0, 6).map(goal => ({
 		description: goal.goal,
 		priority: goal.priority,
 		progress: typeof asRecord(goal.metadata).progress === 'number' ? asRecord(goal.metadata).progress as number : 0,
-		type: 'survival',
-	}));
+		type: (['military', 'diplomatic', 'economic', 'intelligence', 'survival', 'expansion'].includes(String(asRecord(goal.metadata).type))
+			? asRecord(goal.metadata).type : 'survival') as FactionGoal['type'],
+		...(optionalString(asRecord(goal.metadata).deadline) ? { deadline: optionalString(asRecord(goal.metadata).deadline) } : {}),
+	})) : (Array.isArray(state.goals) && state.goals.length ? state.goals : asStringArray(faction.goals))
+		.flatMap(value => {
+			const goal = typeof value === 'string' ? { description: value } : asRecord(value);
+			if (!optionalString(goal.description) || ['closed', 'completed', 'abandoned', 'cancelled'].includes(String(goal.status))) return [];
+			return [{ ...goal, description: String(goal.description), priority: typeof goal.priority === 'number' ? goal.priority : 5,
+				progress: typeof goal.progress === 'number' ? goal.progress : 0, type: optionalString(goal.type) ?? 'survival' } as FactionGoal];
+		});
+	const nameFor = (id: string) => normalized.factionNames?.get(id) ?? entityById.get(id)?.name ?? id;
+	const recordedRelations = (normalized.relations ?? [])
+		.filter(row => (row.sourceEntityId === faction.entityId || row.targetEntityId === faction.entityId)
+			&& (normalized.includeSecret || asRecord(row.metadata).visibility !== 'secret'))
+		.map(row => `${row.targetEntityId === faction.entityId && !row.bidirectional ? 'incoming ' : ''}${row.label || row.type}: ${nameFor(row.sourceEntityId === faction.entityId ? row.targetEntityId : row.sourceEntityId)} (strength ${row.strength})`);
 	return {
 		...(entity ? mapEntity(entity) : mapEntity({
 			id: faction.entityId ?? faction.id,
@@ -282,23 +321,26 @@ function mapFactionEntry(
 		id: faction.id,
 		name: faction.name,
 		type: 'faction',
-		description: entity?.description ?? goalsForFaction.map(goal => goal.description).join('; '),
+		description: optionalString(entity?.description) ?? optionalString(metadata.description) ?? optionalString(state.background) ?? optionalString(metadata.background) ?? '',
 		state: {
+			...state,
 			type: 'faction',
-			playerStanding: 0,
-			status: 'unknown',
-			knownMembers: asStringArray(faction.memberEntityIds),
+			identity: optionalString(state.identity) ?? optionalString(metadata.identity),
+			playerStanding: typeof state.playerStanding === 'number' ? state.playerStanding : undefined,
+			status: optionalString(state.status) ?? 'unknown',
+			knownMembers: membershipRows.length ? visibleMembers.flatMap(row => row.entityId ? [row.entityId] : [])
+				: [...new Set([...asStringArray(state.knownMembers), ...asStringArray(faction.memberEntityIds)])],
+			unresolvedKnownMembers: membershipRows.length ? visibleMembers.flatMap(row => !row.entityId && optionalString(asRecord(row.metadata).memberNameOrId) ? [String(asRecord(row.metadata).memberNameOrId)] : []) : asStringArray(state.unresolvedKnownMembers),
 			goals: goalsForFaction,
-			resources: {
-				military: typeof resources.military === 'number' ? resources.military : faction.pressure,
-				wealth: typeof resources.wealth === 'number' ? resources.wealth : 50,
-				influence: typeof resources.influence === 'number' ? resources.influence : 50,
-				information: typeof resources.information === 'number' ? resources.information : 50,
-				morale: typeof resources.morale === 'number' ? resources.morale : 50,
-			},
-			disposition: faction.pressure >= 70 ? 'aggressive' : faction.pressure >= 40 ? 'scheming' : 'neutral',
-			territory: asStringArray(faction.territoryIds),
-		},
+			resources,
+			recordedResources: visibleResources.map(row => `${row.name}: ${row.amount ?? 'unquantified'} (${row.kind}, ${row.status})`),
+			recordedRelations,
+			allies: asStringArray(faction.allies).map(nameFor),
+			enemies: asStringArray(faction.enemies).map(nameFor),
+			disposition: optionalString(state.disposition),
+			pressure: faction.pressure,
+			territory: [...new Set([...asStringArray(faction.territoryIds), ...asStringArray(state.territory)])].map(nameFor),
+		} as unknown as Entry['state'],
 	};
 }
 
@@ -349,17 +391,28 @@ function mapWorldEvent(row: typeof storyEvents.$inferSelect): WorldEvent {
 }
 
 function mapFactionAction(row: typeof storyEvents.$inferSelect): FactionActionRecord {
+	const metadata = asRecord(row.metadata);
+	const urgencyValue = optionalString(metadata.urgency);
+	const urgency: FactionActionRecord['urgency'] = urgencyValue === 'low'
+		|| urgencyValue === 'high'
+		|| urgencyValue === 'critical'
+		? urgencyValue
+		: 'medium';
 	return {
 		id: row.id,
 		storyId: row.storyId,
-		factionName: asStringArray(row.factionIds)[0] ?? 'Unknown faction',
-		action: row.body,
-		actionType: row.type,
-		target: asStringArray(row.targetEntityIds)[0] ?? null,
-		motivation: null,
-		consequences: asStringArray(asRecord(row.memoryImpact).consequences),
-		urgency: 'medium',
-		affectedRegions: asStringArray(row.locationIds),
+		factionName: optionalString(metadata.factionName) ?? asStringArray(row.factionIds)[0] ?? 'Unknown faction',
+		action: optionalString(metadata.action) ?? row.body,
+		actionType: optionalString(metadata.actionType) ?? row.type,
+		target: optionalString(metadata.target) ?? asStringArray(row.targetEntityIds)[0] ?? null,
+		motivation: optionalString(metadata.motivation) ?? null,
+		consequences: asStringArray(metadata.consequences).length > 0
+			? asStringArray(metadata.consequences)
+			: asStringArray(asRecord(row.memoryImpact).consequences),
+		urgency,
+		affectedRegions: asStringArray(metadata.affectedRegions).length > 0
+			? asStringArray(metadata.affectedRegions)
+			: asStringArray(row.locationIds),
 		chapterNumber: null,
 		status: row.status === 'committed' ? 'active' : 'resolved',
 		createdAt: toTimestamp(row.createdAt),
@@ -398,7 +451,7 @@ function mapProjectScheme(row: typeof factionProjects.$inferSelect, factionName:
 		stages: [{ index: 0, label: row.status, hook: row.project, condition: 'time', conditionPayload: { dueTurn: row.dueTurn, worldTime: row.worldTime }, completed: row.status === 'completed', completedAt: null }],
 		currentStageIndex: 0,
 		pressure: Math.max(0, Math.min(100, Math.round(row.priority * 10 + row.progress * 50))),
-		status: row.status === 'planned' ? 'incubating' : row.status === 'completed' ? 'resolved' : 'active',
+		status: row.status === 'planned' ? 'incubating' : row.status === 'completed' ? 'resolved' : row.status === 'cancelled' ? 'abandoned' : 'active',
 		secrecy: row.visibility === 'secret' ? 'secret' : row.visibility === 'rumored' ? 'rumored' : 'known',
 		nextTickAtDay: row.dueTurn ?? null,
 		branchId: null,
@@ -434,6 +487,7 @@ export interface PlotBrainPlanCommandInput {
 	contextBudget?: number;
 	serverVersion?: number;
 	frameId?: string;
+	replacePendingFrameId?: string;
 }
 
 export interface PlotBrainPlanCommandDeps {
@@ -442,6 +496,12 @@ export interface PlotBrainPlanCommandDeps {
 	loadDraft?: (storyId: string, frameId: string) => Promise<StoredPlotBrainDraft>;
 	buildPlan?: (input: PlotBrainReconciliationInput) => PlotBrainReconciliationPlan;
 	applyPlan?: (plan: PlotBrainReconciliationPlan) => Promise<PlotBrainApplyResult>;
+	enqueueStoryVaultSync?: (input: {
+		storyId: string;
+		serverVersion: number;
+		reason: string;
+		payload: Record<string, unknown>;
+	}) => Promise<string>;
 	persistFrame?: (input: {
 		storyId: string;
 		frame: StrategicWorldFrame;
@@ -450,8 +510,95 @@ export interface PlotBrainPlanCommandDeps {
 		currentTurn: number;
 		now: string;
 		status: 'pending' | 'applied';
+		expectedPendingFrameId?: string | null;
+		replaceStalePendingFrameId?: string | null;
 	}) => Promise<void>;
 	now?: () => string;
+}
+
+export function selectStrategicRecentEntries(
+	rows: Array<typeof storyEntries.$inferSelect>,
+): Array<typeof storyEntries.$inferSelect> {
+	return filterNarrativeContextEntries(rows).slice(0, 24);
+}
+
+export function selectStrategicFactionRows(
+	rows: Array<typeof factions.$inferSelect>,
+	entityById: Map<string, typeof entities.$inferSelect>,
+	context: {
+		sceneText?: string;
+		currentLocationId?: string | null;
+		linkedFactionIds?: string[];
+		linkedEntityIds?: string[];
+		memberships?: Array<typeof factionMemberships.$inferSelect>;
+	} = {},
+): Array<typeof factions.$inferSelect> {
+	const normalize = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+	const scene = context.sceneText ?? '';
+	const mentioned = (entity: typeof entities.$inferSelect) => [entity.name, ...asStringArray(asRecord(entity.state).aliases)]
+		.some(name => name.trim() && containsSceneActorMention(scene, name));
+	const sceneCharacters = [...entityById.values()].filter(entity => entity.type === 'character' && mentioned(entity));
+	const sceneMemberIds = new Set([...sceneCharacters.map(entity => entity.id), ...(context.linkedEntityIds ?? [])]);
+	const affiliations = new Set(sceneCharacters.flatMap(entity => {
+		const state = asRecord(entity.state);
+		return [...asStringArray(state.factionTags), ...asStringArray(state.faction_tags)];
+	}).map(normalize));
+	const namedLocations = [...entityById.values()].filter(entity => entity.type === 'location' && mentioned(entity));
+	const localRefs = new Set((namedLocations.length ? namedLocations.flatMap(entity => [entity.id, entity.name])
+		: [context.currentLocationId ?? '', entityById.get(context.currentLocationId ?? '')?.name ?? '']).map(normalize));
+	localRefs.delete('');
+	const linked = new Set((context.linkedFactionIds ?? []).map(normalize));
+	return rows
+		.filter(row => isWorldSimEligibleFaction(row, row.entityId ? entityById.get(row.entityId) : null))
+		.map((row, index) => {
+			const entity = entityById.get(row.entityId ?? '');
+			const state = asRecord(entity?.state);
+			const refs = [row.id, row.entityId ?? '', row.name ?? '', ...asStringArray(state.aliases)].map(normalize).filter(Boolean);
+			const membershipRows = (context.memberships ?? []).filter(member => member.factionId === row.id);
+			const memberIds = membershipRows.length
+				? membershipRows.filter(member => member.status === 'active').map(member => member.entityId ?? '')
+				: [...asStringArray(row.memberEntityIds), ...asStringArray(state.knownMembers)];
+			const score = ((entity && mentioned(entity)) || (row.name && containsSceneActorMention(scene, row.name)) ? 40 : 0)
+				+ ([...asStringArray(row.territoryIds), ...asStringArray(state.territory)].some(ref => localRefs.has(normalize(ref))) ? 30 : 0)
+				+ (memberIds.some(id => sceneMemberIds.has(id)) || refs.some(ref => affiliations.has(ref)) ? 25 : 0)
+				+ (refs.some(ref => linked.has(ref)) ? 20 : 0)
+				+ Math.min(10, Math.max(0, row.pressure ?? 0) / 10);
+			return { row, score, index };
+		})
+		.sort((a, b) => b.score - a.score || a.index - b.index)
+		.slice(0, 40).map(item => item.row);
+}
+
+export function selectStrategicThreadRows(
+	rows: Array<typeof storyThreads.$inferSelect>,
+): Array<typeof storyThreads.$inferSelect> {
+	return rows.filter(row => row.sourceEntryIds.length > 0
+		|| row.sourceEventIds.length > 0
+		|| row.sourcePatchIds.length > 0);
+}
+
+export function selectStrategicEventRows(
+	rows: Array<typeof storyEvents.$inferSelect>,
+	eligibleFactionIds: Set<string>,
+	playerEntityId?: string,
+): Array<typeof storyEvents.$inferSelect> {
+	return rows.filter(row => {
+		if (!isNarrativeTimelineEvent(row)) return false;
+		const sourceType = optionalString(asRecord(row.metadata).sourceType);
+		if (sourceType === 'npc_independent_action' && playerEntityId && row.actorEntityIds.includes(playerEntityId)) return false;
+		const autonomousFactionEvent = row.type === 'faction_move'
+			|| row.type === 'faction_signal'
+			|| sourceType === 'terminal_world_sim_tick'
+			|| sourceType === 'terminal_world_sim_signal';
+		return !autonomousFactionEvent
+			|| asStringArray(row.factionIds).some(factionId => eligibleFactionIds.has(factionId));
+	}).slice(0, 80);
+}
+
+export function selectStrategicAgreementRows(
+	rows: Array<typeof agreements.$inferSelect>,
+): Array<typeof agreements.$inferSelect> {
+	return rows.filter(row => row.status === 'active' || row.status === 'contested').slice(0, 40);
 }
 
 export async function runMemoryRetrieveCommand(input: MemoryRetrieveRequest): Promise<RetrievedMemoryPacket> {
@@ -542,25 +689,40 @@ export async function loadStrategicWorldBrainInputFromDb(input: PlotBrainPlanCom
 	const [storyRow] = await db.select().from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (!storyRow) throw new Error(`Story not found: ${storyId}`);
 
-	const [entryRows, entityRows, factionRows, goalRows, projectRows, chapterDbRows, arcDbRows, threadRows, eventRows, agreementRows, memoryRows] = await Promise.all([
-		db.select().from(storyEntries).where(eq(storyEntries.storyId, storyId)).orderBy(desc(storyEntries.position)).limit(24),
+	const [entryRows, entityRows, factionRows, goalRows, projectRows, chapterDbRows, arcDbRows, threadRows, eventRows, agreementRows, memoryRows, characterRows, membershipRows, resourceRows] = await Promise.all([
+		db.select().from(storyEntries).where(eq(storyEntries.storyId, storyId)).orderBy(desc(storyEntries.position)).limit(NARRATOR_RECENT_ENTRY_LIMIT),
 		db.select().from(entities).where(eq(entities.storyId, storyId)).orderBy(asc(entities.type), asc(entities.name)).limit(120),
-		db.select().from(factions).where(eq(factions.storyId, storyId)).orderBy(desc(factions.pressure), asc(factions.name)).limit(40),
-		db.select().from(factionGoals).where(eq(factionGoals.storyId, storyId)).orderBy(desc(factionGoals.priority), asc(factionGoals.goal)).limit(120),
-		db.select().from(factionProjects).where(eq(factionProjects.storyId, storyId)).orderBy(desc(factionProjects.priority), desc(factionProjects.updatedAt)).limit(80),
+		db.select().from(factions).where(eq(factions.storyId, storyId)).orderBy(desc(factions.pressure), asc(factions.name)),
+		db.select().from(factionGoals).where(eq(factionGoals.storyId, storyId)).orderBy(desc(factionGoals.priority), asc(factionGoals.goal)),
+		db.select().from(factionProjects).where(eq(factionProjects.storyId, storyId)).orderBy(desc(factionProjects.priority), desc(factionProjects.updatedAt)),
 		db.select().from(chapters).where(eq(chapters.storyId, storyId)).orderBy(desc(chapters.number)).limit(24),
 		db.select().from(arcs).where(eq(arcs.storyId, storyId)).orderBy(desc(arcs.number)).limit(8),
-		db.select().from(storyThreads).where(eq(storyThreads.storyId, storyId)).orderBy(desc(storyThreads.updatedAt)).limit(80),
-		db.select().from(storyEvents).where(eq(storyEvents.storyId, storyId)).orderBy(desc(storyEvents.createdAt)).limit(80),
-		db.select().from(agreements).where(eq(agreements.storyId, storyId)).orderBy(desc(agreements.updatedAt)).limit(40),
+		db.select().from(storyThreads).where(eq(storyThreads.storyId, storyId))
+			.orderBy(sql`case when ${storyThreads.status} in ('closed', 'abandoned') then 1 else 0 end`, desc(storyThreads.updatedAt)).limit(80),
+		db.select().from(storyEvents).where(eq(storyEvents.storyId, storyId)).orderBy(desc(storyEvents.createdAt)).limit(320),
+		db.select().from(agreements).where(and(eq(agreements.storyId, storyId), sql`${agreements.status} != 'deleted'`)).orderBy(desc(agreements.updatedAt)).limit(40),
 		db.select().from(memoryNodes).where(eq(memoryNodes.storyId, storyId)).orderBy(desc(memoryNodes.importance), desc(memoryNodes.updatedAt)).limit(80),
+		loadCanonicalCharacters(storyId),
+		db.select().from(factionMemberships).where(eq(factionMemberships.storyId, storyId)),
+		db.select().from(factionResources).where(eq(factionResources.storyId, storyId)),
 	]);
-	const visibleEntityRows = input.includeSecret ? entityRows : entityRows.filter(row => row.visibility !== 'secret');
-	const visibleGoalRows = input.includeSecret ? goalRows : goalRows.filter(row => row.secrecy !== 'secret');
+	const linkedFactionEntityIds = factionRows.flatMap(row => row.entityId ? [row.entityId] : []);
+	const linkedEntityIds = [...new Set([...linkedFactionEntityIds, ...factionRows.flatMap(row => asStringArray(row.territoryIds)), ...(storyRow.currentLocationId ? [storyRow.currentLocationId] : [])])];
+	const [linkedEntities, relationRows] = await Promise.all([
+		linkedEntityIds.length ? db.select().from(entities).where(and(eq(entities.storyId, storyId), inArray(entities.id, linkedEntityIds))) : Promise.resolve([]),
+		linkedFactionEntityIds.length ? db.select().from(relationships).where(and(eq(relationships.storyId, storyId), or(inArray(relationships.sourceEntityId, linkedFactionEntityIds), inArray(relationships.targetEntityId, linkedFactionEntityIds)))) : Promise.resolve([]),
+	]);
+	const allEntities = [...new Map([...entityRows, ...characterRows, ...linkedEntities].map(row => [row.id, row])).values()];
+	const allEntityById = new Map(allEntities.map(row => [row.id, row]));
+	const visibleEntityRows = input.includeSecret ? allEntities : allEntities.filter(row => row.visibility !== 'secret');
+	const visibleMembershipRows = input.includeSecret ? membershipRows : membershipRows.filter(row => row.visibility !== 'secret');
 	const visibleProjectRows = input.includeSecret ? projectRows : projectRows.filter(row => row.visibility !== 'secret');
 	const visibleEventRows = input.includeSecret ? eventRows : eventRows.filter(row => row.visibility !== 'secret');
-	const visibleAgreementRows = input.includeSecret ? agreementRows : agreementRows.filter(row => row.secrecy !== 'secret');
-	const visibleMemoryRows = input.includeSecret ? memoryRows : memoryRows.filter(row => row.visibility !== 'secret');
+	const visibleAgreementRows = selectStrategicAgreementRows(
+		input.includeSecret ? agreementRows : agreementRows.filter(row => row.secrecy !== 'secret'),
+	);
+	const visibleMemoryRows = memoryRows.filter(row => asRecord(row.metadata).playerDeleted !== true && (input.includeSecret || row.visibility !== 'secret'));
+	const narrativeEntryRows = selectStrategicRecentEntries(entryRows);
 
 	const chapterModels = chapterDbRows.slice().reverse().map(mapChapter);
 	const arcModels = arcDbRows.slice().reverse().map(row => mapArc(row, chapterModels));
@@ -568,18 +730,46 @@ export async function loadStrategicWorldBrainInputFromDb(input: PlotBrainPlanCom
 	const uncoveredChapters = chapterModels.filter(chapter => !completedChapterIds.has(chapter.id));
 	const currentArcChapters = uncoveredChapters.length > 0 ? uncoveredChapters.slice(-8) : chapterModels.slice(-8);
 	const entityById = new Map<string, typeof entities.$inferSelect>(visibleEntityRows.map(row => [row.id, row]));
+	const eligibleFactionRows = factionRows.filter(row => isWorldSimEligibleFaction(row, allEntityById.get(row.entityId ?? ''))
+		&& (input.includeSecret || (allEntityById.get(row.entityId ?? '')?.visibility !== 'secret' && asRecord(row.metadata).visibility !== 'secret')));
+	const eligibleFactionIds = new Set(eligibleFactionRows.map(row => row.id));
+	const playerEntityId = asRecord(storyRow.settings).playerEntityId;
+	const strategicEventRows = selectStrategicEventRows(visibleEventRows, eligibleFactionIds, typeof playerEntityId === 'string' ? playerEntityId : undefined);
+	const previousFrame = input.includeSecret ? storyMetadataFrame(storyRow.metadata) : null;
+	const dossierFactionRows = selectStrategicFactionRows(eligibleFactionRows, entityById, {
+		sceneText: narrativeEntryRows.slice(0, 2).map(row => row.content).join('\n'),
+		currentLocationId: storyRow.currentLocationId,
+		memberships: visibleMembershipRows,
+		linkedFactionIds: [...strategicEventRows.slice(0, 24).flatMap(row => asStringArray(row.factionIds)),
+			...visibleProjectRows.filter(row => ['planned', 'active'].includes(row.status)).slice(0, 24).map(row => row.factionId),
+			...(previousFrame?.factionOperations ?? []).map(operation => operation.factionName)],
+		linkedEntityIds: (previousFrame?.plotCards ?? []).filter(card => card.lifecycleStage !== 'resolved' && card.lifecycleStage !== 'dormant')
+			.flatMap(card => [...card.actorEntityIds, ...card.targetEntityIds]),
+	});
+	const dossierFactionIds = new Set(dossierFactionRows.map(row => row.id));
+	const strategicThreadRows = selectStrategicThreadRows(threadRows);
+	const eligibleGoalRows = goalRows.filter(row => dossierFactionIds.has(row.factionId));
+	const eligibleProjectRows = visibleProjectRows.filter(row => eligibleFactionIds.has(row.factionId))
+		.sort((a, b) => Number(!['planned', 'active'].includes(a.status)) - Number(!['planned', 'active'].includes(b.status)))
+		.slice(0, 80);
 	const goalsByFactionId = new Map<string, Array<typeof factionGoals.$inferSelect>>();
-	for (const row of visibleGoalRows) {
+	for (const row of eligibleGoalRows) {
 		const rows = goalsByFactionId.get(row.factionId) ?? [];
 		rows.push(row);
 		goalsByFactionId.set(row.factionId, rows);
 	}
-	const factionNameById = new Map(factionRows.map(row => [row.id, row.name]));
+	const factionNameById = new Map(eligibleFactionRows.map(row => [row.id, row.name]));
 	const mappedFactions = factionRows.length > 0
-		? factionRows.map(row => mapFactionEntry(row, entityById, goalsByFactionId))
-		: visibleEntityRows.filter(row => row.type === 'faction').map(mapEntity);
+		? dossierFactionRows.map(row => mapFactionEntry(row, entityById, goalsByFactionId, {
+			memberships: membershipRows, resources: resourceRows, relations: relationRows, factionNames: factionNameById, includeSecret: input.includeSecret,
+		}))
+		: visibleEntityRows
+			.filter(row => row.type === 'faction' && isWorldSimEligibleFaction(row, row))
+			.slice(0, 40)
+			.map(mapEntity);
 	const mappedCharacters = visibleEntityRows.filter(row => row.type === 'character').map(mapEntity);
-	const schemes = visibleProjectRows.map(row => mapProjectScheme(row, factionNameById.get(row.factionId) ?? row.factionId));
+	const schemes = eligibleProjectRows
+		.map(row => mapProjectScheme(row, factionNameById.get(row.factionId) ?? row.factionId));
 	const strategicStory = mapStory(storyRow);
 
 	return {
@@ -590,19 +780,20 @@ export async function loadStrategicWorldBrainInputFromDb(input: PlotBrainPlanCom
 		relevantOlderArcs: arcModels.slice(0, Math.max(0, arcModels.length - 4)),
 		currentArcChapters,
 		recentChapters: chapterModels.slice(-8),
-		recentEntries: entryRows.slice().reverse().map(mapStoryEntry),
+		recentEntries: narrativeEntryRows.slice().reverse().map(mapStoryEntry),
 		factions: mappedFactions,
 		characters: mappedCharacters,
 		activeSchemes: schemes.filter(scheme => scheme.status !== 'resolved' && scheme.status !== 'foiled' && scheme.status !== 'abandoned'),
 		recentlyResolvedSchemes: schemes.filter(scheme => scheme.status === 'resolved' || scheme.status === 'foiled' || scheme.status === 'abandoned').slice(-8),
-		storyThreads: threadRows.map(mapThread),
-		worldEvents: visibleEventRows.slice().reverse().map(mapWorldEvent),
+		storyThreads: strategicThreadRows.map(mapThread),
+		worldEvents: strategicEventRows.slice().reverse().map(mapWorldEvent),
 		rumors: visibleMemoryRows.filter(row => row.type === 'rumor' || row.type === 'plot_ledger').slice(0, 20).map(mapRumor),
 		agreements: visibleAgreementRows.map(mapAgreement),
-		factionActions: visibleEventRows.filter(row => row.type === 'faction_move').slice().reverse().map(mapFactionAction),
+		factionActions: strategicEventRows.filter(row => row.type === 'faction_move').slice().reverse().map(mapFactionAction),
 		playerLedger: strategicStory.playerLedger ?? null,
 		playerReputation: strategicStory.playerReputation ?? null,
-		previousStrategicFrame: storyMetadataFrame(storyRow.metadata),
+		previousStrategicFrame: previousFrame,
+		retiredPlotDirectives: asStringArray(asRecord(asRecord(storyRow.metadata).plotBrain).retiredPlotDirectives),
 		mode: strategicStory.mode,
 		pov: 'second' as POV,
 		tense: 'present' as Tense,
@@ -612,8 +803,10 @@ export async function loadStrategicWorldBrainInputFromDb(input: PlotBrainPlanCom
 		contextBudget: input.contextBudget,
 		includeSecret: input.includeSecret,
 		knownEntityIds: visibleEntityRows.map(row => row.id),
-		knownFactionIds: factionRows.map(row => row.id),
-		knownThreadIds: threadRows.map(row => row.id),
+		knownFactionIds: factionRows.length ? [...eligibleFactionIds] : mappedFactions.map(row => row.id),
+		knownThreadIds: strategicThreadRows
+			.filter(row => row.status !== 'closed' && row.status !== 'abandoned')
+			.map(row => row.id),
 	};
 }
 
@@ -640,7 +833,7 @@ async function loadStoredPlotBrainDraft(storyId: string, frameId: string): Promi
 	};
 }
 
-async function persistStrategicPlotBrainFrame(input: {
+export async function persistStrategicPlotBrainFrame(input: {
 	storyId: string;
 	frame: StrategicWorldFrame;
 	serverVersion: number;
@@ -648,11 +841,27 @@ async function persistStrategicPlotBrainFrame(input: {
 	currentTurn: number;
 	now: string;
 	status: 'pending' | 'applied';
+	expectedPendingFrameId?: string | null;
+	replaceStalePendingFrameId?: string | null;
 }, db: ServiceDb | ServiceTx = getDb()): Promise<void> {
 	const [storyRow] = await db.select().from(stories).where(eq(stories.id, input.storyId)).limit(1);
 	if (!storyRow) throw new Error(`Story not found: ${input.storyId}`);
 	const metadata = asRecord(storyRow.metadata);
 	const plotBrain = { ...asRecord(metadata.plotBrain) };
+	const closedThreadIds = new Set(asStringArray(plotBrain.closedThreadIds));
+	const boundIds = frameStoryThreadIds(input.storyId, input.frame);
+	input = { ...input, frame: { ...input.frame, plotCards: input.frame.plotCards
+		.map((card, index) => ({ ...card, storyThreadId: boundIds[index] }))
+		.filter(card => !closedThreadIds.has(card.storyThreadId) && !card.sourceRefs?.some(ref => Object.hasOwn(asRecord(metadata.deletedCommitments), `${ref.sourceType}:${ref.sourceId}`))) } };
+	const replaceStalePendingFrameId = input.replaceStalePendingFrameId?.trim() || null;
+	if (replaceStalePendingFrameId) {
+		const storedPendingFrame = asRecord(plotBrain.pendingFrame);
+		if (plotBrain.pendingFrameId !== replaceStalePendingFrameId || storedPendingFrame.id !== replaceStalePendingFrameId) {
+			throw new Error('The stale Plot Director draft changed before it could be replaced.');
+		}
+		// An explicit matching id may replace a reviewed draft; the update below also
+		// guards the story version and draft id against concurrent changes.
+	}
 	if (input.status === 'pending') {
 		Object.assign(plotBrain, {
 			pendingFrame: input.frame,
@@ -667,13 +876,27 @@ async function persistStrategicPlotBrainFrame(input: {
 		delete plotBrain.pendingBaseServerVersion;
 		delete plotBrain.pendingCurrentTurn;
 		delete plotBrain.pendingPlanAt;
+		delete plotBrain.needsDevelopment;
+		delete plotBrain.developmentChapterId;
+		delete plotBrain.developmentChapterNumber;
+		const active = input.frame.plotCards.length > 0 && input.frame.activationPlan.activateNow.length > 0;
+		if (active) delete plotBrain.quietUntilTurn;
 		Object.assign(plotBrain, {
 			lastFrame: input.frame,
 			lastFrameId: input.frame.id,
 			lastPlanAt: input.now,
+			lastFrameTurn: input.currentTurn,
+			active,
+			...(!active ? { quietUntilTurn: input.currentTurn + 5 } : {}),
 			plotCardCount: input.frame.plotCards.length,
 		});
 	}
+	const guardedPendingFrameId = input.expectedPendingFrameId ?? replaceStalePendingFrameId;
+	const pendingFrameGuard = guardedPendingFrameId
+		? sql`${stories.metadata}->'plotBrain'->>'pendingFrameId' = ${guardedPendingFrameId}
+			and ${stories.metadata}->'plotBrain'->'pendingFrame'->>'id' = ${guardedPendingFrameId}`
+		: sql`coalesce(${stories.metadata}->'plotBrain'->>'pendingFrameId', '') = ''
+			and coalesce(jsonb_typeof(${stories.metadata}->'plotBrain'->'pendingFrame'), 'null') = 'null'`;
 	const updated = await db.update(stories).set({
 		metadata: {
 			...metadata,
@@ -681,7 +904,11 @@ async function persistStrategicPlotBrainFrame(input: {
 		},
 		...(input.status === 'applied' ? { serverVersion: input.serverVersion } : {}),
 		updatedAt: input.now,
-	}).where(and(eq(stories.id, input.storyId), eq(stories.serverVersion, input.baseServerVersion))).returning({ id: stories.id });
+	}).where(and(
+		eq(stories.id, input.storyId),
+		eq(stories.serverVersion, input.baseServerVersion),
+		pendingFrameGuard,
+	)).returning({ id: stories.id });
 	if (updated.length !== 1) throw new Error('Story changed while the plot frame was being planned or applied. Draft again.');
 }
 
@@ -729,15 +956,41 @@ export async function runPlotBrainPlanCommand(
 		proposalCount: reconciliation.patchProposals.length,
 	};
 	let applied: PlotBrainApplyResult | null = null;
+	let storyVaultSyncJobId: string | null = null;
 	if (args.execute) {
-		const persisted = { storyId, frame, serverVersion, baseServerVersion, currentTurn, now, status: 'applied' as const };
+		const persisted = {
+			storyId,
+			frame,
+			serverVersion,
+			baseServerVersion,
+			currentTurn,
+			now,
+			status: 'applied' as const,
+			expectedPendingFrameId: args.frameId ?? null,
+			replaceStalePendingFrameId: args.replacePendingFrameId ?? null,
+		};
+		const vaultSync = {
+			storyId,
+			serverVersion,
+			reason: 'plot-brain-apply',
+			payload: {
+				clean: true,
+				index: true,
+				frameId: frame.id,
+				trigger: frame.trigger,
+			},
+		};
 		if (deps.applyPlan || deps.persistFrame) {
 			applied = await (deps.applyPlan ?? applyPlotBrainReconciliationPlan)(reconciliation);
 			await (deps.persistFrame ?? persistStrategicPlotBrainFrame)(persisted);
+			storyVaultSyncJobId = await (deps.enqueueStoryVaultSync ?? enqueueStoryVaultSyncJob)(vaultSync);
 		} else {
 			await getDb().transaction(async (tx) => {
 				applied = await applyPlotBrainReconciliationPlan(reconciliation, { db: tx });
 				await persistStrategicPlotBrainFrame(persisted, tx);
+				storyVaultSyncJobId = deps.enqueueStoryVaultSync
+					? await deps.enqueueStoryVaultSync(vaultSync)
+					: await enqueueStoryVaultSyncJob(vaultSync, tx);
 			});
 		}
 	} else {
@@ -749,6 +1002,7 @@ export async function runPlotBrainPlanCommand(
 			currentTurn,
 			now,
 			status: 'pending',
+			replaceStalePendingFrameId: args.replacePendingFrameId ?? null,
 		});
 	}
 
@@ -766,6 +1020,7 @@ export async function runPlotBrainPlanCommand(
 		...counts,
 		warnings: reconciliation.warnings,
 		applied,
+		storyVaultSyncJobId,
 		frame,
 		reconciliation: {
 			storyThreads: reconciliation.storyThreads.map(row => row.id),
@@ -775,6 +1030,40 @@ export async function runPlotBrainPlanCommand(
 			patchProposals: reconciliation.patchProposals.map(row => row.id),
 		},
 	};
+}
+
+export async function runPlotBrainRetireCommand(input: {
+	storyId: string;
+	reason: string;
+	quietTurns?: number;
+	serverVersion?: number;
+}): Promise<JsonRecord> {
+	const now = new Date().toISOString();
+	return getDb().transaction(async (tx) => {
+		const [story] = await tx.select({
+			currentTurn: stories.currentTurn,
+			serverVersion: stories.serverVersion,
+		}).from(stories).where(eq(stories.id, input.storyId)).limit(1);
+		if (!story) throw new Error(`Story not found: ${input.storyId}`);
+		if (input.serverVersion != null && input.serverVersion !== story.serverVersion) {
+			throw new Error(`Story version conflict: expected ${input.serverVersion}, current ${story.serverVersion}.`);
+		}
+		const serverVersion = story.serverVersion + 1;
+		const bumped = await tx.update(stories).set({ serverVersion, updatedAt: now }).where(and(
+			eq(stories.id, input.storyId),
+			eq(stories.serverVersion, story.serverVersion),
+		)).returning({ id: stories.id });
+		if (bumped.length !== 1) throw new Error('Story changed while retiring Plot Director pressure.');
+		const result = await retirePlotBrainFrame({
+			storyId: input.storyId,
+			currentTurn: story.currentTurn,
+			serverVersion,
+			reason: input.reason,
+			quietTurns: input.quietTurns,
+			now,
+		}, { db: tx });
+		return { storyId: input.storyId, serverVersion, ...result };
+	});
 }
 
 export async function runReindexStoryJobCommand(input: unknown): Promise<JsonRecord> {
@@ -808,13 +1097,46 @@ export async function listBackendJobsCommand(input: JobStatusCommandInput | Json
 	const rows = await getDb()
 		.select()
 		.from(backendJobs)
-		.where(storyId ? eq(backendJobs.storyId, storyId) : undefined)
+		.where(and(storyId ? eq(backendJobs.storyId, storyId) : undefined, args.status ? eq(backendJobs.status, args.status) : undefined))
 		.orderBy(desc(backendJobs.updatedAt))
 		.limit(args.limit);
 	return {
 		stats: await getBackendJobStats(storyId),
-		jobs: rows,
+		jobs: rows.map((row) => {
+			const retryReason = backendJobRetryBlockReason(row);
+			return { ...row, retryAllowed: retryReason === null, retryReason };
+		}),
 	};
+}
+
+export async function retryBackendJobCommand(input: JsonRecord): Promise<JsonRecord> {
+	const storyId = optionalString(input.storyId);
+	if (!storyId) throw new Error('storyId is required.');
+	const args = engineRetryJobArgsSchema.parse(input);
+	const job = await retryBackendJob({ storyId, ...args });
+	return { jobId: job.id, status: job.status, updatedAt: job.updatedAt, attemptCount: job.attemptCount, maxAttempts: job.maxAttempts };
+}
+
+export async function recoverMemoryCoverageCommand(input: JsonRecord): Promise<JsonRecord> {
+	const storyId = optionalString(input.storyId);
+	if (!storyId) throw new Error('storyId is required.');
+	const args = engineMemoryRecoveryArgsSchema.parse(input);
+	return recoverMemoryCoverage({ storyId, limit: args.limit, order: args.order });
+}
+
+export async function rebuildSummariesCommand(input: JsonRecord): Promise<JsonRecord> {
+	const storyId = optionalString(input.storyId);
+	if (!storyId) throw new Error('storyId is required.');
+	const args = engineRebuildSummariesArgsSchema.parse({ dryRun: input.dryRun, resumeJobId: input.resumeJobId });
+	const requestedAt = new Date().toISOString();
+	const jobId = await enqueueBackendJob({
+		storyId,
+		type: 'rebuild_summaries',
+		payload: { ...args, requestedAt },
+		metadata: { source: 'manual_summary_rebuild', requestedAt, summaryGenerationPolicy: SUMMARY_REBUILD_GENERATION_POLICY },
+		maxAttempts: 1,
+	});
+	return { ok: true, storyId, jobId, status: 'queued', dryRun: args.dryRun };
 }
 
 export async function runDueBackendJobsCommand(input: RunDueJobsCommandInput | JsonRecord): Promise<JsonRecord> {
@@ -826,7 +1148,7 @@ export async function runDueBackendJobsCommand(input: RunDueJobsCommandInput | J
 	const limitValue = typeof body.limit === 'number' ? body.limit : 10;
 	const limit = Math.max(1, Math.min(100, Math.trunc(Number.isFinite(limitValue) ? limitValue : 10)));
 	const before = await getBackendJobStats(storyId);
-	const result = await runDueBackendJobs(workerId, limit, storyId);
+	const result = await runDueBackendJobs(workerId, limit, storyId, body.scope === 'faction' ? factionWorkerJobTypes : undefined);
 	const after = await getBackendJobStats(storyId);
 	return {
 		ok: true,
@@ -890,8 +1212,7 @@ export async function runStoryVaultSyncJobCommand(input: StoryVaultSyncJobComman
 		const selected = items.filter((item) =>
 			args.includeFresh ||
 			!item.vaultFresh ||
-			(args.index && !item.indexFresh) ||
-			(args.lint && !item.lintFresh)
+			(args.index && !item.indexFresh)
 		);
 		const before = await getBackendJobStats();
 		const jobs = [];
@@ -899,7 +1220,7 @@ export async function runStoryVaultSyncJobCommand(input: StoryVaultSyncJobComman
 			const jobId = await enqueueBackendJob({
 				storyId: item.storyId,
 				type: 'sync_story_vault',
-				dedupeKey: `manual-wiki-${item.storyId}-${item.serverVersion}-${args.index ? 'index' : 'sync'}-${args.lint ? 'lint' : 'nolint'}`,
+				dedupeKey: `manual-wiki-${item.storyId}-${item.serverVersion}-${args.index ? 'index' : 'sync'}`,
 				payload: payload('manual_bulk_api'),
 				maxAttempts: 3,
 			});
@@ -956,9 +1277,6 @@ function wikiJobPayload(input: EngineStoryVaultSyncJobArgs, reason: string): Rec
 		recreate: input.recreate,
 		dryRun: input.dryRun,
 		clean: input.clean,
-		lint: input.lint,
-		thinChars: input.thinChars,
-		orphanLayer: input.orphanLayer,
 		provider: input.provider,
 		model: input.model,
 		reason,

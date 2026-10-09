@@ -15,6 +15,7 @@ export const POST: RequestHandler = async ({ request, url }) => {
 		const storyId = typeof body.storyId === 'string' && body.storyId.trim()
 			? body.storyId.trim()
 			: url.searchParams.get('storyId');
+		const scope = body.scope === 'faction' ? 'faction' : 'all';
 
 		return json(await executeLegacyEngineCommand({
 			storyId: storyId || '__all_stories__',
@@ -23,6 +24,7 @@ export const POST: RequestHandler = async ({ request, url }) => {
 				workerId,
 				limit,
 				allStories: !storyId,
+				scope,
 			},
 		}));
 	} catch (error) {

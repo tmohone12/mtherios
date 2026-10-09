@@ -5,6 +5,8 @@ import { stories } from '$lib/server/db/schema';
 import { getServerMemoryConfig } from '$lib/server/env';
 import { getBackendJobStats } from '$lib/server/jobs/processor';
 import { getStoryVaultFreshnessSummary } from '$lib/server/wiki/storyVault';
+import { legacyStoryScopedCollection, storyScopedCollection } from '$lib/server/wiki/storyIdentity';
+import packageJson from '../../../../package.json';
 
 export interface AppStatusInput {
 	storyId?: string | null;
@@ -27,6 +29,13 @@ export async function getAppStatus(input: AppStatusInput = {}) {
 	return {
 		ok: true,
 		mode: 'terminal-process',
+		build: {
+			identity: `${packageJson.name}@${packageJson.version}`,
+			version: packageJson.version,
+			source: (env.MYTHENGINE_BUILD_SOURCE ?? env.MTHERIOS_BUILD_SOURCE)?.trim() || 'local-checkout',
+			artifact: (env.MYTHENGINE_BUILD_ARTIFACT ?? env.MTHERIOS_BUILD_ARTIFACT)?.trim() || 'runtime',
+			externalId: (env.MYTHENGINE_BUILD_ID ?? env.MTHERIOS_BUILD_ID)?.trim() || null,
+		},
 		scope: {
 			storyId,
 		},
@@ -43,11 +52,12 @@ export async function getAppStatus(input: AppStatusInput = {}) {
 			qdrantUrl: config.qdrantUrl,
 			qdrantCollection: config.qdrantCollection,
 			ollamaUrl: config.ollamaUrl,
+			localKevEnabled: config.localKevEnabled, localEmbeddingsEnabled: config.localEmbeddingsEnabled,
 			wikiEmbedProvider: config.wikiEmbedProvider,
 			wikiEmbedModel: config.wikiEmbedModel,
 			wikiAutoIndexStoryVaults: config.wikiAutoIndexStoryVaults,
-			wikiAutoLintStoryVaults: config.wikiAutoLintStoryVaults,
 			jobWorkerEnabled: config.jobWorkerEnabled,
+			jobWorkerScope: config.jobWorkerScope,
 			jobIntervalMs: config.jobIntervalMs,
 			chapterThreshold: memory.chapterThreshold,
 			postChapterBuffer: memory.postChapterBuffer,
@@ -94,10 +104,12 @@ async function qdrantStatus(
 		distance: string | null;
 		role: 'default' | 'story' | 'other';
 		orphaned: boolean;
+		legacy: boolean;
 	}>;
 	totalCollections?: number;
 	totalPoints?: number;
 	orphanedStoryCollections?: number;
+	legacyStoryCollections?: number;
 }> {
 	const baseUrl = qdrantUrl.replace(/\/$/, '');
 	const health = await probe(`${baseUrl}/`);
@@ -107,9 +119,10 @@ async function qdrantStatus(
 		const body = await response.json().catch(() => ({})) as Record<string, unknown>;
 		if (!response.ok) return { ok: false, status: response.status, error: `Qdrant collections failed: HTTP ${response.status}` };
 		const names = readCollectionNames(body).sort((a, b) => a.localeCompare(b));
-		const expectedStoryCollections = new Set(storyIds.map((id) => storyCollectionName(id, baseCollection)));
+		const expectedStoryCollections = new Set(storyIds.map((id) => storyScopedCollection(baseCollection, id)));
+		const legacyStoryCollections = new Set(storyIds.map((id) => legacyStoryScopedCollection(baseCollection, id)));
 		const rows = await Promise.all(names.slice(0, 40).map((name) => (
-			qdrantCollectionInfo(baseUrl, name, baseCollection, expectedStoryCollections)
+			qdrantCollectionInfo(baseUrl, name, baseCollection, expectedStoryCollections, legacyStoryCollections)
 		)));
 		return {
 			...health,
@@ -117,6 +130,7 @@ async function qdrantStatus(
 			totalCollections: names.length,
 			totalPoints: rows.reduce((sum, row) => sum + (row.pointsCount ?? 0), 0),
 			orphanedStoryCollections: rows.filter((row) => row.orphaned).length,
+			legacyStoryCollections: rows.filter((row) => row.legacy).length,
 		};
 	} catch (error) {
 		return {
@@ -144,7 +158,9 @@ async function qdrantCollectionInfo(
 	name: string,
 	baseCollection: string,
 	expectedStoryCollections: Set<string>,
+	legacyStoryCollections: Set<string>,
 ) {
+	const legacy = legacyStoryCollections.has(name) && !expectedStoryCollections.has(name);
 	try {
 		const response = await fetch(`${baseUrl}/collections/${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(2500) });
 		const body = await response.json().catch(() => ({})) as Record<string, unknown>;
@@ -160,7 +176,8 @@ async function qdrantCollectionInfo(
 			vectorSize: asNullableNumber(vectors.size),
 			distance: typeof vectors.distance === 'string' ? vectors.distance : null,
 			role,
-			orphaned: role === 'story' && !expectedStoryCollections.has(name),
+			orphaned: role === 'story' && !expectedStoryCollections.has(name) && !legacy,
+			legacy,
 		};
 	} catch {
 		const role = collectionRole(name, baseCollection);
@@ -172,7 +189,8 @@ async function qdrantCollectionInfo(
 			vectorSize: null,
 			distance: null,
 			role,
-			orphaned: role === 'story' && !expectedStoryCollections.has(name),
+			orphaned: role === 'story' && !expectedStoryCollections.has(name) && !legacy,
+			legacy,
 		};
 	}
 }
@@ -189,17 +207,4 @@ function collectionRole(name: string, baseCollection: string): 'default' | 'stor
 	if (name === baseCollection) return 'default';
 	if (name.startsWith(`${baseCollection}_`)) return 'story';
 	return 'other';
-}
-
-function storyCollectionName(storyId: string, baseCollection: string): string {
-	return `${baseCollection}_${safeCollectionSegment(storyId)}`;
-}
-
-function safeCollectionSegment(value: string): string {
-	return String(value || 'story')
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-+|-+$/g, '')
-		.slice(0, 90)
-		.replace(/-/g, '_') || 'story';
 }

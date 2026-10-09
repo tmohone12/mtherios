@@ -1,32 +1,29 @@
+name: mythengine
 services:
-  mtherios-db:
+  mythengine-db:
     image: pgvector/pgvector:pg16
-    container_name: mtherios-factions-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: mtherios
-      POSTGRES_USER: mtherios
-      POSTGRES_PASSWORD: mtherios
+      POSTGRES_DB: ${MYTHENGINE_DB_NAME:-mythengine}
+      POSTGRES_USER: ${MYTHENGINE_DB_USER:-mythengine}
+      POSTGRES_PASSWORD: ${MYTHENGINE_DB_PASSWORD:-mythengine}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${MYTHENGINE_DB_PORT:-5433}:5432"
     volumes:
-      - mtherios_pgdata:/var/lib/postgresql/data
+      - mythengine_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mtherios -d mtherios"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 20
-
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: mtherios-qdrant
     restart: unless-stopped
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:${MYTHENGINE_QDRANT_PORT:-6335}:6333"
+      - "127.0.0.1:6336:6334"
     volumes:
-      - mtherios_qdrant:/qdrant/storage
-
+      - mythengine_qdrant:/qdrant/storage
 volumes:
-  mtherios_pgdata:
-  mtherios_qdrant:
+  mythengine_pgdata:
+  mythengine_qdrant:

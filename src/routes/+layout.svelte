@@ -1,17 +1,38 @@
 <script>
 	import '../app.css';
+	import favicon from '$lib/assets/favicon.svg';
 	import OnboardingWizard from '$lib/components/wizard/OnboardingWizard.svelte';
 	import StoryView from '$lib/components/story/StoryView.svelte';
 	import { app } from '$lib/stores/app.svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
+	import { refreshTerminalLlmSettings } from '$lib/services/terminalSettings';
 	import { onMount } from 'svelte';
+	import PwaLifecycle from '$lib/components/pwa/PwaLifecycle.svelte';
 
 	let { children } = $props();
 
-	onMount(async () => {
-		await settings.init();
-		await app.init();
+	onMount(() => {
+		const viewport = window.visualViewport;
+		const syncViewport = () => {
+			document.documentElement.style.setProperty('--visual-viewport-height', `${viewport?.height ?? window.innerHeight}px`);
+			document.documentElement.style.setProperty('--visual-viewport-offset-top', `${viewport?.offsetTop ?? 0}px`);
+			document.body.classList.toggle('keyboard-open', Boolean(viewport && window.innerHeight - viewport.height > 140));
+		};
+		syncViewport();
+		viewport?.addEventListener('resize', syncViewport);
+		viewport?.addEventListener('scroll', syncViewport);
+		window.addEventListener('resize', syncViewport);
+		void (async () => {
+			await settings.init();
+			await refreshTerminalLlmSettings().catch(error => console.warn('[Settings] Terminal settings unavailable:', error));
+			await app.init();
+		})();
+		return () => {
+			viewport?.removeEventListener('resize', syncViewport);
+			viewport?.removeEventListener('scroll', syncViewport);
+			window.removeEventListener('resize', syncViewport);
+		};
 	});
 
 	// Load story when currentStoryId changes
@@ -26,19 +47,14 @@
 	});
 </script>
 
-<svelte:head>
-	<link rel="preconnect" href="https://fonts.googleapis.com" />
-	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
-	<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;800&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-	<meta name="theme-color" content="#08090c" />
-	<meta name="apple-mobile-web-app-capable" content="yes" />
-	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-</svelte:head>
+<svelte:head><link rel="icon" type="image/svg+xml" href={favicon} /></svelte:head>
+
+<PwaLifecycle />
 
 {#if app.loading}
 	<!-- Loading splash -->
-	<div class="flex h-[100dvh] items-center justify-center bg-[#08090c]">
-		<svg viewBox="0 0 48 48" fill="none" class="h-12 w-12 animate-pulse text-[#d4a853]">
+	<div class="app-shell flex items-center justify-center bg-[var(--bg-primary)]">
+		<svg viewBox="0 0 48 48" fill="none" class="h-12 w-12 animate-pulse text-[var(--text-accent)]">
 			<path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="currentColor" stroke-width="1.5" fill="none"/>
 			<circle cx="24" cy="24" r="5" fill="currentColor" opacity="0.6"/>
 		</svg>
@@ -58,8 +74,8 @@
 	<StoryView />
 {:else if app.currentStoryId && story.loading}
 	<!-- Story is loading from DB — show loading state instead of flashing AppShell -->
-	<div class="flex h-[100dvh] items-center justify-center bg-[#08090c]">
-		<svg viewBox="0 0 48 48" fill="none" class="h-12 w-12 animate-pulse text-[#d4a853]">
+	<div class="app-shell flex items-center justify-center bg-[var(--bg-primary)]">
+		<svg viewBox="0 0 48 48" fill="none" class="h-12 w-12 animate-pulse text-[var(--text-accent)]">
 			<path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="currentColor" stroke-width="1.5" fill="none"/>
 			<circle cx="24" cy="24" r="5" fill="currentColor" opacity="0.6"/>
 		</svg>

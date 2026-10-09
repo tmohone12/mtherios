@@ -64,7 +64,7 @@ Agents can use the same services through the MCP server:
   "mcpServers": {
     "mtherios-terminal-database": {
       "command": "node",
-      "args": ["E:\\DEV\\Projects\\mtherios-factions-work\\scripts\\mtherios-mcp.mjs"],
+      "args": ["E:\\DEV\\Projects\\mtherios-master\\scripts\\mtherios-mcp.mjs"],
       "env": {
         "MTHERIOS_APP_URL": "http://127.0.0.1:5173"
       }
@@ -73,7 +73,17 @@ Agents can use the same services through the MCP server:
 }
 ```
 
-The MCP exposes `mtherios_status`, `mtherios_database_schema`, `mtherios_list_databases`, `mtherios_create_database`, `mtherios_import_database`, `mtherios_export_database`, and `mtherios_sync_wiki`. It talks to the already-running terminal process, so a phone or second browser is only another client; it does not create another story/runtime instance.
+The MCP exposes the current tool manifest returned by `tools/list`, including database, GM, orchestrator, timeline, campaign-page, settings, jobs, and wiki tools. The MCP client starts this stdio process automatically from its saved configuration. It talks to the already-running terminal process, so a phone or second browser is only another client; it does not create another story/runtime instance.
+
+Player buffs and abilities use `mtherios_get_player_capabilities` and `mtherios_update_player_capabilities`, with a concrete `storyId` and the canonical player's `characterId`. Read before editing. Each supplied `abilities` or `buffs` list replaces only that list; omit a list to preserve it, or send `[]` to clear it. There are at most 12 notes per list, each up to 300 characters. Updates preserve the rest of the character under a database row lock, create an audit patch, and appear in the Character tab, actor brief, and narrator context. Duration text is a note for the GM, not an automatic timer or numeric dice bonus.
+
+For example, ending all buffs while keeping abilities uses:
+
+```json
+{"name":"mtherios_update_player_capabilities","arguments":{"storyId":"<storyId>","characterId":"<playerEntityId>","buffs":[],"reason":"The temporary effects ended."}}
+```
+
+After updating the MCP script, reconnect the MCP client to discover new tools. `MTHERIOS_APP_URL` must target an app build containing the corresponding backend changes; when using a preview, set it to that preview's URL.
 
 Operate story wiki vaults through the running daemon:
 
@@ -173,7 +183,7 @@ Export a Mtherios wiki zip, unzip it somewhere, then run:
 npm run wiki:index -- C:\path\to\vault --recreate
 ```
 
-`--recreate` deletes and rebuilds the target Qdrant collection. Omit it for incremental upserts.
+Indexing reconciles the vault chunk set exactly: current chunks are upserted and obsolete wiki chunks are removed. Canonical-record vectors in the shared story collection are preserved; `--recreate` remains a backwards-compatible alias for this safe scoped behavior.
 
 Dry-run without embeddings or Qdrant:
 

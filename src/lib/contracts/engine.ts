@@ -14,6 +14,7 @@ export const llmServiceSettingSchema = z.object({
 	presencePenalty: z.number().min(-2).max(2).nullable().default(null),
 	reasoningEffort: z.string().nullable().default(null),
 	contextBudget: z.number().int().positive().nullable().default(null),
+	contextWindowTokens: z.number().int().min(1024).max(10_000_000).nullable().optional(),
 	enabled: z.boolean().default(true),
 	systemPromptOverride: z.string().nullable().default(null),
 	apiKeyRef: z.string().nullable().default(null),
@@ -34,6 +35,7 @@ export const llmServiceSettingPatchSchema = z.object({
 	presencePenalty: z.number().min(-2).max(2).nullable().optional(),
 	reasoningEffort: z.string().nullable().optional(),
 	contextBudget: z.number().int().positive().nullable().optional(),
+	contextWindowTokens: z.number().int().min(1024).max(10_000_000).nullable().optional(),
 	enabled: z.boolean().optional(),
 	systemPromptOverride: z.string().nullable().optional(),
 	apiKeyRef: z.string().nullable().optional(),
@@ -53,17 +55,17 @@ export const llmSettingsPatchSchema = z.object({
 export const recordPatchRequestSchema = z.object({
 	updates: jsonObjectSchema,
 	reason: z.string().default('Manual explorer edit.'),
-});
+	expectedVersion: z.number().int().nonnegative().optional(),
+	expectedUpdatedAt: z.string().min(1).optional(),
+	jsonMode: z.enum(['merge', 'replace']).optional(),
+}).strict();
 
 export const engineWorldRecordDetailArgsSchema = z.object({
 	type: z.string().min(1),
 	recordId: z.string().min(1),
 });
 
-export const engineWorldRecordPatchArgsSchema = engineWorldRecordDetailArgsSchema.extend({
-	updates: jsonObjectSchema,
-	reason: z.string().default('Manual explorer edit.'),
-});
+export const engineWorldRecordPatchArgsSchema = engineWorldRecordDetailArgsSchema.merge(recordPatchRequestSchema).strict();
 
 export const engineCharacterDraftUpdateArgsSchema = z.object({
 	recordId: z.string().min(1),
@@ -138,6 +140,7 @@ export const engineRunDueJobsArgsSchema = z.object({
 	workerId: z.string().min(1).optional(),
 	limit: z.number().int().min(1).max(100).default(10),
 	allStories: z.boolean().default(false),
+	scope: z.enum(['all', 'faction']).default('all'),
 });
 
 export const engineRollupArcJobArgsSchema = z.object({
@@ -149,7 +152,26 @@ export const engineRollupArcJobArgsSchema = z.object({
 export const engineJobStatusArgsSchema = z.object({
 	limit: z.number().int().min(1).max(200).default(80),
 	allStories: z.boolean().default(false),
+	status: z.enum(['queued', 'retry', 'running', 'complete', 'failed']).optional(),
 });
+
+export const engineRetryJobArgsSchema = z.object({
+	jobId: z.string().min(1),
+	// Preserve the exact database timestamp, including its fractional precision.
+	expectedUpdatedAt: z.string().min(1).refine((value) => Number.isFinite(Date.parse(value)), 'Expected a valid job update timestamp.'),
+});
+
+export const engineMemoryRecoveryArgsSchema = z.object({
+	limit: z.number().int().min(1).max(25).default(1),
+	order: z.enum(['oldest', 'recent']).optional(),
+});
+
+export const SUMMARY_REBUILD_GENERATION_POLICY = 'historical-transcript-only-v5';
+
+export const engineRebuildSummariesArgsSchema = z.object({
+	dryRun: z.boolean().default(true),
+	resumeJobId: z.string().min(1).optional(),
+}).strict();
 
 export const engineStoryVaultSyncJobArgsSchema = z.object({
 	workerId: z.string().min(1).optional(),
@@ -160,9 +182,6 @@ export const engineStoryVaultSyncJobArgsSchema = z.object({
 	recreate: z.boolean().default(false),
 	dryRun: z.boolean().default(false),
 	clean: z.boolean().default(true),
-	lint: z.boolean().default(false),
-	thinChars: z.number().nullable().default(null),
-	orphanLayer: z.enum(['derived', 'all']).default('derived'),
 	provider: z.string().nullable().default(null),
 	model: z.string().nullable().default(null),
 	limit: z.number().int().min(1).max(1000).default(500),
@@ -171,6 +190,9 @@ export const engineStoryVaultSyncJobArgsSchema = z.object({
 export const enginePromptPacketDebugArgsSchema = z.object({
 	query: z.string().default('current scene'),
 	tokenBudget: z.number().int().min(1).max(100000).default(1200),
+	contextBudget: z.number().int().min(0).max(200000).optional(),
+	recentDialogueTokens: z.number().int().min(512).max(64000).optional(),
+	recentDialogueTurns: z.number().int().min(1).max(40).optional(),
 });
 
 export const apiCallLogCreateSchema = z.object({
@@ -247,6 +269,8 @@ export const campaignProjectionSchema = z.object({
 	story: jsonObjectSchema,
 	entries: z.array(jsonObjectSchema).default([]),
 	entities: z.array(jsonObjectSchema).default([]),
+	threads: z.array(jsonObjectSchema).default([]),
+	recentEvents: z.array(jsonObjectSchema).default([]),
 	chapters: z.array(jsonObjectSchema).default([]),
 	arcs: z.array(jsonObjectSchema).default([]),
 	sagas: z.array(jsonObjectSchema).default([]),
@@ -308,6 +332,7 @@ export const engineCampaignPageWriteArgsSchema = z.object({
 });
 
 export const engineCampaignBootstrapArgsSchema = z.object({
+	includeSecret: z.boolean().default(false),
 	entryLimit: z.number().int().min(1).max(200).optional(),
 	entityLimit: z.number().int().min(0).max(200).optional(),
 	relationshipLimit: z.number().int().min(0).max(400).optional(),
@@ -414,13 +439,27 @@ export const enginePlotBrainPlanArgsSchema = z.object({
 	contextBudget: z.number().int().positive().optional(),
 	serverVersion: z.number().int().positive().optional(),
 	frameId: z.string().trim().min(1).optional(),
+	replacePendingFrameId: z.string().trim().min(1).optional(),
 }).superRefine((value, ctx) => {
 	if (value.frameId && !value.execute) {
 		ctx.addIssue({ code: 'custom', path: ['frameId'], message: 'frameId can only be applied with execute=true.' });
 	}
+	if (value.frameId && value.replacePendingFrameId) {
+		ctx.addIssue({ code: 'custom', path: ['replacePendingFrameId'], message: 'frameId and replacePendingFrameId cannot be combined.' });
+	}
+});
+
+export const enginePlotBrainRetireArgsSchema = z.object({
+	reason: z.string().trim().min(1).max(400),
+	quietTurns: z.number().int().min(1).max(100).default(5),
+	serverVersion: z.number().int().positive().optional(),
 });
 
 export const engineOrchestratorAgentRoleSchema = z.enum([
+	'game_master',
+	'memory_context',
+	'player_guidance',
+	// Older role IDs remain readable in saved run receipts.
 	'dm_narrator',
 	'rules_referee',
 	'state_scribe',
@@ -448,6 +487,8 @@ export const engineOrchestratorContextSchema = z.object({
 	currentFactionId: z.string().nullable().optional(),
 	memoryTokenBudget: z.number().int().min(0).max(100000).optional(),
 	contextBudget: z.number().int().min(1).max(1000000).optional(),
+	recentDialogueTokens: z.number().int().min(512).max(64000).optional(),
+	recentDialogueTurns: z.number().int().min(1).max(40).optional(),
 	includeSecret: z.boolean().default(false),
 	currentTurn: z.number().int().nonnegative().optional(),
 	currentWorldTime: z.string().nullable().optional(),
@@ -479,6 +520,7 @@ export const engineCommandResponseSchema = z.object({
 	result: z.unknown().nullable().default(null),
 	projectionChanges: jsonObjectSchema.default({}),
 	error: z.string().nullable().default(null),
+	errorDetails: z.object({ code: z.string(), details: jsonObjectSchema }).optional(),
 	createdAt: z.string(),
 	updatedAt: z.string(),
 });
@@ -499,6 +541,7 @@ export type EngineCacheStatus = z.infer<typeof engineCacheStatusSchema>;
 export type EngineCommandRequest = z.infer<typeof engineCommandRequestSchema>;
 export type EngineCommandResponse = z.infer<typeof engineCommandResponseSchema>;
 export type EnginePlotBrainPlanArgs = z.infer<typeof enginePlotBrainPlanArgsSchema>;
+export type EnginePlotBrainRetireArgs = z.infer<typeof enginePlotBrainRetireArgsSchema>;
 export type EngineCampaignStatusArgs = z.infer<typeof engineCampaignStatusArgsSchema>;
 export type EngineCacheStatusArgs = z.infer<typeof engineCacheStatusArgsSchema>;
 export type EngineCampaignPageReadArgs = z.infer<typeof engineCampaignPageReadArgsSchema>;
@@ -516,5 +559,7 @@ export type EngineOrchestratorRunArgs = z.infer<typeof engineOrchestratorRunArgs
 export type EngineRunDueJobsArgs = z.infer<typeof engineRunDueJobsArgsSchema>;
 export type EngineRollupArcJobArgs = z.infer<typeof engineRollupArcJobArgsSchema>;
 export type EngineJobStatusArgs = z.infer<typeof engineJobStatusArgsSchema>;
+export type EngineRetryJobArgs = z.infer<typeof engineRetryJobArgsSchema>;
+export type EngineMemoryRecoveryArgs = z.infer<typeof engineMemoryRecoveryArgsSchema>;
 export type EngineStoryVaultSyncJobArgs = z.infer<typeof engineStoryVaultSyncJobArgsSchema>;
 export type EnginePromptPacketDebugArgs = z.infer<typeof enginePromptPacketDebugArgsSchema>;

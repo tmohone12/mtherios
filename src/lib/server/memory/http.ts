@@ -1,3 +1,4 @@
+import { MutationError } from '$lib/server/engine/mutationSafety';
 import { json, type RequestEvent } from '@sveltejs/kit';
 import { ZodError, type ZodType } from 'zod';
 import { BackendNotConfiguredError } from '$lib/server/env';
@@ -10,6 +11,7 @@ export async function readJson<T>(event: RequestEvent, schema: ZodType<T>): Prom
 }
 
 export function apiError(error: unknown) {
+	if (error instanceof MutationError) return json({ error: error.message, code: error.code, details: error.details }, { status: error.code === 'REVISION_CONFLICT' ? 409 : error.code === 'REVISION_REQUIRED' ? 428 : 400 });
 	if (error instanceof BackendNotConfiguredError) {
 		return json({ error: error.message, code: 'BACKEND_NOT_CONFIGURED' }, { status: 503 });
 	}

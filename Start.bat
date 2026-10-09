@@ -1,6 +1,6 @@
 @echo off
-pushd %~dp0
-call npm install
-call npm run app:dev
-pause
-popd
+pwsh -NoProfile -File "%~dp0start.ps1" %*
+if errorlevel 1 (
+  pause
+  exit /b 1
+)

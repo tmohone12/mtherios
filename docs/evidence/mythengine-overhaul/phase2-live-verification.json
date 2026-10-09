@@ -1,0 +1,65 @@
+{
+  "recordedAt": "2026-09-22T00:10:07.814Z",
+  "build": {
+    "identity": "mythengine@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "f7ad74881bd434ab81f1a80b05d3bfe5c4efd88de8618740c80e0ed1edc060b2",
+    "externalId": "1a266b51389707e53bb553d01158ea344e36640ef1e2016f792c7ba7bedb9e9a"
+  },
+  "checks": [
+    "Typed creation defaults and nested updates retain unrelated data",
+    "Concurrent writers produce one commit and one revision conflict",
+    "Project/game isolation, shared edit scope and cross-game references enforced",
+    "Type impact preview rejects incompatible changes and invalidates stale editors",
+    "Move preserves identity, copy allocates identity, archive retains history and rejects incoming references",
+    "Archive recovery requires confirmation and creates a new revision",
+    "Snapshot import remaps references and preserves metadata; conflicts roll back atomically",
+    "Canonical campaign snapshot round-trips authored types/documents during ID-remapped import",
+    "Canonical views resolve the original scoped records without duplicating them",
+    "HTTP, app CLI and MythEngine MCP return the same canonical custom item",
+    "Forced history failure rolls back document payload and revision",
+    "Database constraints reject mismatched type/project/game ownership"
+  ],
+  "fixturesRemoved": true,
+  "originalPid": 39068,
+  "runtimePid": 5284,
+  "browser": {
+    "url": "http://127.0.0.1:5174/",
+    "typeCreation": true,
+    "layoutPreview": true,
+    "invalidSchemaMessage": true,
+    "documentCreation": true,
+    "unsavedNavigationBlocked": true,
+    "reloadPersistence": true,
+    "archiveRecoveryConfirmed": true,
+    "samples": [
+      {
+        "id": "67bebf5a-6142-4250-b793-abd06af0116b",
+        "title": "Example travel cloak",
+        "revision": 1
+      },
+      {
+        "id": "b711e70f-2562-4a15-a455-8b5767e1750c",
+        "title": "Example table rules",
+        "revision": 3
+      }
+    ]
+  },
+  "originalProtection": {
+    "filesChecked": 760,
+    "changed": [],
+    "pid": 39068
+  },
+  "finalRuntime": {
+    "pid": 57740,
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "a47a91528ed05e622f3575d1a00e8bf00802de3e2ecfdbaffdfecdfb07057c21",
+      "externalId": "f2739a3022a4753b56542b78e0e9c668d8e19ace5390d1a474cc507ac46cc0e7"
+    },
+    "storyCount": 0
+  }
+}

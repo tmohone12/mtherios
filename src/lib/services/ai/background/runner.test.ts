@@ -28,6 +28,7 @@ const { aiMock, storyMock, settingsMock, databaseMocks, canonicalMocks } = vi.ho
 		factionActions: [] as any[],
 		rumors: [] as any[],
 		lastWorldSimResult: null as any,
+		campaignProjection: null as any,
 	};
 	const settingsMock = {
 		getServiceConfig: vi.fn(),
@@ -99,6 +100,7 @@ function resetMocks() {
 	storyMock.factionActions = [];
 	storyMock.rumors = [];
 	storyMock.lastWorldSimResult = null;
+	storyMock.campaignProjection = null;
 
 	settingsMock.getServiceConfig.mockImplementation((name: string) => ({
 		enabled: name === 'memory' || name === 'loreManagement',
@@ -110,16 +112,18 @@ function resetMocks() {
 	databaseMocks.getSagas.mockResolvedValue([]);
 	databaseMocks.getStoryBeats.mockResolvedValue([]);
 	databaseMocks.getStoryEntry.mockResolvedValue({ id: 'entry-4-end', position: 4 });
-	databaseMocks.getStoryEntriesAfterPosition.mockResolvedValue([
+	databaseMocks.getStoryEntriesAfterPosition.mockResolvedValue(Array.from({ length: 20 }, (_, index) => [
 		{
-			id: 'entry-5',
-			storyId: 'story-1',
-			type: 'assistant',
-			content: 'A chapter-closing scene names Ser Olyvar and the Ember Court.',
-			position: 5,
-			createdAt: 5,
+			id: `player-${index}`, storyId: 'story-1', type: 'user_action',
+			content: 'I ask about Ser Olyvar and the Ember Court.', parentId: null, branchId: null,
+			position: 5 + index * 2, createdAt: 5 + index * 2,
 		},
-	]);
+		{
+			id: `narration-${index}`, storyId: 'story-1', type: 'narration',
+			content: 'A chapter-closing scene names Ser Olyvar and the Ember Court.', parentId: `player-${index}`, branchId: null,
+			position: 6 + index * 2, createdAt: 6 + index * 2,
+		},
+	]).flat());
 
 	aiMock.memory.analyzeForChapter.mockResolvedValue({
 		shouldCreateChapter: true,
@@ -134,6 +138,16 @@ function resetMocks() {
 		emotionalTone: 'tense',
 	});
 	aiMock.embeddings.embed.mockResolvedValue(undefined);
+	aiMock.worldSim.simulateForNewChapter.mockResolvedValue({
+		plotInjection: null,
+		worldNarrative: '',
+		factionActions: [],
+		rumors: [],
+		worldTension: 0,
+		plotSeeds: [],
+		plotMomentum: null,
+		threadUpdates: [],
+	});
 	aiMock.loreManagement.manage.mockResolvedValue({
 		updates: [
 			{
@@ -179,6 +193,39 @@ function resetMocks() {
 describe('runBackgroundJobs lore management', () => {
 	beforeEach(() => {
 		resetMocks();
+	});
+
+	it('summarizes the complete20-turn window despite old thresholds and a boundary-model refusal', async () => {
+		aiMock.memory.analyzeForChapter.mockResolvedValue({ shouldCreateChapter: false });
+		const errors = await runBackgroundJobs();
+		expect(errors).toEqual([]);
+		expect(aiMock.memory.analyzeForChapter).not.toHaveBeenCalled();
+		expect(aiMock.memory.summarizeChapter.mock.calls[0][0]).toHaveLength(40);
+		expect(canonicalMocks.saveCanonicalChapter).toHaveBeenCalledWith(expect.objectContaining({
+			startEntryId: 'player-0', endEntryId: 'narration-19', entryCount: 40,
+		}), 'create');
+	});
+
+	it('waits for the twentieth narration and keeps a lone action out of the completed count', async () => {
+		const entries = await databaseMocks.getStoryEntriesAfterPosition();
+		databaseMocks.getStoryEntriesAfterPosition.mockResolvedValue(entries.slice(0, 39));
+		expect(await runBackgroundJobs()).toEqual([]);
+		expect(aiMock.memory.summarizeChapter).not.toHaveBeenCalled();
+		expect(canonicalMocks.saveCanonicalChapter).not.toHaveBeenCalled();
+	});
+
+	it.each([true, false])('reattaches a late narration parent only when prior chapters did not cover it (covered=%s)', async covered => {
+		const entries = (await databaseMocks.getStoryEntriesAfterPosition()).slice(0, 38);
+		const oldAction = { id: 'old-action', type: 'user_action', content: 'I ask the envoy.', position: 2, createdAt: 2, branchId: null, parentId: null };
+		entries.push({ id: 'late-reply', type: 'narration', content: 'The envoy finally answers.', position: 45, createdAt: 45, branchId: null, parentId: oldAction.id });
+		databaseMocks.getStoryEntriesAfterPosition.mockResolvedValue(entries);
+		databaseMocks.getChapters.mockResolvedValue([1, 2, 3, 4].map(number => ({ ...chapter(number), sourceEntryIds: covered ? [oldAction.id] : [] })));
+		databaseMocks.getStoryEntry.mockImplementation(async id => id === oldAction.id ? oldAction : { id: 'entry-4-end', position: 4 });
+		expect(await runBackgroundJobs()).toEqual([]);
+		expect(canonicalMocks.saveCanonicalChapter).toHaveBeenCalledTimes(covered ? 0 : 1);
+		if (!covered) expect(canonicalMocks.saveCanonicalChapter).toHaveBeenCalledWith(expect.objectContaining({
+			sourceEntryIds: expect.arrayContaining([oldAction.id, 'late-reply']),
+		}), 'create');
 	});
 
 	it('skips automatic character creations while still creating non-character lore', async () => {
@@ -307,5 +354,13 @@ describe('runBackgroundJobs lore management', () => {
 			}),
 			'create',
 		);
+	});
+
+	it('creates a chapter without asking the browser to invent world movement', async () => {
+		const errors = await runBackgroundJobs();
+		expect(errors).toEqual([]);
+		expect(canonicalMocks.saveCanonicalChapter).toHaveBeenCalled();
+		expect(aiMock.worldSim.simulateForNewChapter).not.toHaveBeenCalled();
+		expect(canonicalMocks.saveCanonicalWorldEvent).not.toHaveBeenCalled();
 	});
 });

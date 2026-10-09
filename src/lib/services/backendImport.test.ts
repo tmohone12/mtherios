@@ -86,6 +86,7 @@ describe('backend import engine gateway client', () => {
 		fetchMock.mockResolvedValue(engineResponse('database.importWorldBundle', {
 			ok: true,
 			storyId: 'story_import_copy',
+			projectId: 'shelf_import_copy',
 			serverVersion: 9,
 			counts: { stories: 1, entries: 1, sourceRefs: 1, memoryNodes: 1 },
 			jobIds: [],
@@ -109,8 +110,19 @@ describe('backend import engine gateway client', () => {
 		});
 		expect(vi.mocked(updateStory)).toHaveBeenCalledWith('local_story', {
 			serverStoryId: 'story_import_copy',
+			shelfId: 'shelf_import_copy',
 			serverVersion: 9,
 			syncStatus: 'synced',
+		});
+
+		fetchMock.mockResolvedValueOnce(engineResponse('database.importWorldBundle', {
+			ok: true, storyId: 'story_import_copy', projectId: 'shelf_import_copy', serverVersion: 9,
+			counts: { stories: 1, entries: 1 }, jobIds: [], importedAt: '2026-06-21T00:00:00.000Z',
+		}));
+		await importStoryBundleToBackend(bundle, 'local_story', { sourceProjectId: 'shelf_source', destinationProjectId: 'shelf_target' });
+		expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)).args.options).toEqual({
+			preserveIds: false, replaceExisting: false, syncWiki: true,
+			sourceProjectId: 'shelf_source', destinationProjectId: 'shelf_target',
 		});
 	});
 

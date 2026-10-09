@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	fetchBackendEntriesAround,
+	previewBackendTurn,
 	processBackendTurn,
 	pullBackendChanges,
 	retrieveBackendMemory,
@@ -13,6 +15,7 @@ const turnRequest = {
 	storyId: 'story_alpha',
 	clientTurnId: 'turn_1',
 	playerText: 'I open the silver gate.',
+	actionType: 'do' as const,
 	localVersion: 12,
 	clientContext: {
 		presentNpcIds: ['npc_mira'],
@@ -51,7 +54,7 @@ describe('backend memory turn client', () => {
 		vi.restoreAllMocks();
 	});
 
-	it('routes turn submissions through the shared engine command gateway', async () => {
+	it('routes turn submissions through the streaming turn endpoint', async () => {
 		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
 			commandId: 'turn_1',
 			clientCommandId: 'turn_1',
@@ -68,17 +71,51 @@ describe('backend memory turn client', () => {
 		const result = await processBackendTurn(turnRequest);
 
 		expect(result).toEqual(turnResult);
-		expect(fetchMock).toHaveBeenCalledWith('/api/engine/command', expect.objectContaining({
+		expect(fetchMock).toHaveBeenCalledWith('/api/turn/stream', expect.objectContaining({
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 		}));
 		const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-		expect(payload).toEqual({
+		expect(payload).toEqual(turnRequest);
+	});
+
+	it('routes context preview through the read-only engine command', async () => {
+		const preview = {
+			inspection: true,
 			storyId: 'story_alpha',
-			command: 'turn.submit',
-			clientCommandId: 'turn_1',
-			args: turnRequest,
-		});
+			clientTurnId: 'preview_1',
+			preparedAt: '2026-09-06T00:00:00.000Z',
+			preparationMs: 12,
+			draftFingerprint: 'draft_hash',
+			settingsFingerprint: 'settings_hash',
+			model: { id: 'test-model', providerType: 'openai', capacityTokens: 128000, capacitySource: 'model-window-registry-or-default' },
+			prompt: { systemChars: 10, systemDynamicChars: 20, playerPromptChars: 8, messageCount: 1, messageChars: 12, totalChars: 50, tokenEstimate: 13 },
+			budgets: { contextTokens: 12000, recentDialogueTokens: 12000, memoryTokens: 1200 },
+			selection: { version: 1, groups: [], sections: [] },
+			sourceReferences: [],
+			warnings: [],
+		};
+		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+			commandId: 'preview_1', clientCommandId: 'preview_1', storyId: 'story_alpha', command: 'turn.preview', status: 'succeeded', result: preview, projectionChanges: {}, error: null,
+			createdAt: '2026-09-06T00:00:00.000Z', updatedAt: '2026-09-06T00:00:00.000Z',
+		}));
+
+		await expect(previewBackendTurn({ ...turnRequest, clientTurnId: 'preview_1' })).resolves.toEqual(preview);
+		const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+		expect(payload.command).toBe('turn.preview');
+		expect(payload.args).toEqual(expect.objectContaining({ clientTurnId: 'preview_1', playerText: turnRequest.playerText }));
+	});
+
+	it('opens bounded transcript evidence through the existing engine read command', async () => {
+		const around = { storyId: 'story_alpha', position: 42, entries: [{ id: 'entry_42', position: 42, content: 'The harbor bell rings.' }] };
+		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+			commandId: 'around_1', clientCommandId: null, storyId: 'story_alpha', command: 'campaign.entriesAround', status: 'succeeded', result: around, projectionChanges: {}, error: null,
+			createdAt: '2026-09-06T00:00:00.000Z', updatedAt: '2026-09-06T00:00:00.000Z',
+		}));
+
+		await expect(fetchBackendEntriesAround('story_alpha', 42, 2)).resolves.toEqual(around);
+		const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+		expect(payload).toEqual({ storyId: 'story_alpha', command: 'campaign.entriesAround', args: { position: 42, radius: 2 } });
 	});
 
 	it('surfaces failed engine command turn submissions as terminal request errors', async () => {

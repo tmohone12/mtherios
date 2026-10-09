@@ -1,9 +1,15 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MtheriosAppConfig } from '$lib/server/app/config';
-import { appendTurnEvidence, campaignVaultPath, readCampaignPage, writeCampaignPage } from './campaignVault';
+
+const dbMocks = vi.hoisted(() => ({ getDb: vi.fn() }));
+
+vi.mock('$lib/server/db/client', () => ({ getDb: dbMocks.getDb }));
+
+import { appendTurnEvidence, campaignVaultPath, rawTurnSourcePairError, readCampaignPage, renderTurnEvidenceMarkdown, writeCampaignPage } from './campaignVault';
 
 const tempRoots: string[] = [];
 
@@ -15,14 +21,14 @@ function testConfig(root: string): MtheriosAppConfig {
 		allowExternalVaults: false,
 		qdrantUrl: 'http://127.0.0.1:6333',
 		qdrantCollection: 'mtherios_wiki',
-		ollamaUrl: 'http://127.0.0.1:11434',
+		localKevEnabled: false, localEmbeddingsEnabled: false, ollamaUrl: 'http://127.0.0.1:11434',
 		wikiEmbedProvider: 'openrouter',
 		wikiEmbedModel: 'openai/text-embedding-3-small',
 		wikiEmbedBaseUrl: 'https://openrouter.ai/api/v1',
 		wikiEmbedApiKey: '',
 		wikiAutoIndexStoryVaults: false,
-		wikiAutoLintStoryVaults: false,
 		jobWorkerEnabled: true,
+		jobWorkerScope: 'all',
 		jobIntervalMs: 5000,
 	};
 }
@@ -32,11 +38,109 @@ afterEach(async () => {
 });
 
 describe('campaign vault storage', () => {
+	it('invalidates indexed raw turns when their canonical source pair was removed or changed', () => {
+		const metadata = { clientTurnId: 'turn_1' };
+		const validEntries = [
+			{ id: 'entry_turn_1', type: 'user_action', content: 'I accept.', parentId: null, metadata: {} },
+			{ id: 'narration_turn_1', type: 'narration', content: 'The emperor nods.', parentId: 'entry_turn_1', metadata: {} },
+		];
+
+		expect(rawTurnSourcePairError(metadata, validEntries)).toBeNull();
+		expect(rawTurnSourcePairError(metadata, validEntries.slice(0, 1))).toBe('source_entries_missing');
+		expect(rawTurnSourcePairError(metadata, [validEntries[0], { ...validEntries[1], parentId: 'entry_other' }]))
+			.toBe('source_entry_pair_changed');
+		expect(rawTurnSourcePairError(metadata, [
+			validEntries[0],
+			{ ...validEntries[1], metadata: { nonCanon: true } },
+		])).toBe('source_entries_non_canon');
+	});
+
+	it('invalidates raw turns when canonical content or the indexed file content changes', () => {
+		const playerText = 'I accept the emperor\'s offer.';
+		const narration = 'The emperor offers his daughter and the court falls silent.';
+		const rawContent = renderTurnEvidenceMarkdown({
+			story: { id: 'story_veil', title: 'Veil', serverVersion: 12 },
+			clientTurnId: 'turn_offer',
+			position: 24,
+			playerText,
+			narration,
+		});
+		const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+		const metadata = {
+			clientTurnId: 'turn_offer',
+			playerContentHash: hash(playerText),
+			narrationContentHash: hash(narration),
+		};
+		const entries = [
+			{ id: 'entry_turn_offer', type: 'user_action', content: playerText, parentId: null, metadata: {} },
+			{ id: 'narration_turn_offer', type: 'narration', content: narration, parentId: 'entry_turn_offer', metadata: {} },
+		];
+
+		expect(rawTurnSourcePairError(metadata, entries, {
+			rawContent,
+			indexedContentHash: hash(rawContent),
+		})).toBeNull();
+		expect(rawTurnSourcePairError(metadata, [
+			entries[0],
+			{ ...entries[1], content: 'Poisoned replacement lore.' },
+		])).toBe('source_entry_content_changed');
+		expect(rawTurnSourcePairError(metadata, entries, {
+			rawContent: `${rawContent}\npoisoned`,
+			indexedContentHash: hash(rawContent),
+		})).toBe('raw_turn_file_content_changed');
+	});
+
+	it('validates legacy raw pages against their rendered canonical sections when source hashes are absent', () => {
+		const playerText = 'I ask for the terms.';
+		const narration = 'The emperor names his daughter as the offered bride.';
+		const rawContent = renderTurnEvidenceMarkdown({
+			story: { id: 'story_veil', title: 'Veil', serverVersion: 8 },
+			clientTurnId: 'legacy_turn',
+			position: 18,
+			playerText,
+			narration,
+		});
+		const entries = [
+			{ id: 'entry_legacy_turn', type: 'user_action', content: playerText, parentId: null, metadata: {} },
+			{ id: 'narration_legacy_turn', type: 'narration', content: narration, parentId: 'entry_legacy_turn', metadata: {} },
+		];
+
+		expect(rawTurnSourcePairError({ clientTurnId: 'legacy_turn' }, entries, { rawContent })).toBeNull();
+		expect(rawTurnSourcePairError({ clientTurnId: 'legacy_turn' }, [
+			entries[0],
+			{ ...entries[1], content: 'Scrambled replacement lore.' },
+		], { rawContent })).toBe('source_entry_content_changed');
+	});
+
+	it('refuses orphan raw evidence left behind by a story replacement', async () => {
+		const root = await mkdtemp(path.join(os.tmpdir(), 'mtherios-campaign-'));
+		tempRoots.push(root);
+		const config = testConfig(root);
+		const result = await appendTurnEvidence({
+			story: { id: 'story_replaced', title: 'Replaced', serverVersion: 9 },
+			clientTurnId: 'deleted_turn',
+			position: 15,
+			playerText: 'Discarded action.',
+			narration: 'Discarded narration.',
+		}, { config, indexFile: async () => undefined });
+		const limit = vi.fn().mockResolvedValue([]);
+		const where = vi.fn(() => ({ limit }));
+		const from = vi.fn(() => ({ where }));
+		dbMocks.getDb.mockReturnValue({ select: vi.fn(() => ({ from })) });
+
+		await expect(readCampaignPage({
+			storyId: 'story_replaced',
+			kind: 'raw_turn',
+			relativePath: result.files[0].relativePath,
+			config,
+		})).rejects.toThrow('not part of the current story');
+	});
+
 	it('appends bounded turn evidence markdown and indexes the file metadata', async () => {
 		const root = await mkdtemp(path.join(os.tmpdir(), 'mtherios-campaign-'));
 		tempRoots.push(root);
 		const config = testConfig(root);
-		const indexed: Array<{ relativePath: string; kind: string; contentHash: string; byteLength: number; serverVersion: number }> = [];
+		const indexed: Array<{ relativePath: string; kind: string; contentHash: string; byteLength: number; serverVersion: number; metadata?: Record<string, unknown> }> = [];
 
 		const result = await appendTurnEvidence({
 			story: {
@@ -83,6 +187,10 @@ describe('campaign vault storage', () => {
 				serverVersion: 42,
 				byteLength: Buffer.byteLength(markdown, 'utf8'),
 				contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+				metadata: expect.objectContaining({
+					playerContentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+					narrationContentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+				}),
 			}),
 		]);
 
@@ -91,6 +199,7 @@ describe('campaign vault storage', () => {
 			kind: 'raw_turn',
 			relativePath: result.files[0].relativePath,
 			config,
+			requireIndexedRawTurn: false,
 		});
 		expect(rawPage.kind).toBe('raw_turn');
 		expect(rawPage.relativePath).toBe('raw/turns/000128-client-turn-1.md');

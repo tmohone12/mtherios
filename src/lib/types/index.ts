@@ -36,6 +36,8 @@ export interface Meter {
 }
 
 export interface Story {
+	/** Read-only cache of the PostgreSQL-backed campaign continuity brief. */
+	campaignState?: import('$lib/contracts/campaignState').CampaignStateFact[];
   id: string
   /** Shelf/library workspace this story belongs to. Shared canon can live at shelf scope. */
   shelfId?: string | null
@@ -436,6 +438,7 @@ export interface Chapter {
   startEntryId: string
   endEntryId: string
   entryCount: number
+  sourceEntryIds?: string[] // Exact coverage; pending interleaved actions can lie inside the position range.
 
   // Content
   summary: string
@@ -452,8 +455,7 @@ export interface Chapter {
   emotionalTone: string | null
 
   branchId: string | null // Branch this chapter belongs to (null = main branch for legacy)
-  /** Pinned chapters are never consumed by arcs — they stay in the Recent tier permanently
-   *  as persistent grounding context (lore bibles, timelines, reference material). */
+  /** Pinned chapters stay available as grounding context even after inclusion in an arc. */
   pinned?: boolean
 
   createdAt: number
@@ -583,6 +585,7 @@ export interface Entry {
   injection: EntryInjection
 
   // Metadata
+  metadata?: Record<string, unknown> | null
   firstMentioned: string | null // Entry ID where first mentioned
   lastMentioned: string | null // Entry ID where last mentioned
   mentionCount: number
@@ -632,6 +635,12 @@ export interface CharacterEntryState extends BaseEntryState {
   rank?: string | null
   role?: string | null
   motivations?: string[] | null
+  currentGoal?: string | null
+  currentPlan?: string | null
+  lastIndependentAction?: string | null
+  nextOpportunity?: string | null
+  nextOpportunityRecordedAt?: string | null
+  constraint?: string | null
   personality?: string | null
   traits?: string[]
   // Active pressures — circumstances tightening around this NPC that they
@@ -641,12 +650,22 @@ export interface CharacterEntryState extends BaseEntryState {
   pressures?: string[]
   /** Faction names/ids this character belongs to, serves, leads, represents, or is sworn to. */
   factionTags?: string[]
+  /** Whether this character currently travels with the protagonist's active party. */
+  partyMember?: boolean
+  /** Short table-facing role such as Scout, Face, Healer, or Guide. */
+  partyRole?: string | null
   /** Player-character prompt guidance, when this character is the protagonist. */
   playerPrompt?: string | null
-  /** Durable assets, contacts, claims, or resources tied to the protagonist. */
-  assets?: string[]
+	/** Durable assets, contacts, claims, or resources tied to the protagonist. */
+	assets?: string[]
+	/** Persisted D&D-style player sheet, projected from the protagonist's metadata. */
+	playerSheet?: Record<string, unknown>
+	/** Player-known abilities and current buff notes for the GM. */
+	playerCapabilities?: import('$lib/contracts/playerCapabilities').PlayerCapabilities
   /** Explicit character-control details from the World Drawer. */
   appearance?: string | null
+  presentation?: string | null
+  speechStyle?: string | null
   voice?: string | null
   mannerisms?: string[]
   personalityDescriptors?: string[]
@@ -697,11 +716,10 @@ export interface ItemEntryState extends BaseEntryState {
  * Inter-faction relation. `standing` is the fast-moving current temperature;
  * `affinity` is the slower-moving "trust" — a brittle alliance has high
  * standing but low affinity. `history` is a capped log of recent shifts that
- * F5 (loop closure) reads back into the worldsim AI's context.
+ * Older browser faction records can retain this history.
  *
  * Stored values may also still be plain `number` from pre-F4 stories — code
- * that reads `interFactionRelations[name]` MUST normalize through `getRel()`
- * (see WorldSimulationService / story.svelte.ts).
+ * that reads `interFactionRelations[name]` must normalize both shapes.
  */
 export interface FactionRelation {
   standing: number // -100..100, fast-moving
@@ -854,6 +872,8 @@ export interface UIState {
 export type StrategicBrainTrigger =
   | 'arc_created'
   | 'manual'
+  | 'world_tick'
+  | 'scheduled_refresh'
   | 'major_event'
   | 'scheme_threshold'
   | 'faction_shock'
@@ -1121,6 +1141,7 @@ export interface PlotBrainPressureBeat {
 
 export interface PlotBrainPlotCard {
   id: string
+  storyThreadId?: string | null
   title: string
   logline: string
   kind: PlotBrainPlotKind
@@ -1324,6 +1345,8 @@ export interface UISettings {
   retrievedLoreEntryLimit: number
   conversationMemoryLimit: number
   backendMemoryTokenBudget: number
+  recentDialogueTokens: number
+  recentDialogueTurns: number
   snapshotTokenCap: number // 0 = unlimited (context window is the limit)
   /** @deprecated Bound server stories always route turns through the terminal engine. */
   serverAuthoritativeTurns?: boolean
@@ -1745,7 +1768,7 @@ export type AgreementCategory =
   | 'vassalage' // explicit subordinate/liege relationship
   | 'bargain-with-entity' // faustian / magical pact with a supernatural party
 
-export type AgreementStatus = 'active' | 'broken' | 'fulfilled' | 'expired' | 'contested'
+export type AgreementStatus = import('$lib/contracts/agreements').AgreementStatus
 
 export type AgreementSecrecy = 'public' | 'known' | 'secret'
 

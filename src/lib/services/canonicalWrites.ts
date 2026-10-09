@@ -1,3 +1,4 @@
+import { playerCapabilitiesSchema } from '$lib/contracts/playerCapabilities';
 import {
 	deleteLorebookEntry,
 	deleteArc,
@@ -165,7 +166,13 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 	const knownFacts = stringListFrom(metadata.knownFacts) ?? previousState?.knownFacts ?? [];
 	const factionName = stringFrom(metadata.factionName) ?? stringFrom(previousStateRecord?.factionName);
 	const factionTags = stringListFrom(metadata.factionTags) ?? previousState?.factionTags ?? (factionName ? [factionName] : []);
+	const partyMember = typeof metadata.partyMember === 'boolean' ? metadata.partyMember : previousState?.partyMember ?? false;
+	const partyRole = partyMember === false ? null
+		: Object.prototype.hasOwnProperty.call(metadata, 'partyRole') ? stringFrom(metadata.partyRole) ?? null
+			: previousState?.partyRole ?? null;
 	const visibilityNote = stringFrom(metadata.visibilityNote) ?? stringFrom(previousStateRecord?.visibilityNote);
+	const playerSheet = record(metadata.playerSheet);
+	const playerCapabilities = metadata.playerCapabilities ?? previousState?.playerCapabilities;
 	const state = {
 		...(previousState ?? {}),
 		type: 'character',
@@ -175,7 +182,7 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 		relationship: {
 			...relationship,
 			level: affinity,
-			status: currentDisposition ?? relationship.status,
+			status: isSelf ? 'self' : currentDisposition ?? relationship.status,
 		},
 		knownFacts,
 		revealedSecrets: previousState?.revealedSecrets ?? [],
@@ -186,11 +193,15 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 		status: character.status,
 		playerPrompt,
 		assets,
+		...(Object.keys(playerSheet).length > 0 ? { playerSheet } : {}),
+		...(playerCapabilities !== undefined ? { playerCapabilities: playerCapabilitiesSchema.parse(playerCapabilities) } : {}),
 		bio,
 		appearance,
 		personality,
 		motivations,
 		factionTags,
+		partyMember,
+		partyRole,
 		voice,
 		mannerisms,
 		personalityDescriptors,

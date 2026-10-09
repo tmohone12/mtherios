@@ -180,3 +180,12 @@ export type NextBeat = z.infer<typeof nextBeatSchema>;
 export type PlotMomentum = z.infer<typeof plotMomentumSchema>;
 export type ThreadUpdate = z.infer<typeof threadUpdateSchema>;
 export type WorldSimulationResult = z.infer<typeof worldSimulationResultSchema>;
+
+// Read compatibility for older browser snapshots; the generation service is retired.
+export interface SeasonEffect {
+	currentSeason: 'spring' | 'summer' | 'autumn' | 'winter' | 'long_winter';
+	militaryModifier: number;
+	travelModifier: number;
+	foodPressure: 'abundant' | 'normal' | 'scarce' | 'famine';
+	narrativeNote: string;
+}

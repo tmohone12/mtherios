@@ -1,5 +1,7 @@
-import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET } from '$lib/services/memorySettings';
+import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET, normalizeRecentDialogueTokens, normalizeRecentDialogueTurns } from '$lib/services/memorySettings';
+import { FIXED_CHAPTER_SETTINGS } from './chapterCadence';
 import { normalizeBackendContextBudget } from '$lib/services/backendTurnContext';
+import { containsSceneActorMention } from '$lib/services/ai/context/sceneActorMention';
 
 interface CharacterLike {
 	id: string;
@@ -28,12 +30,16 @@ export interface BackendClientContextInput {
 	currentActionText?: string;
 	backendMemoryTokenBudget?: number | null;
 	contextBudget?: number | null;
+	recentDialogueTokens?: number | null;
+	recentDialogueTurns?: number | null;
 	chapterThreshold?: number | null;
 	postChapterBuffer?: number | null;
 	chaptersPerArc?: number | null;
 }
 
 const MAX_RELEVANT_NPCS = 8;
+const CURRENT_SCENE_CHAR_LIMIT = 1400;
+const CURRENT_SCENE_PARAGRAPH_LIMIT = 4;
 
 function asRecord(value: unknown): Record<string, unknown> {
 	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -74,7 +80,16 @@ function isPlayerCharacter(character: CharacterLike): boolean {
 }
 
 function latestNarrationText(entries: EntryLike[]): string {
-	return [...entries].reverse().find((entry) => entry.type === 'narration')?.content ?? '';
+	const content = [...entries].reverse().find((entry) => entry.type === 'narration')?.content.trim() ?? '';
+	if (!content) return '';
+	const headerMatch = content.match(/^\s*(\[[^\r\n]*\])/);
+	const header = headerMatch?.[1] ?? '';
+	const body = headerMatch ? content.slice(headerMatch[0].length).trim() : content;
+	const finalBeat = body.split(/\r?\n\s*\r?\n/).filter(Boolean).slice(-CURRENT_SCENE_PARAGRAPH_LIMIT).join('\n\n');
+	const safeHeader = header.length > 360 ? `${header.slice(0, 357)}...` : header;
+	const tailBudget = Math.max(0, CURRENT_SCENE_CHAR_LIMIT - safeHeader.length - 1);
+	const tail = finalBeat.length > tailBudget ? `...${finalBeat.slice(-(tailBudget - 3))}` : finalBeat;
+	return [safeHeader, tail].filter(Boolean).join('\n');
 }
 
 function characterAliases(character: CharacterLike): string[] {
@@ -110,13 +125,15 @@ function isMarkedPresent(character: CharacterLike): boolean {
 	return metadata.present === true || metadata.isPresent === true;
 }
 
-function isRelevantNpc(character: CharacterLike, sceneText: string, actionText: string, currentLocation: LocationLike | null): boolean {
-	if (character.status && character.status !== 'active') return false;
-	if (isPlayerCharacter(character)) return false;
-	if (isMarkedPresent(character)) return true;
-	if (matchesCurrentLocation(character, currentLocation)) return true;
-	const lookupText = `${sceneText}\n${actionText}`;
-	return characterAliases(character).some((alias) => containsPhrase(lookupText, alias));
+function npcRelevanceRank(character: CharacterLike, sceneText: string, currentLocation: LocationLike | null): number | null {
+	if (character.status && character.status !== 'active') return null;
+	if (isPlayerCharacter(character)) return null;
+	const aliases = characterAliases(character);
+	if (aliases.some((alias) => containsSceneActorMention(sceneText, alias))) return 0;
+	if (matchesCurrentLocation(character, currentLocation)) return 1;
+	// A contradictory location is stronger evidence than a stale presence bit.
+	if (isMarkedPresent(character) && !currentLocation) return 2;
+	return null;
 }
 
 /**
@@ -130,14 +147,15 @@ export function buildBackendClientContext(input: BackendClientContextInput) {
 	const currentLocation = input.locations.find((location) => location.current) ?? null;
 	const sourceEntries = input.promptEntries?.length ? input.promptEntries : input.entries ?? [];
 	const sceneText = latestNarrationText(sourceEntries);
-	const actionText = input.currentActionText ?? '';
 	const protagonistIds = input.characters
 		.filter((character) => (!character.status || character.status === 'active') && isPlayerCharacter(character))
 		.map((character) => character.id);
 	const relevantNpcIds = input.characters
-		.filter((character) => isRelevantNpc(character, sceneText, actionText, currentLocation))
+		.map((character, index) => ({ character, index, rank: npcRelevanceRank(character, sceneText, currentLocation) }))
+		.filter((candidate): candidate is typeof candidate & { rank: number } => candidate.rank !== null)
+		.sort((left, right) => left.rank - right.rank || left.index - right.index)
 		.slice(0, MAX_RELEVANT_NPCS)
-		.map((character) => character.id);
+		.map(({ character }) => character.id);
 	const sceneEntityIds = [...new Set([
 		...protagonistIds,
 		...(currentLocation ? [currentLocation.id] : []),
@@ -151,8 +169,9 @@ export function buildBackendClientContext(input: BackendClientContextInput) {
 		threadIds: [],
 		memoryTokenBudget: input.backendMemoryTokenBudget || DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET,
 		contextBudget: normalizeBackendContextBudget(input.contextBudget ?? 0),
-		chapterThreshold: input.chapterThreshold || 20,
-		postChapterBuffer: input.postChapterBuffer ?? 10,
-		chaptersPerArc: input.chaptersPerArc || 5,
+		...(input.recentDialogueTurns === undefined && input.recentDialogueTokens !== undefined
+			? { recentDialogueTokens: normalizeRecentDialogueTokens(input.recentDialogueTokens) }
+			: { recentDialogueTurns: normalizeRecentDialogueTurns(input.recentDialogueTurns) }),
+		...FIXED_CHAPTER_SETTINGS,
 	};
 }

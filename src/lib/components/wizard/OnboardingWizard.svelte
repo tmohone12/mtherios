@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Sword, Feather, ChevronLeft, ChevronRight, Globe, Zap, Play, Plus, X, Upload, Loader2, Sparkles } from 'lucide-svelte';
+	import { Sword, Feather, ChevronLeft, ChevronRight, Globe, Zap, Play, Plus, X, Upload, Loader2, Sparkles, Check, Eye, EyeOff } from 'lucide-svelte';
 	import { fly } from 'svelte/transition';
 	import { onMount } from 'svelte';
 	import { uuid } from '$lib/utils/uuid';
@@ -115,11 +115,11 @@
 	}
 
 	const steps = [
-		{ title: 'Connect', subtitle: 'Choose your AI provider' },
-		{ title: 'Mode', subtitle: 'How will you play?' },
-		{ title: 'World', subtitle: 'Set the stage' },
-		{ title: 'Character', subtitle: 'Who are you?' },
-		{ title: 'Lore', subtitle: 'Build your codex' },
+		{ title: 'Connect', heading: 'Meet your creative partner.', subtitle: 'Connect an AI provider to bring your stories to life.' },
+		{ title: 'Mode', heading: 'Find your way into the story.', subtitle: 'Step into a character’s shoes, or take the author’s chair.' },
+		{ title: 'World', heading: 'Give your imagination a place.', subtitle: 'A name, a mood, a spark of conflict. Start with what you know.' },
+		{ title: 'Character', heading: 'Someone to follow.', subtitle: 'Introduce a protagonist, or let one emerge along the way.' },
+		{ title: 'Lore', heading: 'A world with a history.', subtitle: 'Add the people, places, and ideas your story should remember.' },
 	];
 
 	function next() {
@@ -377,50 +377,69 @@
 	});
 </script>
 
-<div class="app-shell fixed inset-0 z-50 flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-[var(--bg-primary)]">
-	<div class="grain-overlay"></div>
-	<div class="cathedral-glow"></div>
+<input
+	bind:this={storyFileInput}
+	type="file"
+	accept=".json,application/json"
+	class="hidden"
+	aria-label="Import story or world database file"
+	onchange={handleStoryFileImport}
+/>
+
+<div class="app-shell wizard-shell">
 
 	<!-- Header -->
-	<div class="relative z-10 flex items-center justify-between px-6 py-4">
+	<header class="wizard-header">
 		<div class="flex items-center gap-3">
 			<svg viewBox="0 0 48 48" fill="none" class="h-6 w-6 text-[var(--text-accent)]">
 				<path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="currentColor" stroke-width="1.5" fill="none"/>
 				<circle cx="24" cy="24" r="5" fill="currentColor" opacity="0.6"/>
 			</svg>
-			<span class="font-display text-lg font-semibold tracking-wide text-[var(--text-accent)]">Mtherios</span>
+			<span class="wizard-wordmark">MythEngine<span>A living story</span></span>
 		</div>
 		{#if onSkip}
-			<button class="flex min-h-11 items-center px-2 text-sm text-[var(--text-muted)] hover:text-[var(--text-primary)]" onclick={onSkip}>
-				Skip for now
+			<button class="wizard-exit" onclick={onSkip}>
+				Back to library <X class="h-4 w-4" />
 			</button>
 		{/if}
-	</div>
+	</header>
 
-	<!-- Progress dots -->
-	<div class="relative z-10 flex justify-center gap-1 py-0 sm:gap-2 sm:py-2">
+	<div class="wizard-layout">
+	<aside class="wizard-sidebar">
+		<div class="wizard-introduction">
+			<span class="wizard-eyebrow">The beginning</span>
+			<h1>Every world<br />starts with<br /><em>a story.</em></h1>
+			<p>Lay the first stones. There is room for everything else to grow.</p>
+		</div>
+	<nav class="wizard-steps" aria-label="Story creation steps">
 		{#each steps as s, i}
 			<button
-				class="flex h-11 w-11 items-center justify-center rounded-lg"
+				class="wizard-step"
+				class:current={i === currentStep}
+				class:complete={i < currentStep}
 				aria-label={`Go to ${s.title}`}
 				aria-current={i === currentStep ? 'step' : undefined}
 				disabled={i > currentStep}
 				onclick={() => i <= currentStep ? goTo(i) : null}
 			>
-				<span class="h-2 rounded-full transition-all duration-300 {i === currentStep ? 'w-8 bg-[var(--color-gold-400)]' : i < currentStep ? 'w-2 bg-[var(--color-gold-600)]' : 'w-2 bg-[var(--color-surface-700)]'}"></span>
+				<span class="wizard-step-number">{#if i < currentStep}<Check class="h-3.5 w-3.5" />{:else}0{i + 1}{/if}</span>
+				<span>{s.title}</span>
+				{#if i === currentStep}<ChevronRight class="wizard-step-arrow h-3.5 w-3.5" />{/if}
 			</button>
 		{/each}
-	</div>
-
-	<!-- Step title -->
-	<div class="relative z-10 px-6 py-4 text-center">
-		<h2 class="font-display text-2xl tracking-wide text-[var(--text-primary)]">{steps[currentStep].title}</h2>
-		<p class="mt-1 text-sm text-[var(--text-muted)]">{steps[currentStep].subtitle}</p>
-	</div>
+	</nav>
+		<div class="wizard-sidebar-note"><Feather class="h-4 w-4" /><span>Your first chapter is waiting.</span></div>
+	</aside>
 
 	<!-- Content -->
-	<div class="relative z-[1] min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-32 sm:px-6">
-		<div class="mx-auto max-w-lg">
+	<div class="wizard-main">
+	<div class="wizard-content">
+		<div class="wizard-form">
+			<header class="wizard-step-heading">
+				<span class="wizard-eyebrow">Chapter 0{currentStep + 1} / {steps[currentStep].title}</span>
+				<h2>{steps[currentStep].heading}</h2>
+				<p>{steps[currentStep].subtitle}</p>
+			</header>
 
 		{#if currentStep === 0}
 		<!-- Step 0: Provider Setup -->
@@ -430,8 +449,9 @@
 					{ id: 'nanogpt', name: 'NanoGPT', desc: 'Affordable multi-model', icon: Zap },
 					{ id: 'openrouter', name: 'OpenRouter', desc: '100+ models', icon: Globe },
 				] as p}
-					<button class="flex flex-col items-center gap-3 rounded-xl border p-5 text-center transition-all
+					<button class="wizard-provider flex flex-col items-center gap-3 rounded-xl border p-5 text-center transition-all
 						{provider === p.id ? 'border-[var(--color-gold-400)] bg-[rgba(212,168,83,0.1)]' : 'border-[var(--border-primary)] hover:border-[var(--color-gold-600)]'}"
+						aria-pressed={provider === p.id}
 						onclick={() => provider = p.id}>
 						<div class="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--bg-tertiary)]">
 							<p.icon class="h-6 w-6 text-[var(--text-accent)]" />
@@ -452,8 +472,11 @@
 						type={showKey ? 'text' : 'password'}
 						bind:value={apiKey}
 						placeholder="sk-..."
-						class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-4 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none focus:ring-1 focus:ring-[var(--color-gold-600)]"
+						class="w-full rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-4 pr-12 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none focus:ring-1 focus:ring-[var(--color-gold-600)]"
 					/>
+					<button class="wizard-key-toggle" aria-label={showKey ? 'Hide API key' : 'Show API key'} onclick={() => showKey = !showKey}>
+						{#if showKey}<EyeOff class="h-4 w-4" />{:else}<Eye class="h-4 w-4" />{/if}
+					</button>
 				</div>
 				<p class="text-xs text-[var(--text-muted)]">
 					{#if provider === 'nanogpt'}
@@ -470,22 +493,21 @@
 				<div class="h-px flex-1 bg-[var(--border-primary)]"></div>
 			</div>
 
-			<input bind:this={storyFileInput} type="file" accept=".json" class="hidden" aria-label="Import story file" onchange={handleStoryFileImport} />
 			<button
 				class="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--border-primary)] py-4 text-sm text-[var(--text-muted)] transition-colors hover:border-[var(--color-gold-600)] hover:text-[var(--text-accent)]"
 				disabled={importingStory}
 				onclick={() => storyFileInput?.click()}
 			>
-				<Upload class="h-4 w-4" />
-				{importingStory ? 'Importing...' : 'Import from another device'}
+				{#if importingStory}<Loader2 class="h-4 w-4 animate-spin" />{:else}<Upload class="h-4 w-4" />{/if}
+				{importingStory ? 'Importing...' : 'Import Story or World Database'}
 			</button>
-			<p class="text-center text-xs text-[var(--text-muted)]">Import a .mtherios.json file — includes API settings</p>
+			<p class="text-center text-xs text-[var(--text-muted)]">Accepts MythEngine, legacy .mtherios.json, and .world-db.json bundles.</p>
 		</div>
 
 		{:else if currentStep === 1}
 		<!-- Step 1: Story Mode -->
 		<div class="space-y-4" in:fly={{ x: direction * 200, duration: 250 }}>
-			<button class="w-full text-left" onclick={() => storyMode = 'adventure'}>
+			<button class="wizard-mode w-full text-left" aria-pressed={storyMode === 'adventure'} onclick={() => storyMode = 'adventure'}>
 				<div class="rounded-xl border p-5 transition-all
 					{storyMode === 'adventure' ? 'border-[var(--color-gold-400)] bg-[rgba(212,168,83,0.08)]' : 'border-[var(--border-primary)] hover:border-[var(--color-gold-600)]'}">
 					<div class="flex items-center gap-4">
@@ -500,7 +522,7 @@
 				</div>
 			</button>
 
-			<button class="w-full text-left" onclick={() => storyMode = 'creative-writing'}>
+			<button class="wizard-mode w-full text-left" aria-pressed={storyMode === 'creative-writing'} onclick={() => storyMode = 'creative-writing'}>
 				<div class="rounded-xl border p-5 transition-all
 					{storyMode === 'creative-writing' ? 'border-[var(--color-gold-400)] bg-[rgba(212,168,83,0.08)]' : 'border-[var(--border-primary)] hover:border-[var(--color-gold-600)]'}">
 					<div class="flex items-center gap-4">
@@ -512,6 +534,26 @@
 							<p class="mt-1 text-sm text-[var(--text-muted)]">You are the author. Direct the narrative and collaborate with AI to craft prose.</p>
 						</div>
 					</div>
+				</div>
+			</button>
+
+			<div class="flex items-center gap-4 py-1">
+				<div class="h-px flex-1 bg-[var(--border-primary)]"></div>
+				<span class="font-display text-xs tracking-wider uppercase text-[var(--text-muted)]">or start with a world</span>
+				<div class="h-px flex-1 bg-[var(--border-primary)]"></div>
+			</div>
+
+			<button
+				class="flex w-full items-center gap-4 rounded-xl border border-dashed border-[var(--color-gold-600)] bg-[rgba(212,168,83,0.06)] p-5 text-left transition-colors hover:bg-[rgba(212,168,83,0.12)]"
+				disabled={importingStory}
+				onclick={() => storyFileInput?.click()}
+			>
+				<div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-[rgba(212,168,83,0.14)] text-[var(--text-accent)]">
+					{#if importingStory}<Loader2 class="h-6 w-6 animate-spin" />{:else}<Upload class="h-6 w-6" />{/if}
+				</div>
+				<div>
+					<div class="font-display text-base font-semibold text-[var(--text-primary)]">{importingStory ? 'Importing database…' : 'Import World Database'}</div>
+					<p class="mt-1 text-sm leading-relaxed text-[var(--text-muted)]">Create the story with its characters, factions, relationships, timeline, lore, and memory already loaded.</p>
 				</div>
 			</button>
 		</div>
@@ -536,7 +578,7 @@
 							{genre === g.id ? 'border-[var(--color-gold-400)] bg-[rgba(212,168,83,0.08)]' : 'border-[var(--border-primary)] hover:border-[var(--color-gold-600)]'}"
 							aria-pressed={genre === g.id}
 							onclick={() => genre = g.id}>
-							<span class="text-lg">{g.emoji}</span>
+							<span class="text-lg" aria-hidden="true">{g.emoji}</span>
 							<span class="text-xs text-[var(--text-muted)]">{g.label}</span>
 						</button>
 					{/each}
@@ -664,10 +706,10 @@
 	</div>
 
 	<!-- Bottom nav -->
-	<div class="fixed bottom-0 left-0 right-0 z-10 border-t border-[var(--border-primary)] bg-[var(--bg-secondary)] px-6 py-4 pb-[max(env(safe-area-inset-bottom),16px)]">
-		<div class="mx-auto flex max-w-lg items-center justify-between gap-4">
+	<footer class="wizard-footer">
+		<div class="wizard-footer-inner">
 			<button
-				class="flex items-center gap-2 rounded-xl px-4 py-3 text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]
+				class="wizard-back flex items-center gap-2 rounded-xl px-4 py-3 text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]
 					{currentStep === 0 ? 'invisible' : ''}"
 				onclick={prev}>
 				<ChevronLeft class="h-4 w-4" />
@@ -677,8 +719,7 @@
 			{#if currentStep === 4}
 				<!-- Final step: Begin Story -->
 				<button
-					class="flex items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] px-8 py-3 font-display text-sm font-semibold tracking-wide text-[var(--bg-primary)] transition-all hover:shadow-lg hover:shadow-[rgba(212,168,83,0.3)]
-						{saving ? 'opacity-70 cursor-not-allowed' : ''}"
+					class="wizard-next"
 					disabled={saving}
 					onclick={beginStory}>
 					{#if saving}
@@ -691,16 +732,122 @@
 				</button>
 			{:else}
 				<button
-					class="flex items-center gap-2 rounded-xl px-6 py-3 font-display text-sm tracking-wide transition-all
-						{canProceed
-							? 'bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] font-semibold text-[var(--bg-primary)] hover:shadow-lg hover:shadow-[rgba(212,168,83,0.3)]'
-							: 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] cursor-not-allowed'}"
+					class="wizard-next"
 					disabled={!canProceed}
 					onclick={next}>
-					Next
+					Continue
 					<ChevronRight class="h-4 w-4" />
 				</button>
 			{/if}
 		</div>
+	</footer>
+	</div>
 	</div>
 </div>
+
+<style>
+	.wizard-shell { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg-primary); }
+	.wizard-header { display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; min-height: 90px; padding: 18px 42px; border-bottom: 1px solid var(--border-primary); }
+	.wizard-wordmark { color: var(--text-primary); font: 24px/1.1 var(--font-display); letter-spacing: -.025em; }
+	.wizard-wordmark > span { display: block; margin-top: 5px; font: 8px/1.4 var(--font-ui); letter-spacing: .2em; text-transform: uppercase; color: var(--text-muted); }
+	.wizard-exit { display: flex; align-items: center; gap: 13px; min-height: 42px; padding: 0 12px; border-radius: 8px; color: var(--text-muted); font-size: 12px; }
+	.wizard-exit:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+	.wizard-layout { display: grid; grid-template-columns: 330px minmax(0, 1fr); width: min(1240px, 100%); min-height: 0; margin-inline: auto; flex: 1; }
+	.wizard-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; padding: 45px 35px 28px; border-right: 1px solid var(--border-primary); }
+	.wizard-eyebrow { display: block; color: var(--text-accent); font: 10px/1.5 var(--font-ui); font-weight: 600; letter-spacing: .17em; text-transform: uppercase; }
+	.wizard-introduction h1 { margin-top: 20px; font: 43px/1.05 var(--font-display); letter-spacing: -.035em; color: var(--text-primary); }
+	.wizard-introduction h1 em { color: var(--text-accent); font-weight: 400; }
+	.wizard-introduction p { margin-top: 19px; max-width: 215px; font-size: 12px; line-height: 1.9; color: var(--text-muted); }
+	.wizard-steps { display: flex; flex-direction: column; gap: 6px; margin-top: 35px; }
+	.wizard-step { display: flex; align-items: center; gap: 14px; min-height: 47px; padding: 9px 13px; border: 1px solid transparent; border-radius: 9px; color: var(--text-muted); font-size: 12px; text-align: left; transition: background 150ms, border-color 150ms, color 150ms; }
+	.wizard-step-number { display: flex; align-items: center; justify-content: center; min-width: 23px; height: 23px; font: 10px var(--font-mono); color: var(--text-muted); }
+	.wizard-step.current { background: color-mix(in srgb, var(--text-accent) 8%, transparent); border-color: color-mix(in srgb, var(--text-accent) 22%, transparent); color: var(--text-primary); }
+	.wizard-step.current .wizard-step-number { color: var(--text-accent); }
+	.wizard-step.complete .wizard-step-number { color: #a9bea4; }
+	.wizard-step:not(:disabled):hover { background: var(--bg-tertiary); }
+	.wizard-step:disabled { opacity: .55; }
+	.wizard-step :global(.wizard-step-arrow) { margin-left: auto; color: var(--text-accent); }
+	.wizard-sidebar-note { display: flex; align-items: center; gap: 10px; margin-top: auto; padding-top: 30px; color: var(--text-muted); font-size: 10px; }
+	.wizard-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg-secondary); }
+	.wizard-content { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: stable; }
+	.wizard-form { width: 100%; max-width: 720px; margin-inline: auto; padding: 47px 44px 44px; }
+	.wizard-step-heading { margin-bottom: 32px; }
+	.wizard-step-heading h2 { max-width: 560px; margin-top: 14px; color: var(--text-primary); font: 37px/1.13 var(--font-display); letter-spacing: -.03em; }
+	.wizard-step-heading p { margin-top: 14px; color: var(--text-muted); font-size: 13px; line-height: 1.8; }
+	.wizard-form :global(input:not([type='file'])), .wizard-form :global(textarea) { min-width: 0; border-radius: 9px; background: var(--bg-primary); font-size: 14px; line-height: 1.7; }
+	.wizard-form :global(textarea) { resize: vertical; }
+	.wizard-form :global(input:focus-visible), .wizard-form :global(textarea:focus-visible) { outline: 2px solid color-mix(in srgb, var(--text-accent) 40%, transparent); outline-offset: 3px; }
+	.wizard-form :global(label.font-display) { display: inline-block; padding-bottom: 3px; font: 12px/1.5 var(--font-ui); font-weight: 600; letter-spacing: .01em; }
+	.wizard-provider { position: relative; flex-direction: row; text-align: left; gap: 14px; padding: 22px 18px; background: var(--bg-primary); }
+	.wizard-provider[aria-pressed='true'] { background: color-mix(in srgb, var(--text-accent) 8%, var(--bg-primary)); }
+	.wizard-provider :global(.font-display) { font-family: var(--font-ui); }
+	.wizard-provider :global(.h-12) { height: 36px; width: 36px; background: transparent; flex-shrink: 0; }
+	.wizard-mode > div { padding: 25px 22px; border-radius: 12px; background: var(--bg-primary); }
+	.wizard-mode[aria-pressed='true'] > div { background: color-mix(in srgb, var(--text-accent) 7%, var(--bg-primary)); }
+	.wizard-mode :global(.font-display) { font: 23px/1.3 var(--font-display); font-weight: 400; }
+	.wizard-mode p { font-size: 12px; line-height: 1.8; }
+	.wizard-mode :global(.h-12) { flex-shrink: 0; }
+	.wizard-key-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; color: var(--text-muted); border-radius: 6px; }
+	.wizard-key-toggle:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+	.wizard-footer { flex-shrink: 0; padding: 20px 44px max(env(safe-area-inset-bottom), 20px); border-top: 1px solid var(--border-primary); background: var(--bg-secondary); }
+	.wizard-footer-inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 632px; margin-inline: auto; }
+	.wizard-back { padding-left: 0; font-size: 12px; }
+	.wizard-next { display: flex; align-items: center; justify-content: center; gap: 16px; min-width: 144px; min-height: 46px; padding: 12px 22px; border: 1px solid var(--text-accent); border-radius: 8px; color: var(--bg-primary); background: var(--text-accent); font: 600 12px/1.5 var(--font-ui); transition: background 150ms, transform 150ms; }
+	.wizard-next:not(:disabled):hover { background: color-mix(in srgb, var(--text-accent) 82%, white); transform: translateY(-1px); }
+	.wizard-next:disabled { color: var(--text-muted); background: var(--bg-tertiary); border-color: var(--border-primary); cursor: not-allowed; }
+	@media (max-height: 850px) and (min-width: 801px) {
+		.wizard-header { min-height: 75px; }
+		.wizard-sidebar { padding-top: 30px; }
+		.wizard-introduction h1 { font-size: 36px; margin-top: 12px; }
+		.wizard-introduction p { margin-top: 12px; }
+		.wizard-steps { margin-top: 22px; gap: 2px; }
+		.wizard-step { min-height: 41px; padding-block: 7px; }
+		.wizard-form { padding-top: 34px; }
+	}
+	@media (max-width: 1000px) {
+		.wizard-layout { grid-template-columns: 270px minmax(0, 1fr); }
+		.wizard-sidebar { padding-inline: 26px; }
+		.wizard-introduction h1 { font-size: 38px; }
+		.wizard-form { padding: 34px 30px; }
+		.wizard-step-heading h2 { font-size: 32px; }
+		.wizard-provider { flex-direction: column; align-items: flex-start; padding: 17px; gap: 7px; }
+		.wizard-footer { padding-inline: 30px; }
+	}
+	@media (max-width: 800px) {
+		.wizard-header { min-height: 76px; padding: 14px 22px; }
+		.wizard-layout { display: flex; flex-direction: column; }
+		.wizard-sidebar { flex-shrink: 0; padding: 0; border-right: 0; border-bottom: 1px solid var(--border-primary); }
+		.wizard-introduction, .wizard-sidebar-note { display: none; }
+		.wizard-steps { flex-direction: row; gap: 4px; margin: 0; padding: 11px 18px; overflow-x: auto; }
+		.wizard-step { flex: 1; flex-shrink: 0; justify-content: center; min-width: max-content; min-height: 42px; gap: 7px; padding: 8px 11px; font-size: 11px; }
+		.wizard-step-number { min-width: 17px; font-size: 9px; }
+		.wizard-step :global(.wizard-step-arrow) { display: none; }
+		.wizard-main { flex: 1; }
+		.wizard-form { max-width: 650px; padding: 32px 28px; }
+		.wizard-step-heading { margin-bottom: 27px; }
+		.wizard-step-heading h2 { max-width: 460px; font-size: 33px; }
+		.wizard-provider { flex-direction: row; align-items: center; gap: 12px; }
+		.wizard-footer { padding: 14px 28px max(env(safe-area-inset-bottom), 14px); }
+	}
+	@media (max-width: 480px) {
+		.wizard-header { padding-inline: 18px; }
+		.wizard-wordmark { font-size: 22px; }
+		.wizard-exit { font-size: 11px; gap: 10px; padding-right: 0; }
+		.wizard-steps { padding: 9px 12px; gap: 3px; }
+		.wizard-step { flex-direction: column; gap: 1px; padding: 7px; font-size: 10px; min-width: 56px; }
+		.wizard-step-number { height: 17px; }
+		.wizard-form { padding: 28px 20px; }
+		.wizard-step-heading h2 { font-size: 31px; }
+		.wizard-step-heading p { font-size: 12px; }
+		.wizard-provider { flex-direction: column; align-items: flex-start; gap: 8px; padding: 17px; }
+		.wizard-mode > div { padding: 21px 17px; }
+		.wizard-mode :global(.h-12) { height: 36px; width: 36px; }
+		.wizard-mode :global(.font-display) { font-size: 21px; }
+		.wizard-form :global(input:not([type='file'])), .wizard-form :global(textarea) { font-size: 16px; }
+		.wizard-footer { padding-inline: 20px; }
+		.wizard-next { min-height: 46px; }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.wizard-shell :global(*) { transition-duration: 0ms !important; animation-duration: 0ms !important; }
+	}
+</style>

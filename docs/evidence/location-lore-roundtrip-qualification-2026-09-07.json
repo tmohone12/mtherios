@@ -1,0 +1,14 @@
+{
+  "completedAt": "2026-09-07T22:04:35.915Z",
+  "checks": [
+    "Current and historical scoped lore, conditional exception and secret filtering survive import with new IDs.",
+    "Location merge preserves source records and remaps scene, actor, route, event, memory, territory and resource pointers; cyclic merge is rejected.",
+    "Actual export and second remapped import retain owner, ancestry, scene, exception, supersession, transcript sources and historical views. Repeated merge is idempotent."
+  ],
+  "disposableStoryIds": [
+    "story_0e32e77a-b70b-418b-8dbd-a1bf49b36420",
+    "story_6abb1877-00ad-49f5-ae51-5948f1a9fcd3"
+  ],
+  "disposableStoriesRemoved": true,
+  "historicalEntitySnapshotsExcluded": true
+}

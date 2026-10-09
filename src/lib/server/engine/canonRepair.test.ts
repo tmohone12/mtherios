@@ -65,6 +65,50 @@ const characterReferenceProposal = {
 	updatedAt: '2026-06-13T00:00:00.000Z',
 };
 
+function gmCharacterDraftProposal(input: {
+	storyId?: string;
+	id?: string;
+	sourceName?: string;
+	name?: string;
+	aliases?: string[];
+} = {}): typeof patchProposals.$inferSelect {
+	const storyId = input.storyId ?? 'story_1';
+	const proposalId = input.id ?? 'character_create_proposal_tala';
+	const sourceName = input.sourceName ?? 'Tala Venn';
+	const name = input.name ?? sourceName;
+	return {
+		...characterReferenceProposal,
+		id: proposalId,
+		storyId,
+		targetRecordId: 'unresolved_character_tala_venn',
+		proposedBy: 'gm_character_draft',
+		operations: [{
+			op: 'review',
+			path: '/entities/character',
+			value: {
+				storyId,
+				type: 'character',
+				name,
+				description: 'A harbor courier carrying dangerous evidence.',
+				status: 'active',
+				visibility: 'gm',
+				aliases: input.aliases ?? [],
+				state: {
+					bio: 'Raised among the tide warehouses.',
+					rank: 'Harbor courier',
+					currentLocation: 'East Tide Warehouses',
+					factionTags: ['Harbor Guild'],
+				},
+			},
+		}],
+		status: 'pending',
+		metadata: {
+			sourceType: 'gm_character_draft',
+			sourceName,
+		},
+	};
+}
+
 const dueFactionProjectProposal: typeof patchProposals.$inferSelect = {
 	id: 'proposal_due_project_project_harbor_blockade',
 	storyId: 'story_1',
@@ -136,6 +180,8 @@ function createDbMock(options: {
 	type DbSource = 'root' | 'tx';
 	const insertCalls: Array<{ source: DbSource; table: unknown; value: unknown }> = [];
 	const updateCalls: Array<{ source: DbSource; table: unknown; value: Record<string, unknown> }> = [];
+	const deleteCalls: Array<{ source: DbSource; table: unknown }> = [];
+	const proposalRows = (options.patchProposalRows ?? [characterReferenceProposal]).map((row) => ({ ...row }));
 	let entitySelection = 0;
 
 	function createConnection(source: DbSource) {
@@ -151,7 +197,7 @@ function createDbMock(options: {
 				return selectChain;
 			}),
 			limit: vi.fn(() => {
-				if (selectedTable === patchProposals) return Promise.resolve(options.patchProposalRows ?? [characterReferenceProposal]);
+				if (selectedTable === patchProposals) return Promise.resolve(proposalRows);
 				if (selectedTable === entities && options.sequentialEntityRows) {
 					const row = options.sequentialEntityRows[entitySelection++];
 					return Promise.resolve(row ? [row] : []);
@@ -160,8 +206,9 @@ function createDbMock(options: {
 				return Promise.resolve([]);
 			}),
 			for: vi.fn(() => Promise.resolve(selectedTable === patchProposals
-				? options.patchProposalRows ?? [characterReferenceProposal]
-				: [])),
+				? proposalRows.filter((row) => ['pending', 'needs_review'].includes(row.status))
+				: selectedTable === entities ? (options.entityRows ?? []).filter((row) => row.id === ((proposalRows[0].metadata as Record<string, unknown>).sourceDraft as Record<string, unknown>)?.targetEntityId) : [])),
+			then: (resolve: (rows: unknown[]) => unknown) => Promise.resolve(selectedTable === entities ? options.entityRows ?? [] : []).then(resolve),
 		};
 		const select = vi.fn(() => selectChain);
 
@@ -179,6 +226,9 @@ function createDbMock(options: {
 			set: vi.fn((value: Record<string, unknown>) => ({
 				where: vi.fn(() => {
 					updateCalls.push({ source, table, value });
+					if (table === patchProposals && typeof value.status === 'string') {
+						for (const row of proposalRows) row.status = value.status;
+					}
 					return {
 						returning: vi.fn().mockResolvedValue(table === stories
 							? [{ serverVersion: 2 }]
@@ -189,8 +239,13 @@ function createDbMock(options: {
 				}),
 			})),
 		}));
+		const remove = vi.fn((table: unknown) => ({
+			where: vi.fn(async () => {
+				deleteCalls.push({ source, table });
+			}),
+		}));
 
-		return { insert, select, update };
+		return { delete: remove, insert, select, update };
 	}
 
 	const tx = createConnection('tx');
@@ -199,7 +254,7 @@ function createDbMock(options: {
 		transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
 	};
 
-	return { db, insertCalls, updateCalls };
+	return { db, deleteCalls, insertCalls, updateCalls };
 }
 
 beforeEach(() => {
@@ -211,6 +266,90 @@ beforeEach(() => {
 });
 
 describe('reviewPatchProposal', () => {
+	it('creates a populated chapter candidate directly from its saved description', async () => {
+		const proposal = structuredClone(characterReferenceProposal);
+		proposal.proposedBy = 'chapter_scribe';
+		const { db, insertCalls } = createDbMock({ patchProposalRows: [proposal] });
+		dbMocks.getDb.mockReturnValue(db);
+		const result = await reviewPatchProposal({ storyId: 'story_1', proposalId: proposal.id, decision: 'approved' });
+		expect(result).toMatchObject({ status: 'applied', application: { appliedCount: 1 } });
+		expect(insertCalls.find((call) => call.table === entities)?.value).toMatchObject({ name: 'Ser Olyvar', state: { bio: 'A knight mentioned only in passing by the crowd.' } });
+	});
+
+	it('uses the saved description of a populated LLM candidate without another API call', async () => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		const result = await reviewPatchProposal({ storyId: 'story_1', proposalId: characterReferenceProposal.id, decision: 'approved' });
+		expect(result).toMatchObject({ status: 'applied', application: { appliedCount: 1 } });
+		expect(insertCalls.find((call) => call.table === entities)?.value).toMatchObject({ state: { bio: 'A knight mentioned only in passing by the crowd.' } });
+	});
+	it('creates a manually completed chapter candidate without an extraction call', async () => {
+		const proposal = gmCharacterDraftProposal();
+		proposal.proposedBy = 'chapter_scribe';
+		proposal.metadata = { sourceName: 'Tala Venn', sourceDraft: { mode: 'manual_review' } };
+		const { db, insertCalls } = createDbMock({ patchProposalRows: [proposal] });
+		dbMocks.getDb.mockReturnValue(db);
+		const result = await reviewPatchProposal({ storyId: 'story_1', proposalId: proposal.id, decision: 'approved' });
+		expect(result).toMatchObject({ status: 'applied', application: { appliedCount: 1 } });
+		expect(insertCalls.find((call) => call.table === entities)?.value).toMatchObject({ name: 'Tala Venn', state: { bio: 'Raised among the tide warehouses.' } });
+	});
+
+	it('keeps an unfilled chapter placeholder from becoming a character', async () => {
+		const proposal = gmCharacterDraftProposal();
+		proposal.proposedBy = 'chapter_scribe';
+		proposal.metadata = { sourceName: 'Tala Venn' };
+		(proposal.operations[0].value as Record<string, unknown>).description = 'Tala Venn is important in this chapter checkpoint.';
+		const { db, insertCalls } = createDbMock({ patchProposalRows: [proposal] });
+		dbMocks.getDb.mockReturnValue(db);
+		await expect(reviewPatchProposal({ storyId: 'story_1', proposalId: proposal.id, decision: 'approved' })).rejects.toThrow(/placeholder/);
+		expect(insertCalls.some((call) => call.table === entities)).toBe(false);
+	});
+
+	it('rejects a source draft whose biography only repeats the candidate name', async () => {
+		const proposal = gmCharacterDraftProposal();
+		proposal.proposedBy = 'chapter_scribe';
+		proposal.metadata = { sourceName: 'Tala Venn', sourceDraft: { mode: 'evidence_only', evidence: [{ field: 'bio' }], sourceSnapshot: { entries: [], events: [] } } };
+		(proposal.operations[0].value as Record<string, unknown>).state = { bio: 'Tala Venn' };
+		const { db, insertCalls } = createDbMock({ patchProposalRows: [proposal] });
+		dbMocks.getDb.mockReturnValue(db);
+		await expect(reviewPatchProposal({ storyId: 'story_1', proposalId: proposal.id, decision: 'approved' })).rejects.toThrow(/substantive biography/);
+		expect(insertCalls.some((call) => call.table === entities)).toBe(false);
+	});
+	it('refuses stale review versions before any canonical write', async () => {
+		const { db, insertCalls, updateCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		await expect(reviewPatchProposal({ storyId: 'story_1', proposalId: characterReferenceProposal.id, decision: 'approved', expectedProposalVersion: 0 })).rejects.toThrow(/changed/);
+		expect(insertCalls).toEqual([]);
+		expect(updateCalls).toEqual([]);
+	});
+
+	it('updates the exact drafted character beyond 240 records and preserves unrelated current canon', async () => {
+		const character = { id: 'npc_target', storyId: 'story_1', type: 'character', name: 'Tala Venn', description: 'A courier.', status: 'active', visibility: 'player_known', state: { appearance: 'Old scar.', knownFacts: ['The dock password.'] }, metadata: {}, sourceEntryIds: ['entry_old'], sourceEventIds: [], sourcePatchIds: [], serverVersion: 4, createdAt: '2026-09-05T00:00:00Z', updatedAt: '2026-09-05T00:00:00Z' } as typeof entities.$inferSelect;
+		const sourceProposal = gmCharacterDraftProposal();
+		sourceProposal.proposedBy = 'chapter_scribe';
+		sourceProposal.metadata = { sourceName: 'Old source spelling', sourceDraft: { mode: 'evidence_only', evidence: [{ field: 'bio' }], sourceSnapshot: { entries: [], events: [] }, targetEntityId: character.id, targetServerVersion: 4 } };
+		const { db, insertCalls, updateCalls } = createDbMock({ patchProposalRows: [sourceProposal], entityRows: [...Array.from({ length: 260 }, (_, index) => ({ ...character, id: `other_${index}`, name: `Other ${index}` })), character] });
+		dbMocks.getDb.mockReturnValue(db);
+		const result = await reviewPatchProposal({ storyId: 'story_1', proposalId: sourceProposal.id, decision: 'approved', expectedProposalVersion: sourceProposal.serverVersion });
+		expect(result).toMatchObject({ status: 'applied', application: { affectedEntityIds: ['npc_target'] } });
+		expect(insertCalls.some((call) => call.table === entities)).toBe(false);
+		expect(updateCalls.find((call) => call.table === entities)?.value).toMatchObject({ state: { appearance: 'Old scar.', knownFacts: ['The dock password.'], bio: 'Raised among the tide warehouses.' }, sourceEntryIds: ['entry_old', 'entry_whisper'] });
+	});
+
+	it.each(['duplicate', 'changed_target', 'new_match'])('blocks unsafe source identity resolution: %s', async (kind) => {
+		const character = { id: 'npc_target', name: 'Tala Venn', storyId: 'story_1', type: 'character', state: {}, serverVersion: 5 } as typeof entities.$inferSelect;
+		const sourceProposal = gmCharacterDraftProposal();
+		sourceProposal.proposedBy = 'chapter_scribe';
+		sourceProposal.metadata = { sourceDraft: { mode: 'evidence_only', evidence: [{ field: 'bio' }], sourceSnapshot: { entries: [], events: [] }, targetEntityId: kind === 'new_match' ? null : character.id, targetServerVersion: kind === 'duplicate' ? 5 : 4 } };
+		const { db, insertCalls, updateCalls } = createDbMock({ patchProposalRows: [sourceProposal], entityRows: kind === 'duplicate' ? [character, { ...character, id: 'another' }] : [character] });
+		dbMocks.getDb.mockReturnValue(db);
+		const application = reviewPatchProposal({ storyId: 'story_1', proposalId: sourceProposal.id, decision: 'approved' });
+		if (kind === 'duplicate') expect(await application).toMatchObject({ status: 'rejected', application: { appliedCount: 0 } });
+		else await expect(application).rejects.toThrow(/Rebuild/);
+		expect(insertCalls.some((call) => call.table === entities)).toBe(false);
+		expect(updateCalls.some((call) => call.table === entities)).toBe(false);
+	});
+
 	it('classifies source-ref and unsafe-memory rows for canon drift cleanup', () => {
 		expect(isInvalidSourceRefForRepair({
 			sourceType: '',
@@ -345,7 +484,7 @@ describe('reviewPatchProposal', () => {
 		const proposalUpdate = updateCalls.find((call) => call.table === patchProposals)?.value;
 
 		expect(entityInsert).toMatchObject({
-			id: 'entity_ser_olyvar',
+			id: 'entity_story_1_ser_olyvar',
 			storyId: 'story_1',
 			type: 'character',
 			name: 'Ser Olyvar',
@@ -365,7 +504,7 @@ describe('reviewPatchProposal', () => {
 			sourceType: 'patch_proposal',
 			sourceId: 'proposal_ser_olyvar',
 			targetTable: 'entities',
-			targetRecordId: 'entity_ser_olyvar',
+			targetRecordId: 'entity_story_1_ser_olyvar',
 			sourceField: 'character_reference_review',
 			confidence: 0.52,
 			serverVersion: 2,
@@ -373,15 +512,15 @@ describe('reviewPatchProposal', () => {
 		expect(proposalUpdate).toMatchObject({
 			status: 'applied',
 			decision: 'approved',
-			affectedEntityIds: ['entity_ser_olyvar'],
+			affectedEntityIds: ['entity_story_1_ser_olyvar'],
 			metadata: expect.objectContaining({
 				reviewNotes: 'Promote this reference into canon.',
-				appliedEntityId: 'entity_ser_olyvar',
+				appliedEntityId: 'entity_story_1_ser_olyvar',
 				appliedOperations: [
 					expect.objectContaining({
 						op: 'create',
 						table: 'entities',
-						recordId: 'entity_ser_olyvar',
+						recordId: 'entity_story_1_ser_olyvar',
 					}),
 				],
 			}),
@@ -393,12 +532,12 @@ describe('reviewPatchProposal', () => {
 			decision: 'approved',
 			application: {
 				appliedCount: 1,
-				affectedEntityIds: ['entity_ser_olyvar'],
+				affectedEntityIds: ['entity_story_1_ser_olyvar'],
 				appliedOperations: [
 					expect.objectContaining({
 						op: 'create',
 						table: 'entities',
-						recordId: 'entity_ser_olyvar',
+						recordId: 'entity_story_1_ser_olyvar',
 					}),
 				],
 			},
@@ -411,6 +550,164 @@ describe('reviewPatchProposal', () => {
 				index: true,
 			}),
 		}));
+	});
+
+	it('applies an affinity-only update without losing newer relationship history or stats', () => {
+		const current = {
+			relationship: { level: 10, status: 'trusted ally', history: [{ event: 'Rescued the player' }] },
+			playerSheet: { hitPoints: { current: 3, max: 10 } },
+			currentLocation: 'New camp',
+		};
+		expect(mergeCharacterReferenceState(current, { relationship: { level: 35 } })).toEqual({
+			...current, relationship: { ...current.relationship, level: 35 },
+		});
+		expect(mergeCharacterReferenceState({ relationship: 'ally' }, { relationship: { level: 20 } }).relationship).toEqual({ status: 'ally', level: 20 });
+	});
+
+	it('uses the reviewed GM name and a story-scoped collision-safe entity id', async () => {
+		const firstProposal = gmCharacterDraftProposal({
+			id: 'character_create_proposal_shared',
+			sourceName: 'Tala Venn',
+			name: 'Tala Maren',
+		});
+		const first = createDbMock({ patchProposalRows: [firstProposal] });
+		dbMocks.getDb.mockReturnValue(first.db);
+		await reviewPatchProposal({
+			storyId: 'story_1',
+			proposalId: firstProposal.id,
+			decision: 'approved',
+			reviewer: 'human',
+		});
+		const firstEntity = first.insertCalls.find((call) => call.table === entities)?.value as Record<string, unknown>;
+
+		const secondProposal = gmCharacterDraftProposal({
+			storyId: 'story_2',
+			id: 'character_create_proposal_shared',
+			sourceName: 'Tala Venn',
+			name: 'Tala Venn',
+		});
+		const second = createDbMock({ patchProposalRows: [secondProposal] });
+		dbMocks.getDb.mockReturnValue(second.db);
+		await reviewPatchProposal({
+			storyId: 'story_2',
+			proposalId: secondProposal.id,
+			decision: 'approved',
+			reviewer: 'human',
+		});
+		const secondEntity = second.insertCalls.find((call) => call.table === entities)?.value as Record<string, unknown>;
+
+		expect(firstEntity).toMatchObject({
+			id: 'entity_story_1_character_create_proposal_shared',
+			storyId: 'story_1',
+			name: 'Tala Maren',
+			visibility: 'gm',
+		});
+		expect(secondEntity).toMatchObject({
+			id: 'entity_story_2_character_create_proposal_shared',
+			storyId: 'story_2',
+			name: 'Tala Venn',
+			visibility: 'gm',
+		});
+		expect(firstEntity.id).not.toBe(secondEntity.id);
+	});
+
+	it('preserves existing aliases when a GM draft resolves to an existing character', async () => {
+		const proposal = gmCharacterDraftProposal({ aliases: ['Tide Sparrow'] });
+		const existing: typeof entities.$inferSelect = {
+			id: 'entity_tala',
+			storyId: 'story_1',
+			type: 'character',
+			name: 'Tala Venn',
+			description: 'An established harbor courier.',
+			status: 'active',
+			visibility: 'gm',
+			state: { knownFacts: ['The old quay code.'] },
+			metadata: {},
+			sourceEntryIds: ['entry_old'],
+			sourceEventIds: [],
+			sourcePatchIds: [],
+			serverVersion: 1,
+			createdAt: '2026-06-13T00:00:00.000Z',
+			updatedAt: '2026-06-13T00:00:00.000Z',
+		};
+		const oldAlias: typeof entityAliases.$inferSelect = {
+			id: 'alias_old_quay_runner',
+			storyId: 'story_1',
+			entityId: existing.id,
+			alias: 'Old Quay Runner',
+			normalizedAlias: 'old quay runner',
+			sourceEntryIds: ['entry_old'],
+			serverVersion: 1,
+			createdAt: '2026-06-13T00:00:00.000Z',
+			updatedAt: '2026-06-13T00:00:00.000Z',
+		};
+		const { db, insertCalls } = createDbMock({
+			patchProposalRows: [proposal],
+			entityRows: [existing],
+			aliasRows: [oldAlias],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		await reviewPatchProposal({
+			storyId: 'story_1',
+			proposalId: proposal.id,
+			decision: 'approved',
+			reviewer: 'human',
+		});
+
+		const savedAliases = insertCalls
+			.filter((call) => call.table === entityAliases)
+			.map((call) => (call.value as Record<string, unknown>).alias);
+		expect(savedAliases).toEqual(['Old Quay Runner', 'Tala Venn', 'Tide Sparrow']);
+		expect(insertCalls.some((call) => call.table === entities)).toBe(false);
+	});
+
+	it('rejects a malformed GM character draft instead of recording an empty approval', async () => {
+		const malformed = {
+			...gmCharacterDraftProposal(),
+			operations: [{ op: 'review', path: '/entities/character', value: { name: 'Tala Venn', state: 'invalid' } }],
+		} satisfies typeof patchProposals.$inferSelect;
+		const { db, insertCalls, updateCalls } = createDbMock({ patchProposalRows: [malformed] });
+		dbMocks.getDb.mockReturnValue(db);
+
+		const result = await reviewPatchProposal({
+			storyId: 'story_1',
+			proposalId: malformed.id,
+			decision: 'approved',
+			reviewer: 'human',
+		});
+
+		expect(insertCalls.some((call) => call.table === entities)).toBe(false);
+		expect(updateCalls.find((call) => call.table === patchProposals)?.value).toMatchObject({
+			status: 'rejected',
+			decision: 'rejected',
+			metadata: expect.objectContaining({
+				rejectionReason: 'Malformed GM character draft payload cannot become canon.',
+			}),
+		});
+		expect(result).toMatchObject({ status: 'rejected', decision: 'rejected' });
+	});
+
+	it('locks and consumes a review proposal only once', async () => {
+		const proposal = gmCharacterDraftProposal();
+		const { db, insertCalls, updateCalls } = createDbMock({ patchProposalRows: [proposal] });
+		dbMocks.getDb.mockReturnValue(db);
+
+		await reviewPatchProposal({
+			storyId: 'story_1',
+			proposalId: proposal.id,
+			decision: 'approved',
+			reviewer: 'human',
+		});
+		await expect(reviewPatchProposal({
+			storyId: 'story_1',
+			proposalId: proposal.id,
+			decision: 'approved',
+			reviewer: 'human',
+		})).rejects.toThrow('no longer pending');
+
+		expect(insertCalls.filter((call) => call.table === entities)).toHaveLength(1);
+		expect(updateCalls.filter((call) => call.table === stories)).toHaveLength(1);
 	});
 
 	it('rejects approved title-only character references instead of creating canon junk', async () => {
@@ -621,6 +918,7 @@ describe('reviewPatchProposal', () => {
 				op: 'replace',
 				path: '/characters/entity_mira/state',
 				value: {
+					bio: 'Mira is a harbor broker who now guards the ledger at Yin.',
 					currentLocation: 'Yin harbor counting room',
 					currentAction: 'guarding the ledger',
 					goals: ['protect Aurion'],
@@ -686,7 +984,9 @@ describe('reviewPatchProposal', () => {
 		const proposalUpdate = updateCalls.find((call) => call.table === patchProposals)?.value;
 
 		expect(entityUpdate).toMatchObject({
+			description: 'Mira is a harbor broker who now guards the ledger at Yin.',
 			state: {
+				bio: 'Mira is a harbor broker who now guards the ledger at Yin.',
 				currentLocation: 'Yin harbor counting room',
 				currentAction: 'guarding the ledger',
 				goals: ['keep the trading post open', 'protect Aurion'],
@@ -757,6 +1057,20 @@ describe('reviewPatchProposal', () => {
 		}));
 	});
 
+	it('leaves a chapter refresh for review when the character changed during generation', async () => {
+		const proposal = {
+			...characterReferenceProposal,
+			proposalType: 'character_context_update', proposedBy: 'chapter_scribe', targetRecordId: 'entity_a',
+			metadata: { sourceType: 'chapter_character_context', chapterNumber: 3, characterUpdateBaseVersion: 1, sourceDraft: { targetEntityId: 'entity_a' } },
+		} as typeof patchProposals.$inferSelect;
+		const { db, updateCalls } = createDbMock({ patchProposalRows: [proposal], entityRows: [{ id: 'entity_a', serverVersion: 2 } as typeof entities.$inferSelect] });
+		dbMocks.getDb.mockReturnValue(db);
+		const result = await applyChapterScribeCharacterContextProposals({ storyId: 'story_1', proposalIds: [proposal.id] });
+		expect(result.appliedCount).toBe(0);
+		expect(updateCalls.filter(call => call.table === entities)).toHaveLength(0);
+		expect(updateCalls.find(call => call.table === patchProposals)?.value).toMatchObject({ status: 'needs_review', metadata: { staleReason: expect.stringContaining('Character changed') } });
+	});
+
 	it('applies chapter-scribe character context proposals in one versioned batch', async () => {
 		const chapterProposal = (id: string, entityId: string): typeof patchProposals.$inferSelect => ({
 			...characterReferenceProposal,
@@ -767,7 +1081,11 @@ describe('reviewPatchProposal', () => {
 			operations: [{
 				op: 'replace',
 				path: `/characters/${entityId}/state`,
-				value: { currentAction: `updated from ${id}` },
+				value: {
+					currentAction: 'Old chapter action', currentLocation: 'Old location', isPresent: true,
+					playerSheet: { hitPoints: { current: 10, max: 10 } },
+					eventMemory: { did: [`updated from ${id}`] },
+				},
 			}],
 			affectedEntityIds: [entityId],
 			metadata: { sourceType: 'chapter_character_context', chapterNumber: 2 },
@@ -780,7 +1098,7 @@ describe('reviewPatchProposal', () => {
 			description: null,
 			status: 'active',
 			visibility: 'player_known',
-			state: {},
+			state: { currentAction: 'Resting', currentLocation: 'New camp', isPresent: false, playerSheet: { hitPoints: { current: 3, max: 10 } } },
 			metadata: {},
 			sourceEntryIds: [],
 			sourceEventIds: [],
@@ -816,6 +1134,13 @@ describe('reviewPatchProposal', () => {
 			affectedEntityIds: ['entity_a', 'entity_b'],
 		});
 		expect(updateCalls.filter((call) => call.table === stories)).toHaveLength(1);
+		for (const update of updateCalls.filter(call => call.table === entities)) {
+			expect(update.value.state).toMatchObject({
+				currentAction: 'Resting', currentLocation: 'New camp', isPresent: false,
+				playerSheet: { hitPoints: { current: 3, max: 10 } },
+				eventMemory: { did: [expect.stringContaining('updated from proposal_chapter_')] },
+			});
+		}
 		const proposalUpdates = updateCalls.filter((call) => call.table === patchProposals);
 		expect(proposalUpdates).toHaveLength(2);
 		expect(proposalUpdates.map((call) => call.value)).toEqual([

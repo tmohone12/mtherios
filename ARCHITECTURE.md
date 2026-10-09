@@ -1,1060 +1,242 @@
-# MTHERIOS ARCHITECTURE & CODEBASE DOCUMENTATION
+# MythEngine Architecture and Codebase Reference
 
-This is a comprehensive reference document for the entire Mtherios interactive fiction engine. Mtherios is being refactored into a terminal-process-owned local app: a Node/SvelteKit process owns runtime config, backend canon, the syncable data root, Qdrant-backed wiki search, and API routes, while the browser frontend becomes the client.
+Runtime source map refreshed on 2026-09-21 against `E:\DEV\Projects\MythEngine`; other domain sections retain the inherited 2026-09-12 source map. MythEngine is a terminal-owned interactive fiction engine with a SvelteKit/Svelte 5 client. The Node runtime owns backend-bound campaigns, generation, jobs, configuration, and local service integrations.
 
----
+This reference describes the current working tree, including uncommitted implementation. Source presence is not proof of deployment or completed qualification. [AGENTS.md](AGENTS.md) owns the working agreement; [the task map](<AGENTS READ THIS/ARCHITECTURE.md>) helps locate the relevant section. Read the affected implementation and contracts to confirm behavior before changing it.
 
-## TERMINAL APP PROCESS
+## How these documents fit together
 
-**Entry points:** `server.js`, `Start.bat`, `start.ps1`, `scripts/mtheriosd.mjs`
+| Document | Owns | Read when |
+| --- | --- | --- |
+| [AGENTS.md](AGENTS.md) | Repository working agreement, invariants, verification expectations | Starting work in this repository |
+| This architecture | System ownership, data flows, implementation entrypoints | Investigating or changing the relevant subsystem |
+| [Architecture task map](<AGENTS READ THIS/ARCHITECTURE.md>) | Task-to-section navigation | The responsible subsystem is unclear |
+| [Product overview](<AGENTS READ THIS/PROJECT_ABOUT.md>) | Product purpose and user experience | Product context is needed |
+| [Vision](<AGENTS READ THIS/VISION.md>) | Desired outcomes and design priorities | Evaluating a product/architecture tradeoff |
+| Dated documents under `docs/` | A plan, decision, or evidence from a specific run | That history is relevant to the current task |
+| Installed `mtherios-project` skill | Cross-checkout discovery and optional operational recipes | Working across checkouts or needing a command recipe |
 
-**What it does:** Starts the real local app process. In development, `npm run app:dev` brings up Postgres and Qdrant, runs migrations, initializes `data/`, sets runtime environment, then launches Vite as a child. In production, `npm run app:start` serves the built SvelteKit adapter output.
+Keep each claim at its owner and link to it elsewhere. Update affected boundaries and source links alongside behavior changes. Record measured results with their date, artifact, and scope in a report rather than freezing them into general instructions. A plan is not an implementation, and source tests do not establish runtime activation.
 
-**Runtime config:** `mtherios.config.json` if present, otherwise defaults from `mtherios.config.example.json` and environment variables.
+## Runtime and entrypoints
 
-**Data root:** `MTHERIOS_DATA_ROOT` defaults to `./data`. It contains vaults, exports, uploads, and logs. This folder is the practical sync boundary for multi-device use.
+| Surface | Implementation | Role |
+| --- | --- | --- |
+| Terminal application | `server.js`, `scripts/mythengined.mjs` (legacy `mtheriosd.mjs` implementation), `Start.bat`, `start.ps1` | Start the app, configure paths/services, poll backend jobs |
+| Browser | `src/routes/+layout.svelte`, `src/lib/components/layout/AppShell.svelte` | Render the workspace and server projections |
+| Engine gateway | `src/routes/api/engine/command/+server.ts`, `src/lib/server/engine/command.ts` | Shared command dispatch for browser, CLI, and MCP |
+| Streaming | `/api/engine/stream`, `/api/turn/stream` | Engine events and turn progress |
+| CLI | `scripts/app-engine.mjs`, `app-story.mjs`, `app-jobs.mjs`, `app-wiki.mjs` | Operate the existing backend |
+| MCP | `scripts/mythengine-mcp.mjs` (legacy implementation/aliases retained) | Expose tools over canonical engine operations |
 
-**Wiki APIs:** `/api/wiki/status`, `/api/wiki/story-vault`, `/api/wiki/story-vault/status`, `/api/wiki/index`, `/api/wiki/search`, and `/api/wiki/follow` wrap the terminal `scripts/wiki-core` tools. `/api/wiki/story-vault` materializes backend story canon into an Obsidian-style vault under `data/vaults/stories/<storyId>` and writes `.mtherios/story-vault.json` with the source server version. Backend-bound wiki search, follow, and index requests ensure that generated vault exists and is fresh before reading it. `/api/wiki/index` can rebuild a story-specific Qdrant collection from that markdown and updates the same manifest when the index is fresh. Qdrant is treated as a rebuildable index over Obsidian markdown, not canon. The GM `search_wiki` tool now prefers this terminal API with wikilink/backlink neighborhoods and falls back to the browser lorebook cache only when the terminal wiki is unavailable or empty.
+`npm run app:dev` brings up PostgreSQL and Qdrant, runs migrations, and starts development mode. `npm run app:start` serves an existing production build; it does not build or run the dependency/migration scripts. `npm run app:build` builds and then starts production. `npm run dev` starts Vite alone.
 
-**Story APIs:** `/api/stories` lists and creates server-owned stories; `/api/stories/:id` deletes backend canon, removes the generated story vault, and best-effort deletes the story-specific Qdrant collection; `/api/stories/:id/bootstrap` returns canonical story state for frontend hydration.
+Local AI is opt-in. [Start.bat](Start.bat) and [start.ps1](start.ps1) offer separate choices for Kev-9B decisions and Ollama/local embeddings, each defaulting to off. The selections are saved by [select-local-ai.mjs](scripts/select-local-ai.mjs) without changing provider profiles or embedding models. Noninteractive startup uses `localKevEnabled` and `localEmbeddingsEnabled` from runtime configuration, both false by default; CLI overrides are `--local-kev` / `--no-local-kev` and `--local-embeddings` / `--no-local-embeddings`, with environment equivalents `MYTHENGINE_LOCAL_KEV` and `MYTHENGINE_LOCAL_EMBEDDINGS`. Off mode blocks local Kev/Ollama requests and disables configured Ollama embeddings; wiki search retains its exact-search fallback and existing vectors are retained. Remote embedding providers remain available.
 
-**Job APIs:** `/api/app/jobs/run` drains due backend jobs from the server-side `backend_jobs` outbox, `/api/app/jobs/world-sim` enqueues and immediately runs a manual backend world tick for a backend-bound story, and `/api/app/jobs/wiki` enqueues the same story-vault sync job the daemon uses after canon changes. `scripts/mtheriosd.mjs` polls the run endpoint by default, so memory-node projection, story-vault materialization, and retryable background work are owned by the terminal process rather than the browser. The current processor materializes event memory nodes, deterministic chapter checkpoints, chapter-scoped faction pressure, chapter-scoped world-tick events, arc rollups, saga rollups, generated Obsidian story vaults, and optional memory-node embeddings from canonical Postgres rows. Turn projection no longer queues world/faction simulation jobs every turn; those updates are tied to chapter creation. Turn projection, IndexedDB import, sync operations, and direct backend-canon edits all queue story-vault sync jobs so `.mtherios/story-vault.json` tracks the latest server version once the worker drains. Qdrant auto-indexing for story vault jobs is controlled by `MTHERIOS_WIKI_AUTO_INDEX` / `wikiAutoIndexStoryVaults`; richer AI summarization remains a follow-up worker.
+When opted in, [mtheriosd.mjs](scripts/mtheriosd.mjs) starts Ollama if configured embeddings need it and Ollama is down. Kev starts only when enabled and `data/models/kev/.venv-rocm/Scripts/python.exe` exists, using loopback port 8008. The upstream Kev checkout and Python environment live in ignored `data/models/kev`; startup does not install dependencies or wait for the checkpoint to load. Sidecar logs live under `data/logs/`. `OLLAMA_EMBED_NUM_GPU=0` (or `ollamaEmbedNumGpu: 0` in local config) keeps Ollama embeddings on CPU.
 
-**Current migration state:** The old browser/IndexedDB path still exists for compatibility, but the frontend story catalog now refreshes from the terminal process, new/imported stories are backend-bound by default when the server is reachable, and backend-bound turns use `/api/turn`, `/api/sync/*`, and `/api/memory/retrieve`. For backend-bound stories, Dexie is being narrowed into cache plus offline command queue: queued `turn_command`/entry repair ops are pushed before projection pulls or new backend turns, and server `sync_ops` IDs make retries idempotent. Future work should keep moving large-story ownership toward the terminal process and backend canon.
+Configuration is owned by [runtime-config.mjs](scripts/runtime-config.mjs), shared by the daemon, CLI/MCP, Vite, database/migrations, server settings and wiki adapters. Precedence: CLI > new environment aliases > legacy/generic environment > selected config > defaults. `mythengine.config.json` wins over `mtherios.config.json`; secret-bearing files are not merged. [The example](mythengine.config.example.json) documents the new defaults.
 
-### Canon Schema Lock (DB-first projection boundary)
+The isolated Compose project is `mythengine`, with loopback app 5174, PostgreSQL 5433 and Qdrant 6335/6336. Data defaults to `./data`; external paths and known original service targets fail unless intentional sharing is explicitly enabled. Jobs and wiki auto-index default off. [backend.mjs](scripts/backend.mjs) fixes Compose project/file ownership for up/down/config; down retains volumes. `npm run app:config` reports sanitized targets, and `npm run app:status` verifies the running process. A data-directory copy alone is not a PostgreSQL backup.
 
-- `Postgres` is the canonical source of truth for character/location/faction/world records. `stories`, `story_entries`, `entities`, `entity_aliases`, `relationships`, `factions`, `state_patches`, `facts`, `source_refs`, `patch_proposals`, and `continuity_warnings` are persistent, durable records owned by the terminal process.
-- Stable IDs live in row IDs (`id`, `story_id`, record IDs in related tables). Frontmatter/markdown pages are generated projections, not identity boundaries.
-- Durable updates flow as: write/update a canonical row with `source_ids`/`source_refs` provenance, then project the story vault and optional search indexes.
-- Entity and record changes are expected to include explicit evidence links (`source_entry_ids`, `source_event_ids`, `source_patch_ids`, `source_refs`) rather than implicit narrative inference.
-- Import/export (`worldDatabase`) must preserve or map IDs and row payloads so identity is stable across bundles.
+[build.mjs](scripts/build.mjs) records source and artifact SHA-256 fingerprints in `build/mythengine-build.json`; production startup verifies artifact integrity and exposes the fingerprints through status. Runtime identity does not assert the current source still matches the build. Legacy MCP names remain aliases without a removal date; database/storage/wire identifiers are retained for compatibility. The new origin isolates browser state; new PWA caches use owned MythEngine prefixes. [Phase 0 evidence](docs/mythengine-phase0-2026-09-21.md) describes the qualified scope.
 
----
+## Storage and authority
 
-### FILE 1: `src/lib/stores/story.svelte.ts`
-
-**What it does:** Central reactive store managing the active story state including entries, characters, locations, items, lorebook entries, and world state. Handles conversation history building, system prompt construction, and context statistics.
-
-**Exports:**
-- `story` (singleton StoryStore instance)
-- `StoryStore` (class)
-
-**Key internal functions:**
-- `loadStory(storyId)` - Loads story and all related data from IndexedDB in parallel
-- `addEntry(type, content, reasoning)` - Creates a new story entry (user action, narration, system, retry)
-- `addCharacter(name, description, relationship)` - Creates a new character
-- `updateCharacterFromClassification(name, updates)` - Merges classifier updates into a character
-- `updatePresence(characterNames, locationName)` - Sets lastSeenLocation for present characters
-- `clearPresenceForCharacters(characterNames)` - Removes lastSeenLocation (departed/dead)
-- `addOrUpdateLocation(name, description, current)` - Creates or updates a location; ensures only one location is current
-- `addOrUpdateItem(name, description, quantity, equipped, location)` - Creates or updates an item
-- `buildSystemPrompt(contextBlock)` - Constructs the full system prompt for narrative generation with role rules, genre instructions, and assembled context
-- `buildConversationMessages()` - Builds alternating user/assistant messages from entries, scaled to 60% of model context window
-- `buildUserPrompt(currentAction)` - Wraps user action for generation
-- `getContextStats(tierUsage)` - Reports system, context, history, and total token estimates
-
-**Reads:** Database (getStory, getStoryEntries, getCharacters, getLocations, getItems, getLorebookEntries, etc.), settings (narrativeSettings, contextBudget), ContextAssembler (getModelContextWindow)
-
-**Writes:** Database (createStoryEntry, createCharacter, updateCharacter, createLocation, updateLocation, createItem, updateItem, updateStory), story entries added to this.entries array, characters/locations/items updates merged into reactive state
-
-**Connections:** Called by StoryView component during generation pipeline; called by ActionInput for action submission. Reads from settings store. Provides entries/characters/locations to ClassifierService, MemoryService, WorldSimulationService, other AI services.
-
-**Notable patterns:**
-- POV/tense/mode-adaptive system prompts with role tags ({{user}}, {{char}}, {{world}})
-- Character classification merges (trait deduplication with Set)
-- Location current-exclusivity logic (only one location can be current at a time)
-- Conversation history token budget: 60% of model context window, 2/3 of user budget
-- Inherited entries logic: entries on null branchId are "main branch" (legacy stories)
-
----
-
-### FILE 2: `src/lib/stores/settings.svelte.ts`
-
-**What it does:** Persistent settings store loaded from IndexedDB on init. Manages API profiles, narrative generation settings, per-service model/temp/maxTokens overrides, UI settings, translation settings, context budget.
-
-**Exports:**
-- `settings` (singleton SettingsStore)
-- `SERVICE_DEFINITIONS` (record mapping service IDs to label, description, profile grouping, default temp/maxTokens)
-- `SERVICE_PROFILES` (array of profile definitions grouping services by configuration tier)
-- `ServiceConfig`, `ServiceProfile`, `NarrativeSettings`, `ClassifierSettings`, `SystemServicesSettings` (types)
-
-**Key internal functions:**
-- `init()` - Loads all settings from IndexedDB via getAllSettings()
-- `saveProfiles()`, `saveNarrativeSettings()`, `saveUISettings()`, `saveServiceConfigs()`, `saveProfileModels()`, `saveContextBudget()` - Persistence functions
-- `getServiceConfig(serviceId)` - Returns effective config: per-service override or profile model or empty (provider default)
-- `setServiceConfig(serviceId, config)` - Updates per-service override
-- `getProfileModel(profileId)`, `setProfileModel(profileId, model)` - Profile-level model selection
-- `setActiveProfile(profileId)` - Switches active API profile, resets narrative model to provider default
-- `addProfile(profile)`, `removeProfile(profileId)` - Profile management
-
-**Reads:** Database (getSetting, setSetting, getAllSettings)
-
-**Writes:** Database (setSetting for each setting category)
-
-**Connections:** Used by BaseAIService to get model/temp/maxTokens. Used by ActionInput to build generation options. Used by ContextAssembler for model context window lookup.
-
-**Notable patterns:**
-- Dual-layer model selection: per-service override > profile model > provider default
-- 13 AI services (narrative, classifier, suggestions, actionChoices, memory, styleReviewer, loreManagement, agenticRetrieval, interactiveVault, imageGeneration, worldSimulation, arcCondensation, proceduralMemory)
-- Services grouped into 7 profiles (Narrative, World State, Player Guidance, Memory & Context, Lorebook, Style Review, Image Generation)
-- Default configs defined in SERVICE_DEFINITIONS with sensible temp/maxTokens per service
-- Context budget: 0 = auto (60% of model context), or explicit token limit
-
----
-
-### FILE 3: `src/lib/stores/app.svelte.ts`
-
-**What it does:** Global app state including onboarding completion, current story selection, wizard visibility, loading state.
-
-**Exports:**
-- `app` (singleton AppStore)
-
-**Key internal functions:**
-- `init()` - Loads onboarding flag and last story ID from IndexedDB
-- `startNewStory()` - Shows wizard
-- `completeOnboarding(storyId)` - Marks onboarding done, sets current story, hides wizard
-- `openStory(storyId)`, `closeStory()` - Story selection
-
-**Reads:** Database (getSetting)
-
-**Writes:** App state (onboardingComplete, currentStoryId, showWizard, loading)
-
-**Connections:** Used by +layout.svelte to control rendering flow. Syncs with story store when currentStoryId changes.
-
----
-
-### FILE 4: `src/lib/types/index.ts`
-
-**Complete type reference:**
-
-**Story Management:**
-- `StoryMode = 'adventure' | 'creative-writing'` - Play mode
-- `POV = 'first' | 'second' | 'third'` - Point of view
-- `Tense = 'past' | 'present'` - Narrative tense
-- `ActionInputType = 'do' | 'say' | 'think' | 'story' | 'free'` - Action types
-- `Story` - Main story record with id, title, description, genre, mode, settings (POV/tense/tone), memoryConfig, retryState, styleReviewState, timeTracker, currentBranchId, headerPrompt
-- `StorySettings` - Per-story overrides: model, temperature, maxTokens, pov, tense, tone, themes, visualProseMode, imageGenerationMode, backgroundImagesEnabled, referenceMode
-- `StoryEntry` - Log entry (user_action|narration|system|retry) with content, type, position, createdAt, metadata, branchId, reasoning, translatedContent, worldStateDelta, suggestedActions
-- `EntryMetadata` - tokenCount, model, generationTime, source, timeStart, timeEnd, originalInput
-
-**Characters & Appearance:**
-- `VisualDescriptors` - face, hair, eyes, build, clothing, accessories, distinguishing
-- `Character` - id, storyId, name, description, relationship, traits, visualDescriptors, portrait, status (active|inactive|deceased), metadata, branchId
-- `VaultCharacter` - Reusable character with tags, favorite, source (manual|import|story), originalStoryId, createdAt, updatedAt
-
-**Locations & Items:**
-- `Location` - id, storyId, name, description, visited, current, connections, metadata, branchId
-- `Item` - id, storyId, name, description, quantity, equipped, location, metadata, branchId
-
-**Story Beats (Quests/Milestones):**
-- `StoryBeat` - id, storyId, title, description, type (milestone|quest|revelation|event|plot_point), status (pending|active|completed|failed), triggeredAt, resolvedAt, metadata, branchId
-
-**Memory System:**
-- `TimeTracker` - years, days, hours, minutes (in-story time)
-- `MemoryConfig` - tokenThreshold (16000), chapterBuffer (10), autoSummarize, enableRetrieval, maxChaptersPerRetrieval
-- `Chapter` - id, storyId, number, title, startEntryId, endEntryId, entryCount, summary, startTime, endTime, keywords, characters (names), locations (names), plotThreads, emotionalTone, branchId, createdAt
-- `Arc` - id, storyId, arcNumber, title, summary, keyPlotPoints, characterArcs, unresolvedThreads, emotionalProgression, chapterIds, chapterRange, branchId, createdAt
-
-**Lorebook (Entry) System:**
-- `EntryType = 'character' | 'location' | 'item' | 'faction' | 'concept' | 'event'`
-- `EntryInjectionMode = 'always' | 'keyword' | 'never'`
-- `EntryCreator = 'user' | 'ai' | 'import' | 'forge'`
-- `Entry` - Full lorebook entry with name, type, description, hiddenInfo, aliases, state (union of entry-type-specific states), injection (keywords, priority, mode), firstMentioned, lastMentioned, mentionCount, createdBy, loreManagementBlacklisted, branchId
-
-**Entry State Types (Mutable):**
-- `CharacterEntryState` - isPresent, lastSeenLocation, currentDisposition, relationship (level -100 to 100, status, history), knownFacts, revealedSecrets, conversationTopics, lastConversationAt, personalOpinion
-- `LocationEntryState` - isCurrentLocation, visitCount, changes, presentCharacters, presentItems, connections (targetLocationId, direction, travelTime, description, blocked), region, terrain
-- `ItemEntryState` - inInventory, currentLocation, condition, uses (action, result, entryId)
-- `FactionEntryState` - playerStanding (-100 to 100), status (allied|neutral|hostile|unknown), knownMembers, goals (FactionGoal[]), resources (FactionResources), disposition, interFactionRelations (factionName → standing), territory, lastActionChapter
-- `FactionGoal` - description, priority (1-10), progress (0-100), type (military|diplomatic|economic|intelligence|survival|expansion), deadline
-- `FactionResources` - military, wealth, influence, information, morale (all 0-100)
-- `ConceptEntryState` - revealed, comprehensionLevel (unknown|basic|intermediate|advanced), relatedEntries
-- `EventEntryState` - occurred, occurredAt, witnesses, consequences
-
-**Vault Systems (Reusable Assets):**
-- `VaultLorebookEntry`, `VaultLorebook` - Reusable lorebook with tags, favorite, source, metadata
-- `VaultScenarioNpc` - name, role, description, relationship, traits
-- `VaultScenario` - Reusable scenario with settingSeed, npcs, primaryCharacterName, firstMessage, alternateGreetings
-- `VaultTag` - id, name, type (character|lorebook|scenario), color, createdAt
-
-**Tier 2: Relationships & Memory:**
-- `RelationshipType = 'member-of' | 'leader-of' | 'allied-with' | 'enemy-of' | 'located-in' | 'part-of' | 'created-by' | 'triggered-by' | 'knows-about' | 'owns' | 'serves' | 'related-to'`
-- `EntryRelationship` - id, storyId, sourceEntryId, targetEntryId, type, label, strength (0-100), bidirectional, metadata, createdAt, updatedAt
-- `ConversationMemoryEntry` - id, storyId, npcEntryId, npcName, storyEntryId, storyPosition, topic, playerSaid, npcLearned (what NPC learned), emotionalImpact, importance (trivial|minor|significant|critical), createdAt
-- `WorldEvent` - id, storyId, name, description, triggerEntryId, triggerPosition, sourceEntityId, type (death|hostility_change|territory_change|alliance_formed|alliance_broken|item_destroyed|location_blocked|secret_revealed|custom), severity (minor|moderate|major|catastrophic), consequences (Consequence[]), appliedAt, createdAt
-- `Consequence` - id, description, status (pending|applied|expired|reversed), targetEntityId, targetEntityName, effectType (relationship_change|faction_status_change|location_blocked|location_unblocked|npc_status_change|rumor_spread|custom), effectPayload, delay, appliedAt
-
-**Procedural Memory (CASS-inspired):**
-- `RuleCategory = 'character_behavior' | 'world_rule' | 'narrative_pattern' | 'player_preference' | 'anti_pattern' | 'lore_connection'`
-- `RuleMaturity = 'candidate' | 'established' | 'proven' | 'deprecated'`
-- `RuleScope = 'global' | 'story' | 'arc' | 'chapter'`
-- `ProceduralRule` - id, storyId, content, category, scope, type (rule|anti_pattern), maturity, helpfulCount, harmfulCount, effectiveScore (0-1), sourceChapterIds, sourceArcIds, relatedEntryIds, embedding (vector), tags, createdAt, updatedAt, lastReinforcedAt
-- `EmbeddingCacheEntry` - id, sourceId, sourceType (lorebook|chapter|arc|rule|query), contentHash, vector, model, createdAt
-
-**World State Delta Tracking (Phase 1 - Undo support):**
-- `WorldStateDelta` - Stores before-state snapshots (CharacterBeforeState[], LocationBeforeState[], ItemBeforeState[], StoryBeatBeforeState[], currentLocationId, timeTracker) and created entity IDs
-- `CharacterBeforeState`, `LocationBeforeState`, `ItemBeforeState`, `StoryBeatBeforeState` - Snapshots for rollback
-
-**Retry System:**
-- `PersistentRetryState` - Stores state for time-travel restore: entryCountBeforeAction, userActionContent, rawInput, actionType, characterIds, locationIds, itemIds, storyBeatIds, characterSnapshots (PersistentCharacterSnapshot[]), timeTracker, activationData (for lorebook stickiness)
-- `PersistentCharacterSnapshot` - id, traits, status, relationship, visualDescriptors, portrait
-
-**Style Review:**
-- `PersistentPhraseAnalysis` - phrase, frequency, severity (low|medium|high), alternatives, contexts
-- `PersistentStyleReviewResult` - phrases, overallAssessment, reviewedEntryCount, timestamp
-- `PersistentStyleReviewState` - messagesSinceLastReview, lastReview
-
-**Branching:**
-- `Branch` - id, storyId, name, parentBranchId (null=main), forkEntryId, checkpointId, createdAt, snapshotComplete
-- `Checkpoint` - id, storyId, name, lastEntryId, lastEntryPreview, entryCount, entriesSnapshot, charactersSnapshot, locationsSnapshot, itemsSnapshot, storyBeatsSnapshot, chaptersSnapshot, timeTrackerSnapshot, lorebookEntriesSnapshot, createdAt
-
-**API & Provider:**
-- `ProviderType = 'openrouter' | 'nanogpt' | 'chutes' | 'pollinations' | 'ollama' | 'lmstudio' | 'llamacpp' | 'nvidia-nim' | 'openai-compatible' | 'openai' | 'anthropic' | 'google' | 'xai' | 'groq' | 'zhipu' | 'deepseek' | 'mistral'`
-- `ReasoningEffort = 'off' | 'low' | 'medium' | 'high'`
-- `APIProfile` - id, name, providerType, baseUrl, apiKey, customModels, fetchedModels, reasoningModels, hiddenModels, favoriteModels, createdAt
-
-**UI & Settings:**
-- `UISettings` - theme (mtherios), fontSize, fontFamily, fontSource, showWordCount, autoSave, spellcheckEnabled, debugMode, disableSuggestions, disableActionPrefixes, showReasoning, sidebarWidth, autoScroll, showScrollToTop, showScrollToBottom
-- `TranslationSettings` - enabled, sourceLanguage, targetLanguage, translateNarration, translateUserInput, translateWorldState
-- `ExperimentalFeatures` - stateTracking, rollbackOnDelete, lightweightBranches, autoSnapshotInterval, backgroundGeneration, generationNotifications, notificationPreview
-
-**Images:**
-- `EmbeddedImageStatus = 'pending' | 'generating' | 'complete' | 'failed'`
-- `EmbeddedImage` - id, storyId, entryId, sourceText, prompt, styleId, model, imageData (base64), width, height, status, errorMessage, createdAt, generationMode (analyzed|inline)
-- `InlineImageTag` - originalTag, startIndex, endIndex, prompt, characters, imageId, status
-
----
-
-### FILE 5: `src/lib/services/database.ts`
-
-**What it does:** IndexedDB wrapper using Dexie.js. Provides CRUD operations for all story data, with support for branching and versioning.
-
-**Database Schema (v7):**
-- `stories` (id, title, createdAt, updatedAt)
-- `storyEntries` (id, storyId, position, type, [storyId+position], [storyId+branchId+position])
-- `characters` (id, storyId, name, [storyId+name])
-- `locations` (id, storyId, name, [storyId+name])
-- `items` (id, storyId, name, [storyId+name])
-- `storyBeats` (id, storyId, type, status)
-- `chapters` (id, storyId, number, [storyId+number])
-- `lorebookEntries` (id, storyId, name, type, [storyId+type])
-- `embeddedImages` (id, storyId, entryId, status, [storyId+entryId])
-- `appSettings` (key)
-- `arcs` (id, storyId, arcNumber, [storyId+arcNumber])
-- `proceduralRules` (id, storyId, category, maturity, [storyId+category], [storyId+maturity])
-- `embeddingCache` (id, sourceId, sourceType, [sourceType+sourceId])
-- `entryRelationships` (id, storyId, sourceEntryId, targetEntryId, type, [storyId+sourceEntryId], [storyId+targetEntryId])
-- `conversationMemory` (id, storyId, npcEntryId, storyPosition, [storyId+npcEntryId], [storyId+storyPosition])
-- `worldEvents` (id, storyId, triggerPosition, type, [storyId+triggerPosition])
-
-**Exports:**
-- Story CRUD: `createStory`, `getStory`, `getAllStories`, `updateStory`, `deleteStory` (cascading delete of all related data)
-- StoryEntry CRUD: `createStoryEntry`, `getStoryEntries`, `updateStoryEntry`, `deleteStoryEntry`, `deleteStoryEntriesFromPosition`
-- Character/Location/Item/StoryBeat/Chapter/Arc/Lorebook CRUD (standard pattern)
-- EmbeddedImages CRUD: `createEmbeddedImage`, `getEmbeddedImages`, `getEntryImages`, `updateEmbeddedImage`, `deleteEmbeddedImage`
-- ProceduralRules CRUD: `createProceduralRule`, `getProceduralRules`, `getProceduralRulesByCategory`, `updateProceduralRule`, `deleteProceduralRule`, `bulkPutProceduralRules`
-- Embedding Cache CRUD: `getEmbedding`, `putEmbedding`, `getEmbeddingsByType`, `deleteEmbedding`, `deleteEmbeddingsBySource`
-- Settings: `getSetting`, `setSetting`, `deleteSetting`, `getAllSettings`
-- Relationships (Tier 2): `createEntryRelationship`, `getEntryRelationships`, `getRelationshipsForEntry`, `updateEntryRelationship`, `deleteEntryRelationship`
-- Conversation Memory (Tier 2): `createConversationMemory`, `getConversationMemory`, `getNpcConversationMemory`
-- World Events (Tier 2): `createWorldEvent`, `getWorldEvents`, `updateWorldEvent`
-- Utility: `debugDatabaseStatus`
-
-**Reads:** Dexie tables
-
-**Writes:** Dexie tables
-
-**Connections:** Called by story store, AI services, StoryView component. Settings values read by settings store on init.
-
-**Notable patterns:**
-- Cascading delete: deleteStory removes all entries, characters, locations, items, beats, chapters, lore, images, arcs, sagas, rules, relationships, conversation memory, world events in a single transaction
-- Compound indices for common queries (storyId+position, storyId+name, etc.)
-- Version 4→5→6→7 migrations with upgrade hook (v4 clears lorebookEntries on upgrade to fix schema issues)
-- Circular ref protection in createLorebookEntry: JSON.parse(JSON.stringify(entry)) sanitizes before insert
-
----
-
-### FILE 6: `src/lib/services/ai/index.ts`
-
-**What it does:** Singleton registry for all AI services. Lazy-initializes services on first access.
-
-**Exports:**
-- All AI service classes (MemoryService, SuggestionsService, ActionChoicesService, StyleReviewerService, EntryRetrievalService, LoreManagementService, EntryRefinementService, ImageGenerationService, WorldSimulationService, ArcCondensationService, SagaCondensationService, ProceduralMemoryService, EmbeddingService, WikiLintService)
-- `ai` object with getters for each service (lazy-initializes on first access)
-
-**Key structure:**
-```typescript
-export const ai = {
-  get classifier() { return _classifier ??= new ClassifierService(); },
-  get memory() { return _memory ??= new MemoryService(); },
-  // ... 13 more services
-};
+```text
+Player action / import / authorized edit
+  -> persisted source evidence
+  -> structured proposals and validation
+  -> PostgreSQL campaign records and provenance
+  -> outbox jobs and versioned projections
+  -> memory retrieval / Markdown vault / optional indexes
+  -> browser projection
 ```
 
-**Reads:** Nothing directly
+[The database schema](src/lib/server/db/schema.ts) owns stories, entries, entities and aliases, relationships, factions and projects, facts, NPC beliefs, agreements, events, threads, state patches, proposals, source references, continuity warnings, memory nodes, chapters, arcs, sagas, and backend jobs.
 
-**Writes:** Caches service instances in module-level variables
+Transcript entries are durable evidence; prose does not automatically establish every inferred fact as accepted state. Canonical writes preserve IDs, provenance, and relevant revision checks. NPC beliefs and planned/scheduled events are separate from current truth.
 
-**Connections:** Imported and used by StoryView component during generation pipeline to access specific services.
+Generated Markdown is a readable projection. Qdrant indexes vault content; pgvector supports backend memory embeddings. Neither vector representation is authority. IndexedDB/Dexie serves the client cache and remaining local/legacy compatibility paths for backend-bound stories.
 
----
+## Revisioned edits and agent foundations
 
-### FILE 7: `src/lib/services/ai/BaseAIService.ts`
+Generic world-record patches require the loaded revision. [mutationSafety.ts](src/lib/server/engine/mutationSafety.ts) owns conflicts, nested partial updates and field validation; [worldRecords.ts](src/lib/server/engine/worldRecords.ts) owns record/reference checks and transactional audit/outbox writes. Public client edits are attributed to the client and schema validator. Migration 0024 captures canonical source-row history across SQL writers; the content workspace exposes retained versions and approved restore from Phase 3.
 
-**What it does:** Abstract base class for all AI services. Handles per-service configuration lookup, model selection, and structured generation via JSON mode.
+[Agent contracts](src/lib/contracts/agentTools.ts), [permission policy](src/lib/server/engine/agentPolicy.ts) and [settings owner](src/lib/server/engine/agentSettings.ts) define separate GM/Assistant preferences, project/game inheritance and future scoped tool enforcement. Settings → Agent Tools edits the versioned server document. GM game runs now expose only implemented tools permitted by the effective settings; project Assistant and batch profiles require explicit configuration.
 
-**Exports:**
-- `BaseAIService` (abstract class)
+[assistantConversations.ts](src/lib/server/engine/assistantConversations.ts) owns project/game-scoped Assistant conversations, replies, question answers and human approval reviews, backed by migrations 0034, 0036, 0037 and 0038. Its messages and runs are separate from campaign transcript entries; [AssistantPanel.svelte](src/lib/components/content/AssistantPanel.svelte) presents them from the content workspace and active game. Replies use the dedicated `assistant` service profile and bounded scoped context. [assistantContextDigest.ts](src/lib/server/engine/assistantContextDigest.ts) incrementally folds older committed messages into short excerpts, revisioned source IDs and completed tool receipts using the existing conversation summary fields; the latest 12 messages remain raw in the prompt, and full transcripts remain in PostgreSQL. [assistantUsage.ts](src/lib/server/engine/assistantUsage.ts) totals only fully known provider usage, and runs record attempts before dispatch so failed or cancelled calls remain visibly unaccounted. [assistantTools.ts](src/lib/server/engine/assistantTools.ts) dispatches scoped document/history reads, list/write/update, project-wide custom-type saves, persisted questions, restore proposals and layout-clear proposals under the Assistant policy. Migration 0035 records each tool call. Mutations commit through shared content writers with canonical revisions and Assistant actor attribution; approval reuses the shared snapshot-token review transaction. Questions and proposals pause the run, and an answer or approval completes its reserved receipt. A declined proposal gets a server-authored result with the current revision and prior provider usage. A reply that claims an applied edit without a current-run applied receipt is rejected. Remaining Phase 8 qualification is open.
 
-**Key internal functions:**
-- `get serviceModel(): string` - Returns per-service model override or empty string
-- `get serviceTemperature(): number` - Returns per-service temperature
-- `get serviceMaxTokens(): number` - Returns per-service maxTokens
-- `get promptOverride(): string` - Returns system prompt override (empty = use default)
-- `get isEnabled(): boolean` - Returns if service is enabled
-- `protected generateStructured<T>(schema, defaultSystem, prompt)` - Generates JSON, parses with Zod, returns typed result
-- `protected generateText(defaultSystem, prompt)` - Generates plain text
+Migrations 0044–0045 and [assistantBatchPlan.ts](src/lib/server/engine/assistantBatchPlan.ts) own durable Assistant batch plans, exact scoped target enumeration, separate plan/dispatch calls, queued child assignments, saved spend ceilings and cancellation. [assistantBatchBudget.ts](src/lib/server/engine/assistantBatchBudget.ts) requires a configured maximum USD and conservative input/output prices, then reserves each bounded provider request against the aggregate ceiling under the project lock. [assistantBatchWorker.ts](src/lib/server/engine/assistantBatchWorker.ts) sends only assigned record snapshots and allowed field schemas to the configured `batchAuthoring` service; it does not pass the parent conversation or tools. [assistantBatchApply.ts](src/lib/server/engine/assistantBatchApply.ts) validates complete child decisions and uses the canonical content writer with per-item revision checks and batch attribution. [assistantBatchReport.ts](src/lib/server/engine/assistantBatchReport.ts) produces one source-linked parent wrap-up for each terminal batch, comparing two applied proposals with their immutable accepted revisions. The outbox dispatches children through two batch lanes; conversation reads expose persisted status, target outcomes, final report and separate usage to the Assistant panel. [Phase 9 evidence](docs/mythengine-phase9-batches-2026-09-23.md) records the tested boundary and remaining qualification.
 
-**Reads:** settings store (getServiceConfig returns model/temp/maxTokens/systemPromptOverride/enabled)
+Jobs have a required project owner. Campaign jobs retain a required game, while explicitly supported project jobs can run without one. Database ownership constraints and project-scoped status/run/retry commands keep these paths separate. Preference saves enqueue their validation job in the same transaction. [Phase 1 evidence](docs/mythengine-phase1-2026-09-21.md) records migration, race, rollback and browser verification.
 
-**Writes:** Nothing
+## Authored project content
 
-**Connections:** Subclassed by all 13 AI services. Calls generateNarrative from generate.ts.
+Migrations 0039–0040 add immutable scoped image assets, cover identity/revisions on documents, and project-capable image jobs. Migration 0041 makes the asset/game and document/cover ownership constraints deferrable for atomic game moves. Migration 0042 adds durable public GM story image cards. [imageAssets.ts](src/lib/server/engine/imageAssets.ts) validates generated bytes, stores them under opaque server-owned keys, serves scoped reads, attaches covers with a cover-revision check, and imports verified image bytes with rollback cleanup. [content.ts](src/lib/server/engine/content.ts) exports current covers plus retained type/item revisions and their historical cover assets, then remaps those identities during import; campaign bundles reuse that path. [gameMigration.ts](src/lib/server/engine/gameMigration.ts) moves game assets and revisions, rewrites snapshot ownership and shared references, and copies selected shared documents with their retained history. [storyImageCards.ts](src/lib/server/engine/storyImageCards.ts) attaches completed public GM images to their originating turn and exports/imports their bytes independently of transient agent runs. [automaticCovers.ts](src/lib/server/engine/automaticCovers.ts) queues one job in the new-document transaction only when the project switch and a supported, configured image profile are available. [imageStyle.ts](src/lib/server/engine/imageStyle.ts) owns revisioned project style saves; [imageRequests.ts](src/lib/server/engine/imageRequests.ts) binds explicit GM/Assistant image requests to their originating run and scoped file. [imageJobs.ts](src/lib/server/engine/imageJobs.ts) owns direct API execution, gates, idempotent asset receipts and conditional attachment; its worker handler remains for automatic covers and legacy jobs; [imageProvider.ts](src/lib/server/engine/imageProvider.ts) implements bounded OpenAI, NanoGPT, and OpenRouter image transport. Agent run and Assistant conversation reads join only matching-origin jobs for status and result display. Scene and character image buttons, and explicit GM/Assistant image tools, await prompt preparation, image transport and attachment in their API call using the saved `imageGeneration` service. A receipt is reserved as running with execution=api for history and duplicate protection; workers cannot claim it. The API returns the finished image result, and the UI updates without image status polling. Scene requests snapshot the originating narration, six preceding narrations from the same POV, current location, and visible character bio/appearance records. A read-only scene prompt agent using the saved classifier service composes and validates the full cast and visual prompt before image transport; the request retains its prompt, participant IDs, and model/usage receipt. Character image prompts prefer saved appearance and visual descriptors, using biography only when appearance is missing; species and current form retain anatomy-appropriate framing. Character illustrations use a neutral background and saved attire, with ordinary covering clothes for humanoids when no attire is saved. Provider content-filter failures return a fixed diagnostic without exposing response text. Scene casts are not capped at four; oversized composed prompts fail instead of dropping participants. [Phase 10 image evidence](docs/mythengine-phase10-images-2026-09-23.md) records current proof and gaps.
 
-**Notable patterns:**
-- JSON markdown fence stripping (handles ```json prefix/suffix)
-- System prompt override replaces default entirely (not appended)
-- _service field tagged on options for API logging
+[Content contracts](src/lib/contracts/content.ts), [validation](src/lib/server/engine/contentValidation.ts) and [content.ts](src/lib/server/engine/content.ts) own custom types, documents, references, revisioned saves, organization, archive recovery and scoped transfer. Every authoring mutation locks its project and commits its snapshot atomically. The [Content workspace](src/lib/components/content/ContentWorkspace.svelte) uses the same gateway as CLI/MCP. Existing characters/locations/items/factions use [canonicalContent.ts](src/lib/server/engine/canonicalContent.ts) and a separate metadata-only catalog. Migration 0024 captures their source-row baseline and subsequent changes transactionally across all SQL writers. Composite revisions protect workspace edits and same-game copies. Explicit new identities and validated patches reuse the world-record owner in the same transaction; creation cannot merge by name. Copies retain row fields but do not clone linked domain tables, source evidence or player identities. [Canonical authoring evidence](docs/mythengine-phase2-authoring-2026-09-21.md) defines the boundary. [Canonical workspace evidence](docs/mythengine-phase2-canonical-2026-09-21.md) defines writer attribution and restore limitations; approved historical restore is implemented in Phase 3.
 
----
+Campaign exports include authored content in their existing repeatable-read snapshot. Imports remap content identities and typed references in the canonical import transaction; definition/path conflicts abort the whole import. Saved audience/context preferences are separate from retrieval and are not yet consumed by a model dispatcher. [Phase 2 completion](docs/mythengine-phase2-complete-2026-09-22.md) records the implemented boundary and acceptance evidence.
 
-### FILE 8: `src/lib/services/ai/sdk/generate.ts`
+Built-in type settings live in [canonicalTypes.ts](src/lib/server/engine/canonicalTypes.ts) and migration 0025. [canonicalExtensions.ts](src/lib/server/engine/canonicalExtensions.ts) validates embedded extension schemas and values in `metadata.contentFields`; the established canonical domain schemas remain authoritative. Preview locks project records, reports incompatible values, and binds schema/default migration to their current revisions. Apply fills only missing defaults through the shared canonical writer in the same transaction as the type revision. New records use those defaults; custom-field edits replace only the extension object. Project revision checks and atomic history protect layout/context saves; clearing requires explicit revision-bound confirmation. The renderer uses bounded own-property paths and escaped text. Content/campaign snapshots carry current definitions; conflicts abort import. Retained history and reviewed restore are implemented in Phase 3; prompt consumption is Phase 4.
 
-**What it does:** Lightweight OpenAI-compatible chat completion wrapper. Handles streaming and non-streaming requests, API logging, conversation history insertion.
+Persistent folder ownership and subtree moves live in [content.ts](src/lib/server/engine/content.ts), [folder contracts](src/lib/contracts/contentFolders.ts) and migration 0026. Exact project/game scope, a project lock and a preview fingerprint protect atomic moves across custom items, archived items and canonical metadata/history. Empty folders survive content/campaign transfer. [Folder evidence](docs/mythengine-phase2-folders-2026-09-21.md) records bounds and remaining operations.
 
-**Exports:**
-- `ChatMessage` type (role: 'user'|'assistant', content: string)
-- `GenerateOptions` interface (system, prompt, messages, model, temperature, maxTokens, signal)
-- `StreamChunk` interface (content, reasoning, done)
-- `APILogEntry` interface (full request/response logging)
-- `streamNarrative(options)` - Async generator yielding StreamChunks
-- `generateNarrative(options)` - Non-streaming completion
-- `getActiveProfile()` - Returns active APIProfile + baseUrl
-- `getActiveModel()` - Returns active model with fallback chain
-- API log functions: `getApiLog()`, `clearApiLog()`, `onApiLogChange(fn)`
+Folder copying uses the same project lock and an operation-bound preview fingerprint. The content owner allocates new document IDs before remapping internal references; external references retain their targets and are validated. Canonical copies reuse their domain owner, including player/deleted-source guards and atomic history/outbox writes. Partial-update contracts remove creation defaults so omitted fields remain unchanged. [Folder-copy evidence](docs/mythengine-phase2-folder-copy-2026-09-21.md) defines the same-game linked-record boundary.
 
-**Key internal functions:**
-- Both functions build messages array: [system, ...history, user prompt]
-- Fetch to `${baseUrl}/chat/completions` with Authorization header
-- Streaming: SSE parsing with data: JSON lines
-- Non-streaming: response.json() → choices[0].message.content
-- Error handling: logs full APILogEntry with error field on exception
-- Token estimation: length/4 rule of thumb
+## Server turn and prompt flow
 
-**Reads:** Database (getSetting for profiles), settings (activeProfileId, narrativeModel)
+Primary implementation: [turn/orchestrator.ts](src/lib/server/turn/orchestrator.ts). The separate [engine/orchestrator.ts](src/lib/server/engine/orchestrator.ts) serves engine orchestration; do not confuse the two. [agentRuns.ts](src/lib/server/engine/agentRuns.ts) owns durable GM model-tool runs, question continuation and tool receipts; [generatedNames.ts](src/lib/server/engine/generatedNames.ts) validates bounded GM name candidates without creating canon. [agentRunGuard.ts](src/lib/server/engine/agentRunGuard.ts) prevents a second advancing turn while one is pending. Migrations 0030–0032 own the run ledger and persisted provider decisions, and [run-stream](src/routes/api/engine/run-stream/+server.ts) projects its cursor-ordered events. The run reaches the existing turn owner only when ready to narrate.
 
-**Writes:** API log (module-level _apiLog array)
+The provider UI calls the persisted `narrative` service **GameMaster**; this compatibility ID still owns prose turns. [settings.svelte.ts](src/lib/stores/settings.svelte.ts) groups World State services as GameMaster tools, completed-turn extraction and lore/summary tasks as **Memory & Context**, and optional visible-scene suggestions as **Player Guidance**. Saved specialist model/provider overrides remain per service. [terminalSettings.ts](src/lib/services/terminalSettings.ts) synchronizes tasks inheriting the GameMaster model. The orchestration role names `game_master`, `memory_context`, and `player_guidance` apply to new runs; legacy role IDs remain readable in old receipts.
 
-**Connections:** Called by BaseAIService.generateStructured and generateText. Streaming used by ActionInput component.
+The optional `dialogue` service runs after the GameMaster draft and any roll continuation. [dialoguePass.ts](src/lib/server/turn/dialoguePass.ts) attributes known NPC speech and gives each speaker a separate bounded request with that speaker's actor card, selected learned beliefs, applicable actor decision, nearby draft prose, recent exchanges, and player action. GM tool observations and other speakers' private cards are excluded. It may replace only quoted NPC speech; invalid or failed output leaves the whole GM draft intact. The service is off until configured in AI Services. Dialogue coverage defaults to all eligible speech; the optional important-exchanges mode skips clear routine greetings. The final result is streamed and persisted once.
 
-**Notable patterns:**
-- Bearer token auth from profile.apiKey
-- Provider baseUrl override from profile.baseUrl or provider config
-- Always-on API log for debugging (clears on page reload, listeners for reactive updates)
-- Stream chunk parsing handles malformed SSE lines gracefully
-- Messages array insertion of history between system and final user prompt
+1. Validate the turn request and load canonical story context through [turn/context.ts](src/lib/server/turn/context.ts).
+2. `prepareServerTurnContext` resolves narrative settings, timeline/scene state, recall, location lore, and prompt material. Prepare, preview, and submit reuse this path.
+3. [promptPacket.ts](src/lib/server/turn/promptPacket.ts) compiles current world and scene state, bounded NPC cards and actor beliefs, selected arc summaries, chapters not yet represented by an arc, and narrative entries after the latest chapter boundary. [recentDialogue.ts](src/lib/server/turn/recentDialogue.ts) applies the configured turn and token allowances to that dialogue. Older details remain available through source-linked retrieval and GM tools.
+   For narration, the effective instructions, campaign premise, and selected saga/arc/chapter history form a reusable provider prefix. On NanoGPT, bounded dialogue follows that prefix, then current scene state, characters, retrieved details, and the action arrive together in the final user message; the current context supersedes older dialogue when they conflict. Other providers retain their existing system-context layout. The GM planner still reads the full compiled context; prompt receipts attribute historical records in the system prefix as well as records in changing context.
+4. Ordinary narrative turns reuse wiki setting lore keyed by the current POV location and containing places. Lore questions, investigation, travel, and named world-entity actions include the action in the search query. Automatic wiki context selects up to 8 world-lore search seeds and 12 linked pages, with 2,400 characters per page; ordinary scenes allow 8,000 characters and explicit lore questions allow 24,000. OOC controls skip this retrieval. Ordinary GM tool observations are capped at 12,000 characters total. The GM planner can use bounded private Research reads. Direct turns deterministically read named campaign pages, canonical records, wiki pages, transcript neighbors, and the opening transcript for an explicit story-start question; an optional adaptive GM research pass uses the narrative model when these reads leave an open question. Its observations are capped at 12,000 characters each and 24,000 total. [gmTools.ts](src/lib/server/engine/gmTools.ts) defines the shared server operations. [research.ts](src/lib/server/engine/research.ts) supplies the local, public-source extractive Research tool and live citation checks; `research.preview` uses that same read-only path. GM Research gates these reads; a separate adaptive GM research preference gates the optional model pass and inherits the former Active Recall opt-in until explicitly overridden. Historical `activeRecall` receipts remain readable. Phase 6's provider-backed synthesis over GM-only evidence remains open.
+5. Final request budgeting accounts for system instructions, dynamic context, messages, action/tool content, and output allowance. [provider.ts](src/lib/server/turn/provider.ts) performs provider transport and context-window enforcement, with usage/error/stream diagnostics.
+6. The turn persists transcript/results and schedules follow-up processing. [patchValidator.ts](src/lib/server/turn/patchValidator.ts) validates structured state updates before canonical application. [dueEventFeedback.ts](src/lib/server/events/dueEventFeedback.ts) checks final-narration evidence, snapshotted due-event revisions and the persisted source before a due event can be marked realized through synchronous or deferred extraction; ambiguous outcomes stay unresolved. The same extraction pass checks whether an optional faction cue surfaced in final prose; its presentation receipt never realizes the underlying world event. Story presentation metadata holds the latest attempt status so pending cues do not recur after a scene change, and only feedback for that latest entry can release an unwritten cue.
 
----
+Prepared contexts are cached by story/client turn identity and request fingerprint. Reuse checks story server version, narrative settings, authored context, scene checkpoint, and the applied Plot Director/presentation state, including current turn and location. A checkpoint refresh or Director retirement can change guidance without changing story version.
 
-### FILE 9: `src/lib/services/ai/sdk/schemas/classifier.ts`
+The compact campaign continuity brief lives in PostgreSQL `stories.metadata.campaignState`, using [campaignState.ts](src/lib/contracts/campaignState.ts). Sync and deferred state extraction propose up to eight source-quoted topic changes; the locked canonical writer validates primary-POV narration, source position and expected prior source ID before replacing a topic. At 32 topics new keys are rejected with warnings rather than silently evicting milestones; related changes should reuse existing keys. The brief is supplied before historical context, has retained-record receipt tracking, and a normal turn fails explicitly if its required bullets cannot fit the context budget. It is GM reference, not universal NPC knowledge. The World state drawer projects these bullets and their supporting quotes. Historical retrieval selects by relevance, then displays dated selected records chronologically; undated records retain relevance order. This does not replay or automatically backfill old campaigns; `scripts/seed-veil-campaign-state.mjs` provides a dry-run-first, five-anchor Veil backfill.
 
-**Zod schemas for world state extraction:**
-- `characterUpdateSchema` - name, description, relationship, status (active|inactive|departed|deceased|unknown), traits
-- `locationConnectionSchema` - targetName, direction, travelTimeMinutes, description
-- `locationUpdateSchema` - name, description, current, region, terrain, connections
-- `itemUpdateSchema` - name, description, quantity, equipped, location
-- `relationshipExtractionSchema` - sourceName, targetName, type (12 enum values), label, strength (0-100), bidirectional
-- `conversationDetectionSchema` - npcName, topicSummary, playerRevealed, npcLearned, emotionalShift, importance (trivial|minor|significant|critical)
-- `classificationResultSchema` - characters, locations, items, storyBeats (with significance), relationships, conversations, mood, timeProgression
+### Prompt settings and evidence
 
-**Type exports:** ClassificationResult, CharacterUpdate, LocationUpdate, ItemUpdate, RelationshipExtraction, ConversationDetection
+Story genre/preset packs live in [storyPromptPacks.ts](src/lib/components/wizard/storyPromptPacks.ts). The built-in prompt editor preview at `GET /api/settings/prompts/narrative` calls the same server compiler. Persisted service settings in [llmSettings.ts](src/lib/server/engine/llmSettings.ts) resolve provider/model/reasoning, context/output controls, and a global narrative `systemPromptOverride`. An override can replace the built-in story-pack instructions; inspect both before diagnosing style.
 
----
+`turn.preview` and `/api/debug/prompt-packet/<storyId>` inspect server preparation. Preview occurs before tool observations and provider execution. [promptReceipt.ts](src/lib/server/turn/promptReceipt.ts) tracks retained source spans, complete/partial/omitted records, payload sections, and primary/roll-continuation request summaries. These token estimates exclude provider wire framing; they are not a billing receipt. The narrator caches campaign history as a stable system prefix. Anthropic-compatible requests put ordinary location-only wiki context in a second marked system cache segment so a changed wiki lookup can still reuse the history prefix; action-specific wiki results remain dynamic. NanoGPT puts changing wiki context after dialogue with the rest of the current turn context.
 
-### FILE 10: `src/lib/services/ai/generation/ClassifierService.ts`
+The browser exposes this through [ContextWindow.svelte](src/lib/components/story/ContextWindow.svelte), [ContextSelection.svelte](src/lib/components/story/ContextSelection.svelte), and [PromptsPanel.svelte](src/lib/components/settings/PromptsPanel.svelte). Actual provider request diagnostics also live in [apiCallLogs.ts](src/lib/server/engine/apiCallLogs.ts).
 
-**What it does:** Extracts world state changes from narrative text. Runs after each narration to keep characters, locations, items, and story beats in sync.
+[terminalSettings.ts](src/lib/services/terminalSettings.ts) mirrors canonical LLM settings into browser state on app startup, settings open, and explicit refresh. Mirrored profiles carry key references, not secret values. Narrative generation and context controls patch only their edited fields; memory-budget changes do not rewrite LLM settings. Service saves target changed services and never resend cached secrets by default. Provider credential replacement is an explicit save. Already-open clients need a reload to adopt this behavior; it is not a server-side rejection of legacy clients.
 
-**Exports:**
-- `ClassifierService` (extends BaseAIService)
+Keep direct GM/OOC control input separate from narrative evidence, and preserve parallel-POV and NPC knowledge boundaries. Parallel-POV preparation excludes unrelated secret retrieval and timeline records before the prompt is compiled; its deterministic memory read keeps that same visibility scope. Plot guidance does not override established scene evidence or the player's action.
 
-**Key methods:**
-- `classify(narrative, recentEntries, existingCharacters, existingLocations, existingItems, mode, pov, tense)` - Returns ClassificationResult
+## Memory, retrieval, and durable processing
 
-**System prompt construction:**
-- Lists existing characters/locations/items
-- Detailed rules for character updates (ONLY if changed, departure logic for "departed" status)
-- Location update rules (set current: true only for END location, one location max)
-- Item tracking (gained/lost/equipped/unequipped/used/discovered)
-- Story beat capture (minor|moderate|major|critical)
-- Relationship extraction rules
-- Location connection discovery
-- Conversation detection with importance levels
+Narration and roll continuations omit `max_tokens` on OpenAI-compatible transports (including OpenRouter), irrespective of the saved service cap. Full returned text and provider-reported completion/total/reasoning usage are retained; completion usage already includes reasoning and must not be double-counted. Native Anthropic still requires an explicit `max_tokens` value. Input/context safety reserves and bounded specialist outputs are separate from narrative output caps. Provider-imposed output limits remain observable through finish reasons.
 
-**Reads:** Story entries, characters, locations, items (from params)
+[retrieval.ts](src/lib/server/memory/retrieval.ts) combines canonical records, event/memory projections, agreements and beliefs, transcript recall, and optional embedding-backed sources. [ranking.ts](src/lib/server/memory/ranking.ts) ranks candidates; visibility, temporal state, and control/POV filtering matter before caps. [retrievalSource.ts](src/lib/server/memory/retrievalSource.ts) bounds optional reads and reports degraded sources while retaining successful ones.
 
-**Writes:** Nothing directly (results used by StoryView component)
+Lexical candidates use weighted full-text relevance before the 80-row cap and match individual meaningful query terms. Retrieval then resolves explicit supersession/source links and revision-topic dependencies independently of query wording (at most four passes, 1,000 related rows per pass; overflow fails rather than silently returning stale candidates). Corrections inherit linked relevance within the same campaign and belief owner; temporal/visibility exclusions still decide what can be rendered. This does not infer semantic corrections in unrelated summaries or repair missing extraction jobs. The memory benchmark includes candidate-cap and low-importance correction-chain regressions.
 
-**Connections:** Called by StoryView.runClassifier after AI generation. Output merged into story.characters, story.locations, story.items, and used to update presence and lorebook.
+[canonical.ts](src/lib/server/memory/canonical.ts) maintains canonical retrieval projections. [sceneCheckpoint.ts](src/lib/server/memory/sceneCheckpoint.ts) derives bounded, source-linked scene state with branch/scene boundaries and excludes interlude/control material from primary-scene knowledge.
 
-**Notable patterns:**
-- Rejects "do not re-list unchanged characters" instruction
-- "Departed" status is transient classifier signal → persists as "active" (they're alive, just elsewhere)
-- Trait merging: Set deduplication
-- Three-character list for recent context (reduces token cost)
+[The outbox](src/lib/server/jobs/outbox.ts) and [processor](src/lib/server/jobs/processor.ts) own retryable durable work, including:
 
----
+- State extraction and continuity audit.
+- Scene checkpoint refresh and event/canonical retrieval projections.
+- Chapter summarization, arc rollup, and automatic saga rollup.
+- Faction pressure, world simulation ticks, and Plot Director planning.
+- Story-vault sync and optional memory embeddings.
 
-### FILE 11: `src/lib/services/ai/generation/MemoryService.ts`
+The existing `extract_turn_state` job is the Memory & Context Turn Memory task: its job metadata records both transcript source IDs, and its source/version checks and retry semantics remain the sole durable extraction path. Sync and deferred extraction each allow one compact repair after invalid output, including an empty response that exhausted its output limit; that case lowers reasoning effort and raises the repair cap within the existing limit. A repair still validates the entire patch before canonical writes. The reader can inspect extraction coverage in [MemoryProcessingStatus.svelte](src/lib/components/story/MemoryProcessingStatus.svelte). Player Guidance uses the bounded [SuggestionsService.ts](src/lib/services/ai/generation/SuggestionsService.ts) only on recent player-visible transcript entries; its output is optional and never submits a turn. The unused Action Choices and Style Review services and the separate Wiki Lint workflow are retired. Wiki search/context and canonical write validation remain active.
 
-**What it does:** Manages chapter summarization, chapter boundary detection, and retrieval decisions for long-form narrative memory.
+[chapterCadence.ts](src/lib/services/chapterCadence.ts) owns the fixed cadence: 20 completed player/narrator turns per chapter, then 10 consecutive chapters per arc, with no trailing buffer. Legacy settings keys remain compatible but cannot override this rule. Accepted narration after a GM correction remains supplementary evidence without counting the GM instruction as a player turn. [summaryGeneration.ts](src/lib/server/jobs/summaryGeneration.ts) sends full source windows and validates one chronological account for every source; missing model output fails the job. The reader-facing summary is a connected chronological narrative, while the ordered source accounts remain complete audit evidence. Oversized chapters and arcs split into source-complete subwindows; synthesis consumes their retained accounts. Arc generation prefers validated chapter accounts over prose and excludes event-derived change lists from its factual input. Historical facts come from transcript narration, not extracted event descriptions. An independent retryable arc job is queued in the same transaction as chapter persistence. Arc persistence refreshes coverage and numbering under the story lock so competing jobs cannot duplicate chapter coverage or arc numbers.
 
-**Exports:**
-- `MemoryService` (extends BaseAIService)
-- `DEFAULT_MEMORY_CONFIG` (tokenThreshold: 16000, chapterBuffer: 10, autoSummarize: true, enableRetrieval: true, maxChaptersPerRetrieval: 3)
+`jobs.rebuildSummaries` defaults to a dry run. Its `dryRun: false` mode queues [summaryRebuild.ts](src/lib/server/jobs/summaryRebuild.ts), which backs up primary-history sources and projections, stages generated chapters/arcs, revalidates the source snapshot and worker lease, and atomically replaces summary projections. It does not replay turns, world ticks, Director planning, thread reconciliation, or character updates. Optional `resumeJobId` reuses validated drafts from a failed rebuild only when the story snapshot and historical generation policy match; changed source windows regenerate. Existing saved accounts also require the current source fingerprint; unchanged IDs alone cannot establish unchanged history. Alternate branches require a separate scoped rebuild. Progress and the backup path are saved in `backendJobs.metadata.summaryRebuild`.
 
-**Key methods:**
-- `summarizeChapter(entries, previousChapters, mode, pov, tense)` - Returns ChapterSummaryResult with title, summary, keywords, keyCharacters, keyLocations, emotionalTone
-- `analyzeForChapter(entries, lastChapterEndIndex, tokensOutsideBuffer, mode, pov, tense)` - Returns ChapterAnalysis with shouldCreateChapter, optimalEndIndex, keywords, reason
-- `decideRetrieval(userInput, recentNarrative, availableChapters)` - Returns RetrievalDecision with shouldRetrieve, relevantChapterIds, reason
-- `buildRetrievedContextBlock(chapters, decision)` - Formats chapters as context block
+[memoryCoverage.ts](src/lib/server/jobs/memoryCoverage.ts) reports extraction coverage against eligible source pairs, including missing, failed, outdated, waiting, and running work. The contiguous boundary stops at unresolved gaps. A later successful extraction does not repair an earlier source automatically.
 
-**Reads:** Story entries, chapters (from params)
+Character continuity refresh runs automatically after every completed chapter, with the preceding chapter retained as a recovery window. The character-update service refines existing chapter proposals; automatic application checks the character version captured before refinement, leaving changed targets for review. Per-turn extraction still owns immediate state changes.
 
-**Writes:** Nothing directly (results used by StoryView)
+Use `jobs.status` and scoped `jobs.retry` through the engine gateway; failure classification lives in [failureClassification.ts](src/lib/server/jobs/failureClassification.ts). Coverage, checkpoint/consolidation freshness, vault freshness, and vector-index freshness are different signals. Repeated retries do not fix provider-account or invalid-output causes.
 
-**Connections:** Called by StoryView.runChapterCheck during chapter boundary detection and memory management. Used to populate context for ContextAssembler.
+[StoryMemoryPanel.svelte](src/lib/components/memory/StoryMemoryPanel.svelte) and [MemoryProcessingStatus.svelte](src/lib/components/story/MemoryProcessingStatus.svelte) expose processing and recall state. [mtheriosSummaryFormat.ts](src/lib/services/ai/context/mtheriosSummaryFormat.ts) removes audit/control noise while preserving the complete factual history. Prompt assembly prioritizes chapters not yet covered by an arc and bounded arc accounts, with explicit notices when history must be omitted.
 
-**Notable patterns:**
-- Chapter boundary detection: looks for scene transitions, time skips, resolution of dramatic sequences
-- Retrieval decision: checks if current action references past characters/locations by name
-- Summary focuses on WHAT CHANGED, not play-by-play
-- Keywords designed for future retrieval (names, places, concepts, plot elements)
+## Canonical world editing
 
----
+[worldRecords.ts](src/lib/server/engine/worldRecords.ts), [canonicalWrites.ts](src/lib/services/canonicalWrites.ts), and the engine gateway connect UI edits to validated backend records. [characterDrafts.ts](src/lib/server/engine/characterDrafts.ts) handles character draft workflows. [smallBrain.ts](src/lib/server/engine/smallBrain.ts) is proposal-only; drafts become canon only through the applicable validated write path.
 
-### FILE 12: `src/lib/services/ai/generation/WorldSimulationService.ts`
+The [character update workflow](docs/character-update-workflow.md) covers identity resolution, origin and recent evidence, explicit author additions, profile composition, and saved-state verification. Character update drafts search canonical aliases and parenthesized former names, exclude noncanon narrative exchanges, and retain author instructions and the target's base version for review. Accepting a nonempty revised bio also aligns the character description; unrelated sheet state remains merged from the current record.
 
-**What it does:** Unified living-world engine: chapter-scoped faction/world reaction plus the retained full/manual simulation path. Automatic simulation now runs once when a new chapter is created, using only the newly closed chapter, the last dozen transcript entries, and directly relevant factions.
+### Player capabilities
 
-**Exports:**
-- `WorldSimulationService` (extends BaseAIService)
-- `WORLD_SIM_CHAPTER_INTERVAL` = 1 (legacy/full-sim constant; automatic cadence is chapter-triggered)
-- `SeasonEffect` interface (currentSeason, militaryModifier, travelModifier, foodPressure, narrativeNote)
-- `calculateSeason(timeTracker)` - Deterministic season lookup based on day of year
+[playerCapabilities.ts](src/lib/contracts/playerCapabilities.ts) defines `abilities` and `buffs` on canonical player `state.playerCapabilities`. Abilities are deliberately invoked; buffs describe ongoing effects. The update contract preserves omitted lists and clears a supplied empty list.
 
-**Key methods:**
-- `simulateForNewChapter({ storyId, latestChapter, recentEntries, factionEntries })` - Lightweight LLM call for the new chapter trigger. Returns WorldSimulationResult with factionActions, rumors, worldNarrative/world-state delta, worldTension, plotSeeds, and threadUpdates.
-- `simulate(chapters, arcs, recentEntries, factionEntries, timeTracker, mode, pov, tense)` - Full/manual WorldSimulationResult path retained for explicit world drawer ticks.
-- `buildChapterWorldSimulationPrompt(...)` - Pure helper that builds the recent-only chapter prompt and filters relevant factions.
+MCP tools `mtherios_get_player_capabilities` and `mtherios_update_player_capabilities` require a concrete story/player context and use canonical record operations. Keep actor/GM context, projections, and [PlayerCapabilities.svelte](src/lib/components/story/PlayerCapabilities.svelte) on the same data path.
 
-**Context sources:**
-- Chapter automatic path: latest chapter summary + last 12 transcript entries + relevant faction lore entries only
-- Manual/full path: arcs, uncovered chapters, tactical transcript, faction dossiers, schemes, agreements, events, and season context
+### Locations and inherited lore
 
-**Faction reasoning:**
-- Reads FactionEntryState.goals (priority, progress, deadline, type)
-- Reads FactionResources (military, wealth, influence, information, morale)
-- Reads interFactionRelations (faction name → standing -100 to 100)
-- Outputs FactionActions (action, actionType, target, motivation, consequences, urgency, affectedRegions)
+[locationLore.ts](src/lib/contracts/locationLore.ts) defines strict metadata and workspace contracts. [locationRecords.ts](src/lib/server/engine/locationRecords.ts) implements `world.location.get` and revision-checked `world.location.save`. [memory/locationLore.ts](src/lib/server/memory/locationLore.ts) builds bounded inherited context.
 
-**Season effects (deterministic):**
-- Spring/Summer/Autumn/Winter/Long Winter based on day of year
-- Military/travel modifiers (e.g., Winter: 0.6 military, 0.5 travel)
-- Food pressure (abundant/normal/scarce/famine)
+Containment is a directed child-to-parent `part-of` relationship; do not duplicate it as a state `parentId`. Travel edges, ownership, and government remain separate. Rules are source-linked facts with `metadata.locationLore`: category, self/descendant scope, foundation/campaign origin, salience, exceptions, and validity measured in campaign turns. Base rules and conditional exceptions remain inspectable.
 
-**Reads:** Chapter automatic path reads the latest Chapter, recent StoryEntry rows, and faction lore entries. Full/manual path reads chapters, arcs, story entries, faction lorebook entries, agreements, threads, events, schemes, and time tracker.
+[LocationWorkspace.svelte](src/lib/components/database/LocationWorkspace.svelte) exposes containment and how a place works inside World Explorer. Navigating the workspace does not move the player. See [location authoring](docs/location-lore-authoring.md) for bundle examples and revision semantics.
 
-**Writes:** The service returns structured results only. `background/runner.ts` persists chapter-triggered faction actions, rumors, and a compact world event; the manual executor path persists its own result.
+Location maps have a separate canonical document and revision history in `location_maps` and `location_map_revisions`, defined by [locationMap.ts](src/lib/contracts/locationMap.ts) and saved through [locationMaps.ts](src/lib/server/engine/locationMaps.ts). World Explorer's [map editor](src/lib/components/database/LocationMapEditor.svelte) and the GM `map` tool share that service. Normalized geometry, layers, and same-game links stay out of location prose/state and do not alter containment or the current player location. Game bundles carry map snapshots, history, and referenced image bytes; [locationMapPortability.ts](src/lib/server/engine/locationMapPortability.ts) and the world database importer handle those references.
 
-**Connections:** Called by `runChapterCheck()` after `saveCanonicalChapter(chapter, 'create')`. The executor no longer calls world simulation from the time tick loop; the World drawer can still request a manual tick.
+## Plot Director and autonomous factions
 
-**Notable patterns:**
-- Prompt adapts based on whether factions exist (faction section omitted if empty)
-- Season calculation is deterministic in code, not LLM
-- Arc block built once, shared between faction and plot reasoning
-- Faction dossiers capped at MAX_FACTIONS_PER_TICK = 12 to prevent token explosion
-- Output collected for SeasonEffect, stored in story.lastWorldSimResult for UI display
-- Chapter prompts are intentionally recent-only to avoid fast character drift and overactive faction churn
+World ticks prefer factions without a recent move for ambient rotation and suppress repeated non-project actions by content as well as event ID. A faction target needs a goal, relationship, shared territory, or relevant event link; otherwise the tick can use an internal move. Imported active projects remain saved intent and do not auto-advance without explicit autonomous metadata.
 
----
+[planner.ts](src/lib/server/plotBrain/planner.ts), [lifecycle.ts](src/lib/server/plotBrain/lifecycle.ts), and [reconciler.ts](src/lib/server/plotBrain/reconciler.ts) distinguish pending drafts, active frames, freshness, quiet periods, and retirement. Check stored pending state and activation plans before assuming a frame was applied; preserve pending-frame identity when updating lifecycle behavior.
 
-### FILE 13: `src/lib/services/ai/generation/SuggestionsService.ts`
+[chapterThreads.ts](src/lib/server/plotBrain/chapterThreads.ts) supports chapter handoffs. Its persistence path also closes linked future events and removes closed pressure from applied and pending frames before the next Director job. [factions/projects.ts](src/lib/server/factions/projects.ts) and [factions/autonomy.ts](src/lib/server/factions/autonomy.ts) handle canonical project/autonomy paths. Backend faction ticks enqueue once per five completed non-OOC turns, independently of chapter summarization; a high-pressure event can request an earlier tick, and the World drawer's manual action uses the same backend tick. Jobs for the same turn are deduplicated without resetting completed work. Imported/manual faction projects remain saved intent; they do not auto-advance or prevent a separate autonomous project. Local-only browser stories can still advance time and create chapter summaries, but require terminal sync for world movement. Their browser prompt reads stored rumors from [story.svelte.ts](src/lib/stores/story.svelte.ts), filtering secret, stale, debunked, and out-of-location claims without a World Simulation request; rumor mentions remain optional. The retired browser World Simulation generator is removed; its result schema and seasonal note shape remain for reading old snapshots. Faction tick IDs follow the prior project step so repeated or concurrent jobs cannot reuse an earlier move ID. [PlotDirectorPanel.svelte](src/lib/components/story/PlotDirectorPanel.svelte) exposes the controls.
 
-**What it does:** Generates contextual action suggestions based on current narrative state.
+[strategicFramePromptCard.ts](src/lib/services/ai/context/strategicFramePromptCard.ts) selects at most one sourced, relevant, scene-linked Director cue for optional presentation. [events/timeline.ts](src/lib/server/events/timeline.ts) ranks due events reaching the scene before applying its bounded read and brief limits, so remote backlog cannot crowd out local effects. [promptPacket.ts](src/lib/server/turn/promptPacket.ts) keeps remote threads, scoped due/recent events, and committed faction signals/moves out of narrator context unless the player asks or a supported scene effect reaches them; unscoped ordinary events remain available. Its due section can serialize the ten selected events, while recent and scheduled sections keep their four-event caps. Scene-reaching due effects appear before optional history, and [orchestrator.ts](src/lib/server/turn/orchestrator.ts) keeps each one intact through dynamic and roll-continuation context budgeting or reports that required context cannot fit. The packet records the chosen cue. The final narration classifier and [dueEventFeedback.ts](src/lib/server/events/dueEventFeedback.ts) separately record whether it surfaced; presentation does not advance the faction or complete the plot.
 
-**Exports:**
-- `SuggestionsService` (extends BaseAIService)
+The browser-only prompt's [SchemeService.ts](src/lib/services/ai/scheme/SchemeService.ts) section carries player-declared plans as intent. It does not inject antagonist stage hooks: scheme pressure or secrecy is not a scene selector. Local-only turn processing no longer invokes the legacy antagonist scheme evaluator or its time tick. It still records elapsed time and ages local rumors; backend faction/NPC jobs and Director planning own automatic strategic movement for terminal-bound stories. Historical scheme records and explicit player plan authoring remain available; existing legacy scheme stages do not advance automatically on local-only turns.
 
-**Key methods:**
-- `suggest(recentEntries, protagonist, mode, pov)` - Returns SuggestionsResult with suggestions (text, type, brief)
+[story.svelte.ts](src/lib/stores/story.svelte.ts) builds the browser-only faction roster from an explicit action mention or a present faction member. High standing and recent background action do not add remote factions. Its general prompt keeps chapter/arc summaries and binding obligations for continuity but omits unselected open-thread and old story-beat hook lists. Applied world events enter that prompt only when a consequence affects the current place or present character, or the player names the event. Local effects omit the event's hidden cause and unrelated consequences. Terminal-bound turns use the server packet and its sourced Director cue selector.
 
-**Suggestion types:** action, dialogue, thought, direction
+The optional Continuity Review in [processor.ts](src/lib/server/jobs/processor.ts) still uses its configured prose model after a turn. It compares the saved narration with the player entry and committed events not sourced from that narration, and accepts warnings only with exact narration spans and independent source IDs. It remains separate from state extraction and the classifier fallback; typed Jev replacement has not been qualified.
 
-**Guidelines:**
-- Exactly 3-4 suggestions
-- Specific to current scene (reference actual characters/objects/details)
-- Vary across suggestion types
-- Escalate in boldness (at least one safe, one risky)
-- Keep text to 5-12 words, brief to 2-4 words
+[Faction authoring](src/lib/server/factions/authoring.ts) adds character members, goals, and resource scores through revision-checked canonical writes. The [faction details editor](src/lib/components/content/FactionProfileEditor.svelte) is shared by Content Workspace and World Explorer; normalized faction rows remain authoritative when present.
 
-**Reads:** Story entries, protagonist character (from params)
+When Actor Decisions selects a Jev model, [jev.ts](src/lib/server/turn/jev.ts) sends bounded choices and prioritized actor-scoped source IDs through the configured provider. Its shared transport logs request usage and failures without actor evidence text, including decisions that later abstain. The GameMaster planner in [agentRuns.ts](src/lib/server/engine/agentRuns.ts) can ask Jev an actor-scoped question through `askJev` before narration. A validated immediate response with matching actor, action, evidence, scope, and configured model is reused by the turn and the matching dialogue speaker; the result is advice, never a completed event. On direct submission, a short acceptance of one attributed offer in the immediately preceding primary narration supplies that quoted offer and source to the actor, narrator, and dialogue requests; ambiguous offers yield no automatic choice. Faction ticks offer hold and code-eligible variants, then apply the existing validated planner and save an accepted decision receipt. Completed non-OOC turns also enqueue an idempotent off-scene NPC evaluation; its isolated actor view includes known events and commitments, and the job can commit only a source-linked, secret preparation/investigation event for an eligible actor with a saved plan or opportunity. Uncertain decisions hold or fall back to the deterministic faction planner. The job worker must be enabled for these background actions to run.
 
-**Writes:** Nothing directly (displayed as chips in StoryView)
+The same typed decision path accepts the provider-specific Choice/Noul models in [decisionModels.ts](src/lib/contracts/decisionModels.ts), including hosted Kev 4B, Clef, Liquid D1, Perplexity Decider, Solar Decide, Mercury Decide, and NanoGPT's Decider variants. [JevProviderPanel.svelte](src/lib/components/settings/JevProviderPanel.svelte) uses this shared catalog for selection, provider switching, and saved input budgets; [jev.ts](src/lib/server/turn/jev.ts) validates the provider/model pair and rejects oversized evidence before dispatch. The legacy `isJevModel` helper recognizes all supported typed decision models so existing consumers keep using the Decisions endpoint. Noul-only models such as Span are excluded from world decisions because actor/faction actions require Choice. Provider availability and context limits were checked against public catalogs on 2026-10-08; additions require checking both question types and the provider endpoint.
 
-**Connections:** Called by StoryView.runSuggestions. Output rendered as ActionSuggestionChips that emit mtherios:inject-input event to ActionInput on click.
+NPC choices through the typed adapter first evaluate actor psychology, then choose a reaction or planner-supplied action using that evaluation. [actorPsychology.ts](src/lib/server/turn/actorPsychology.ts) defines bounded Choice questions for judgment, emotional intensity (1–5), proposed relationship delta (−2–2), and response style, including controlled and uncertain responses. Each dimension needs confidence and selected probability of at least 0.7; unsupported dimensions remain null. The [shared contract](src/lib/contracts/actorPsychology.ts) marks this interpretation advisory and affinity unapplied. Narration and dialogue can use supported psychology for expression even when action selection abstains, without inventing an action or exposing internal analysis. These two sequential requests share the existing overall time and agent budgets; provider calls are logged separately and turn usage combines both. Turn receipts retain the interpretation. The context inspector shows the latest recorded turn's decisions, model, rationale, and psychology rather than searching backward for an older nonempty result. This does not create a separate canonical mood tracker or directly change affinity.
 
----
+Local Kev-9B uses the keyless `openai-compatible` Actor Decisions profile with model `kev-latest` and loopback base URL `http://127.0.0.1:8008/v1`, subject to the startup opt-in. Hosted decision models do not start local inference. Ollama's `nomic-embed-text` supplies optional local embeddings. Changing embedding model or dimensions requires a separate Qdrant collection and a story-vault reindex before semantic wiki retrieval is fresh.
 
-### FILE 14: `src/lib/services/ai/generation/ActionChoicesService.ts`
+[plotEditing.ts](src/lib/server/engine/plotEditing.ts) owns the revision-checked `plot.edit` command used by [ThreadManager.svelte](src/lib/components/story/ThreadManager.svelte) and [PlotDirectorEditor.svelte](src/lib/components/story/PlotDirectorEditor.svelte). Thread deletion is recoverable closure, recorded in `closureReason`; player closures resist automatic chapter/Director reopening. Edits cancel linked future pressure, never past events. Applied-frame editing changes guidance without replaying its write plan or resetting freshness; pending edits remain pending. `plotBrain.closedThreadIds` also suppresses closed bindings in subsequent stored frames. Generic historical transcript recall remains evidence, not an active-thread directive.
 
-**What it does:** Generates meaningful branching choices for significant decision points (different from suggestions).
+[CommitmentManager.svelte](src/lib/components/story/CommitmentManager.svelte) and [CommitmentEditor.svelte](src/lib/components/story/CommitmentEditor.svelte) use the same version-checked command for agreements and imported schemes. `plot.commitments` reads their canonical records for an author view, including optional history/secrets independently of the player-safe bootstrap. Agreement arrays and scheme stages are validated before writes. Scheme edits atomically update the `scheme_import` memory record and linked story thread; that memory record is retained as the scheme's storage, not deleted as a disposable thread projection.
 
-**Exports:**
-- `ActionChoicesService` (extends BaseAIService)
+Commitment deletion is recoverable author control, not a fictional resolution: agreements use a `deleted` status and scheme memory metadata uses `playerDeleted`. `story.metadata.deletedCommitments` retains the prior status for explicit restoration. Bootstrap, agreement recall, classifier input, Director input, canonical semantic search and vault projection exclude deleted records. Deletion closes explicitly linked Director threads and cancels their unplayed events; restoration does not replay those events. Manual edits invalidate the scene checkpoint and queue derived vault/index refresh. Historical transcript, summaries and unrelated campaign facts are not rewritten by record deletion.
 
-**Key methods:**
-- `generateChoices(recentEntries, protagonist, currentLocation, mode)` - Returns ActionChoicesResult with choices (text, type, risk, brief)
+## Vaults, imports, and portability
 
-**Choice types:** bold, cautious, creative, social, investigate
+[wiki/storyVault.ts](src/lib/server/wiki/storyVault.ts) and [engine/campaignVault.ts](src/lib/server/engine/campaignVault.ts) materialize readable, source-linked campaign pages. Terminal [wiki-core](scripts/wiki-core) tools support indexing, search, and link traversal through `/api/wiki/*`.
 
-**Risk levels:** low, medium, high
+Story vaults live under `data/vaults/stories/<storyId>` by default. Their `.mtherios/story-vault.json` manifest records projection/index state. Vault freshness does not prove Qdrant freshness; collections and embedding settings must match the story and configuration. See [local wiki operations](docs/local-wiki-core.md).
 
-**Guidelines:**
-- 2-4 choices (prefer 3)
-- Each produces genuinely different narrative outcome
-- Reflect current dramatic tension
-- Include at least one choice player might not have thought of
-- Vary risk levels (at least 2 different levels)
-- Vary types (at least 2 different types)
-- Text: 8-20 words, Brief: 2-5 words
+Full portable bundles use [worldDatabase.ts](src/lib/contracts/worldDatabase.ts), [worldDatabaseSchema.ts](src/lib/server/db/worldDatabaseSchema.ts), and [worldDatabaseImport.ts](src/lib/server/db/worldDatabaseImport.ts). [importIds.ts](src/lib/server/db/importIds.ts) remaps linked identities. Recognize `worldDatabase`/`backendCanon` bundles before choosing an importer; preserve the original when creating a remapped copy.
 
-**Reads:** Story entries, protagonist, current location (from params)
+Imports rebuild projections without advancing faction/Director state. Record conflicts roll back a full database import instead of silently dropping records. Transcript deletion does not reverse already accepted canon; restoring a context checkpoint is a separate operation.
 
-**Writes:** Nothing directly (rendered as ActionChoiceCards in StoryView)
+## Browser and offline boundaries
 
-**Connections:** Called by StoryView.runActionChoices. Output rendered as cards that emit mtherios:inject-input event to ActionInput.
+[story.svelte.ts](src/lib/stores/story.svelte.ts) coordinates client story state; [serverStories.ts](src/lib/services/serverStories.ts), [storySync.ts](src/lib/services/storySync.ts), and backend projection clients connect it to the terminal catalog. Browser/local generation helpers remain compatibility code; they are not the authoritative backend turn pipeline.
 
----
+The library opens on shelves; opening a shelf reveals its stories. Chapters and arcs live inside the selected story, alongside play and lore. Global navigation omits chapter and canon review tabs. The workspace also includes World Drawer/World Sheet, World Explorer, and prompt/model settings. Portrait uploads accept image files up to 3 MB (3,000,000 bytes). Keep user-visible settings editable in these existing surfaces.
 
-### FILE 15: `src/lib/services/ai/generation/StyleReviewerService.ts`
+[service-worker.ts](src/service-worker.ts) caches the app shell and same-origin assets while excluding API requests. [The manifest](static/manifest.webmanifest) and PWA components support installation/update flows. Cached content and local drafts can remain available offline, but narrative turns require the terminal backend and are not silently queued/replayed. Physical iOS keyboard behavior requires device verification beyond viewport simulation.
 
-**What it does:** Reviews AI-generated narrative for POV consistency, tense shifts, repetition, pacing, tone, character voice.
+## Development, evaluation, and release evidence
 
-**Exports:**
-- `StyleReviewerService` (extends BaseAIService)
-
-**Key methods:**
-- `review(narrative, pov, tense, tone, revise)` - Returns StyleReview with approved, issues, revisedText (optional), overallQuality
-
-**Issue types:** pov_break, tense_shift, character_voice, repetition, pacing, tone_mismatch
-
-**Severity:** minor, moderate, major
-
-**Reads:** Generated narrative (from params)
-
-**Writes:** Nothing directly (results displayed in StoryView)
-
-**Connections:** Called by StoryView.runStyleReview post-generation. Output shown as style review warnings/suggestions.
-
-**Notable patterns:**
-- Flags only REAL issues, not stylistic preferences
-- Dialogue exempt from POV/tense checks
-- Overused filler words: "suddenly", "seemed to", "began to", "couldn't help but"
-- "Approved" if zero moderate/major issues (minor alone doesn't block)
-
----
-
-### FILE 16: `src/lib/services/ai/generation/ArcCondensationService.ts`
-
-**What it does:** Condenses multiple chapters into higher-level arc summaries for context management.
-
-**Exports:**
-- `ArcCondensationService` (extends BaseAIService)
-- `ARC_DEFAULTS` (chaptersPerArc: 5, maxArcSummaryTokens: 400)
-
-**Key methods:**
-- `getCondensableChapters(chapters, existingArcCount)` - Returns next batch of chapters ready for condensation
-- `condense(chapters, arcNumber, mode, pov, tense)` - Returns ArcSummary with title, summary, keyPlotPoints, characterArcs, unresolvedThreads, emotionalProgression
-- `buildArcContextBlock(arcs)` - Formats arcs as context block
-
-**Reads:** Chapters (from params)
-
-**Writes:** Nothing directly (results stored in DB as Arc records)
-
-**Connections:** Called by StoryView during chapter check when chapters.length >= (arcCount + 1) * chaptersPerArc. Arcs used by ContextAssembler for world tier context.
-
----
-
-### FILE 16b: `src/lib/services/ai/generation/SagaCondensationService.ts`
-
-**What it does:** Condenses every 10 arcs into a saga summary, the highest compact memory layer above arcs. Sagas preserve durable faction shifts, major power changes, lingering threads, and the overall political/emotional tone.
-
-**Exports:**
-- `SagaCondensationService` (extends BaseAIService)
-- `SAGA_DEFAULTS` (arcsPerSaga: 10, maxSagaSummaryTokens: 600)
-
-**Key methods:**
-- `getCondensableArcs(arcs, existingSagaCount)` - Returns the next 10 uncovered arcs for saga condensation
-- `condense(arcs, sagaNumber, mode, pov, tense)` - Uses `generateStructured(sagaSummarySchema, ...)` and returns SagaSummary
-
-**Storage:** Local IndexedDB has a `sagas` table. Backend canon has a `sagas` table and `/api/stories/:id/sagas` upsert routes. Saga summaries are also projected into `memory_nodes` as plot-ledger memory.
-
-**Hierarchy:** Entries -> Chapters -> Arcs -> Sagas.
-
-**Connections:** Called immediately after a new arc is created in `background/runner.ts`. It does not run as an independent per-turn check.
-
----
-
-### FILE 17: `src/lib/services/ai/generation/WorldSimulationService.ts` (continued)
-
-**System prompt construction:**
-```
-buildSystemPrompt() function (private):
-- mode-specific opening (DM simulator for adventure, world reactor for creative)
-- story context blocks (arc, chapter, all threads, character arcs)
-- tactical context (recent entries)
-- faction dossiers (if factions exist)
-- season effect narrative notes
-- response format: plotInjection + worldNarrative (both required)
-- if factions: factionActions, rumors, worldTension, plotSeeds
+```powershell
+npm run app:status
+npm test -- path/to/test.test.ts
+npm run check
+npm run build
+git diff --check
 ```
 
-**Notable patterns:**
-- Prompt collapses gracefully when no factions: faction sections omitted entirely
-- Faction dossier builder reads from Entry.state (type-safe FactionEntryState)
-- Inter-faction relations filtered to only notable (abs(standing) >= 30)
-- Tactical context truncated to 200 chars per entry to preserve tokens
-- Territory list capped to show most important regions
+Use focused tests for the affected contract/flow, check/build when applicable, and browser verification for visible behavior. Documentation edits require link/path/command and whitespace checks rather than a full application rebuild.
 
----
+`bench:memory`, `bench:generation`, `eval:turns`, and `qualify:campaign` are defined in [package.json](package.json). Inspect modes before running: generation, job-draining, and campaign qualification can mutate state or use providers. [harness-build-id.mjs](scripts/harness-build-id.mjs) records source identity, dirty-status fingerprints, selected source hashes, and optional artifact identifiers. A package name/version alone is not proof of the served build.
 
-### FILE 18: `src/lib/services/ai/retrieval/AgenticRetrievalService.ts`
+[The implementation plan](docs/agent-harness-implementation-plan-2026-09-06.md) and [release path](docs/agent-harness-release-path-2026-09-07.md) retain historical scope and evidence. The latter recorded physical-device, provider-backed completed-turn, and activation gates as open on its date; do not silently promote those to passed or assume they remain unchanged. Verify the current artifact, health, persisted turn/receipt, durable processing, and recovery/rollback evidence for a release claim.
 
-**What it does:** Multi-step context retrieval using AI to determine what context is needed, retrieves it, and decides if more is needed (up to maxIterations).
+Folder archives use migration 0027 and the existing content owner, contracts and revision history. A root folder stores the IDs and archived revisions of changed descendants. Archive validates outside incoming references; recovery validates current types, paths and outgoing references as a group, including cycles. Records edited since the archive are listed as skipped rather than overwritten. Both operations require operation-bound preview fingerprints and commit with their history in one project-locked transaction. Canonical folder archive calls the metadata owner to change workspace visibility only; domain records, game versions and gameplay content are retained. Lists expose all paths plus active paths for the default tree. Exports retain folder/document archive flags and eligible recovery receipt members. Imports rebuild receipts with new local IDs/revisions; canonical members require the full campaign importer's explicit old/new identity map. Content-only imports reject canonical recovery members. Receipt folders must be archived members of the incoming bundle and new in the destination, so a receipt cannot claim unrelated existing folders. [Archive/recovery evidence](docs/mythengine-phase2-folder-archive-2026-09-22.md).
 
-**Exports:**
-- `AgenticRetrievalService` (extends BaseAIService)
-- `AgenticRetrievalResult` interface (lorebookEntries, chapterContext, iterations)
-
-**Key methods:**
-- `retrieve(userInput, recentEntries, allLoreEntries, chapters, maxIterations)` - Returns AgenticRetrievalResult
-
-**Retrieval loop:**
-1. Initial keyword retrieval using EntryRetrievalService
-2. Ask AI: "do we have enough context?"
-3. If no: generate search queries (max 3)
-4. Search lore entries for matches (name, description, keywords)
-5. Cap at 20 entries total
-6. Repeat up to maxIterations (default 3)
-
-**Reads:** User input, recent entries, all lore entries, chapters (from params)
-
-**Writes:** Nothing directly (results used by ContextAssembler)
-
-**Connections:** Called by ContextAssembler during pre-generation context assembly. Results merged into retrieved tier context.
-
-**Notable patterns:**
-- Uses EntryRetrievalService for initial keyword match
-- AI-driven query generation focuses on: character names, location names, faction names, concept names, specific details
-- Keyword search case-insensitive, matches entry.name, entry.description, entry.injection.keywords
-- Hard cap at 20 entries to prevent context explosion
-- Iterative refinement: better queries → better matches
-
----
-
-### FILE 19: `src/lib/services/ai/retrieval/EntryRetrievalService.ts`
-
-**What it does:** Simple keyword-based lorebook entry retrieval.
-
-**Exports:**
-- `EntryRetrievalService` (class)
-- `RetrievalResult` interface (entries, contextBlock)
-
-**Key methods:**
-- `retrieve(allEntries, recentEntries, maxEntries)` - Scores entries by keyword hits, returns top N
-
-**Scoring logic:**
-- mode == 'never': skip
-- mode == 'always': score = priority + 1000 (always included)
-- mode == 'keyword': count keyword hits in recent text, score = hits * priority
-
-**Reads:** All lorebook entries, recent story entries (from params)
-
-**Writes:** Nothing directly (results used by AgenticRetrievalService)
-
-**Connections:** Called by AgenticRetrievalService on first retrieval pass. Also called directly by ContextAssembler as fallback tier context.
-
----
-
-### FILE 20: `src/lib/services/ai/context/ContextAssembler.ts`
-
-**What it does:** Pre-generation context assembly with dynamic, model-aware token budgets. Assembles 5 tiers of context (scene, recent, world, procedural, retrieved) scaled to the model's context window.
-
-**Exports:**
-- `ContextAssembler` (class)
-- `TierBudget`, `TierUsage` interfaces (token budgets/usage per tier)
-- `AssembledContext` interface (contextBlock, tierUsage, totalTokens)
-- `AssembleParams` interface (all required data for assembly)
-- `getModelContextWindow(model)` - Returns model's context window from lookup table
-
-**Key methods:**
-- `assemble(params)` - Returns AssembledContext
-
-**Tiers (in prompt order):**
-1. **Scene** (10% budget) - Current location, present characters, equipped items
-2. **Recent** (35% budget) - All uncovered chapter summaries
-3. **World** (20% budget) - Arc summaries, unresolved threads, DM plot injection
-4. **Procedural** (5% budget) - CASS-inspired narrative rules, decay-scored, relevance-matched
-5. **Retrieved** (30% budget) - AI-selected chapters + agentic lore search
-
-**Model context window lookup table:**
-- OpenAI: gpt-4o (128k), gpt-4-turbo (128k), gpt-3.5-turbo (16k)
-- Anthropic: claude-opus-4.5 (200k), claude-sonnet-4.5 (200k), claude-haiku-4.5 (200k)
-- Google: gemini-3-pro (1M), gemini-2.5-flash (1M)
-- Others: Grok (131k), Deepseek (64k), Mistral (128k)
-- Heuristic fallbacks: claude → 200k, gpt-4o → 128k, gemini → 1M
-- Default: 128k
-
-**Budget computation:**
-- Total = model context - RESERVED_FOR_OUTPUT (4096)
-- Min floor: MIN_CONTEXT_BUDGET (8000)
-- User override: contextBudget setting (0 = auto)
-- Each tier gets TIER_RATIOS fraction (scene 10%, recent 35%, world 20%, procedural 5%, retrieved 30%)
-
-**Reads:** Story data (entries, characters, locations, items, lore, relationships, world events), chapters, arcs, last world sim result, settings (narrativeSettings.model, contextBudget)
-
-**Writes:** Nothing directly (returns assembled context block for system prompt)
-
-**Connections:** Called by ActionInput during narrative generation. Results passed to buildSystemPrompt and used as context parameter.
-
-**Notable patterns:**
-- Token estimation: text.length / 4 (rough but fast)
-- Truncation function: keeps text to budget * 4 characters, adds "..."
-- Procedural rules retrieved by embedding similarity (not yet fully implemented)
-- Retrieved tier uses AgenticRetrievalService for intelligent context selection
-- Total assembled context is bounded but each tier includes full content available within its budget
-
----
-
-### FILE 21: `src/lib/components/story/StoryView.svelte`
-
-**What it does:** Main story view component managing narrative generation, post-gen services (classifier, action choices, style review, image generation), world drawer, header editor, export/delete.
-
-**Key internal functions:**
-- `handleStreamStart()` - Resets streaming state, clears service outputs
-- `handleStreamChunk(text)` - Updates streamingContent, auto-scrolls
-- `handleStreamEnd(fullText)` - Runs post-gen service jobs in parallel
-- `runClassifier(narrative)` - Calls ai.classifier.classify, persists characters/locations/items, syncs to lorebook
-- `runActionChoices()` - Calls ai.actionChoices.generateChoices, stores in actionChoices state
-- `runStyleReview(fullText)` - Calls ai.styleReviewer.review, stores in styleReview state
-- `runImageGeneration(fullText)` - Calls ai.imageGen (not fully shown)
-- `runChapterCheck()` - Calls ai.memory.analyzeForChapter, creates chapter if needed
-- `syncClassifierToLorebook(result)` - Creates/updates lorebook entries from classifier results
-- `syncClassifierRelationships(result)` - Stores EntryRelationship records from classifier
-- `applyTimeProgression(timeString)` - Updates story.currentStory.timeTracker
-- World Drawer: displays characters/locations/items/quests from story state
-- Export: downloads story as JSON
-- Delete: removes story after confirmation
-
-**Reads:** story store (entries, characters, locations, items, mode, pov, tense), settings (service configs), database (chapters, arcs)
-
-**Writes:** story store (addEntry, addCharacter, updateCharacter, addOrUpdateLocation, addOrUpdateItem, updatePresence, clearPresenceForCharacters, updateHeaderPrompt), database (createChapter, createLorebookEntry, updateLorebookEntry, createEntryRelationship, createConversationMemory, createWorldEvent, updateWorldEvent)
-
-**Connections:** Main page component. Imports ActionInput, ActionChoiceCards, WorldStateToast, WorldDrawer. Receives stream callbacks from ActionInput and stores generated text.
-
-**Notable patterns:**
-- Post-gen services run in parallel via Promise.allSettled
-- Chapter check runs every story to detect chapter boundaries
-- Classifier results merged into world state: characters updated, locations/items created
-- Lorebook auto-discovery: every entity from classifier becomes an Entry
-- Presence tracking: "departed" and "deceased" clear lastSeenLocation
-- Time progression parsed from classifier output (e.g., "a few minutes", "several hours")
-
----
-
-### FILE 22: `src/lib/components/story/ActionInput.svelte`
-
-**What it does:** User input form with action type selector (do/say/think/story/free), shorthand commands, streaming generation, and dice roll handling.
-
-**Key internal functions:**
-- `buildActionContent(rawInput, type)` - Constructs action from raw input + type
-- `buildSayContent(text, thirdPerson, name)` - Builds say action with verb based on punctuation (? → ask, ! → yell, default → say)
-- `handlePlayerRoll(rawInput)` - Standalone /roll command (no AI)
-- `handleAIRollContinuation(fullResponse, systemPrompt, conversationHistory)` - Executes roll after AI narration, continues generation
-
-**Shorthand commands (Do mode):**
-- `l` → look around
-- `i` → check inventory
-- `z` → wait
-- `n/s/e/w` → go north/south/east/west
-- `ne/nw/se/sw` → diagonal directions
-- `u/d` → go up/down
-- `x <thing>` → examine thing
-
-**Special syntax:**
-- `!` prefix → world event (not player action)
-- `"` prefix in Do → force Say behavior
-- `*` suffix → AI should continue/complete (wildcard)
-
-**Generation flow:**
-1. Validate input
-2. Handle player /roll or build action content
-3. Build system prompt via story.buildSystemPrompt
-4. Build conversation history via story.buildConversationMessages
-5. Stream via streamNarrative
-6. Check for AI roll markers
-7. Add entry to story
-8. Emit streamEnd callback
-
-**Reads:** story store (buildSystemPrompt, buildConversationMessages, protagonist, pov), ContextAssembler (pre-generation context), streamNarrative from generate.ts
-
-**Writes:** story store (addEntry), AbortController for cancellation
-
-**Connections:** Child of StoryView. Emits onStreamStart, onStreamChunk, onStreamEnd callbacks. Listens for mtherios:inject-input event from suggestion/choice chips.
-
-**Notable patterns:**
-- POV-based prefixes: second person "You", third person "name", first person "I"
-- Wildcard completion: trailing * or , indicates AI should continue
-- Dice roll parsing: parseRollMarker returns preText and marker, generates continuation
-- Spellcheck disabled by default (interactive fiction often uses made-up words)
-
----
-
-### FILE 23: `src/lib/services/lorebookImporter.ts`
-
-**What it does:** Imports lorebooks from various formats (primarily SillyTavern character cards) into Mtherios Entry system.
-
-**Exports:**
-- `importLorebookEntry(entry)` - Converts SillyTavern entry to ImportedEntry
-- `parseLorebookFile(file, format)` - Parses JSON file, returns LorebookImportResult
-- `TYPE_KEYWORDS` - Heuristics for inferring entry type from content
-
-**SillyTavern format:**
-- Array of entries with uid, key (keywords), keysecondary, content (description)
-- Fields: selective, selectiveLogic, order, position, disable, probability, depth, group, etc.
-
-**Inference logic:**
-- Looks for type keywords in content (case-insensitive)
-- Fallback: character > location > item > faction > concept > event
-
-**Result includes:**
-- entries (ImportedEntry[])
-- errors (entries that failed)
-- warnings (potential issues)
-- metadata (format, totalEntries, importedEntries, skippedEntries)
-
-**Reads:** File contents (from params)
-
-**Writes:** Nothing directly (results returned for UI to save)
-
-**Connections:** Called by LorebookImport component. Results displayed and optionally saved to story via database.createLorebookEntry.
-
----
-
-### FILE 24: `src/lib/utils/dice.ts`
-
-**What it does:** Full D&D dice notation parser and roller with support for advantage/disadvantage and DC checks.
-
-**Exports:**
-- `DiceNotation` - count, sides, modifier, advantage, disadvantage
-- `DiceResult` - notation, rolls[], natural, total, modifier, sides, advantage, disadvantage, discardedRoll
-- `RollCheckResult` extends DiceResult - dc, success, ability, description, critical (success|failure|null)
-- `parseDice(notation)` - Parse "1d20+3", "2d6 advantage", "1d20 dis"
-- `rollDice(notation|DiceNotation)` - Execute roll, return result
-- `rollCheck(notation, dc, ability, description)` - Roll check against DC, set critical on 1/20
-- `formatRollText(result)` - Human-readable string with notation, total, modifiers, advantage/disadvantage flags
-- `encodeDiceMarker(result)` - Inline marker: {{dice:notation|natural|total|dc|success|ability|description|crit-X}}
-- `parseRollMarker(text)` - Extract {{roll:DICE:DC:ABILITY:DESCRIPTION}} from AI narration
-- `parseRollCommand(rawInput)` - Extract /roll notation from user input
-
-**Rolls:**
-- Normal: sum all dice + modifier
-- Advantage: roll 2d sides, take higher
-- Disadvantage: roll 2d sides, take lower
-
-**Critical hits:** Only on d20, roll 1 is always fail, roll 20 is always success
-
-**Reads:** Nothing
-
-**Writes:** Nothing (pure functions)
-
-**Connections:** Used by ActionInput for player /roll command and AI roll continuation. Dice results embedded in narrative via encodeDiceMarker.
-
----
-
-### FILE 25: `src/lib/utils/uuid.ts`
-
-**What it does:** UUID generation that works on HTTP (non-secure contexts).
-
-**Exports:**
-- `uuid()` - Returns UUID v4 string
-
-**Implementation:**
-- Tries crypto.randomUUID() if available (HTTPS)
-- Falls back to crypto.getRandomValues() with manual UUID v4 encoding (HTTP-compatible)
-
-**Reads:** crypto global
-
-**Writes:** Nothing
-
-**Connections:** Used throughout codebase for generating IDs (stories, entries, characters, locations, items, etc.).
-
----
-
-### FILE 26: `src/routes/+layout.svelte`
-
-**What it does:** Root layout component initializing settings and app stores, managing navigation state (wizard, story loading, main app shell).
-
-**Key logic:**
-- onMount: Initialize settings store, then app store
-- $effect: When currentStoryId changes, load story into story store (or clear if not found)
-- Rendering:
-  - app.loading → splash screen
-  - app.showWizard → OnboardingWizard
-  - currentStoryId && story.currentStory → StoryView
-  - currentStoryId && story.loading → loading screen
-  - else → AppShell (library/settings/templates)
-
-**Reads:** app store (loading, showWizard, currentStoryId), story store (currentStory, loading)
-
-**Writes:** app store (completion), story store (loadStory)
-
-**Connections:** Imports OnboardingWizard, StoryView, AppShell, initializes stores on mount.
-
-**Notable patterns:**
-- Graceful error handling: if story.loadStory fails, clears currentStoryId
-- Preload fonts from Google Fonts (Cinzel, Cormorant Garamond, JetBrains Mono)
-- Mobile-optimized viewport and app status bar styling
-
----
-
-## CRITICAL DATA FLOWS
-
-### Generation Pipeline
-1. **ActionInput** receives user action
-2. Builds system prompt via `story.buildSystemPrompt()`
-3. Builds conversation history via `story.buildConversationMessages()`
-4. Calls `ContextAssembler.assemble()` to get pre-gen context
-5. Inserts context into system prompt
-6. Streams via `streamNarrative()` 
-7. Adds entry to story via `story.addEntry('narration', fullText)`
-8. **StoryView** receives full text, runs post-gen services in parallel:
-   - **Classifier** extracts world state → creates/updates characters/locations/items/lore entries
-   - **ActionChoices** generates branching choices
-   - **StyleReviewer** checks narrative quality
-   - **ImageGeneration** creates scene images
-   - **ChapterCheck** detects chapter boundaries
-   - **WorldSimulation** runs once if ChapterCheck creates a new chapter
-   - **ArcCondensation** creates arcs when chapter threshold is met
-   - **SagaCondensation** creates sagas when 10 arcs are ready
-   - **LoreManagement** discovers/curates lore entries on chapter cadence
-
-### Context Assembly (Pre-Generation)
-1. **Scene Tier** - Current location + present characters + equipped items
-2. **Recent Tier** - Uncovered chapter summaries (recent chapters not yet in an arc)
-3. **World Tier** - Arc summaries, saga summaries, unresolved threads, and world sim signals
-4. **Procedural Tier** - Retrieved narrative rules (CASS-inspired, decay-scored)
-5. **Retrieved Tier** - AgenticRetrievalService loops with AI queries until satisfied or max iterations
-
-### Memory Condensation Hierarchy
-1. **Entries** - Raw transcript evidence and canonical turn records
-2. **Chapters** - Scene/checkpoint summaries created only when enough post-buffer entries accumulate
-3. **Arcs** - Multi-chapter condensation, usually 5 chapters per arc
-4. **Sagas** - Multi-arc condensation, 10 arcs per saga
-
-### World State Tracking
-1. **Classifier** extracts characters, locations, items, story beats, relationships, conversations
-2. Classifier results → create/update entities in database
-3. **Entry (Lorebook)** records created automatically for discovered entities
-4. **EntryRelationship** records track connections between entities
-5. **ConversationMemoryEntry** records track NPC conversations
-6. **WorldEvent** records track major consequences
-7. **TimeTracker** updated via classifier's timeProgression field
-
----
-
-## ARCHITECTURAL PATTERNS
-
-**Reactive State Management:**
-- Svelte 5 $state for all stores (story, settings, app)
-- Changes auto-propagate to components via $derived, $effect
-- No external state management library
-
-**Service Architecture:**
-- BaseAIService provides model lookup, config resolution, structured generation
-- Each service extends BaseAIService, implements single responsibility
-- Singleton registry pattern (ai.classifier, ai.memory, etc.)
-- All services read from settings store for per-service overrides
-
-**Database:**
-- Dexie.js wrapper (IndexedDB)
-- Compound indices for efficient queries
-- Cascading deletes on story deletion
-- Version migrations with upgrade hooks
-
-**Narrative Generation:**
-- OpenAI-compatible API (supports 16+ providers)
-- Bearer token auth via profile.apiKey
-- Streaming + non-streaming modes
-- Always-on API log for debugging
-
-**Context Management:**
-- Model-aware token budgets (128k, 200k, 1M context windows)
-- 5-tier context assembly with dynamic ratios
-- Keyword-based + agentic retrieval
-- Procedural rules with decay scoring
-
-**World State:**
-- Living world simulation once per newly created chapter, plus manual world drawer ticks
-- Faction dynamics with goals/resources/disposition
-- Season-based modifiers (deterministic)
-- Rumors and plot injection
-
----
-
-## NOTABLE TECHNICAL DECISIONS
-
-1. **IndexedDB over SQLite:** Browser-native storage, works on mobile/web without native dependencies
-2. **Streaming narratives:** Real-time text-to-speech compatible, better UX for long responses
-3. **Post-gen services:** Classifier runs after narration to keep world state eventual-consistent
-4. **Context assembly pre-gen:** All context prepared before streaming, more stable results
-5. **Per-service overrides:** Fine-grained control over model/temp/tokens per AI service
-6. **Procedural rules:** CASS-inspired decay-adjusted rules for narrative pattern detection
-7. **Faction simulation:** Full simulation engine including goals/resources/relations, not just rumors
-8. **Dice integration:** Full D&D support with advantage/disadvantage, critical hits, DC checks
-9. **Time tracking:** Deterministic in-story time progression enables season/holiday effects
-10. **Relationship graph:** Tier 2 system tracks connections between entities for query optimization
-11. **Agent-maintained wiki export:** Obsidian exports are structured as a three-layer knowledge base: immutable `raw/` transcript sources, compiled wiki/synthesis pages, and an `AGENTS.md` maintainer schema that tells future LLM sessions how to ingest, query, lint, cite, and update the vault.
-12. **Terminal wiki core:** `scripts/wiki-core/` provides the first terminal-first lore layer: materialize backend-bound stories into generated Obsidian vaults, index exported or generated vaults into Qdrant, use OpenRouter-compatible embeddings for semantic search, and traverse Obsidian links/backlinks outside the browser sandbox.
-
----
-
-## FILES NOT YET FULLY DOCUMENTED (from git status)
-
-The following new/modified files exist but were not fully read due to token constraints:
-
-- `.claude/` - Debug/configuration directory
-- `src/lib/components/settings/PromptInspector.svelte` - Debug UI for inspecting prompts
-- `src/lib/components/story/ContextWindow.svelte` - UI for context breakdown display
-- `src/lib/services/ai/context/` - Additional context services
-- `src/lib/services/ai/embeddings/EmbeddingService.ts` - Vector embeddings for retrieval
-- `src/lib/services/ai/generation/WorldSimulationService.ts` (rest of file)
-- `src/lib/services/ai/generation/ArcCondensationService.ts` (rest)
-- `src/lib/services/ai/memory/ProceduralMemoryService.ts` - Procedural rule extraction/application
-- `src/lib/services/ai/vault/InteractiveVaultService.ts` - Vault (reusable assets) management
-- `src/lib/services/storySync.ts` - Export/import story JSON
-- `src/lib/utils/` - Additional utilities
-
-All core systems and data flows have been documented. The above files contain secondary features and detailed implementations of documented patterns.
+Game/project moves are owned by [gameMigration.ts](src/lib/server/engine/gameMigration.ts), exposed through `content.games.previewMove` and `content.games.move`, and rendered by [GameMigration.svelte](src/lib/components/content/GameMigration.svelte). The project-locked preview follows typed references from game documents and selected shared documents, checks destination types/paths, explicit cross-game associations and running work, and fingerprints the reviewed dependencies. Apply copies shared dependencies, remaps their references, retains game-owned IDs, moves ownership/history/jobs, rebases eligible recovery receipts and writes an audit/outbox entry atomically. Migration 0028 makes the existing ownership foreign keys deferrable during this transaction. Campaign import also locks source/destination projects before replacement writes. Destination settings/shared content apply after a move. [Completion and rollback evidence](docs/mythengine-phase2-complete-2026-09-22.md).

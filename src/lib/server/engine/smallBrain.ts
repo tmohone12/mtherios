@@ -4,6 +4,7 @@ import { arcs, chapters, entities, facts, factions, memoryNodes, stories, storyE
 import type { SmallBrainRunRequest, SmallBrainRunResponse } from '$lib/contracts/engine';
 import type { GmTimelineBrief, RetrievedMemoryPacket } from '$lib/contracts/memory';
 import { smallBrainResultSchema, type SmallBrainResult } from '$lib/services/ai/sdk/schemas/smallBrain';
+import { summarizeMtheriosMemoryForContext } from '$lib/services/ai/context/mtheriosSummaryFormat';
 import { loadGmTimelineBrief } from '$lib/server/events/timeline';
 import { lookupMentioned, memoryQueryTokens } from '$lib/server/memory/ranking';
 import { retrieveMemoryPacket } from '$lib/server/memory/retrieval';
@@ -140,7 +141,7 @@ function renderMemory(rows: Array<typeof memoryNodes.$inferSelect>): string {
 }
 
 function renderChapters(rows: Array<typeof chapters.$inferSelect>): string {
-	return rows.map((chapter) => `- ${chapter.id} Chapter ${chapter.number}: ${chapter.title ?? 'Untitled'}; ${compact(chapter.sceneOutcome)} sourceEntries=${stringArray(chapter.sourceEntryIds).join(',')}`).join('\n');
+	return rows.map((chapter) => `- ${chapter.id} Chapter ${chapter.number}: ${chapter.title ?? 'Untitled'}; ${compact(summarizeMtheriosMemoryForContext(chapter.sceneOutcome))} sourceEntries=${stringArray(chapter.sourceEntryIds).join(',')}`).join('\n');
 }
 
 function renderArcs(rows: Array<typeof arcs.$inferSelect>): string {

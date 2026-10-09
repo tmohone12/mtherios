@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 
+import { resolveAppUrl } from './runtime-config.mjs';
+
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 
-const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
-const DEFAULT_PORT = process.env.PORT || '5173';
-const DEFAULT_URL = process.env.MTHERIOS_APP_URL || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
+const DEFAULT_URL = resolveAppUrl();
 
-const SYSTEM_BRIEF = `Mtherios terminal agent
+const SYSTEM_BRIEF = `MythEngine terminal agent
 
 Authority model:
   - The terminal Node/SvelteKit process owns runtime and API orchestration.
@@ -164,7 +164,7 @@ class Agent {
 			console.log(`Wrote schema to ${outputPath}`);
 			return true;
 		}
-		console.log(`${payload.name ?? 'Mtherios'} v${payload.schemaVersion ?? '-'}`);
+		console.log(`${payload.name ?? 'MythEngine'} v${payload.schemaVersion ?? '-'}`);
 		for (const [name, table] of Object.entries(asRecord(payload.tables))) {
 			console.log(`  ${name}: ${asRecord(table).purpose ?? ''}`);
 		}
@@ -380,11 +380,11 @@ function printJson(value) {
 }
 
 function printStartupHelp(url) {
-	console.log(`Mtherios terminal agent
+	console.log(`MythEngine terminal agent
 
 Usage:
   npm run app:agent
-  npm run app:agent -- --url http://127.0.0.1:5173
+  npm run app:agent -- --url http://127.0.0.1:5174
   node scripts/app-agent.mjs status
 
 Default app URL: ${url}`);

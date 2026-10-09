@@ -3,6 +3,7 @@ import {
 	llmServiceSettingSchema,
 	type LlmServiceSetting,
 } from '$lib/contracts/engine';
+import { narrativePromptPreviewSchema, type NarrativePromptPreview } from '$lib/contracts/prompts';
 
 function asRecord(value: unknown): Record<string, unknown> {
 	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -64,6 +65,17 @@ export function buildPromptOverridePatch(
 export async function loadTerminalPromptSettings(fetchImpl: typeof fetch = fetch): Promise<LlmServiceSetting[]> {
 	const response = await fetchImpl('/api/settings/llm', { method: 'GET' });
 	return parseEngineResponse(response, 'Failed to load terminal prompt settings');
+}
+
+export async function loadNarrativePromptPreview(
+	input: { storyId?: string; promptPackId?: string },
+	fetchImpl: typeof fetch = fetch,
+): Promise<NarrativePromptPreview> {
+	const query = new URLSearchParams(input);
+	const response = await fetchImpl(`/api/settings/prompts/narrative?${query}`, { method: 'GET' });
+	const body = await response.json().catch(() => null);
+	if (!response.ok) throw new Error(errorMessage(body, `Failed to load the current prompt: HTTP ${response.status}`));
+	return narrativePromptPreviewSchema.parse(body);
 }
 
 export async function saveTerminalPromptOverrides(

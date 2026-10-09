@@ -3,6 +3,14 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 describe('WorldDrawer terminal control-surface diagnostics', () => {
+	it('shows the same canonical campaign brief in both world surfaces', () => {
+		for (const surface of ['WorldSheet', 'WorldDrawer']) {
+			expect(readFileSync(resolve(`src/lib/components/story/${surface}.svelte`), 'utf8')).toContain('<CampaignFacts />');
+		}
+		const panel = readFileSync(resolve('src/lib/components/story/CampaignFacts.svelte'), 'utf8');
+		expect(panel).toContain('story.currentStory.campaignState');
+		expect(panel).toContain('{fact.evidence}');
+	});
 	it('renders last-turn performance from backend stream state without direct turn APIs', () => {
 		const source = readFileSync(resolve('src/lib/components/story/WorldDrawer.svelte'), 'utf8');
 
@@ -37,12 +45,28 @@ describe('WorldDrawer terminal control-surface diagnostics', () => {
 		expect(source).toContain('state.unresolvedKnownMembers');
 	});
 
-	it('restores a persisted Plot Pulse draft after navigation', () => {
+	it('normalizes escaped imported line breaks in character summaries', () => {
 		const source = readFileSync(resolve('src/lib/components/story/WorldDrawer.svelte'), 'utf8');
-		const plotBrainBlock = source.slice(source.indexOf('async function runPlotBrain'), source.indexOf('// ── Meters'));
 
-		expect(source).toContain('story.campaignProjection?.story');
-		expect(source).toContain('pendingFrameId');
-		expect(plotBrainBlock.indexOf('await story.pullBackendProjection()')).toBeLessThan(plotBrainBlock.indexOf('pendingPlotFrameId = null'));
+		expect(source).toContain("replace(/\\\\r\\\\n|\\\\n|\\\\r/g, '\\n')");
+		expect(source).toContain('{displayText(character.description)}');
+		expect(source).toContain('{displayText(protagonist?.description)}');
+		expect(source).toContain('{displayText(char.description)}');
+	});
+
+	it('shows the persisted Plot Director in both shells and rejects stale drafts', () => {
+		const source = readFileSync(resolve('src/lib/components/story/WorldDrawer.svelte'), 'utf8');
+		const sheet = readFileSync(resolve('src/lib/components/story/WorldSheet.svelte'), 'utf8');
+		const panel = readFileSync(resolve('src/lib/components/story/PlotDirectorPanel.svelte'), 'utf8');
+		expect(source).toContain('<PlotDirectorPanel />');
+		expect(sheet).toContain('<PlotDirectorPanel />');
+		expect(sheet).toContain("label: 'Director'");
+		expect(panel).toContain('pendingFrameId');
+		expect(panel).toContain('pendingBaseServerVersion');
+		expect(panel).toContain('pendingBaseVersion === projectionVersion');
+		expect(panel).toContain('appliedStrategicFrameFromProjection(story.campaignProjection)');
+		expect(panel).toContain('event.metadata.plotCardId');
+		expect(panel).toContain('description.startsWith(`${title}:`)');
+		expect(panel).toContain('await story.pullBackendProjection()');
 	});
 });

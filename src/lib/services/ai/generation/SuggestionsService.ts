@@ -4,10 +4,7 @@
  * Generates contextual action suggestions for the player
  * based on the current narrative state.
  *
- * DO NOT MERGE with ActionChoicesService — distinct UX surfaces:
- *   - Suggestions:   3-4 terse one-turn nudges (chip UI, copy-paste into input).
- *   - ActionChoices: 2-4 narrative FORKS the player picks one of (modal/cards UI).
- * Different schemas, different cadences, different stakes. They look similar; they're not.
+ * Player Guidance is optional and only sees the player-visible scene.
  */
 
 import { BaseAIService } from '../BaseAIService';
@@ -24,7 +21,9 @@ export class SuggestionsService extends BaseAIService {
 		protagonist: Character | undefined,
 		mode = 'adventure', pov = 'second',
 	): Promise<SuggestionsResult> {
-		const recentText = recentEntries.slice(-5).map(e => `[${e.type}]: ${e.content}`).join('\n\n');
+		const recentText = recentEntries
+			.filter(e => e.type === 'user_action' || e.type === 'narration')
+			.slice(-5).map(e => `[${e.type}]: ${e.content.slice(-2400)}`).join('\n\n');
 		const protName = protagonist?.name ?? 'the protagonist';
 
 		const system = `You generate contextual action suggestions for ${pov === 'second' ? 'a player' : protName} in a ${mode} interactive fiction story.
@@ -35,6 +34,8 @@ Your suggestions should feel like natural next moves that arise organically from
 
 - Generate exactly 3-4 suggestions
 - Each must be SPECIFIC to the current scene — reference actual characters, objects, or details from the narrative
+- Preserve player agency: suggest an intent, never a guaranteed outcome or an NPC's consent/cooperation
+- Use only observable scene information; do not give the player hidden knowledge
 - Vary the suggestion types across these categories:
   • action: Physical actions (fight, climb, grab, run, open, search a specific thing)
   • dialogue: Speaking to a specific character about something relevant ("Ask [name] about [topic]")

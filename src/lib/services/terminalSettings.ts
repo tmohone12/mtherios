@@ -1,6 +1,7 @@
 import { SERVICE_DEFINITIONS, settings } from '$lib/stores/settings.svelte';
 import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
-import type { APIProfile, ProviderType } from '$lib/types';
+import type { APIProfile, ProviderType, ReasoningEffort } from '$lib/types';
+import { llmServiceSettingSchema } from '$lib/contracts/engine';
 import type { EngineCommandResponse, LlmServiceSettingPatch } from '$lib/contracts/engine';
 
 const DEFAULT_KEY_REFS: Partial<Record<ProviderType, string>> = {
@@ -22,7 +23,7 @@ const DEFAULT_KEY_REFS: Partial<Record<ProviderType, string>> = {
 };
 
 function serviceDefaultKey(serviceId: string): 'narrative' | 'classification' {
-	return serviceId === 'classifier' || serviceId === 'characterUpdate' || serviceId === 'worldSimulation' || serviceId === 'smallBrain'
+	return serviceId === 'classifier' || serviceId === 'characterUpdate' || serviceId === 'worldSimulation' || serviceId === 'smallBrain' || serviceId === 'activeRecall' || serviceId === 'actorDecision' || serviceId === 'continuityReview'
 		? 'classification'
 		: 'narrative';
 }
@@ -43,7 +44,7 @@ export function terminalApiKeyRefForProfile(profile: APIProfile | null): string 
 
 type TerminalSecretRef = { ref: string; value: string };
 
-async function patchTerminalLlmSettings(payload: LlmServiceSettingPatch[], secrets: TerminalSecretRef[] = []): Promise<void> {
+export async function patchTerminalLlmSettings(payload: LlmServiceSettingPatch[], secrets: TerminalSecretRef[] = []): Promise<void> {
 	if (payload.length === 0) return;
 	const response = await fetch('/api/engine/command', {
 		method: 'POST',
@@ -81,10 +82,6 @@ function terminalSettingForService(serviceId: string): LlmServiceSettingPatch | 
 		model,
 		temperature: config.temperature,
 		maxTokens: config.maxTokens,
-		topP: null,
-		frequencyPenalty: null,
-		presencePenalty: null,
-		contextBudget: settings.contextBudget > 0 ? settings.contextBudget : null,
 		enabled: config.enabled,
 		systemPromptOverride: config.systemPromptOverride?.trim() || null,
 		apiKeyRef: terminalApiKeyRefForProfile(profile),
@@ -94,6 +91,10 @@ function terminalSettingForService(serviceId: string): LlmServiceSettingPatch | 
 			profileName: profile.name,
 			profileProviderType: profile.providerType,
 			browserProfileHasLocalKey: Boolean(profile.apiKey),
+			...(serviceId === 'dialogue' ? { dialogueMode: config.dialogueMode === 'important' ? 'important' : 'all' } : {}),
+			...(serviceId === 'batchAuthoring' && config.batchMaxCostUsd != null && config.batchInputUsdPerMillion != null && config.batchOutputUsdPerMillion != null
+				? { batchBudget: { maxCostUsd: config.batchMaxCostUsd, inputUsdPerMillion: config.batchInputUsdPerMillion,
+					outputUsdPerMillion: config.batchOutputUsdPerMillion } } : {}),
 			syncedAt: new Date().toISOString(),
 		},
 	};
@@ -115,10 +116,54 @@ function uniqueSecrets(items: Array<TerminalSecretRef | null>): TerminalSecretRe
 	return [...byRef.values()];
 }
 
-export async function syncTerminalLlmSettingsFromBrowser(serviceIds = Object.keys(SERVICE_DEFINITIONS)): Promise<void> {
-	const payload = serviceIds
+export async function syncTerminalLlmSettingsFromBrowser(serviceIds = Object.keys(SERVICE_DEFINITIONS), saveSecrets = false): Promise<void> {
+	const activeIds = serviceIds.filter(serviceId => Object.hasOwn(SERVICE_DEFINITIONS, serviceId));
+	const payload = activeIds
 		.map(terminalSettingForService)
 		.filter((item): item is LlmServiceSettingPatch => Boolean(item));
-	const secrets = uniqueSecrets(serviceIds.map(terminalSecretForService));
+	const secrets = saveSecrets ? uniqueSecrets(activeIds.map(terminalSecretForService)) : [];
 	await patchTerminalLlmSettings(payload, secrets);
+}
+
+/** Keep inherited tools and subagents on the selected GameMaster provider/model. */
+export async function syncInheritedGameMasterTools(): Promise<void> {
+	const inherited = Object.entries(SERVICE_DEFINITIONS)
+		.filter(([id, def]) => id !== 'narrative' && ['narrative', 'memoryContext', 'guidance'].includes(def.profile)
+			&& !settings.profileModels[def.profile]
+			&& !settings.serviceConfigs[id]?.model && !settings.serviceConfigs[id]?.profileId)
+		.map(([id]) => id);
+	await syncTerminalLlmSettingsFromBrowser(inherited);
+}
+
+/** Server settings are authoritative. Secret values are never fetched into the browser. */
+export async function refreshTerminalLlmSettings(): Promise<void> {
+	const response = await fetch('/api/engine/command', {
+		method: 'POST', headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ storyId: '__app__', command: 'settings.llm.list', args: {} }),
+	});
+	const body = await response.json();
+	if (!response.ok || body.status !== 'succeeded') throw new Error(body.error || 'Could not load terminal settings.');
+	const rows = llmServiceSettingSchema.array().parse(body.result?.settings);
+	const profiles = new Map<string, APIProfile>();
+	for (const row of rows) {
+		if (!PROVIDERS[row.providerType as ProviderType]) continue;
+		const id = `terminal:${row.providerType}:${row.baseUrl ?? ''}:${row.apiKeyRef ?? ''}`;
+		const previous = settings.profiles.find(profile => profile.id === id);
+		profiles.set(id, { ...previous, id, name: `Server ${PROVIDERS[row.providerType as ProviderType].name ?? row.providerType}`, providerType: row.providerType as ProviderType,
+			apiKey: '', terminalApiKeyRef: row.apiKeyRef, baseUrl: row.baseUrl ?? undefined,
+			customModels: previous?.customModels ?? [], fetchedModels: previous?.fetchedModels ?? [], reasoningModels: previous?.reasoningModels ?? [], hiddenModels: previous?.hiddenModels ?? [], favoriteModels: previous?.favoriteModels ?? [], createdAt: previous?.createdAt ?? Date.now() });
+		const batchBudget = row.serviceId === 'batchAuthoring' && row.metadata?.batchBudget && typeof row.metadata.batchBudget === 'object'
+			? row.metadata.batchBudget as Record<string, unknown> : null;
+		settings.serviceConfigs[row.serviceId] = { model: row.model ?? '', temperature: row.temperature, maxTokens: row.maxTokens, enabled: row.enabled, systemPromptOverride: row.systemPromptOverride ?? '', profileId: id,
+			...(row.serviceId === 'dialogue' ? { dialogueMode: row.metadata?.dialogueMode === 'important' ? 'important' as const : 'all' as const } : {}),
+			...(batchBudget ? { batchMaxCostUsd: typeof batchBudget.maxCostUsd === 'number' ? batchBudget.maxCostUsd : null,
+				batchInputUsdPerMillion: typeof batchBudget.inputUsdPerMillion === 'number' ? batchBudget.inputUsdPerMillion : null,
+				batchOutputUsdPerMillion: typeof batchBudget.outputUsdPerMillion === 'number' ? batchBudget.outputUsdPerMillion : null } : {}) };
+		if (row.serviceId === 'narrative') {
+			settings.activeProfileId = id;
+			Object.assign(settings.narrativeSettings, { model: row.model ?? '', temperature: row.temperature, maxTokens: row.maxTokens, reasoningEffort: (row.reasoningEffort ?? 'off') as ReasoningEffort });
+			settings.contextBudget = row.contextBudget ?? 0;
+		}
+	}
+	settings.profiles = [...profiles.values(), ...settings.profiles.filter(profile => !profile.id.startsWith('terminal:'))];
 }

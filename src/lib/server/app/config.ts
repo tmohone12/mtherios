@@ -1,6 +1,7 @@
 import { env } from '$env/dynamic/private';
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveRuntimeOptions, buildRuntimeEnv } from '../../../../scripts/runtime-config.mjs';
 
 export interface MtheriosAppConfig {
 	dataRoot: string;
@@ -10,37 +11,29 @@ export interface MtheriosAppConfig {
 	qdrantUrl: string;
 	qdrantCollection: string;
 	ollamaUrl: string;
+	localKevEnabled: boolean;
+	localEmbeddingsEnabled: boolean;
 	wikiEmbedProvider: string;
 	wikiEmbedModel: string;
 	wikiEmbedBaseUrl: string;
 	wikiEmbedApiKey: string;
 	wikiAutoIndexStoryVaults: boolean;
-	wikiAutoLintStoryVaults: boolean;
 	jobWorkerEnabled: boolean;
+	jobWorkerScope: 'all' | 'faction';
 	jobIntervalMs: number;
 }
 
 export function getMtheriosAppConfig(): MtheriosAppConfig {
-	const dataRoot = path.resolve(env.MTHERIOS_DATA_ROOT || './data');
-	const vaultRoot = path.resolve(env.MTHERIOS_VAULT_ROOT || path.join(dataRoot, 'vaults'));
-	const defaultVault = path.resolve(env.MTHERIOS_DEFAULT_VAULT || path.join(vaultRoot, 'default'));
-
+	const options = resolveRuntimeOptions([], { env });
 	return {
-		dataRoot,
-		vaultRoot,
-		defaultVault,
-		allowExternalVaults: env.MTHERIOS_ALLOW_EXTERNAL_VAULTS === 'true',
-		qdrantUrl: env.QDRANT_URL || 'http://127.0.0.1:6333',
-		qdrantCollection: env.QDRANT_COLLECTION || 'mtherios_wiki',
-		ollamaUrl: env.OLLAMA_URL || 'http://127.0.0.1:11434',
-		wikiEmbedProvider: env.WIKI_EMBED_PROVIDER || 'openrouter',
-		wikiEmbedModel: env.WIKI_EMBED_MODEL || 'openai/text-embedding-3-small',
-		wikiEmbedBaseUrl: env.WIKI_EMBED_BASE_URL || 'https://openrouter.ai/api/v1',
-		wikiEmbedApiKey: env.WIKI_EMBED_API_KEY || env.OPENROUTER_API_KEY || '',
-		wikiAutoIndexStoryVaults: env.MTHERIOS_WIKI_AUTO_INDEX === 'true',
-		wikiAutoLintStoryVaults: env.MTHERIOS_WIKI_AUTO_LINT === 'true',
-		jobWorkerEnabled: env.MTHERIOS_JOB_WORKER !== 'false',
-		jobIntervalMs: readPositiveInt(env.MTHERIOS_JOB_INTERVAL_MS, 5000),
+		dataRoot: options.dataRoot, vaultRoot: options.vaultRoot, defaultVault: options.defaultVault,
+		allowExternalVaults: options.allowExternalVaults, qdrantUrl: options.qdrantUrl,
+		qdrantCollection: options.qdrantCollection, ollamaUrl: options.ollamaUrl,
+		localKevEnabled: options.localKevEnabled, localEmbeddingsEnabled: options.localEmbeddingsEnabled,
+		wikiEmbedProvider: options.wikiEmbedProvider, wikiEmbedModel: options.wikiEmbedModel,
+		wikiEmbedBaseUrl: options.wikiEmbedBaseUrl, wikiEmbedApiKey: options.wikiEmbedApiKey,
+		wikiAutoIndexStoryVaults: options.wikiAutoIndexStoryVaults,
+		jobWorkerEnabled: options.jobWorker, jobWorkerScope: options.jobWorkerScope === 'faction' ? 'faction' : 'all', jobIntervalMs: options.jobIntervalMs,
 	};
 }
 
@@ -66,7 +59,7 @@ export function resolveVaultPath(input?: string | null, config = getMtheriosAppC
 	if (!config.allowExternalVaults && !isPathInside(config.vaultRoot, candidate)) {
 		throw new Error(
 			`Vault path must be under ${config.vaultRoot}. ` +
-			'Set MTHERIOS_ALLOW_EXTERNAL_VAULTS=true if you want the app server to index an outside Obsidian vault.',
+			'Set MYTHENGINE_ALLOW_EXTERNAL_VAULTS=true if you want the app server to index an outside Obsidian vault.',
 		);
 	}
 
@@ -74,28 +67,7 @@ export function resolveVaultPath(input?: string | null, config = getMtheriosAppC
 }
 
 export function wikiRuntimeEnv(config = getMtheriosAppConfig()): NodeJS.ProcessEnv {
-	return {
-		...process.env,
-		MTHERIOS_DATA_ROOT: config.dataRoot,
-		MTHERIOS_VAULT_ROOT: config.vaultRoot,
-		MTHERIOS_DEFAULT_VAULT: config.defaultVault,
-		QDRANT_URL: config.qdrantUrl,
-		QDRANT_COLLECTION: config.qdrantCollection,
-		OLLAMA_URL: config.ollamaUrl,
-		WIKI_EMBED_PROVIDER: config.wikiEmbedProvider,
-		WIKI_EMBED_MODEL: config.wikiEmbedModel,
-		WIKI_EMBED_BASE_URL: config.wikiEmbedBaseUrl,
-		WIKI_EMBED_API_KEY: config.wikiEmbedApiKey,
-		MTHERIOS_JOB_WORKER: config.jobWorkerEnabled ? 'true' : 'false',
-		MTHERIOS_JOB_INTERVAL_MS: String(config.jobIntervalMs),
-		MTHERIOS_WIKI_AUTO_INDEX: config.wikiAutoIndexStoryVaults ? 'true' : 'false',
-		MTHERIOS_WIKI_AUTO_LINT: config.wikiAutoLintStoryVaults ? 'true' : 'false',
-	};
-}
-
-function readPositiveInt(value: string | undefined, fallback: number): number {
-	const parsed = Number.parseInt(value ?? '', 10);
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+	return buildRuntimeEnv({ ...resolveRuntimeOptions([], { env }), ...config, jobWorker: config.jobWorkerEnabled });
 }
 
 function isPathInside(parent: string, child: string): boolean {

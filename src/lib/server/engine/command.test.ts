@@ -1,8 +1,26 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { executeEngineCommand } from './command';
 import { resetEngineEventsForTest, subscribeEngineEvents } from './events';
 
 describe('engine command envelope', () => {
+	it('bounds story-scoped chapter candidate discovery before dispatch', async () => {
+		const find = vi.fn(async () => ({ chaptersScanned: 8, created: 1 }));
+		const valid = await executeEngineCommand({ command: 'world.character.findCandidates', storyId: 'story_a', clientCommandId: 'find_candidates', args: {} }, { findCharacterCandidates: find });
+		expect(valid.status).toBe('succeeded');
+		expect(find).toHaveBeenCalledExactlyOnceWith('story_a', 8);
+		const invalid = await executeEngineCommand({ command: 'world.character.findCandidates', storyId: 'story_a', clientCommandId: 'find_too_many', args: { chapterLimit: 13 } }, { findCharacterCandidates: find });
+		expect(invalid.status).toBe('failed');
+		expect(find).toHaveBeenCalledTimes(1);
+	});
+	it('routes source-only candidate IDs and exact review versions without accepting freeform source text', async () => {
+		const draft = vi.fn(async () => ({ proposalId: 'candidate_mara', status: 'pending' }));
+		const drafted = await executeEngineCommand({ command: 'world.character.draftFromSources', storyId: 'story_a', clientCommandId: 'source_draft', args: { proposalId: 'candidate_mara', expectedProposalVersion: 7, name: 'Injected name', sourceText: 'Invented source' } }, { draftCharacterFromSources: draft });
+		expect(drafted.status).toBe('succeeded');
+		expect(draft).toHaveBeenCalledWith('story_a', { proposalId: 'candidate_mara', expectedProposalVersion: 7 });
+		const review = vi.fn(async () => ({ proposalId: 'candidate_mara', status: 'applied', decision: 'approved' }));
+		await executeEngineCommand({ command: 'patchProposal.review', storyId: 'story_a', clientCommandId: 'source_review', args: { proposalId: 'candidate_mara', decision: 'approved', expectedProposalVersion: 8 } }, { reviewPatchProposal: review });
+		expect(review).toHaveBeenCalledWith(expect.objectContaining({ expectedProposalVersion: 8 }));
+	});
 	it('routes app status reads through the shared backend command surface', async () => {
 		const statusCalls: unknown[] = [];
 		const result = await executeEngineCommand({
@@ -291,6 +309,7 @@ describe('engine command envelope', () => {
 			args: {
 				query: 'marriage',
 				tokenBudget: 777,
+				contextBudget: 0,
 			},
 		}, {
 			buildPromptPacketDebug: async (input) => {
@@ -389,6 +408,7 @@ describe('engine command envelope', () => {
 			storyId: 'story_alpha',
 			query: 'marriage',
 			tokenBudget: 777,
+			contextBudget: 0,
 		}]);
 	});
 
@@ -407,6 +427,8 @@ describe('engine command envelope', () => {
 				story: { id: storyId, title: 'Long Campaign', serverVersion: 3 },
 				entries: [],
 				entities: [],
+				threads: [],
+				recentEvents: [],
 				chapters: [],
 				arcs: [],
 				sagas: [],
@@ -470,6 +492,8 @@ describe('engine command envelope', () => {
 						story: { id: storyId, title: 'Long Campaign', serverVersion: 7 },
 						entries: [],
 						entities: [],
+						threads: [],
+						recentEvents: [],
 						chapters: [],
 						arcs: [],
 						sagas: [],
@@ -498,6 +522,7 @@ describe('engine command envelope', () => {
 				entityLimit: 60,
 				memoryNodeLimit: 20,
 				npcBeliefLimit: 10,
+				includeSecret: false,
 			},
 		}]);
 	});
@@ -727,8 +752,8 @@ describe('engine command envelope', () => {
 				recordId: 'npc_mira',
 			},
 		}, {
-			getWorldRecord: async (type, recordId) => {
-				calls.push({ kind: 'get', type, recordId });
+			getWorldRecord: async (storyId, type, recordId) => {
+				calls.push({ kind: 'get', storyId, type, recordId });
 				return {
 					type,
 					record: { id: recordId, story_id: 'story_alpha', name: 'Mira' },
@@ -749,8 +774,8 @@ describe('engine command envelope', () => {
 				reason: 'Manual explorer edit.',
 			},
 		}, {
-			patchWorldRecord: async (type, recordId, request) => {
-				calls.push({ kind: 'patch', type, recordId, request });
+			patchWorldRecord: async (storyId, type, recordId, request) => {
+				calls.push({ kind: 'patch', storyId, type, recordId, request });
 				return {
 					storyId: 'story_alpha',
 					type,
@@ -799,11 +824,13 @@ describe('engine command envelope', () => {
 		expect(calls).toEqual([
 			{
 				kind: 'get',
+				storyId: '__app__',
 				type: 'characters',
 				recordId: 'npc_mira',
 			},
 			{
 				kind: 'patch',
+				storyId: '__app__',
 				type: 'characters',
 				recordId: 'npc_mira',
 				request: {
@@ -860,6 +887,137 @@ describe('engine command envelope', () => {
 		}]);
 	});
 
+	it('routes read-only turn previews without exposing the prepared prompt', async () => {
+		const calls: unknown[] = [];
+		const preview = {
+			inspection: true as const,
+			storyId: 'story_alpha',
+			clientTurnId: 'preview_1',
+			preparedAt: '2026-09-06T00:00:00.000Z',
+			preparationMs: 12,
+			draftFingerprint: 'draft_hash',
+			settingsFingerprint: 'settings_hash',
+			model: { id: 'test-model', providerType: 'openai', capacityTokens: 128000, capacitySource: 'model-window-registry-or-default' },
+			prompt: { systemChars: 10, systemDynamicChars: 20, playerPromptChars: 8, messageCount: 1, messageChars: 12, totalChars: 50, tokenEstimate: 13 },
+			budgets: { contextTokens: 12000, recentDialogueTokens: 12000, memoryTokens: 1200 },
+			selection: { version: 1 as const, groups: [], sections: [] },
+			sourceReferences: [],
+			warnings: ['Context before GM tool observations.'],
+		};
+		const result = await executeEngineCommand({
+			command: 'turn.preview',
+			storyId: 'story_alpha',
+			clientCommandId: 'preview_1',
+			args: { clientTurnId: 'preview_1', playerText: 'I look toward the harbor.', actionType: 'do' },
+		}, {
+			previewTurn: async (input) => {
+				calls.push(input);
+				return preview;
+			},
+		});
+
+		expect(result.status).toBe('succeeded');
+		expect(result.result).toEqual(preview);
+		expect(result.projectionChanges).toEqual({ turnPreview: { clientTurnId: 'preview_1', preparationMs: 12, sourceReferenceCount: 0 } });
+		expect(calls).toEqual([expect.objectContaining({ storyId: 'story_alpha', clientTurnId: 'preview_1', playerText: 'I look toward the harbor.' })]);
+	});
+
+	it('routes focused GM exploration reads through the command envelope', async () => {
+		const calls: unknown[] = [];
+		const handlers = {
+			getActorBrief: async (storyId: string, args: unknown) => {
+				calls.push({ command: 'world.actor.brief', storyId, args });
+				return { data: { actor: { id: 'npc_mira', name: 'Mira' } }, sourceIds: [], warnings: [], unresolved: [], truncated: false };
+			},
+			readAffinity: async (storyId: string, args: unknown) => {
+				calls.push({ command: 'world.affinity.read', storyId, args });
+				return { data: { affinities: [{ actorId: 'npc_mira', level: 42 }] }, sourceIds: [], warnings: [], unresolved: [], truncated: false };
+			},
+			checkScene: async (storyId: string, args: unknown) => {
+				calls.push({ command: 'world.scene.check', storyId, args });
+				return { data: { actors: [] }, sourceIds: [], warnings: [], unresolved: [], truncated: false };
+			},
+			getRelationshipWeb: async (storyId: string, args: unknown) => {
+				calls.push({ command: 'world.relationship.web', storyId, args });
+				return { data: { nodes: [], edges: [] }, sourceIds: [], warnings: [], unresolved: [], truncated: false };
+			},
+			getThreadBoard: async (storyId: string, args: unknown) => {
+				calls.push({ command: 'plot.thread.board', storyId, args });
+				return { data: { threads: [] }, sourceIds: [], warnings: [], unresolved: [], truncated: false };
+			},
+		};
+		const requests = [
+			{ command: 'world.actor.brief', args: { name: 'Mira', eventLimit: 5 } },
+			{ command: 'world.affinity.read', args: { actorNames: ['Mira'], historyLimit: 3 } },
+			{ command: 'world.scene.check', args: { actorNames: ['Mira'], locationName: 'Harbor Court', availableMinutes: 30 } },
+			{ command: 'world.relationship.web', args: { actorNames: ['Mira'], depth: 2 } },
+			{ command: 'plot.thread.board', args: { query: 'marriage', factionIds: ['faction_harbor'], limit: 8 } },
+		] as const;
+
+		for (const [index, request] of requests.entries()) {
+			const result = await executeEngineCommand({
+				storyId: 'story_alpha',
+				clientCommandId: `cmd_gm_tool_${index}`,
+				...request,
+			}, handlers);
+			expect(result.status).toBe('succeeded');
+			expect(result.projectionChanges).toEqual({
+				gmTool: expect.objectContaining({ command: request.command }),
+			});
+		}
+
+		expect(calls).toHaveLength(5);
+		expect(calls[0]).toEqual({
+			command: 'world.actor.brief',
+			storyId: 'story_alpha',
+			args: { name: 'Mira', eventLimit: 5 },
+		});
+	});
+
+	it('routes story-conditioned character creation into the existing review queue', async () => {
+		const calls: unknown[] = [];
+		const result = await executeEngineCommand({
+			command: 'world.character.draftCreate',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_character_create',
+			args: {
+				name: 'Tala Venn',
+				role: 'harbor courier',
+				backstory: 'She learned every smuggler route while working the tide warehouses.',
+				narrativePurpose: 'Move conflicting evidence between rival houses.',
+				desire: 'Free her family from debt.',
+			},
+		}, {
+			draftCharacterCreate: async (storyId, args) => {
+				calls.push({ storyId, args });
+				return {
+					storyId,
+					recordId: 'draft_tala',
+					proposalId: 'proposal_tala',
+					status: 'pending',
+				};
+			},
+		});
+
+		expect(result.status).toBe('succeeded');
+		expect(result.projectionChanges).toEqual({
+			characterDraftCreate: {
+				name: 'Tala Venn',
+				recordId: 'draft_tala',
+				proposalId: 'proposal_tala',
+				status: 'pending',
+			},
+		});
+		expect(calls).toEqual([{
+			storyId: 'story_alpha',
+			args: expect.objectContaining({
+				name: 'Tala Venn',
+				role: 'harbor courier',
+				narrativePurpose: 'Move conflicting evidence between rival houses.',
+			}),
+		}]);
+	});
+
 	it('routes orchestrator runs through the shared backend command surface', async () => {
 		const orchestratorCalls: unknown[] = [];
 		const result = await executeEngineCommand({
@@ -883,6 +1041,7 @@ describe('engine command envelope', () => {
 					goal: 'Prepare the next text RPG response.',
 					executed: false,
 					roles: [{ id: 'dm_narrator', name: 'DM / Narrator Agent', responsibilities: [] }],
+					steps: [{ id: 'situation', title: 'Situation', focus: 'Prepare bounded turn context.', toolCallIds: ['tool_1'] }],
 					toolCalls: [{ id: 'tool_1', agentRole: 'dm_narrator', command: 'turn.prepare', args: {}, reason: 'Prepare bounded turn context.' }],
 					toolResults: [],
 					warnings: [],
@@ -901,6 +1060,7 @@ describe('engine command envelope', () => {
 				runId: 'orch_1',
 				mode: 'turn',
 				roleCount: 1,
+				stepCount: 1,
 				toolCallCount: 1,
 				toolResultCount: 0,
 				executed: false,
@@ -1438,6 +1598,25 @@ describe('engine command envelope', () => {
 			'audit:story_alpha:12',
 			'cleanup:story_alpha:false',
 		]);
+	});
+
+	it('fails closed when a proposal review decision is missing or invalid', async () => {
+		const reviewPatchProposal = vi.fn(async () => ({ status: 'applied' }));
+		for (const args of [
+			{ proposalId: 'proposal_1' },
+			{ proposalId: 'proposal_1', decision: 'approve' },
+			{ proposalId: '', decision: 'approved' },
+		]) {
+			const result = await executeEngineCommand({
+				command: 'patchProposal.review',
+				storyId: 'story_alpha',
+				clientCommandId: `cmd_invalid_review_${JSON.stringify(args)}`,
+				args,
+			}, { reviewPatchProposal });
+
+			expect(result.status).toBe('failed');
+		}
+		expect(reviewPatchProposal).not.toHaveBeenCalled();
 	});
 
 	it('rejects unknown commands without touching campaign state', async () => {
@@ -1989,6 +2168,9 @@ describe('engine command envelope', () => {
 						requestTokens: 1000,
 						responseTokens: 120,
 						totalTokens: 1120,
+						cachedInputTokens: null,
+						cacheWriteTokens: null,
+						providerCostUsd: null,
 					},
 					waterfall: {},
 					topSpans: [],
@@ -2081,6 +2263,9 @@ describe('engine command envelope', () => {
 					requestTokens: 1000,
 					responseTokens: 120,
 					totalTokens: 1120,
+					cachedInputTokens: null,
+					cacheWriteTokens: null,
+					providerCostUsd: null,
 				},
 				waterfall: {},
 				topSpans: [],
@@ -2255,6 +2440,45 @@ describe('engine command envelope', () => {
 			currentTurn: 17,
 			currentWorldTime: 'Day 12, midnight',
 			includeSecret: true,
+		}]);
+	});
+
+	it('routes durable Plot Director retirement through the shared command surface', async () => {
+		const calls: unknown[] = [];
+		const result = await executeEngineCommand({
+			command: 'plotBrain.retire',
+			storyId: 'story_alpha',
+			clientCommandId: 'cmd_plot_brain_retire',
+			args: { reason: 'Player vetoed the shadow plot.', quietTurns: 8, serverVersion: 12 },
+		}, {
+			runPlotBrainRetire: async (input) => {
+				calls.push(input);
+				return {
+					storyId: input.storyId,
+					serverVersion: 13,
+					quietUntilTurn: 28,
+					retiredStoryThreads: 2,
+					retiredStoryEvents: 3,
+					retiredPlotDirectives: ['The Shadow Patron'],
+				};
+			},
+		});
+
+		expect(result.status).toBe('succeeded');
+		expect(result.projectionChanges).toEqual({
+			plotBrain: {
+				active: false,
+				quietUntilTurn: 28,
+				retiredStoryThreads: 2,
+				retiredStoryEvents: 3,
+				serverVersion: 13,
+			},
+		});
+		expect(calls).toEqual([{
+			storyId: 'story_alpha',
+			reason: 'Player vetoed the shadow plot.',
+			quietTurns: 8,
+			serverVersion: 12,
 		}]);
 	});
 
@@ -2471,22 +2695,64 @@ describe('engine command envelope', () => {
 					title: 'New Campaign',
 					description: 'A small beginning.',
 					genre: 'fantasy',
-					mode: 'adventure',
-					role: 'playable',
-					timelineMode: 'overlay',
-					clientStoryId: 'local_1',
-					startWorkflow: {
-						sourceMode: 'lorebook',
-						sourceCount: 3,
-						requiresCanonReview: true,
-						startingSceneReady: false,
+						mode: 'adventure',
+						role: 'playable',
+						timelineMode: 'overlay',
+						clientStoryId: 'local_1',
+						startWorkflow: {
+							sourceMode: 'lorebook',
+							sourceCount: 3,
+							requiresCanonReview: true,
+							startingSceneReady: false,
+						},
 					},
-				},
-			},
-		]);
-	});
+					},
+					]);
+					});
 
-	it('routes manual job controls through the shared backend command surface', async () => {
+					it('passes includeArchived through story.list and routes story.restore through the shared backend command surface', async () => {
+					const calls: unknown[] = [];
+					const listed = await executeEngineCommand({
+					command: 'story.list',
+					storyId: '__app__',
+					clientCommandId: 'cmd_story_list_archived',
+					args: { includeArchived: true },
+					}, {
+					listStories: async (options) => {
+					calls.push({ kind: 'list', options });
+					return [{ id: 'story_archived', title: 'Old Campaign', serverVersion: 2 }];
+					},
+					});
+					const restored = await executeEngineCommand({
+					command: 'story.restore',
+					storyId: 'story_archived',
+					clientCommandId: 'cmd_story_restore',
+					args: {},
+					}, {
+					restoreStory: async (storyId) => {
+					calls.push({ kind: 'restore', storyId });
+					return { ok: true, storyId, serverVersion: 3 };
+					},
+					});
+
+					expect(listed.status).toBe('succeeded');
+					expect(calls[0]).toEqual({ kind: 'list', options: { shelfId: null, includeArchived: true } });
+					expect(restored.status).toBe('succeeded');
+					expect(restored.result).toEqual({ ok: true, storyId: 'story_archived', serverVersion: 3 });
+					expect(restored.projectionChanges).toEqual({
+					story: {
+					storyId: 'story_archived',
+					restored: true,
+					serverVersion: 3,
+					},
+					});
+					expect(calls).toEqual([
+					{ kind: 'list', options: { shelfId: null, includeArchived: true } },
+					{ kind: 'restore', storyId: 'story_archived' },
+					]);
+					});
+
+					it('routes manual job controls through the shared backend command surface', async () => {
 		const calls: unknown[] = [];
 		const reindex = await executeEngineCommand({
 			command: 'jobs.reindexStory',
@@ -2537,6 +2803,7 @@ describe('engine command envelope', () => {
 			args: {
 				workerId: 'manual_worker',
 				limit: 7,
+				scope: 'faction',
 			},
 		}, {
 			runDueJobs: async (input) => {
@@ -2671,6 +2938,7 @@ describe('engine command envelope', () => {
 					workerId: 'manual_worker',
 					limit: 7,
 					allStories: false,
+					scope: 'faction',
 				},
 			},
 			{

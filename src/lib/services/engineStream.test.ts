@@ -14,6 +14,8 @@ const projection = {
 	story: { id: 'story_alpha', title: 'Long Campaign', serverVersion: 5 },
 	entries: [{ id: 'entry_5', position: 5, type: 'assistant', content: 'The court waits.' }],
 	entities: [],
+	threads: [],
+	recentEvents: [],
 	chapters: [],
 	arcs: [],
 	sagas: [],
@@ -88,6 +90,14 @@ describe('engine stream client helpers', () => {
 		expect(extractEngineCacheStatus(parsed)).toEqual(projection.cache);
 		expect(shouldRefreshCampaignProjection(parsed)).toBe(true);
 		expect(shouldRefreshCampaignProjection(event('engine.heartbeat', {}))).toBe(false);
+		expect(shouldRefreshCampaignProjection(event('job.status', {
+			type: 'extract_turn_state',
+			status: 'completed',
+		}))).toBe(true);
+		expect(shouldRefreshCampaignProjection(event('job.status', {
+			type: 'embed_memory_nodes',
+			status: 'completed',
+		}))).toBe(false);
 	});
 
 	it('extracts compact turn performance diagnostics from command projection changes', () => {
@@ -258,6 +268,12 @@ describe('engine stream client helpers', () => {
 			command: 'timeline.advance',
 			projectionChanges: { counts: { events: 4 } },
 		}));
+		source.emit('gm.activity', event('gm.activity', {
+			stage: 'tool',
+			label: 'Searching canonical world state: Mira',
+			command: 'world.search',
+			round: 1,
+		}));
 		source.emit('state.changed', event('state.changed', {
 			performance: {
 				preparedCacheHit: false,
@@ -299,7 +315,7 @@ describe('engine stream client helpers', () => {
 			},
 		}));
 
-		expect(seen).toEqual(['campaign.status', 'command.succeeded', 'state.changed']);
+		expect(seen).toEqual(['campaign.status', 'command.succeeded', 'gm.activity', 'state.changed']);
 		expect(projections).toEqual([projection]);
 		expect(cacheStatuses).toEqual([projection.cache]);
 		expect(turnPerformance).toHaveLength(1);

@@ -1,4 +1,8 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
+import { mergeCampaignState, readCampaignState } from '$lib/contracts/campaignState';
+import { createHash } from 'node:crypto';
+import { NPC_AGENCY_FIELDS, readNpcAgency } from '$lib/contracts/npcAgency';
+import { AGREEMENT_ACTION_STATUS, agreementPartiesKey, isCurrentAgreement, resolveAgreementTarget } from '$lib/contracts/agreements';
 import { z } from 'zod';
 import { getDb } from '$lib/server/db/client';
 import {
@@ -16,12 +20,15 @@ import {
 	relationships,
 	statePatches,
 	stories,
+	storyEntries,
 	storyEvents,
 } from '$lib/server/db/schema';
 import { buildNpcEventLinksForEvent } from '$lib/server/events/timeline';
 import { enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
 import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from '$lib/server/memory/entityResolver';
-import { worldStateUpdateSchema, type WorldStateTimelineEvent, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
+import { worldStateUpdateSchema, worldStateTimelineEventSchema, type WorldStateTimelineEvent, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
+import { isParallelPovEntry } from '$lib/services/ai/context/parallelPov';
+import { durableCharacterEventMemoryList } from './characterEventMemory';
 
 type TurnPersistenceDb = Pick<ReturnType<typeof getDb>, 'delete' | 'insert' | 'select' | 'update'>;
 
@@ -39,6 +46,16 @@ function id(prefix: string): string {
 
 function normalizeName(value: string): string {
 	return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function locationReferencesMatch(value: string, locationId: string, locationName: string): boolean {
+	const normalizedValue = normalizeName(value);
+	const normalizedId = normalizeName(locationId);
+	const normalizedName = normalizeName(locationName);
+	return normalizedValue === normalizedId
+		|| normalizedValue === normalizedName
+		|| (normalizedName.length >= 4 && normalizedValue.includes(normalizedName))
+		|| (normalizedValue.length >= 4 && normalizedName.includes(normalizedValue));
 }
 
 function stableNameSegment(value: string): string {
@@ -68,7 +85,7 @@ function characterEventMemoryPatch(value: unknown): Record<string, string[]> | u
 	const memory = recordValue(value);
 	const patch = Object.fromEntries(
 		['did', 'saw', 'knew', 'knows']
-			.map((key) => [key, nonEmptyList(memory[key])] as const)
+			.map((key) => [key, nonEmptyList(durableCharacterEventMemoryList(memory[key]))] as const)
 			.filter(([, list]) => list && list.length > 0),
 	) as Record<string, string[]>;
 	return Object.keys(patch).length > 0 ? patch : undefined;
@@ -82,6 +99,7 @@ function buildCharacterStatePatch(character: WorldStateUpdate['characters'][numb
 	const motivations = nonEmptyList(character.goals);
 	const bio = stringValue(character.background);
 	return Object.fromEntries(Object.entries({
+		...readNpcAgency(character),
 		aliases,
 		status: character.status,
 		currentDisposition,
@@ -90,10 +108,17 @@ function buildCharacterStatePatch(character: WorldStateUpdate['characters'][numb
 		present: isPresent,
 		pressures: nonEmptyList(character.pressures),
 		factionTags: nonEmptyList(character.faction_tags),
+		partyMember: typeof character.party_member === 'boolean' ? character.party_member : undefined,
+		partyRole: character.party_member === false ? null : stringValue(character.party_role),
+		affinityDelta: typeof character.affinity_delta === 'number' && Number.isFinite(character.affinity_delta) ? Math.trunc(character.affinity_delta) : undefined,
+		affinityReason: stringValue(character.affinity_reason),
 		currentLocation: stringValue(character.currentLocation ?? character.current_location),
 		currentAction: stringValue(character.currentAction ?? character.current_action),
 		emotionalState: stringValue(character.emotionalState ?? character.emotional_state),
 		appearance: stringValue(character.appearance),
+		presentation: stringValue(character.presentation),
+		personality: stringValue(character.personality),
+		rank: stringValue(character.rank),
 		bio,
 		background: bio,
 		motivations,
@@ -103,16 +128,65 @@ function buildCharacterStatePatch(character: WorldStateUpdate['characters'][numb
 	}).filter(([, value]) => value !== undefined));
 }
 
-function mergeEntityState(existing: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
-	const next = { ...existing, ...patch };
+function supportedCharacterQuote(quote: string | undefined, name: string, narration: string): boolean {
+	const clean = (value: string) => value.replace(/\s+/g, ' ').trim();
+	return Boolean(quote && clean(narration).includes(clean(quote))
+		&& ` ${normalizeName(quote)} `.includes(` ${normalizeName(name)} `)
+		&& normalizeName(quote).length >= normalizeName(name).length + 12);
+}
+
+function normalizedRelationshipStrength(value: number): number {
+	return Math.max(-1, Math.min(1, value / 100));
+}
+
+function mergeEntityState(
+	existing: Record<string, unknown>,
+	patch: Record<string, unknown>,
+	evidence: { sourceEntryId?: string; timestamp?: string } = {},
+): Record<string, unknown> {
+	const { affinityDelta: rawAffinityDelta, affinityReason: rawAffinityReason, ...rawDurablePatch } = patch;
+	const durablePatch = Object.fromEntries(
+		Object.entries(rawDurablePatch).filter(([, value]) => value !== undefined),
+	);
+	const next = { ...existing, ...durablePatch };
+	// Turn extraction supplies new biography facts, not a replacement life story.
+	const previousBio = stringValue(existing.bio) ?? stringValue(existing.background);
+	const addedBio = stringValue(patch.bio);
+	if (previousBio && addedBio) {
+		const bio = previousBio.includes(addedBio) ? previousBio : addedBio.includes(previousBio) ? addedBio : `${previousBio}\n${addedBio}`;
+		next.bio = bio;
+		next.background = bio;
+	}
 	const currentDisposition = stringValue(patch.currentDisposition);
-	if (currentDisposition) {
-		const relationship = recordValue(existing.relationship);
+	const affinityDelta = typeof rawAffinityDelta === 'number' && Number.isFinite(rawAffinityDelta)
+		? Math.max(-20, Math.min(20, Math.trunc(rawAffinityDelta)))
+		: 0;
+	const relationship = recordValue(existing.relationship);
+	const playerSelf = existing.relationship === 'self'
+		|| existing.isProtagonist === true
+		|| relationship.status === 'self'
+		|| relationship.status === 'player_character';
+	if (currentDisposition || (affinityDelta !== 0 && !playerSelf)) {
+		const previousLevel = typeof relationship.level === 'number' && Number.isFinite(relationship.level) ? relationship.level : null;
+		const history = Array.isArray(relationship.history) ? relationship.history : [];
+		const alreadyApplied = Boolean(evidence.sourceEntryId) && history.some((item) => recordValue(item).entryId === evidence.sourceEntryId);
+		const applyAffinityDelta = affinityDelta !== 0 && !playerSelf && !alreadyApplied;
+		const parsedTimestamp = evidence.timestamp ? Date.parse(evidence.timestamp) : Number.NaN;
+		const affinityHistory = applyAffinityDelta
+			? [...history, {
+				description: `[${affinityDelta > 0 ? '+' : ''}${affinityDelta}] ${stringValue(rawAffinityReason) ?? 'Narrated relationship shift.'}`,
+				delta: affinityDelta,
+				...(evidence.sourceEntryId ? { entryId: evidence.sourceEntryId } : {}),
+				...(Number.isFinite(parsedTimestamp) ? { timestamp: parsedTimestamp } : {}),
+			}].slice(-12)
+			: history;
 		next.relationship = {
 			...relationship,
-			level: typeof relationship.level === 'number' ? relationship.level : 0,
-			status: currentDisposition,
-			history: Array.isArray(relationship.history) ? relationship.history : [],
+			...(applyAffinityDelta
+				? { level: Math.max(-100, Math.min(100, (previousLevel ?? 0) + affinityDelta)) }
+				: previousLevel !== null ? { level: previousLevel } : {}),
+			status: currentDisposition ?? relationship.status ?? 'neutral',
+			history: affinityHistory,
 		};
 	}
 	const eventMemory = characterEventMemoryPatch(patch.eventMemory);
@@ -157,9 +231,17 @@ function queueTurnContinuityProposal(
 		metadata: Record<string, unknown>;
 	},
 ) {
-	void ledger;
-	void input;
-	// ponytail: normal turns apply validated updates directly; review queues belong in explicit repair tools.
+	// Keep review for unresolved places and explicit automatic character creation attempts.
+	if (input.metadata.sourceType !== 'unresolved_location_reference' && input.metadata.automaticCharacterCreation !== true) return;
+	ledger.patchProposals.push({
+		id: id('proposal'), storyId: input.storyId, proposalType: input.proposalType,
+		targetTable: input.targetTable, targetRecordId: input.targetRecordId,
+		operations: input.operations, reason: input.reason, suggestion: input.suggestion, status: 'needs_review',
+		confidence: input.confidence, sourceEntryIds: input.sourceEntryIds,
+		sourceEventIds: input.sourceEventIds ?? [], sourcePatchIds: input.sourcePatchIds ?? [],
+		metadata: { ...input.metadata, suggestion: input.suggestion },
+		serverVersion: input.serverVersion, createdAt: input.now, updatedAt: input.now,
+	});
 }
 
 function queueUnresolvedEntityReference(
@@ -262,7 +344,7 @@ function relationshipEndpointLooksCharacter(
 }
 
 function agreementPartyLooksCharacter(
-	agreement: WorldStateUpdate['agreements'][number],
+	agreement: { category?: string },
 	name: string,
 ): boolean {
 	const normalized = normalizeName(name);
@@ -424,8 +506,21 @@ async function upsertEntity(
 	options: {
 		allowCreate?: boolean;
 		sourceField?: string;
+		entityId?: string;
+		primaryScene?: boolean;
+		creationEvidence?: string;
 	} = {},
 ): Promise<string | null> {
+	if (options.primaryScene === false) {
+		state = { ...state };
+		if (type === 'location') {
+			delete state.current;
+			delete state.isCurrentLocation;
+		} else if (type === 'character') {
+			delete state.present;
+			delete state.isPresent;
+		}
+	}
 	const aliases = Array.isArray(state.aliases)
 		? state.aliases.filter((alias): alias is string => typeof alias === 'string' && alias.trim().length > 0)
 		: [];
@@ -435,6 +530,7 @@ async function upsertEntity(
 		db,
 		includeSemantic: false,
 		candidate: {
+			id: options.entityId,
 			type,
 			name,
 			aliases,
@@ -444,8 +540,13 @@ async function upsertEntity(
 			sourcePatchIds,
 		},
 	});
-	const resolvedEntityId = shouldReuseResolvedEntity(resolution) ? resolution.entityId : null;
-	if (!resolvedEntityId && options.allowCreate === false) {
+	const best = resolution.candidates.find(candidate => candidate.entityId === resolution.entityId);
+	const ambiguousCharacter = type === 'character' && !options.entityId && best && resolution.candidates.some(candidate => candidate.entityId !== best.entityId && best.score - candidate.score < 0.08);
+	const invalidExplicitId = options.entityId && (resolution.entityId !== options.entityId || !best?.signals.some(signal => signal === 'exact:name' || signal === 'exact:alias'));
+	const resolvedEntityId = !ambiguousCharacter && !invalidExplicitId && shouldReuseResolvedEntity(resolution) ? resolution.entityId : null;
+	const unresolvedLocation = type === 'location' && (resolution.decision !== 'create' || Boolean(options.entityId));
+	const unresolvedCharacter = type === 'character' && (resolution.decision !== 'create' || Boolean(options.entityId));
+	if (!resolvedEntityId && (options.allowCreate === false || unresolvedLocation || unresolvedCharacter)) {
 		queueUnresolvedEntityReference(continuityLedger, {
 			storyId,
 			type,
@@ -460,21 +561,27 @@ async function upsertEntity(
 			now: createdAt,
 			metadata: {
 				entityResolver: entityResolutionSummary(resolution),
+				...(options.creationEvidence ? { automaticCharacterCreation: true, creationEvidence: options.creationEvidence } : {}),
 			},
 		});
 		return null;
 	}
 	const entityId = resolvedEntityId ?? id('entity');
-	const [existing] = resolvedEntityId
+	const existingRows = resolvedEntityId
 		? await db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, resolvedEntityId))).limit(1)
 		: [];
+	const existing = existingRows.find(row => row.id === resolvedEntityId);
 	const canonicalName = existing && normalizeName(existing.name) !== normalizeName(name) && existing.name.length >= name.length
 		? existing.name
 		: name;
-	const nextState = mergeEntityState(existing?.state as Record<string, unknown> | null ?? {}, state);
+	const nextState = mergeEntityState(existing?.state as Record<string, unknown> | null ?? {}, state, {
+		sourceEntryId: sourceEntryIds[0],
+		timestamp: createdAt,
+	});
 	const metadata = {
 		...(existing?.metadata as Record<string, unknown> | null ?? {}),
 		entityResolver: entityResolutionSummary(resolution),
+		...(!existing && options.creationEvidence ? { sourceType: 'gm_auto_character', creationEvidence: options.creationEvidence } : {}),
 	};
 	const isUpdate = Boolean(existing);
 	await db.insert(entities).values({
@@ -579,8 +686,72 @@ async function upsertEntity(
 	return entityId;
 }
 
+async function applyCharacterAffiliations(db: TurnPersistenceDb, input: {
+	storyId: string;
+	updates: Array<{ entityId: string; character: WorldStateUpdate['characters'][number] }>;
+	narration: string;
+	entryId: string;
+	patchIds: string[];
+	serverVersion: number;
+	now: string;
+	warnings: string[];
+}): Promise<void> {
+	if (!input.updates.length) return;
+	const factionRows = await db.select().from(factions).where(eq(factions.storyId, input.storyId)).limit(1000);
+	const aliases = await db.select().from(entityAliases).where(eq(entityAliases.storyId, input.storyId)).limit(3000);
+	const factionNames = (faction: typeof factions.$inferSelect) => [faction.name, ...aliases.filter(alias => alias.entityId === faction.entityId).map(alias => alias.alias)];
+	const membershipRows = await db.select().from(factionMemberships).where(eq(factionMemberships.storyId, input.storyId)).limit(3000);
+	for (const { entityId, character } of input.updates) {
+		const rows = await db.select().from(entities).where(and(eq(entities.storyId, input.storyId), eq(entities.id, entityId))).limit(1);
+		const entity = rows.find(row => row.id === entityId);
+		if (!entity) continue;
+		const tags = stringList(recordValue(entity.state).factionTags);
+		for (const evidence of character.faction_evidence ?? []) {
+			const key = normalizeName(evidence.faction);
+			const matches = factionRows.filter(faction => {
+				const metadata = recordValue(faction.metadata);
+				return (factionNames(faction).some(name => normalizeName(name) === key) || faction.id === evidence.faction)
+					&& !metadata.mergedInto && !metadata.archived && metadata.activeEra !== false
+					&& !['archived', 'inactive', 'historical', 'retired'].includes(String(metadata.status ?? ''));
+			});
+			const faction = matches.length === 1 ? matches[0] : null;
+			if (!faction || !supportedCharacterQuote(evidence.quote, character.name, input.narration)
+				|| !factionNames(faction).some(name => ` ${normalizeName(evidence.quote)} `.includes(` ${normalizeName(name)} `))) {
+				input.warnings.push(`Faction affiliation for ${character.name} / ${evidence.faction} was not saved: source evidence or faction identity is unresolved.`);
+				continue;
+			}
+			const existing = membershipRows.find(row => row.factionId === faction.id && (row.entityId === entityId
+				|| (!row.entityId && normalizeName(String(recordValue(row.metadata).memberNameOrId ?? '')) === normalizeName(character.name))));
+			if (existing && existing.status !== 'active') {
+				input.warnings.push(`Faction affiliation for ${character.name} / ${faction.name} needs review: an inactive membership already exists.`);
+				continue;
+			}
+			const membershipId = existing?.id ?? `${faction.id}_member_${entityId}`;
+			const membership = {
+				id: membershipId, storyId: input.storyId, factionId: faction.id, entityId,
+				role: existing?.role ?? 'member', rank: existing?.rank ?? character.rank ?? null,
+				status: 'active', visibility: existing?.visibility ?? entity.visibility,
+				metadata: { ...recordValue(existing?.metadata), memberNameOrId: entity.name, unresolvedCharacterReference: false, affiliationEvidence: evidence.quote },
+				sourceEntryIds: sourceIds(...(existing?.sourceEntryIds ?? []), input.entryId),
+				sourceEventIds: existing?.sourceEventIds ?? [], sourcePatchIds: sourceIds(...(existing?.sourcePatchIds ?? []), ...input.patchIds),
+				serverVersion: input.serverVersion, createdAt: existing?.createdAt ?? input.now, updatedAt: input.now,
+			};
+			await db.insert(factionMemberships).values(membership).onConflictDoUpdate({ target: factionMemberships.id, set: membership });
+			if (existing) Object.assign(existing, membership);
+			else membershipRows.push(membership);
+			faction.memberEntityIds = sourceIds(...(faction.memberEntityIds ?? []), entityId);
+			await db.update(factions).set({ memberEntityIds: faction.memberEntityIds, serverVersion: input.serverVersion, updatedAt: input.now })
+				.where(and(eq(factions.storyId, input.storyId), eq(factions.id, faction.id)));
+			if (!tags.some(tag => normalizeName(tag) === normalizeName(faction.name))) tags.push(faction.name);
+		}
+		if (tags.length) await db.update(entities).set({ state: { ...recordValue(entity.state), factionTags: tags }, serverVersion: input.serverVersion, updatedAt: input.now })
+			.where(and(eq(entities.storyId, input.storyId), eq(entities.id, entityId)));
+	}
+}
+
 function makeOperations(update: WorldStateUpdate): Array<Record<string, unknown>> {
 	const operations: Array<Record<string, unknown>> = [];
+	for (const fact of update.campaign_state ?? []) operations.push({ op: 'upsert', path: '/stories/metadata/campaignState', value: fact });
 	if (update.player_reputation) operations.push({ op: 'replace', path: '/stories/playerReputation', value: update.player_reputation });
 	for (const character of update.characters) operations.push({ op: 'upsert', path: '/entities/character', value: character });
 	for (const location of update.locations) operations.push({ op: 'upsert', path: '/entities/location', value: location });
@@ -618,14 +789,19 @@ function parseNarrationSceneAnchor(narration: string): { currentWorldTime: strin
 	const closingBracket = firstLine.lastIndexOf(']');
 	if (closingBracket < 0) return null;
 	const fields = firstLine.slice(1, closingBracket).split('|');
-	if (fields.length < 4) return null;
-	const field = (label: RegExp) => fields.find(part => label.test(part))
-		?.replace(label, '')
+	if (fields.length < 3) return null;
+	const rawField = (matcher: RegExp, fallbackIndex: number) => fields.find(part => matcher.test(part)) ?? fields[fallbackIndex] ?? '';
+	const cleanMarker = (value: string) => value
+		.trim()
+		.replace(/^[^\p{L}\p{N}]+/u, '')
 		.replace(/^\s*[-,:]?\s*/, '')
-		.trim() ?? '';
-	const time = field(/^[\s\S]*?\bTime\b/i);
-	const day = field(/^[\s\S]*?\b(?:Day|Date)\b/i);
-	const rawLocation = field(/^[\s\S]*?\bLocation\b/i);
+		.trim();
+	const timeField = rawField(/(?:🕰️|\bTime\b)/iu, 0);
+	const dayField = rawField(/(?:🗓️|\b(?:Day|Date)\b)/iu, 1);
+	const locationField = rawField(/(?:📍|\bLocation\b)/iu, 2);
+	const time = cleanMarker(/\bTime\b/i.test(timeField) ? timeField.replace(/^[\s\S]*?\bTime\b\s*/i, '') : timeField);
+	const day = cleanMarker(/\b(?:Day|Date)\b/i.test(dayField) ? dayField.replace(/^[\s\S]*?\b(?:Day|Date)\b\s*/i, '') : dayField);
+	const rawLocation = cleanMarker(/\bLocation\b/i.test(locationField) ? locationField.replace(/^[\s\S]*?\bLocation\b\s*/i, '') : locationField);
 	const unknown = new Set([
 		'unknown', 'time unknown', 'unknown time', 'day unknown', 'unknown day',
 		'date unknown', 'unknown date', 'location unknown', 'unknown location',
@@ -680,6 +856,7 @@ export interface ApplyTurnUpdateInput {
 	serverVersion: number;
 	mode?: 'turn' | 'supplemental';
 	timelineTurn?: number | null;
+	suppressCurrentNpcAgency?: boolean;
 	memorySettings?: {
 		chapterThreshold?: number;
 		postChapterBuffer?: number;
@@ -694,8 +871,15 @@ export interface ApplyTurnUpdateResult {
 	warnings: string[];
 }
 
-export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Promise<ApplyTurnUpdateResult> {
-	const db = getDb();
+export interface ApplyTurnUpdateOptions {
+	transaction?: TurnPersistenceDb;
+	enqueueProjectionJobs?: boolean;
+}
+
+export async function applyValidatedTurnUpdate(
+	input: ApplyTurnUpdateInput,
+	options: ApplyTurnUpdateOptions = {},
+): Promise<ApplyTurnUpdateResult> {
 	const narrationAnchor = parseNarrationSceneAnchor(input.narration);
 	const createdAt = nowIso();
 	const eventIds: string[] = [];
@@ -705,11 +889,11 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 	const operations = makeOperations(input.update);
 	const continuityLedger: TurnContinuityLedgerBundle = { patchProposals: [] };
 	const isSupplemental = input.mode === 'supplemental';
-	const shouldPersistPatch = !isSupplemental || operations.length > 0 || input.parseWarnings.length > 0;
+	const shouldPersistPatch = operations.length > 0 || input.parseWarnings.length > 0;
 	const patchId = shouldPersistPatch ? id('patch') : null;
 	const patchIds = patchId ? [patchId] : [];
 
-	await db.transaction(async (tx) => {
+	const apply = async (tx: TurnPersistenceDb) => {
 		const [story] = await tx
 			.select()
 			.from(stories)
@@ -717,6 +901,15 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			.for('update')
 			.limit(1);
 		if (!story) throw new Error(`Story not found: ${input.storyId}`);
+		// Read persisted source scope here so deferred extraction cannot bypass the guard.
+		const sourceEntries = await tx.select({ id: storyEntries.id, type: storyEntries.type, content: storyEntries.content, metadata: storyEntries.metadata, position: storyEntries.position })
+			.from(storyEntries)
+			.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, [input.playerEntryId, input.assistantEntryId])))
+			.limit(2);
+		const primaryScene = !sourceEntries.some(isParallelPovEntry);
+		const narrationSource = sourceEntries.find(entry => entry.id === input.assistantEntryId && entry.type === 'narration');
+		const canonicalNarration = narrationSource && !sourceEntries.some(entry => recordValue(entry.metadata).nonCanon === true || recordValue(entry.metadata).actionType === 'ooc')
+			? narrationSource.content : '';
 
 		const currentTurn = story.currentTurn ?? 0;
 		const currentWorldTime = story.currentWorldTime ?? null;
@@ -770,7 +963,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			});
 		}
 
-		if (input.update.player_reputation) {
+		if (primaryScene && input.update.player_reputation) {
 			const metadata = story?.metadata && typeof story.metadata === 'object' ? story.metadata as Record<string, unknown> : {};
 			if (shouldApplyPlayerReputationUpdate(metadata, currentTurn)) {
 				await tx.update(stories).set({
@@ -801,7 +994,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				visibility: 'player_known',
 				sourceEntryIds: [input.playerEntryId, input.assistantEntryId],
 				sourcePatchIds: patchIds,
-				metadata: {},
+				metadata: primaryScene ? {} : { narrativeMode: 'parallel_pov' },
 				serverVersion: input.serverVersion,
 				createdAt,
 				updatedAt: createdAt,
@@ -855,16 +1048,58 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 		}
 
 		const turnCharacterEntityIds: string[] = [];
+		const timelineEvents: Array<{ event: WorldStateTimelineEvent; npcActionEntityId?: string }> = input.update.timeline_events.map(event => ({ event }));
+		const affiliationUpdates: Array<{ entityId: string; character: WorldStateUpdate['characters'][number] }> = [];
+		const explicitlyPresentEntityIds = new Set<string>();
 		for (const character of input.update.characters) {
-			const entityId = await upsertEntity(tx, input.storyId, 'character', character.name, character.description, buildCharacterStatePatch(character), [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0, {
-				allowCreate: false,
+			const allowCreate = supportedCharacterQuote(character.creation_evidence, character.name, canonicalNarration)
+				&& Boolean(character.description?.trim() || character.background?.trim());
+			const state = buildCharacterStatePatch(character);
+			const normalizeQuote = (value: string) => value.replace(/\s+/g, ' ').trim();
+			const independentMove = character.lastIndependentAction
+				&& character.independentActionEvidence
+				&& [character.name, ...character.aliases].some(name => supportedCharacterQuote(character.independentActionEvidence, name, canonicalNarration))
+				&& normalizeQuote(character.independentActionEvidence).includes(normalizeQuote(character.lastIndependentAction));
+			if (character.lastIndependentAction && !independentMove) {
+				delete state.lastIndependentAction;
+				warnings.push(`Independent move for ${character.name} was not saved: its actor and exact action must be supported by canonical narration evidence.`);
+			}
+			if (input.suppressCurrentNpcAgency) {
+				for (const { key } of NPC_AGENCY_FIELDS) delete state[key];
+			} else if (character.nextOpportunity !== undefined) {
+				state.nextOpportunityRecordedAt = character.nextOpportunity === null ? null : nextWorldTime;
+			}
+			// Newly proposed affiliations enter canon only after their quotes and faction identity resolve below.
+			if (character.creation_evidence || character.faction_evidence) delete state.factionTags;
+			const entityId = await upsertEntity(tx, input.storyId, 'character', character.name, character.description, state, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0, {
+				allowCreate,
+				creationEvidence: character.creation_evidence,
 				sourceField: 'characters',
+				entityId: character.entityId,
+				primaryScene,
 			});
 			if (entityId) {
+				if (independentMove) {
+					timelineEvents.push({ npcActionEntityId: entityId, event: worldStateTimelineEventSchema.parse({
+						title: `${character.name}: ${character.lastIndependentAction!.slice(0, 100)}`,
+						description: character.lastIndependentAction,
+						type: 'scheme',
+						status: 'committed',
+						actor_names: [character.name],
+						visibility: character.independentActionVisibility ?? 'player_known',
+						world_time: parseNarrationSceneAnchor(canonicalNarration)?.currentWorldTime ?? nextWorldTime,
+						memory_impact: { independentNpcAction: true, evidence: character.independentActionEvidence },
+						reason: 'Consequential independent NPC move established by narration.',
+					}) });
+				}
+				if (character.faction_evidence?.length) affiliationUpdates.push({ entityId, character });
 				affectedEntityIds.push(entityId);
 				turnCharacterEntityIds.push(entityId);
+				if (primaryScene && character.present === true) explicitlyPresentEntityIds.add(entityId);
 			} else {
-				warnings.push(unresolvedCharacterWarning(character.name));
+				warnings.push(character.creation_evidence && !isCharacterTitleOnlyName(character.name)
+					? `Character "${character.name}" needs review: creation evidence or identity could not be validated. See NPC Candidates.`
+					: unresolvedCharacterWarning(character.name));
 			}
 		}
 		const uniqueTurnCharacterEntityIds = sourceIds(...turnCharacterEntityIds);
@@ -902,42 +1137,81 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 
 		const hasSelectedLocation = currentLocationIndex >= 0 || Boolean(narrationAnchor?.location);
 		let nextCurrentLocationId = currentLocationId;
+		let sceneLocationId: string | null = null;
 		for (const [index, location] of input.update.locations.entries()) {
 			const locationState = {
-				...(hasSelectedLocation ? { current: index === currentLocationIndex } : {}),
+				...(primaryScene && hasSelectedLocation && index === currentLocationIndex ? { current: true } : {}),
 				region: location.region,
 				connections: location.connections,
 			};
 			const entityId = await upsertEntity(tx, input.storyId, 'location', location.name, location.description, {
 				...locationState,
-			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0);
+			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0, {
+				entityId: location.entityId,
+				sourceField: 'locations',
+				primaryScene,
+			});
 			if (entityId) {
 				affectedEntityIds.push(entityId);
-				if (index === currentLocationIndex) nextCurrentLocationId = entityId;
+				if (index === currentLocationIndex) sceneLocationId = entityId;
+			} else {
+				warnings.push(`Location reference "${location.name}" needs identity review; the primary scene anchor was preserved.`);
 			}
 		}
 		if (currentLocationIndex < 0 && narrationAnchor?.location) {
 			const entityId = await upsertEntity(tx, input.storyId, 'location', narrationAnchor.location, null, {
-				current: true,
-			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0);
+				...(primaryScene ? { current: true } : {}),
+			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0, { primaryScene, sourceField: 'narration_header' });
 			if (entityId) {
 				affectedEntityIds.push(entityId);
-				nextCurrentLocationId = entityId;
+				sceneLocationId = entityId;
+			} else {
+				warnings.push('Narration location needs identity review; the primary scene anchor was preserved.');
 			}
 		}
-		if (nextCurrentLocationId !== currentLocationId || currentLocationIndex >= 0 || narrationAnchor?.location) {
+		if (turnEventId && sceneLocationId) {
+			await tx.update(storyEvents).set({ locationId: sceneLocationId, locationIds: [sceneLocationId], serverVersion: input.serverVersion, updatedAt: createdAt })
+				.where(and(eq(storyEvents.storyId, input.storyId), eq(storyEvents.id, turnEventId)));
+		}
+		if (primaryScene && sceneLocationId) nextCurrentLocationId = sceneLocationId;
+		if (primaryScene && sceneLocationId) {
 			const locationRows = await tx.select().from(entities)
 				.where(and(eq(entities.storyId, input.storyId), eq(entities.type, 'location')))
 				.limit(1000);
 			// ponytail: 1000 locations is a practical story ceiling; remove the limit if a campaign reaches it.
 			for (const row of locationRows) {
 				const state = recordValue(row.state);
-				if (row.id === nextCurrentLocationId || state.current !== true) continue;
+				const selected = row.id === nextCurrentLocationId;
+				if (selected ? state.current === true && state.isCurrentLocation === true : state.current !== true && state.isCurrentLocation !== true) continue;
 				await tx.update(entities).set({
-					state: { ...state, current: false },
+					state: { ...state, current: selected, isCurrentLocation: selected },
 					serverVersion: input.serverVersion,
 					updatedAt: createdAt,
 				}).where(and(eq(entities.storyId, input.storyId), eq(entities.id, row.id)));
+			}
+		}
+		if (explicitlyPresentEntityIds.size > 0 && nextCurrentLocationId) {
+			const sceneLocationRows = await tx.select().from(entities)
+				.where(and(eq(entities.storyId, input.storyId), eq(entities.id, nextCurrentLocationId)))
+				.limit(20);
+			const sceneLocation = sceneLocationRows.find((row) => row.id === nextCurrentLocationId);
+			if (sceneLocation?.type === 'location') {
+				const characterRows = await tx.select().from(entities)
+					.where(and(eq(entities.storyId, input.storyId), eq(entities.type, 'character')))
+					.limit(1000);
+				for (const row of characterRows) {
+					if (explicitlyPresentEntityIds.has(row.id)) continue;
+					const state = recordValue(row.state);
+					const currentLocation = stringValue(state.currentLocation ?? state.current_location ?? state.location);
+					if ((state.present !== true && state.isPresent !== true)
+						|| !currentLocation
+						|| locationReferencesMatch(currentLocation, sceneLocation.id, sceneLocation.name)) continue;
+					await tx.update(entities).set({
+						state: { ...state, present: false, isPresent: false },
+						serverVersion: input.serverVersion,
+						updatedAt: createdAt,
+					}).where(and(eq(entities.storyId, input.storyId), eq(entities.id, row.id)));
+				}
 			}
 		}
 
@@ -959,6 +1233,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0, {
 				allowCreate: entry.type !== 'character',
 				sourceField: 'lorebook_entries',
+				primaryScene,
 			});
 			if (!entityId) {
 				warnings.push(unresolvedCharacterWarning(entry.name));
@@ -967,6 +1242,10 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			affectedEntityIds.push(entityId);
 			if (entry.type === 'faction') {
 				const factionId = `faction_${entityId}`;
+				const [existingFaction] = await tx.select().from(factions).where(and(
+					eq(factions.storyId, input.storyId),
+					eq(factions.id, factionId),
+				)).limit(1);
 				const knownMemberRefs: Array<{ name: string; entityId: string | null; role: string }> = [];
 				for (const [idx, member] of entry.known_members.entries()) {
 					const memberName = member.trim();
@@ -1006,19 +1285,27 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 					warnings.push(unresolvedCharacterWarning(memberName));
 				}
 				const knownMemberEntityIds = sourceIds(...knownMemberRefs.map((member) => member.entityId ?? undefined));
+				const incomingGoals = entry.faction_goals.map((goal) => goal.description);
+				const incomingResources = entry.faction_resources ?? {};
+				const incomingTerritory = entry.territory;
+				const mergedMetadata = {
+					...recordValue(existingFaction?.metadata),
+					...(entry.faction_disposition ? { disposition: entry.faction_disposition } : {}),
+					...(entry.faction_goals.length > 0 ? { goals: entry.faction_goals } : {}),
+				};
 				await tx.insert(factions).values({
 					id: factionId,
 					storyId: input.storyId,
 					entityId,
 					name: entry.name,
-					goals: entry.faction_goals.map((goal) => goal.description),
-					resources: entry.faction_resources ?? {},
+					goals: incomingGoals,
+					resources: incomingResources,
 					memberEntityIds: knownMemberEntityIds,
-					territoryIds: entry.territory,
+					territoryIds: incomingTerritory,
 					allies: [],
 					enemies: [],
 					pressure: 0,
-					metadata: { disposition: entry.faction_disposition, goals: entry.faction_goals },
+					metadata: mergedMetadata,
 					sourceEntryIds: [input.assistantEntryId],
 					sourceEventIds: [],
 					sourcePatchIds: patchIds,
@@ -1028,12 +1315,15 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				}).onConflictDoUpdate({
 					target: factions.id,
 					set: {
-						goals: entry.faction_goals.map((goal) => goal.description),
-						resources: entry.faction_resources ?? {},
-						memberEntityIds: knownMemberEntityIds,
-						territoryIds: entry.territory,
-						metadata: { disposition: entry.faction_disposition, goals: entry.faction_goals },
-						sourcePatchIds: patchIds,
+						name: entry.name,
+						entityId,
+						goals: incomingGoals.length > 0 ? incomingGoals : existingFaction?.goals ?? [],
+						resources: Object.keys(incomingResources).length > 0 ? incomingResources : existingFaction?.resources ?? {},
+						memberEntityIds: knownMemberEntityIds.length > 0 ? knownMemberEntityIds : existingFaction?.memberEntityIds ?? [],
+						territoryIds: incomingTerritory.length > 0 ? incomingTerritory : existingFaction?.territoryIds ?? [],
+						metadata: mergedMetadata,
+						sourceEntryIds: sourceIds(...(existingFaction?.sourceEntryIds ?? []), input.assistantEntryId),
+						sourcePatchIds: sourceIds(...(existingFaction?.sourcePatchIds ?? []), ...patchIds),
 						serverVersion: input.serverVersion,
 						updatedAt: createdAt,
 					},
@@ -1212,24 +1502,58 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				continue;
 			}
 			affectedEntityIds.push(source.id, target.id);
-			const relId = id('rel');
-			await tx.insert(relationships).values({
-				id: relId,
-				storyId: input.storyId,
-				sourceEntityId: source.id,
-				targetEntityId: target.id,
-				type: rel.type,
-				label: rel.label,
-				strength: rel.strength,
-				bidirectional: rel.bidirectional,
-				metadata: {},
-				sourceEntryIds: [input.assistantEntryId],
-				sourceEventIds: [],
-				sourcePatchIds: patchIds,
-				serverVersion: input.serverVersion,
-				createdAt,
-				updatedAt: createdAt,
-			}).onConflictDoNothing();
+			const [existingRelationship] = await tx.select().from(relationships).where(and(
+				eq(relationships.storyId, input.storyId),
+				eq(relationships.type, rel.type),
+				rel.bidirectional
+					? or(
+						and(eq(relationships.sourceEntityId, source.id), eq(relationships.targetEntityId, target.id)),
+						and(eq(relationships.sourceEntityId, target.id), eq(relationships.targetEntityId, source.id)),
+					)
+					: and(eq(relationships.sourceEntityId, source.id), eq(relationships.targetEntityId, target.id)),
+			)).limit(1);
+			const relId = existingRelationship?.id ?? id('rel');
+			if (rel.type === 'part-of' && (source.type === 'location' || target.type === 'location')) {
+				if (existingRelationship && !existingRelationship.bidirectional && source.type === 'location' && target.type === 'location') continue;
+				queueUnresolvedEntityReference(continuityLedger, {
+					storyId: input.storyId, type: 'location', name: source.name, description: source.description,
+					state: { proposedParentLocationId: target.id }, sourceEntryIds: [input.assistantEntryId], sourcePatchIds: patchIds,
+					sourceField: 'relationships', serverVersion: input.serverVersion, now: createdAt,
+					metadata: { referenceContext: 'location_containment', childLocationId: source.id, proposedParentLocationId: target.id },
+				});
+				warnings.push(`Proposed containment for "${source.name}" needs review in the location workspace.`);
+				continue;
+			}
+			const strength = normalizedRelationshipStrength(rel.strength);
+			if (existingRelationship) {
+				await tx.update(relationships).set({
+					label: rel.label ?? existingRelationship.label,
+					strength,
+					bidirectional: rel.bidirectional,
+					sourceEntryIds: sourceIds(...existingRelationship.sourceEntryIds, input.assistantEntryId),
+					sourcePatchIds: sourceIds(...existingRelationship.sourcePatchIds, ...patchIds),
+					serverVersion: input.serverVersion,
+					updatedAt: createdAt,
+				}).where(and(eq(relationships.storyId, input.storyId), eq(relationships.id, relId)));
+			} else {
+				await tx.insert(relationships).values({
+					id: relId,
+					storyId: input.storyId,
+					sourceEntityId: source.id,
+					targetEntityId: target.id,
+					type: rel.type,
+					label: rel.label,
+					strength,
+					bidirectional: rel.bidirectional,
+					metadata: {},
+					sourceEntryIds: [input.assistantEntryId],
+					sourceEventIds: [],
+					sourcePatchIds: patchIds,
+					serverVersion: input.serverVersion,
+					createdAt,
+					updatedAt: createdAt,
+				}).onConflictDoNothing();
+			}
 			await insertSourceRefs(tx, {
 				storyId: input.storyId,
 				targetTable: 'relationships',
@@ -1249,7 +1573,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				targetTable: 'relationships',
 				targetRecordId: relId,
 				operations: [{
-					op: 'add',
+					op: existingRelationship ? 'replace' : 'add',
 					path: '/relationships',
 					value: {
 						id: relId,
@@ -1257,7 +1581,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 						targetEntityId: target.id,
 						type: rel.type,
 						label: rel.label,
-						strength: rel.strength,
+						strength,
 						bidirectional: rel.bidirectional,
 					},
 				}],
@@ -1317,6 +1641,30 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				conversation.npcLearned.length ? `NPC learned: ${conversation.npcLearned.join('; ')}` : '',
 				conversation.emotionalShift ? `Emotional shift: ${conversation.emotionalShift}` : '',
 			].filter(Boolean).join('\n');
+			const [beliefSource] = await tx.select({ position: storyEntries.position })
+				.from(storyEntries)
+				.where(and(eq(storyEntries.storyId, input.storyId), eq(storyEntries.id, input.assistantEntryId)))
+				.limit(1);
+			const existingBeliefs = await tx.select({ belief: npcBeliefs.belief, sourceEntryIds: npcBeliefs.sourceEntryIds })
+				.from(npcBeliefs)
+				.where(and(eq(npcBeliefs.storyId, input.storyId), eq(npcBeliefs.believerEntityId, believer.id)));
+			const topicKey = normalizeName(conversation.topicSummary);
+			const sameTopicBeliefs = existingBeliefs.filter((row) => normalizeName(row.belief.split('\n', 1)[0] ?? '') === topicKey);
+			if (sameTopicBeliefs.some((row) => row.sourceEntryIds.includes(input.assistantEntryId))) {
+				warnings.push(`Skipped repeated NPC belief for ${conversation.npcName}: this source was already applied.`);
+				continue;
+			}
+			const previousSourceIds = sourceIds(...sameTopicBeliefs.flatMap((row) => row.sourceEntryIds));
+			if (beliefSource && previousSourceIds.length > 0) {
+				const priorSources = await tx.select({ position: storyEntries.position })
+					.from(storyEntries)
+					.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, previousSourceIds)));
+				const latestPriorPosition = priorSources.reduce((max, row) => Math.max(max, row.position), -1);
+				if (latestPriorPosition >= beliefSource.position) {
+					warnings.push(`Skipped older NPC belief for ${conversation.npcName}: a newer source already records this topic.`);
+					continue;
+				}
+			}
 			const beliefId = id('belief');
 			await tx.insert(npcBeliefs).values({
 				id: beliefId,
@@ -1380,9 +1728,83 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			});
 		}
 
-		for (const agreement of input.update.agreements) {
+		for (const proposedAgreement of input.update.agreements) {
+			let previous: typeof agreements.$inferSelect | undefined;
+			if (proposedAgreement.action === 'create' && proposedAgreement.category && proposedAgreement.terms) {
+				const rows = await tx.select().from(agreements).where(and(eq(agreements.storyId, input.storyId),
+					eq(agreements.category, proposedAgreement.category), eq(agreements.terms, proposedAgreement.terms))).limit(201);
+				const matches = rows.filter(row => row.storyId === input.storyId && row.category === proposedAgreement.category
+					&& row.terms === proposedAgreement.terms && agreementPartiesKey(row.parties) === agreementPartiesKey(proposedAgreement.parties));
+				if (rows.length > 200 || matches.some(row => row.status === 'deleted' || isCurrentAgreement(row) || row.sourceEntryIds.includes(input.assistantEntryId))) {
+					warnings.push('Skipped duplicate or ambiguous agreement creation; use the existing agreement id.');
+					continue;
+				}
+				const oldSourceIds = sourceIds(...matches.flatMap(row => row.sourceEntryIds));
+				if (oldSourceIds.length) {
+					const [source] = await tx.select({ position: storyEntries.position }).from(storyEntries)
+						.where(and(eq(storyEntries.storyId, input.storyId), eq(storyEntries.id, input.assistantEntryId))).limit(1);
+					const [latest] = await tx.select({ position: storyEntries.position }).from(storyEntries)
+						.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, oldSourceIds))).orderBy(desc(storyEntries.position)).limit(1);
+					if (!source || (latest && source.position <= latest.position)) {
+						warnings.push('Skipped older agreement creation: a later source has already resolved this commitment.');
+						continue;
+					}
+				}
+			}
+			if (proposedAgreement.action !== 'create') {
+				const candidates = await tx.select().from(agreements).where(and(
+					eq(agreements.storyId, input.storyId),
+					proposedAgreement.id ? eq(agreements.id, proposedAgreement.id) : proposedAgreement.category
+						? eq(agreements.category, proposedAgreement.category) : undefined,
+				)).limit(201);
+				previous = candidates.length <= 200 ? resolveAgreementTarget(candidates, input.storyId, proposedAgreement) : undefined;
+				if (!previous || !isCurrentAgreement(previous)) {
+					warnings.push(`Skipped agreement ${proposedAgreement.action}: target is missing, ambiguous, or already resolved. Supply the exact current agreement id.`);
+					continue;
+				}
+				const [source] = await tx.select({ position: storyEntries.position }).from(storyEntries)
+					.where(and(eq(storyEntries.storyId, input.storyId), eq(storyEntries.id, input.assistantEntryId))).limit(1);
+				const [latest] = previous.sourceEntryIds.length ? await tx.select({ position: storyEntries.position }).from(storyEntries)
+					.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, previous.sourceEntryIds)))
+					.orderBy(desc(storyEntries.position)).limit(1) : [];
+				if (!source || previous.sourceEntryIds.includes(input.assistantEntryId) || (latest && source.position <= latest.position)) {
+					warnings.push(`Skipped agreement ${previous.id}: missing, repeated, or older source cannot overwrite its current state.`);
+					continue;
+				}
+			}
+			const resolving = proposedAgreement.action !== 'create' && proposedAgreement.action !== 'update';
+			const agreement = {
+				...proposedAgreement,
+				parties: resolving ? previous!.parties : proposedAgreement.parties.length ? proposedAgreement.parties : previous?.parties ?? [],
+				category: resolving ? previous!.category : proposedAgreement.category ?? previous?.category,
+				terms: resolving ? previous!.terms : proposedAgreement.terms ?? previous?.terms,
+				// Omission must never publish a secret commitment; resolution retains its visibility.
+				secrecy: proposedAgreement.action === 'update' || proposedAgreement.action === 'create'
+					? proposedAgreement.secrecy ?? previous?.secrecy ?? 'public' : previous?.secrecy ?? 'public',
+			};
+			if (!agreement.category || !agreement.terms?.trim() || !agreement.parties.length) {
+				warnings.push(`Skipped agreement ${agreement.action}: category, terms, and parties are required.`);
+				continue;
+			}
 			const eventId = id('event');
-			const visibility = agreement.secrecy === 'secret' ? 'secret' : 'player_known';
+			const agreementId = previous?.id ?? id('agreement');
+			const nextStatus = agreement.action === 'create' ? 'active' : agreement.action === 'update'
+				? previous!.status : AGREEMENT_ACTION_STATUS[agreement.action];
+			const agreementValue = {
+				parties: agreement.parties, category: agreement.category, terms: agreement.terms,
+				status: nextStatus, secrecy: agreement.secrecy,
+				consequences: sourceIds(...(previous?.consequences ?? []), ...agreement.consequences),
+				sourceEntryIds: sourceIds(...(previous?.sourceEntryIds ?? []), input.assistantEntryId),
+				sourceEventIds: sourceIds(...(previous?.sourceEventIds ?? []), eventId),
+				sourcePatchIds: sourceIds(...(previous?.sourcePatchIds ?? []), ...patchIds),
+				serverVersion: input.serverVersion, updatedAt: createdAt,
+			};
+			const visibility = agreement.secrecy === 'secret' || previous?.secrecy === 'secret' ? 'secret' : 'player_known';
+			const eventBody = [
+				previous && previous.terms !== agreement.terms ? `Previous terms: ${previous.terms}` : '',
+				`${agreement.action}: ${agreement.terms}`,
+				agreement.reason,
+			].filter(Boolean).join('\n');
 			const resolvedPartyIds: string[] = [];
 			const resolvedFactionIds: string[] = [];
 			for (const party of agreement.parties) {
@@ -1434,7 +1856,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				storyId: input.storyId,
 				type: 'agreement',
 				title: `${agreement.action} agreement`,
-				body: agreement.terms ?? agreement.reason ?? `${agreement.action} ${agreement.category ?? 'agreement'}`,
+				body: eventBody,
 				...timelineDefaults({ currentTurn: timelineTurn, currentWorldTime: nextWorldTime }),
 				actorEntityIds: actorPartyIds,
 				targetEntityIds: targetPartyIds,
@@ -1442,7 +1864,11 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				visibility,
 				sourceEntryIds: [input.assistantEntryId],
 				sourcePatchIds: patchIds,
-				metadata: { agreement },
+				metadata: {
+					agreement: proposedAgreement, agreementId, agreementStatus: nextStatus,
+					previousAgreement: previous ?? null,
+					currentAgreement: { id: agreementId, ...agreementValue },
+				},
 				serverVersion: input.serverVersion,
 				createdAt,
 				updatedAt: createdAt,
@@ -1504,8 +1930,9 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				sourcePatchIds: patchIds,
 			});
 			eventIds.push(eventId);
-			if (agreement.action === 'create' && agreement.category && agreement.terms && agreement.parties.length > 0) {
-				const agreementId = id('agreement');
+			if (previous) {
+				await tx.update(agreements).set(agreementValue).where(and(eq(agreements.storyId, input.storyId), eq(agreements.id, agreementId)));
+			} else {
 				await tx.insert(agreements).values({
 					id: agreementId,
 					storyId: input.storyId,
@@ -1573,16 +2000,18 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			}
 		}
 
-		for (const timelineEvent of input.update.timeline_events) {
-			const eventId = id('event');
+		for (const { event: timelineEvent, npcActionEntityId } of timelineEvents) {
+			const eventId = npcActionEntityId
+				? `event_npc_action_${createHash('sha256').update(JSON.stringify([input.storyId, input.assistantEntryId, npcActionEntityId])).digest('hex').slice(0, 32)}`
+				: id('event');
 			const status = timelineEvent.status;
 			const scheduledTurn = scheduledTurnForTimelineEvent(timelineEvent, timelineTurn);
 			if (status === 'scheduled' && timelineEvent.due_turn === null && timelineEvent.delay_turns === null) {
 				warnings.push(`Scheduled timeline event "${timelineEvent.title}" defaulted to next turn because no due_turn or delay_turns was provided.`);
 			}
 
-			const actorEntityIds: string[] = [];
-			for (const name of timelineEvent.actor_names) {
+			const actorEntityIds: string[] = npcActionEntityId ? [npcActionEntityId] : [];
+			for (const name of npcActionEntityId ? [] : timelineEvent.actor_names) {
 				const entity = await findEntityByName(tx, input.storyId, name);
 				if (entity) {
 					actorEntityIds.push(entity.id);
@@ -1685,7 +2114,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				sourcePatchIds: patchIds,
 				metadata: {
 					reason: timelineEvent.reason,
-					sourceType: 'turn_timeline_event',
+					sourceType: npcActionEntityId ? 'npc_independent_action' : 'turn_timeline_event',
 					actorNames: timelineEvent.actor_names,
 					targetNames: timelineEvent.target_names,
 					factionNames: timelineEvent.faction_names,
@@ -1695,7 +2124,7 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				serverVersion: input.serverVersion,
 				createdAt,
 				updatedAt: createdAt,
-			});
+			}).onConflictDoNothing();
 			await insertSourceRefs(tx, {
 				storyId: input.storyId,
 				targetTable: 'story_events',
@@ -1828,6 +2257,26 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 			eventIds.push(eventId);
 		}
 
+		if (input.update.campaign_state?.length) {
+			if (!primaryScene || !canonicalNarration || !narrationSource) {
+				warnings.push('Campaign state skipped: requires canonical primary-POV narration.');
+			} else {
+				const merged = mergeCampaignState(readCampaignState(story.metadata), input.update.campaign_state, {
+					id: narrationSource.id, position: narrationSource.position, content: canonicalNarration,
+				});
+				warnings.push(...merged.warnings);
+				if (merged.accepted.length) {
+					await tx.update(stories).set({
+						metadata: sql`jsonb_set(coalesce(${stories.metadata}, '{}'::jsonb), '{campaignState}', ${JSON.stringify(merged.facts)}::jsonb)`,
+						serverVersion: input.serverVersion, updatedAt: createdAt,
+					}).where(eq(stories.id, input.storyId));
+				}
+			}
+		}
+
+		// Factions introduced in this same turn now exist, so memberships can be saved atomically.
+		await applyCharacterAffiliations(tx, { storyId: input.storyId, updates: affiliationUpdates, narration: canonicalNarration,
+			entryId: input.assistantEntryId, patchIds, serverVersion: input.serverVersion, now: createdAt, warnings });
 		const continuityBundleCombined = {
 			patchProposals: continuityLedger.patchProposals,
 		};
@@ -1845,12 +2294,12 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 		if (!isSupplemental) {
 			await tx.update(stories).set({
 				currentTurn: currentTurn + 1,
-				currentWorldTime: nextWorldTime,
+				currentWorldTime: primaryScene ? nextWorldTime : currentWorldTime,
 				currentLocationId: nextCurrentLocationId,
 				serverVersion: input.serverVersion,
 				updatedAt: createdAt,
 			}).where(eq(stories.id, input.storyId));
-		} else if (nextWorldTime !== currentWorldTime || nextCurrentLocationId !== currentLocationId) {
+		} else if (primaryScene && (nextWorldTime !== currentWorldTime || nextCurrentLocationId !== currentLocationId)) {
 			await tx.update(stories).set({
 				currentWorldTime: nextWorldTime,
 				currentLocationId: nextCurrentLocationId,
@@ -1858,9 +2307,18 @@ export async function applyValidatedTurnUpdate(input: ApplyTurnUpdateInput): Pro
 				updatedAt: createdAt,
 			}).where(eq(stories.id, input.storyId));
 		}
-	});
+	};
+	if (options.transaction) {
+		await apply(options.transaction);
+	} else {
+		await getDb().transaction(apply);
+	}
 
 	if (eventIds.length === 0 && memoryNodeIds.length === 0 && patchIds.length === 0) {
+		return { eventIds, patchIds, memoryNodeIds, warnings };
+	}
+
+	if (options.enqueueProjectionJobs === false) {
 		return { eventIds, patchIds, memoryNodeIds, warnings };
 	}
 

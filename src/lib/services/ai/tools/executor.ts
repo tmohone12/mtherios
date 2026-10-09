@@ -7,8 +7,6 @@
  */
 
 import { story } from '$lib/stores/story.svelte';
-import { settings } from '$lib/stores/settings.svelte';
-import { ai } from '$lib/services/ai';
 import {
 	briefTerminalWiki,
 	contextTerminalWiki,
@@ -20,25 +18,22 @@ import { uuid } from '$lib/utils/uuid';
 import {
 	createEntryRelationship, getRelationshipsForEntry, updateEntryRelationship,
 	createStoryBeat,
-	updateStory, getChapters, getArcs,
-	getStoryThreads, createStoryThread, updateStoryThread, getAgreements, getWorldEvents,
+	updateStory, getChapters,
 } from '$lib/services/database';
 import {
 	patchCanonicalLorebookEntry,
 	saveCanonicalConversationMemory,
-	saveCanonicalFactionActions,
 	saveCanonicalLorebookEntry,
 	saveCanonicalRumors,
 	saveCanonicalWorldEvent,
 } from '$lib/services/canonicalWrites';
 import {
 	parseTimeProgression, advanceTime, clamp,
-	makeLoreEntry, WORLD_SIM_DAY_INTERVAL,
+	makeLoreEntry,
 	normalizeRelation,
 	findMatchingLoreEntry,
 	loreNameKey,
 	computeRelationEventTarget,
-	ENTROPY_DRIFT_THRESHOLD, ENTROPY_DRIFT_STEP,
 } from './helpers';
 import {
 	briefWikiSchema,
@@ -52,21 +47,18 @@ import {
 	type WorldStateLorebookEntry,
 } from './schemas';
 import { encodeDiceMarker, rollCheck } from '$lib/utils/dice';
-import * as schemeService from '$lib/services/ai/scheme/SchemeService';
-import type { FactionAction, WorldSimulationResult } from '$lib/services/ai/sdk/schemas/worldsim';
-import type { RelationChangeEvent } from '$lib/services/ai/generation/WorldSimulationService';
+import { resolveAbilityCheckNotation } from '$lib/utils/playerSheet';
 import type {
 	Entry, EntryRelationship, WorldEvent, Consequence,
 	CharacterEntryState, LocationEntryState, LocationConnection,
-	FactionEntryState, FactionActionRecord, RumorRecord,
-	EntryType, FactionGoal, FactionResources, StoryThread,
+	FactionEntryState, RumorRecord,
+	EntryType, FactionGoal, FactionResources,
 } from '$lib/types';
 
 type FactionGoalInput = Omit<Partial<FactionGoal>, 'deadline'> & {
 	description: string;
 	deadline?: string | null;
 };
-type WorldSimThreadUpdate = WorldSimulationResult['threadUpdates'][number];
 type SearchWikiToolResult = {
 	query: string;
 	source: 'terminal_wiki' | 'local_lorebook';
@@ -176,56 +168,6 @@ export async function executeToolCall(
 			await handleWorldStateUpdate(parsed.data);
 			return JSON.stringify({ success: true });
 		}
-		case 'refresh_plot_momentum': {
-			try {
-				const snapshot = await story.buildStateSnapshot();
-				const factionEntries = story.lorebookEntries.filter(e => e.type === 'faction');
-				const characterEntries = story.lorebookEntries.filter(e => e.type === 'character');
-				const recentFactionActions = story.factionActions.slice(-5);
-				const worldEventList = story.worldEvents.slice(-6).map(e => ({ name: e.name, description: e.description }));
-				const schemeText = story.schemes.length > 0
-					? story.schemes.map(s => `- ${s.ownerName} (${s.status}): ${s.goal.slice(0, 120)}`).join('\n')
-					: '';
-				const locationName = snapshot.currentLocation?.name ?? '';
-				const tracker = story.currentStory?.timeTracker ?? null;
-
-				const result = await ai.worldSim.generateMomentum(
-					snapshot.chapters,
-					snapshot.arcs,
-					story.entries,
-					factionEntries,
-					characterEntries,
-					story.entryRelationships,
-					snapshot.threads,
-					snapshot.activeAgreements,
-					worldEventList,
-					locationName,
-					schemeText,
-					tracker,
-					story.storyMode,
-					story.pov,
-					story.tense,
-					recentFactionActions,
-					[],
-				);
-				story.lastWorldSimResult = {
-					...(story.lastWorldSimResult ?? {
-						plotInjection: null,
-						worldNarrative: '',
-						factionActions: [],
-						rumors: [],
-						worldTension: 0,
-						plotSeeds: [],
-						threadUpdates: [],
-					}),
-					plotMomentum: result,
-				};
-				return JSON.stringify({ ok: true, refreshed: true });
-			} catch (e) {
-				const msg = e instanceof Error ? e.message : String(e);
-				return JSON.stringify({ error: `Plot momentum refresh failed: ${msg}` });
-			}
-		}
 		default:
 			return JSON.stringify({ error: `Unknown tool: ${name}` });
 	}
@@ -237,7 +179,11 @@ export async function executeToolCall(
 
 function rollCheckTool(args: RollCheckToolArgs): Record<string, unknown> {
 	try {
-		const result = rollCheck(args.notation, args.dc, args.ability, args.description);
+		const playerSheet = story.protagonist?.metadata?.playerSheet;
+		const notation = playerSheet && typeof playerSheet === 'object'
+			? resolveAbilityCheckNotation(args.notation, args.ability, playerSheet)
+			: args.notation;
+		const result = rollCheck(notation, args.dc, args.ability, args.description);
 		return {
 			ok: true,
 			result,
@@ -517,6 +463,103 @@ function truncateForTool(text: string, maxChars: number): string {
 	return clean.slice(0, Math.max(0, maxChars - 3)).trimEnd() + '...';
 }
 
+function recordValue(value: unknown): Record<string, any> {
+	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function cleanStrings(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+		: [];
+}
+
+function cleanText(value: unknown): string | undefined {
+	return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function mergedCharacterContinuityState(
+	previous: Record<string, any>,
+	character: WorldStateUpdate['characters'][number],
+	evidenceEntry: { id?: string } | undefined,
+	isProtagonist: boolean,
+): Record<string, any> {
+	const next = { ...previous };
+	const disposition = cleanText(character.relationship);
+	const currentLocation = cleanText(character.currentLocation ?? character.current_location);
+	const currentAction = cleanText(character.currentAction ?? character.current_action);
+	const emotionalState = cleanText(character.emotionalState ?? character.emotional_state);
+	const appearance = cleanText(character.appearance);
+	const background = cleanText(character.background);
+	const speechStyle = cleanText(character.speechStyle ?? character.speech_style);
+	const aliases = cleanStrings(character.aliases);
+	const traits = cleanStrings(character.traits);
+	const pressures = cleanStrings(character.pressures);
+	const factionTags = cleanStrings(character.faction_tags);
+	const goals = cleanStrings(character.goals);
+
+	if (aliases.length) next.aliases = mergeStrings(cleanStrings(previous.aliases), aliases);
+	if (character.status) next.status = character.status;
+	if (disposition) next.currentDisposition = disposition;
+	if (traits.length) next.traits = traits;
+	if (typeof character.present === 'boolean') {
+		next.present = character.present;
+		next.isPresent = character.present;
+	}
+	if (pressures.length) next.pressures = pressures;
+	if (factionTags.length) next.factionTags = factionTags;
+	if (typeof character.party_member === 'boolean') next.partyMember = character.party_member;
+	if (character.party_member === false) next.partyRole = null;
+	else if (cleanText(character.party_role)) next.partyRole = cleanText(character.party_role);
+	if (currentLocation) next.currentLocation = currentLocation;
+	if (currentAction) next.currentAction = currentAction;
+	if (emotionalState) next.emotionalState = emotionalState;
+	if (appearance) next.appearance = appearance;
+	if (background) {
+		next.bio = background;
+		next.background = background;
+	}
+	if (goals.length) {
+		next.goals = goals;
+		next.motivations = goals;
+	}
+	if (speechStyle) next.speechStyle = speechStyle;
+
+	const relationship = recordValue(previous.relationship);
+	const playerSelf = isProtagonist
+		|| previous.isProtagonist === true
+		|| relationship.status === 'self'
+		|| relationship.status === 'player_character';
+	const affinityDelta = typeof character.affinity_delta === 'number' && Number.isFinite(character.affinity_delta)
+		? Math.max(-20, Math.min(20, Math.trunc(character.affinity_delta)))
+		: 0;
+	if (disposition || (affinityDelta !== 0 && !playerSelf)) {
+		const history = Array.isArray(relationship.history) ? relationship.history : [];
+		const alreadyApplied = Boolean(evidenceEntry?.id)
+			&& history.some((item) => recordValue(item).entryId === evidenceEntry?.id);
+		const applyDelta = affinityDelta !== 0 && !playerSelf && !alreadyApplied;
+		const level = typeof relationship.level === 'number' && Number.isFinite(relationship.level) ? relationship.level : 0;
+		next.relationship = {
+			...relationship,
+			...(applyDelta ? { level: Math.max(-100, Math.min(100, level + affinityDelta)) } : {}),
+			status: disposition ?? relationship.status ?? 'neutral',
+			history: applyDelta ? [...history, {
+				description: `[${affinityDelta > 0 ? '+' : ''}${affinityDelta}] ${cleanText(character.affinity_reason) ?? 'Narrated relationship shift.'}`,
+				delta: affinityDelta,
+				...(evidenceEntry?.id ? { entryId: evidenceEntry.id } : {}),
+			}].slice(-12) : history,
+		};
+	}
+
+	if (character.eventMemory) {
+		const oldMemory = recordValue(previous.eventMemory ?? previous.npcEventMemory);
+		next.eventMemory = Object.fromEntries(['did', 'saw', 'knew', 'knows'].map((key) => [
+			key,
+			mergeStrings(cleanStrings(oldMemory[key]), cleanStrings(character.eventMemory?.[key as keyof typeof character.eventMemory])).slice(-12),
+		]));
+	}
+	return next;
+}
+
 async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 	if (!story.currentStory) return;
 
@@ -533,30 +576,29 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 				relationship: char.relationship,
 				status: char.status,
 				traits: char.traits,
+				partyMember: char.party_member,
+				partyRole: char.party_role,
 			});
 		}
 
-		// Merge pressures onto an existing lorebook entry (canonical or alias match).
-		// Pressures accumulate — they're conditions of the NPC's life. The narrator
-		// is responsible for marking them resolved by emitting a replacement set.
-		if (char.pressures && char.pressures.length > 0 && char.name.toLowerCase() !== protagonistName) {
-			const needle = char.name.toLowerCase();
-			const target = story.lorebookEntries.find(e => {
-				if (e.type !== 'character') return false;
-				if (e.name?.toLowerCase() === needle) return true;
-				return (e.aliases ?? []).some(a => a?.toLowerCase() === needle);
-			});
-			if (target) {
-				const prev = target.state as CharacterEntryState;
-				const merged = [...new Set([
-					...(prev.pressures ?? []),
-					...char.pressures.filter(p => p && p.trim()),
-				])].slice(-8); // cap so it doesn't bloat — keep most recent
-				const newState: CharacterEntryState = { ...prev, pressures: merged };
-				applyCurrentStoryServerVersion((await patchCanonicalLorebookEntry(target.id, { state: newState as any, updatedAt: Date.now() })).serverVersion);
-				story.lorebookEntries = story.lorebookEntries.map(e =>
-					e.id === target.id ? { ...e, state: newState as any } : e
-				);
+		const needle = char.name.toLowerCase();
+		const target = story.lorebookEntries.find(e => e.type === 'character' && (
+			e.name?.toLowerCase() === needle || (e.aliases ?? []).some(a => a?.toLowerCase() === needle)
+		));
+		if (target) {
+			const previousState = recordValue(target.state);
+			const newState = mergedCharacterContinuityState(
+				previousState,
+				char,
+				story.entries.at(-1),
+				char.name.toLowerCase() === protagonistName,
+			);
+			const aliases = mergeStrings(target.aliases ?? [], cleanStrings(char.aliases));
+			if (JSON.stringify(newState) !== JSON.stringify(previousState) || aliases.length !== (target.aliases ?? []).length) {
+				const result = await patchCanonicalLorebookEntry(target.id, { state: newState as any, aliases, updatedAt: Date.now() });
+				applyCurrentStoryServerVersion(result.serverVersion);
+				const projected = result.entry ?? { ...target, state: newState as any, aliases };
+				story.lorebookEntries = story.lorebookEntries.map(e => e.id === target.id ? projected : e);
 			}
 		}
 	}
@@ -1082,9 +1124,8 @@ async function syncFactionMembership(source: Entry, target: Entry, type: string)
 // ── Time progression ──
 
 /**
- * Advance the in-world clock by a parsed time delta. Time is the world's
- * metronome — every subsystem that should evolve over in-world time hangs
- * off `tickWorld`, called from here after the tracker is persisted.
+ * Advance the in-world clock by a parsed time delta and age local rumors.
+ * Backend jobs own automatic faction and antagonist movement.
  */
 async function applyTimeProgression(progression: string): Promise<void> {
 	if (!story.currentStory) return;
@@ -1096,7 +1137,7 @@ async function applyTimeProgression(progression: string): Promise<void> {
 
 	// Capture the story id at entry — `updateStory` is async, and if the user
 	// switches stories during the write we must not stamp the new story's
-	// `currentStory` with the old story's tracker. Same pattern as `maybeRunWorldSim`.
+	// `currentStory` with the old story's tracker.
 	const storyId = story.currentStory.id;
 	const newTracker = advanceTime(story.currentStory.timeTracker ?? null, deltaMinutes);
 	await updateStory(storyId, { timeTracker: newTracker } as any);
@@ -1104,42 +1145,7 @@ async function applyTimeProgression(progression: string): Promise<void> {
 		story.currentStory = { ...story.currentStory, timeTracker: newTracker };
 	}
 
-	await tickWorld(deltaMinutes);
-}
-
-/**
- * Fan-out called whenever the world clock advances. Owns all time-driven
- * subsystems so we have one ordered place to add new ones.
- *
- * Today: rumor aging + scheme ticking. World simulation is chapter-triggered.
- * Future hooks (intentionally kept here): agreement deadline checks,
- * faction goal progress, NPC schedule advancement.
- */
-async function tickWorld(deltaMinutes: number): Promise<void> {
-	if (!story.currentStory) return;
 	await ageRumors();
-	await schemeService.tick(deltaMinutes);
-	// future: ageAgreements(deltaMinutes); progressFactionGoals(deltaMinutes); ...
-}
-
-/**
- * Reactive scheme evaluation. Call AFTER `executeToolCall('update_world_state')`
- * (or after `handleWorldStateUpdate` from the orchestrator path) with the same
- * args and the narrative text that produced them. Gated internally — quiet
- * turns skip the LLM call entirely.
- */
-export async function runSchemeEvaluation(
-	narrative: string,
-	stateSnapshot: string,
-	worldStateArgs: WorldStateUpdate | null,
-	signal?: AbortSignal,
-): Promise<string[]> {
-	if (!schemeService.shouldEvaluate(worldStateArgs)) return [];
-	try {
-		return await schemeService.evaluate(narrative, stateSnapshot, signal);
-	} catch (e) {
-		return [`scheme evaluator: ${e instanceof Error ? e.message : e}`];
-	}
 }
 
 /**
@@ -1184,213 +1190,6 @@ async function ageRumors(): Promise<void> {
 	story.rumors = story.rumors.map((r) =>
 		byId.has(r.id) ? { ...r, status: byId.get(r.id)! } : r,
 	);
-}
-
-/**
- * Manual world-simulation entry point for the World drawer.
- *
- * Pass `{ force: true }` to bypass the day-interval gate — used by the manual
- * "Run now" button in the World drawer. Automatic world simulation runs when
- * a new chapter is created.
- */
-export async function maybeRunWorldSim(opts: { force?: boolean } = {}): Promise<void> {
-	if (!story.currentStory) return;
-	const tracker = story.currentStory.timeTracker;
-	if (!tracker) return;
-
-	const totalDays = tracker.years * 365 + tracker.days;
-	const lastSimDay = story.currentStory.lastWorldSimDay ?? 0;
-	if (!opts.force && totalDays - lastSimDay < WORLD_SIM_DAY_INTERVAL) return;
-
-	const wsConfig = settings.getServiceConfig('worldSimulation');
-	if (!wsConfig.enabled) return;
-
-	// Capture the story id at entry — simulate() can take seconds, and the
-	// user may navigate away before it returns. We must not write back to a
-	// different story's record in the finally block.
-	const storyId = story.currentStory.id;
-
-	try {
-		const chapters = await getChapters(story.currentStory.id);
-		const arcs = await getArcs(story.currentStory.id);
-		const factionEntries = story.lorebookEntries.filter(e => e.type === 'faction');
-		const characterEntries = story.lorebookEntries.filter(e => e.type === 'character');
-
-		// F5 loop-closure inputs: feed last tick's moves and relation history back into the AI.
-		const recentFactionActions = story.factionActions.slice(-5);
-		const relationChangeLog = buildRelationChangeLog(factionEntries);
-
-		const threads = await getStoryThreads(story.currentStory.id);
-		const agreements = await getAgreements(story.currentStory.id);
-		const worldEvents = await getWorldEvents(story.currentStory.id);
-		const worldEventList = worldEvents.slice(-6).map(e => ({ name: e.name, description: e.description }));
-		const locationName = story.locations.find(l => l.current)?.name ?? '';
-		const schemeText = story.schemes.length > 0
-			? story.schemes.map(s => `- ${s.ownerName} (${s.status}): ${s.goal.slice(0, 120)}`).join('\n')
-			: '';
-
-		const result = await ai.worldSim.simulate(
-			chapters, arcs, story.entries, factionEntries, characterEntries,
-			story.entryRelationships, threads, agreements, worldEventList,
-			locationName, schemeText, tracker,
-			story.storyMode, story.pov, story.tense,
-			recentFactionActions, relationChangeLog,
-		);
-		story.lastWorldSimResult = result;
-
-		// ── Persist WorldSim output so it feeds the timeline + export ──
-		const currentChapterNumber = chapters.length > 0
-			? Math.max(...chapters.map((c) => c.number))
-			: null;
-		const now = Date.now();
-
-		if (result.factionActions && result.factionActions.length > 0) {
-			const rows: FactionActionRecord[] = result.factionActions.map((fa: any) => ({
-				id: uuid(),
-				storyId: story.currentStory!.id,
-				factionName: fa.factionName ?? 'Unknown Faction',
-				action: fa.action ?? '',
-				actionType: fa.actionType ?? 'custom',
-				target: fa.target ?? null,
-				motivation: fa.motivation ?? null,
-				consequences: Array.isArray(fa.consequences) ? fa.consequences : [],
-				urgency: fa.urgency ?? 'medium',
-				affectedRegions: Array.isArray(fa.affectedRegions) ? fa.affectedRegions : [],
-				chapterNumber: currentChapterNumber,
-				status: 'active',
-				createdAt: now,
-			}));
-			try {
-				applyCurrentStoryServerVersion(await saveCanonicalFactionActions(rows));
-				story.factionActions = [...story.factionActions, ...rows];
-			} catch (e) { console.warn('[Executor] persist factionActions failed:', e); }
-
-			// Apply per-action relation deltas to interFactionRelations.
-			// Symmetric: A→B delta also writes B→A. Unknown target names are warned and skipped.
-			// Then run deterministic entropy drift on rivalries that were not touched this tick,
-			// so high-magnitude standings ebb back toward zero without LLM cost.
-			try {
-				const touched = await applyRelationDeltas(result.factionActions);
-				await applyEntropyDrift(touched);
-			} catch (e) { console.warn('[Executor] applyRelationDeltas failed:', e); }
-		} else {
-			// No factionActions this tick — still run entropy drift on existing rivalries.
-			try { await applyEntropyDrift(new Set()); }
-			catch (e) { console.warn('[Executor] applyEntropyDrift failed:', e); }
-		}
-
-		if (result.rumors && result.rumors.length > 0) {
-			const rows: RumorRecord[] = result.rumors.map((r: any) => ({
-				id: uuid(),
-				storyId: story.currentStory!.id,
-				content: r.content ?? '',
-				truthfulness: typeof r.truthfulness === 'number' ? r.truthfulness : 0.5,
-				originRegion: r.originRegion ?? 'unknown',
-				spreadRadius: r.spreadRadius ?? 'local',
-				sourceType: r.sourceType ?? 'gossip',
-				relatedFaction: r.relatedFaction ?? null,
-				chapterNumber: currentChapterNumber,
-				staleAfterChapters: typeof r.staleAfterChapters === 'number' ? r.staleAfterChapters : 5,
-				status: 'spreading',
-				createdAt: now,
-			}));
-			try {
-				applyCurrentStoryServerVersion(await saveCanonicalRumors(rows));
-				story.rumors = [...story.rumors, ...rows];
-			} catch (e) { console.warn('[Executor] persist rumors failed:', e); }
-		}
-
-		if (result.threadUpdates && result.threadUpdates.length > 0) {
-			try {
-				await persistThreadUpdates(result.threadUpdates, threads, currentChapterNumber);
-			} catch (e) { console.warn('[Executor] persist threadUpdates failed:', e); }
-		}
-
-		console.log(`[Executor] World sim triggered at day ${totalDays}`);
-	} catch (e) {
-		console.error('[Executor] Time-based world sim failed:', e);
-	} finally {
-		// Reset cooldown using the LATEST tracker (handles time advancing during
-		// the slow simulate() call) and ALWAYS reset, even on failure, so a
-		// failing sim doesn't retry every turn. Skip the writeback if the user
-		// navigated to a different story while simulate() was running — we'd
-		// otherwise stamp an unrelated story's lastWorldSimDay.
-		if (story.currentStory && story.currentStory.id === storyId) {
-			const latest = story.currentStory.timeTracker;
-			const latestTotalDays = latest
-				? latest.years * 365 + latest.days
-				: totalDays;
-			await updateStory(storyId, { lastWorldSimDay: latestTotalDays } as any);
-			story.currentStory = { ...story.currentStory, lastWorldSimDay: latestTotalDays };
-		}
-	}
-}
-
-function threadKey(description: string): string {
-	return description
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, ' ')
-		.trim()
-		.replace(/\s+/g, ' ');
-}
-
-async function persistThreadUpdates(
-	updates: WorldSimThreadUpdate[],
-	existingThreads: StoryThread[],
-	currentChapterNumber: number | null,
-): Promise<void> {
-	if (!story.currentStory || updates.length === 0) return;
-
-	const byId = new Map(existingThreads.map(t => [t.id, t]));
-	const byKey = new Map(existingThreads.map(t => [threadKey(t.description), t]));
-	const now = Date.now();
-
-	for (const update of updates) {
-		const description = update.description?.trim();
-		if (!description) continue;
-		const existing = (update.threadId ? byId.get(update.threadId) : undefined)
-			?? byKey.get(threadKey(description));
-
-		if (existing) {
-			const closing = update.status === 'closed' || update.status === 'abandoned';
-			const patch: Partial<StoryThread> = {
-				description,
-				status: update.status,
-				significance: update.significance,
-				updatedAt: now,
-				closedAt: closing ? (existing.closedAt ?? now) : null,
-				closureReason: closing ? update.reason : null,
-			};
-			await updateStoryThread(existing.id, patch);
-			Object.assign(existing, patch);
-			byKey.set(threadKey(description), existing);
-			continue;
-		}
-
-		const thread: StoryThread = {
-			id: uuid(),
-			storyId: story.currentStory.id,
-			description,
-			status: update.status,
-			significance: update.significance,
-			sourceArcId: null,
-			sourceChapterId: null,
-			createdAt: now,
-			updatedAt: now,
-			closedAt: update.status === 'closed' || update.status === 'abandoned' ? now : null,
-			closureReason: update.status === 'closed' || update.status === 'abandoned' ? update.reason : null,
-			relatedFactionIds: [],
-			relatedCharacterNames: [],
-		};
-		await createStoryThread(thread);
-		existingThreads.push(thread);
-		byId.set(thread.id, thread);
-		byKey.set(threadKey(description), thread);
-	}
-
-	if (currentChapterNumber != null) {
-		console.log(`[Executor] Persisted ${updates.length} thread update(s) near chapter ${currentChapterNumber}`);
-	}
 }
 
 // ── Consequences (death → faction hostility) ──
@@ -1524,70 +1323,6 @@ async function applyConsequence(consequence: Consequence, eventId: string): Prom
 // ── Inter-faction relation mutation helpers (Phase F3) ──
 
 /**
- * Apply each FactionAction's relationDeltas to interFactionRelations symmetrically.
- * Unknown target names are warned and skipped (the action itself still persists).
- * Returns the set of pair keys (canonical-order id|id) that received a delta —
- * used by applyEntropyDrift to skip same-tick double-shifts.
- */
-async function applyRelationDeltas(actions: FactionAction[]): Promise<Set<string>> {
-	const touched = new Set<string>();
-	if (!story.currentStory) return touched;
-	const factions = story.lorebookEntries.filter(e => e.type === 'faction');
-	const byName = new Map(factions.map(f => [f.name.toLowerCase(), f]));
-	for (const a of actions) {
-		const source = byName.get((a.factionName ?? '').toLowerCase());
-		if (!source) continue;
-		for (const d of a.relationDeltas ?? []) {
-			const target = byName.get((d.targetFaction ?? '').toLowerCase());
-			if (!target) {
-				console.warn('[WorldSim] relationDelta target not found:', d.targetFaction);
-				continue;
-			}
-			if (target.id === source.id) continue; // ignore self-relation deltas
-			await mutateRelation(source.id, target.name, d.delta, d.reason);
-			await mutateRelation(target.id, source.name, d.delta, d.reason);
-			touched.add(pairKey(source.id, target.id));
-		}
-	}
-	return touched;
-}
-
-// Canonical pair key (smaller-id first) so A↔B and B↔A collide.
-function pairKey(a: string, b: string): string {
-	return a < b ? `${a}|${b}` : `${b}|${a}`;
-}
-
-/**
- * Regression-to-the-mean for active inter-faction relations.
- * For every pair where |standing| ≥ ENTROPY_DRIFT_THRESHOLD, nudge ±ENTROPY_DRIFT_STEP
- * toward zero. Skips pairs already shifted by relationDeltas this tick.
- * Runs synchronously after the LLM worldsim pass — deterministic, no LLM cost.
- */
-async function applyEntropyDrift(touchedPairs: Set<string>): Promise<void> {
-	if (!story.currentStory) return;
-	const factions = story.lorebookEntries.filter(e => e.type === 'faction');
-	const seen = new Set<string>();
-	for (const a of factions) {
-		const aState = a.state as FactionEntryState;
-		const rels = aState.interFactionRelations ?? {};
-		for (const [otherName, rel] of Object.entries(rels)) {
-			const norm = normalizeRelation(rel);
-			if (Math.abs(norm.standing) < ENTROPY_DRIFT_THRESHOLD) continue;
-			const b = factions.find(f => f.name.toLowerCase() === otherName.toLowerCase());
-			if (!b || b.id === a.id) continue;
-			const key = pairKey(a.id, b.id);
-			if (seen.has(key) || touchedPairs.has(key)) continue;
-			seen.add(key);
-			const driftDelta = norm.standing > 0 ? -ENTROPY_DRIFT_STEP : ENTROPY_DRIFT_STEP;
-			// Silent — entropy is a deterministic background process; logging it
-			// in the 5-entry history would displace meaningful narrative entries.
-			await mutateRelation(a.id, b.name, driftDelta, 'entropy', true);
-			await mutateRelation(b.id, a.name, driftDelta, 'entropy', true);
-		}
-	}
-}
-
-/**
  * Patch one side of a relation: shift standing by delta, shift affinity by a
  * fraction (slower for positive deltas, faster for negative — betrayal hurts
  * trust as much as standing). Appends an entry to history (capped at 5) unless
@@ -1671,43 +1406,6 @@ function currentChapterNumber(): number {
 		if (typeof fa.chapterNumber === 'number' && fa.chapterNumber > max) max = fa.chapterNumber;
 	}
 	return max;
-}
-
-/**
- * Build the inter-faction relation change log fed back into the next worldsim
- * tick. Walks every faction's interFactionRelations.history, flattens, and
- * returns the most recent N events sorted by chapter desc.
- */
-function buildRelationChangeLog(
-	factionEntries: Entry[],
-	limit = 8,
-): RelationChangeEvent[] {
-	const log: RelationChangeEvent[] = [];
-	for (const f of factionEntries) {
-		const rels = (f.state as FactionEntryState | undefined)?.interFactionRelations ?? {};
-		for (const [other, raw] of Object.entries(rels)) {
-			if (typeof raw === 'number' || !raw) continue; // legacy entries have no history
-			const history = (raw as { history?: { event: string; delta: number; chapter: number }[] }).history;
-			if (!Array.isArray(history)) continue;
-			for (const h of history) {
-				log.push({ source: f.name, target: other, event: h.event, delta: h.delta, chapter: h.chapter });
-			}
-		}
-	}
-	// Sort by chapter desc, take top N. Deduplicate near-identical reciprocal entries
-	// (A→B and B→A often mirror) by collapsing into one when source/target/delta/chapter match.
-	log.sort((a, b) => b.chapter - a.chapter);
-	const seen = new Set<string>();
-	const dedup: RelationChangeEvent[] = [];
-	for (const e of log) {
-		const pair = [e.source, e.target].sort().join('|');
-		const key = `${pair}|${e.chapter}|${e.delta}`;
-		if (seen.has(key)) continue;
-		seen.add(key);
-		dedup.push(e);
-		if (dedup.length >= limit) break;
-	}
-	return dedup;
 }
 
 /**

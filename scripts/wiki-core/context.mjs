@@ -33,6 +33,7 @@ const search = await searchVault(vault, query, {
 	provider: flags.provider,
 	model: flags.model,
 	collection: flags.collection,
+	layer: flags['seed-layer'] ?? null,
 });
 const context = buildContextPack(vault, search, {
 	followDepth,

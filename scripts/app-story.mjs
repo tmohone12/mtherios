@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { resolveAppUrl } from './runtime-config.mjs';
+
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -12,9 +14,7 @@ import {
 	unwrapEngineTurnCommand,
 } from './app-story-core.mjs';
 
-const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
-const DEFAULT_PORT = process.env.PORT || '5173';
-const DEFAULT_URL = process.env.MTHERIOS_APP_URL || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
+const DEFAULT_URL = resolveAppUrl();
 const BOOLEAN_FLAGS = new Set([
 	'includeSecret',
 	'json',
@@ -22,7 +22,6 @@ const BOOLEAN_FLAGS = new Set([
 	'wiki',
 	'syncWiki',
 	'indexWiki',
-	'lintWiki',
 	'recreateWiki',
 	'dryRunWiki',
 	'preserveIds',
@@ -370,7 +369,6 @@ async function refreshStoryWiki(url, storyId, flags) {
 			storyId,
 			runNow: true,
 			index: flags.indexWiki === true,
-			lint: flags.lintWiki === true,
 			recreate: flags.recreateWiki === true,
 			dryRun: flags.dryRunWiki === true,
 			clean: flags.cleanWiki !== false,
@@ -385,7 +383,6 @@ function shouldRefreshWiki(flags) {
 	return flags.wiki === true
 		|| flags.syncWiki === true
 		|| flags.indexWiki === true
-		|| flags.lintWiki === true
 		|| flags.recreateWiki === true
 		|| flags.dryRunWiki === true;
 }
@@ -438,7 +435,7 @@ function printStories(payload, json) {
 	if (json) return printJson(payload);
 	const stories = Array.isArray(payload.stories) ? payload.stories : [];
 	console.log('');
-	console.log('Mtherios terminal world databases');
+	console.log('MythEngine terminal world databases');
 	if (stories.length === 0) {
 		console.log('  no stories found in the terminal database');
 		console.log('');
@@ -629,7 +626,6 @@ function printTurn(payload, json) {
 		const status = payload.wikiJob.job?.result?.status ?? payload.wikiJob.status ?? {};
 		console.log(`  wiki:            ${payload.wikiJob.ok ? 'refreshed' : 'failed'}${status.vaultPath ? ` at ${status.vaultPath}` : ''}`);
 		if (status.indexFresh !== undefined) console.log(`  qdrant:          ${status.indexFresh ? 'fresh' : 'stale or skipped'}`);
-		if (status.lint) console.log(`  lint:            ${lintLabel(status.lint)}`);
 	}
 	console.log('');
 }
@@ -701,15 +697,6 @@ function snippet(value, max) {
 	return clean.length > max ? `${clean.slice(0, max - 1)}...` : clean;
 }
 
-function lintLabel(lint) {
-	if (!lint.exists) return 'not run';
-	const issueCount = typeof lint.issueCount === 'number' ? lint.issueCount : '?';
-	if (!lint.fresh) return `stale, ${issueCount} issue(s)`;
-	if (lint.ok === true) return 'healthy';
-	if (lint.ok === false) return `${issueCount} issue(s)`;
-	return `recorded, ${issueCount} issue(s)`;
-}
-
 function formatCounts(value) {
 	const counts = asRecord(value);
 	const entries = Object.entries(counts).filter(([, count]) => Number(count) > 0);
@@ -732,7 +719,7 @@ function printHelp() {
   npm run app:story -- entries --story <storyId> [--limit 20] [--json]
   npm run app:story -- dossier --story <storyId> "character or faction name" [--json]
   npm run app:story -- memory --story <storyId> "query" [--json]
-  npm run app:story -- turn --story <storyId> "player action" [--wiki] [--lint-wiki] [--index-wiki] [--json]
+  npm run app:story -- turn --story <storyId> "player action" [--wiki] [--index-wiki] [--json]
 
 Turn provider options:
   --provider-type <type>     openai, anthropic, openai-compatible, google-agent-platform, etc.
@@ -744,13 +731,12 @@ Turn provider options:
 Turn wiki options:
   --wiki                     Materialize the story vault after the turn.
   --sync-wiki                Alias for --wiki.
-  --lint-wiki                Materialize and lint the story vault after the turn.
   --index-wiki               Materialize and index the story vault into Qdrant after the turn.
-  --recreate-wiki            Recreate the Qdrant collection while indexing.
+  --recreate-wiki            Reconcile vault chunks while preserving canonical vectors.
   --no-clean-wiki            Preserve existing vault files instead of rewriting the vault cleanly.
 
 General options:
-  --url <url>                Running Mtherios terminal app URL. Default: ${DEFAULT_URL}
+  --url <url>                Running MythEngine terminal app URL. Default: ${DEFAULT_URL}
   --story <id>               Terminal world database/story id.
   --file <path>              Import source for app:story import.
   --out <path>               Export destination for app:story export.

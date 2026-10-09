@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	addEntityAlias,
 	createEntityThroughResolver,
-	lintCanonWiki,
 	mergeEntities,
 	previewEntityResolution,
 	readCanonPage,
@@ -46,7 +45,7 @@ describe('canon repair engine gateway client', () => {
 		vi.stubGlobal('fetch', fetchMock);
 	});
 
-	it('routes wiki search, page reads, and lint through the shared engine command gateway', async () => {
+	it('routes wiki search and page reads through the shared engine command gateway', async () => {
 		fetchMock
 			.mockResolvedValueOnce(engineResponse('wiki.search', {
 				query: 'Mira',
@@ -56,10 +55,6 @@ describe('canon repair engine gateway client', () => {
 				path: 'characters/mira.md',
 				title: 'Mira',
 				text: 'Mira is a courier.',
-			}))
-			.mockResolvedValueOnce(engineResponse('wiki.lint', {
-				ok: true,
-				summary: { brokenLinks: 0 },
 			}));
 
 		await searchCanonPages('story_alpha', 'Mira');
@@ -76,12 +71,6 @@ describe('canon repair engine gateway client', () => {
 			args: { storyId: 'story_alpha', page: 'characters/mira.md' },
 		});
 
-		await lintCanonWiki('story_alpha');
-		expect(await postedCommand()).toEqual({
-			storyId: 'story_alpha',
-			command: 'wiki.lint',
-			args: { storyId: 'story_alpha' },
-		});
 	});
 
 	it('routes resolver, merge, alias, review, create, and audit actions through the shared engine command gateway', async () => {

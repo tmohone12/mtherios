@@ -1,5 +1,15 @@
-import { and, asc, desc, eq, gt, inArray, lt, sql } from 'drizzle-orm';
+import { exportCanonicalWorkspace } from '$lib/server/engine/canonicalContent';
+import { exportContentSnapshot } from '$lib/server/engine/content';
+import { exportStoryImageCards } from '$lib/server/engine/storyImageCards';
+import { exportLocationMapAssets } from '$lib/server/engine/locationMapPortability';
+import { exportPortraitAssets } from '$lib/server/engine/portraitAssetPortability';
+import { and, asc, desc, eq, gt, gte, inArray, lt, ne, sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
+import { playerCapabilitiesSchema } from '$lib/contracts/playerCapabilities';
+import { agentSettingsDocumentSchema } from '$lib/contracts/agentTools';
+import { projectImageStyleSchema } from '$lib/contracts/imageStyle';
+import { remapImportedRecordIds } from '$lib/server/db/importIds';
+import { allocateStoryEntryPosition } from '$lib/server/db/storyEntryPositions';
 import {
 	agreements,
 	arcs,
@@ -7,6 +17,8 @@ import {
 	contextCheckpoints,
 	continuityWarnings,
 	entities,
+	locationMaps,
+	locationMapRevisions,
 	entityAliases,
 	facts,
 	factions,
@@ -40,8 +52,7 @@ import {
 	type SyncOperation,
 } from '$lib/contracts/memory';
 import { createShelfRequestSchema, updateShelfRequestSchema } from '$lib/contracts/shelves';
-import { enqueueImportProjectionJobs, enqueuePlotBrainJob, enqueueStoryVaultSyncJob, enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
-import { hasStrategicPlotContent } from '$lib/services/ai/sdk/schemas/strategicWorldBrain';
+import { enqueueBackendJob, enqueueImportProjectionJobs, enqueueStoryVaultSyncJob, enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
 import { deleteStoryVaultArtifacts } from '$lib/server/wiki/storyVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
 import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from './entityResolver';
@@ -76,7 +87,7 @@ export interface BootstrapProjectionLimits {
 
 export const DEFAULT_BOOTSTRAP_LIMITS: BootstrapProjectionLimits = {
 	entryLimit: 80,
-	entityLimit: 120,
+	entityLimit: 200,
 	relationshipLimit: 200,
 	factionLimit: 80,
 	factionMembershipLimit: 160,
@@ -119,7 +130,7 @@ function boundedInt(value: unknown, fallback: number, cap: number): number {
 	return Math.max(0, Math.min(cap, Math.trunc(value)));
 }
 
-export function normalizeBootstrapOptions(options: EngineCampaignBootstrapArgs = {}): BootstrapProjectionLimits {
+export function normalizeBootstrapOptions(options: Partial<EngineCampaignBootstrapArgs> = {}): BootstrapProjectionLimits {
 	return {
 		entryLimit: boundedInt(options.entryLimit, DEFAULT_BOOTSTRAP_LIMITS.entryLimit, BOOTSTRAP_LIMIT_CAPS.entryLimit),
 		entityLimit: boundedInt(options.entityLimit, DEFAULT_BOOTSTRAP_LIMITS.entityLimit, BOOTSTRAP_LIMIT_CAPS.entityLimit),
@@ -300,16 +311,6 @@ async function applyCharacterReferenceProposalResolutions(
 	return resolved;
 }
 
-async function nextStoryEntryPosition(storyId: string): Promise<number> {
-	const [last] = await getDb()
-		.select({ position: storyEntries.position })
-		.from(storyEntries)
-		.where(eq(storyEntries.storyId, storyId))
-		.orderBy(desc(storyEntries.position))
-		.limit(1);
-	return (last?.position ?? -1) + 1;
-}
-
 function extractFactionResources(state: JsonRecord): JsonRecord {
 	const resources = asRecord(state.resources);
 	if (Object.keys(resources).length > 0) return resources;
@@ -410,7 +411,7 @@ export async function createBackendStory(input: unknown) {
 	};
 }
 
-export async function listBackendStories(options: { shelfId?: string | null } = {}) {
+export async function listBackendStories(options: { shelfId?: string | null; includeArchived?: boolean } = {}) {
 	const shelfId = typeof options.shelfId === 'string' && options.shelfId.trim() ? options.shelfId.trim() : null;
 	const rows = await getDb()
 		.select()
@@ -419,7 +420,11 @@ export async function listBackendStories(options: { shelfId?: string | null } = 
 		.orderBy(desc(stories.updatedAt))
 		.limit(500);
 
-	return rows.map((story) => ({
+	const visible = options.includeArchived
+		? rows
+		: rows.filter((story) => story.metadata?.archived !== true);
+
+	return visible.map((story) => ({
 		id: story.id,
 		shelfId: story.shelfId,
 		clientStoryId: story.clientStoryId,
@@ -457,7 +462,7 @@ async function ensureShelfExists(db: Db, shelfId: string, genre: string | null, 
 		id: DEFAULT_SHELF_ID,
 		name: 'Default Shelf',
 		slug: 'default_shelf',
-		description: 'Migrated shelf for existing Mtherios stories.',
+		description: 'Your MythEngine stories.',
 		genre,
 		settings: {},
 		metadata: { createdByCompatibilityPath: true },
@@ -489,15 +494,15 @@ export async function listBackendShelves() {
 	const db = getDb();
 	await ensureShelfExists(db, DEFAULT_SHELF_ID, null);
 	const rows = await db.select().from(shelves).orderBy(desc(shelves.updatedAt)).limit(500);
-	const storyCounts = await db
-		.select({ shelfId: stories.shelfId, count: sql<number>`count(*)::int` })
-		.from(stories)
-		.groupBy(stories.shelfId);
-	const storiesByShelf = new Map(storyCounts.map((row) => [row.shelfId, Number(row.count ?? 0)]));
 	const summaries = [];
 	for (const row of rows) {
-		const shelfStoryIds = await db.select({ id: stories.id }).from(stories).where(eq(stories.shelfId, row.id));
-		const ids = shelfStoryIds.map((story) => story.id);
+		const shelfStories = await db
+			.select({ id: stories.id, metadata: stories.metadata })
+			.from(stories)
+			.where(eq(stories.shelfId, row.id));
+		const ids = shelfStories
+			.filter((story) => story.metadata?.archived !== true)
+			.map((story) => story.id);
 		let canonRecordCount = 0;
 		let sourceCount = 0;
 		if (ids.length > 0) {
@@ -506,7 +511,7 @@ export async function listBackendShelves() {
 			canonRecordCount = Number(entityCount?.count ?? 0);
 			sourceCount = Number(entryCount?.count ?? 0);
 		}
-		summaries.push(shelfSummary(row, storiesByShelf.get(row.id) ?? 0, canonRecordCount, sourceCount));
+		summaries.push(shelfSummary(row, ids.length, canonRecordCount, sourceCount));
 	}
 	return summaries;
 }
@@ -552,13 +557,16 @@ export async function createBackendShelf(input: unknown) {
 export async function updateBackendShelf(shelfId: string, input: unknown) {
 	const request = updateShelfRequestSchema.parse(input);
 	const now = nowIso();
-	const updates: Partial<typeof shelves.$inferInsert> = { updatedAt: now };
+	const updates: Omit<Partial<typeof shelves.$inferInsert>, 'settings'> & { settings?: Record<string, unknown> | ReturnType<typeof sql> } = { updatedAt: now };
 	const db = getDb();
 	if (request.name !== undefined) updates.name = request.name;
 	if (request.description !== undefined) updates.description = request.description ?? null;
 	if (request.genre !== undefined) updates.genre = request.genre ?? null;
 	if (request.coverImageUrl !== undefined) updates.coverImageUrl = request.coverImageUrl ?? null;
-	if (request.settings !== undefined) updates.settings = request.settings;
+	if (request.settings !== undefined) {
+		if (Object.hasOwn(request.settings, 'agentTools')) throw new Error('Edit agent preferences through settings.agent.save.');
+		updates.settings = sql`(${JSON.stringify(request.settings)}::jsonb) || case when settings ? 'agentTools' then jsonb_build_object('agentTools', settings->'agentTools') else '{}'::jsonb end`;
+	}
 	if (request.metadata !== undefined || request.tags !== undefined) {
 		const [existing] = await db.select({ metadata: shelves.metadata }).from(shelves).where(eq(shelves.id, shelfId)).limit(1);
 		if (!existing) throw new Error(`Shelf not found: ${shelfId}`);
@@ -638,9 +646,34 @@ export async function deleteBackendStory(storyId: string, input: unknown = {}) {
 	}
 }
 
-export async function getBootstrap(storyId: string, options: EngineCampaignBootstrapArgs = {}) {
+export async function restoreBackendStory(storyId: string) {
+	const db = getDb();
+	const now = nowIso();
+	const [existing] = await db.select({ metadata: stories.metadata }).from(stories).where(eq(stories.id, storyId)).limit(1);
+	if (!existing) throw new Error(`Story not found: ${storyId}`);
+
+	const metadata = asRecord(existing.metadata);
+	const { archived: _archived, archivedAt: _archivedAt, deleteMode: _deleteMode, exportBeforeDelete: _exportBeforeDelete, ...rest } = metadata;
+
+	const [restored] = await db.update(stories).set({
+		metadata: rest,
+		updatedAt: now,
+		serverVersion: sql`${stories.serverVersion} + 1`,
+	}).where(eq(stories.id, storyId)).returning({ id: stories.id, serverVersion: stories.serverVersion });
+
+	if (!restored) throw new Error(`Story not found: ${storyId}`);
+	await enqueueStoryVaultSyncJob({
+		storyId,
+		serverVersion: restored.serverVersion,
+		reason: 'story-restore',
+	});
+	return { ok: true as const, storyId, serverVersion: restored.serverVersion };
+}
+
+export async function getBootstrap(storyId: string, options: Partial<EngineCampaignBootstrapArgs> = {}) {
 	const db = getDb();
 	const limits = normalizeBootstrapOptions(options);
+	const includeSecret = options.includeSecret === true;
 	const [story] = await db.select().from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
 
@@ -672,39 +705,26 @@ export async function getBootstrap(storyId: string, options: EngineCampaignBoots
 			.orderBy(desc(storyEntries.position))
 			.limit(limits.entryLimit),
 		db.select({ count: sql<number>`count(*)::int` }).from(storyEntries).where(eq(storyEntries.storyId, storyId)),
-		limits.entityLimit === 0 ? Promise.resolve([]) : db.select().from(entities).where(eq(entities.storyId, storyId)).limit(limits.entityLimit),
+		limits.entityLimit === 0 ? Promise.resolve([]) : db.select().from(entities).where(includeSecret ? eq(entities.storyId, storyId) : and(eq(entities.storyId, storyId), ne(entities.visibility, 'secret'))).orderBy(desc(entities.updatedAt)).limit(limits.entityLimit),
 		limits.relationshipLimit === 0 ? Promise.resolve([]) : db.select().from(relationships).where(eq(relationships.storyId, storyId)).limit(limits.relationshipLimit),
 		limits.factionLimit === 0 ? Promise.resolve([]) : db.select().from(factions).where(eq(factions.storyId, storyId)).limit(limits.factionLimit),
 		limits.factionMembershipLimit === 0 ? Promise.resolve([]) : db.select().from(factionMemberships).where(eq(factionMemberships.storyId, storyId)).limit(limits.factionMembershipLimit),
 		limits.factionResourceLimit === 0 ? Promise.resolve([]) : db.select().from(factionResources).where(eq(factionResources.storyId, storyId)).limit(limits.factionResourceLimit),
-		limits.factionGoalLimit === 0 ? Promise.resolve([]) : db.select().from(factionGoals).where(eq(factionGoals.storyId, storyId)).limit(limits.factionGoalLimit),
-		limits.factionProjectLimit === 0 ? Promise.resolve([]) : db.select().from(factionProjects).where(eq(factionProjects.storyId, storyId)).limit(limits.factionProjectLimit),
-		limits.agreementLimit === 0 ? Promise.resolve([]) : db.select().from(agreements).where(eq(agreements.storyId, storyId)).limit(limits.agreementLimit),
+		limits.factionGoalLimit === 0 ? Promise.resolve([]) : db.select().from(factionGoals).where(includeSecret ? eq(factionGoals.storyId, storyId) : and(eq(factionGoals.storyId, storyId), ne(factionGoals.secrecy, 'secret'))).limit(limits.factionGoalLimit),
+		limits.factionProjectLimit === 0 ? Promise.resolve([]) : db.select().from(factionProjects).where(includeSecret ? eq(factionProjects.storyId, storyId) : and(eq(factionProjects.storyId, storyId), ne(factionProjects.visibility, 'secret'))).limit(limits.factionProjectLimit),
+		limits.agreementLimit === 0 ? Promise.resolve([]) : db.select().from(agreements).where(and(eq(agreements.storyId, storyId), ne(agreements.status, 'deleted'), includeSecret ? undefined : ne(agreements.secrecy, 'secret'))).limit(limits.agreementLimit),
 		limits.npcBeliefLimit === 0 ? Promise.resolve([]) : db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).orderBy(desc(npcBeliefs.updatedAt)).limit(limits.npcBeliefLimit),
 		limits.threadLimit === 0 ? Promise.resolve([]) : db.select().from(storyThreads).where(eq(storyThreads.storyId, storyId)).limit(limits.threadLimit),
 		limits.chapterLimit === 0 ? Promise.resolve([]) : db.select().from(chapters).where(eq(chapters.storyId, storyId)).orderBy(desc(chapters.number)).limit(limits.chapterLimit),
 		limits.arcLimit === 0 ? Promise.resolve([]) : db.select().from(arcs).where(eq(arcs.storyId, storyId)).orderBy(desc(arcs.number)).limit(limits.arcLimit),
 		limits.sagaLimit === 0 ? Promise.resolve([]) : db.select().from(sagas).where(eq(sagas.storyId, storyId)).orderBy(desc(sagas.number)).limit(limits.sagaLimit),
-		limits.eventLimit === 0 ? Promise.resolve([]) : db.select().from(storyEvents).where(eq(storyEvents.storyId, storyId)).orderBy(desc(storyEvents.createdAt)).limit(limits.eventLimit),
+		limits.eventLimit === 0 ? Promise.resolve([]) : db.select().from(storyEvents).where(includeSecret
+			? eq(storyEvents.storyId, storyId)
+			: and(eq(storyEvents.storyId, storyId), ne(storyEvents.visibility, 'secret'), eq(storyEvents.status, 'committed'))).orderBy(desc(storyEvents.createdAt)).limit(limits.eventLimit),
 		limits.patchLimit === 0 ? Promise.resolve([]) : db.select().from(statePatches).where(eq(statePatches.storyId, storyId)).orderBy(desc(statePatches.createdAt)).limit(limits.patchLimit),
-		limits.memoryNodeLimit === 0 ? Promise.resolve([]) : db.select().from(memoryNodes).where(eq(memoryNodes.storyId, storyId)).orderBy(desc(memoryNodes.updatedAt)).limit(limits.memoryNodeLimit),
+		limits.memoryNodeLimit === 0 ? Promise.resolve([]) : db.select().from(memoryNodes).where(and(eq(memoryNodes.storyId, storyId), sql`coalesce(${memoryNodes.metadata}->>'playerDeleted', 'false') != 'true'`, includeSecret ? undefined : ne(memoryNodes.visibility, 'secret'))).orderBy(desc(memoryNodes.updatedAt)).limit(limits.memoryNodeLimit),
 		getCampaignProjection(storyId, { entryLimit: limits.entryLimit }),
 	]);
-	const metadata = asRecord(story.metadata);
-	const plotBrain = asRecord(metadata.plotBrain);
-	const hasPlotFrame = hasStrategicPlotContent(plotBrain.lastFrame ?? metadata.strategicWorldFrame);
-	const hasPendingPlotFrame = Boolean(plotBrain.pendingFrameId)
-		|| Object.keys(asRecord(plotBrain.pendingFrame)).length > 0;
-	const hasPlotEvidence = Number(entryCountRows[0]?.count ?? 0) > 0 || entityRows.length > 0 || factionRows.length > 0;
-	if (!hasPlotFrame && !hasPendingPlotFrame && hasPlotEvidence) {
-		await enqueuePlotBrainJob({
-			storyId,
-			trigger: 'scheduled_refresh',
-			scopeId: storyId,
-			skipIfPlanned: true,
-		}).catch((error) => console.warn('[plot-brain] Failed to queue story bootstrap plan:', error));
-	}
-
 	return {
 		story,
 		serverVersion: story.serverVersion,
@@ -768,7 +788,6 @@ export async function getStoryEntriesPage(
 	const pageRows = rows.slice(0, limit);
 	const entries = [...pageRows].sort((a, b) => a.position - b.position);
 
-	await queueStoryVaultSync(story.id, story.serverVersion ?? 1, 'story-created');
 	return {
 		storyId: story.id,
 		serverVersion: story.serverVersion,
@@ -783,6 +802,7 @@ function entityStateFromEntry(entry: JsonRecord): JsonRecord {
 	const state = asRecord(entry.state);
 	return {
 		...state,
+		...(Object.prototype.hasOwnProperty.call(state, 'playerCapabilities') ? { playerCapabilities: playerCapabilitiesSchema.parse(state.playerCapabilities) } : {}),
 		hiddenInfo: asNullableString(entry.hiddenInfo),
 	};
 }
@@ -806,6 +826,7 @@ function entityMetadataFromEntry(entry: JsonRecord, existing: JsonRecord = {}): 
 export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: unknown) {
 	const db = getDb();
 	const entry = asRecord(rawEntry);
+	const incomingState = entityStateFromEntry(entry);
 	const requestedEntityId = asNullableString(entry.id);
 	const name = asString(entry.name).trim();
 	if (!name) throw new Error('Wiki entry name is required.');
@@ -843,7 +864,7 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 		? await loadMatchingCharacterReferenceProposals(db, storyId, [name, ...entryAliases])
 		: [];
 	const serverVersion = await bumpStoryVersion(storyId);
-	const state = { ...asRecord(existing?.state), ...entityStateFromEntry(entry) };
+	const state = { ...asRecord(existing?.state), ...incomingState };
 	const mergedSourceEntryIds = stringList(
 		existing?.sourceEntryIds,
 		sourceEntryIds,
@@ -1628,6 +1649,7 @@ export async function revertToContextCheckpoint(storyId: string, input: unknown)
 		checkpointId,
 		reason: asNullableString(request.reason),
 	});
+	await enqueueBackendJob({ storyId, type: 'refresh_scene_checkpoint', dedupeKey: `restore-scene-${result.serverVersion}`, maxAttempts: 3 });
 	return result;
 }
 
@@ -1855,9 +1877,17 @@ async function importFactionFromEntry(storyId: string, entry: JsonRecord, entity
 	}).onConflictDoUpdate({
 		target: factions.id,
 		set: {
+			entityId,
+			name: asString(entry.name),
 			goals: asStringArray(state.goals),
 			resources: extractFactionResources(state),
 			memberEntityIds: extractFactionMembers(state),
+			territoryIds: asStringArray(state.territories ?? state.territoryIds),
+			allies: asStringArray(state.allies),
+			enemies: asStringArray(state.enemies),
+			pressure: asNumber(state.pressure, 0),
+			metadata: { originalState: state },
+			sourceEntryIds: sourceEntries(entry.firstMentioned, entry.lastMentioned),
 			serverVersion,
 			updatedAt: insertedAt,
 		},
@@ -2220,9 +2250,36 @@ async function importFactionAction(
 	const actionId = asNullableString(action.id) ?? id('faction_action');
 	const insertedAt = options.timestamp ?? nowIso();
 	const serverVersion = options.serverVersion ?? 1;
-	const title = `${asString(action.factionName, 'Faction')} ${asString(action.actionType, 'move')}`;
+	const factionName = asString(action.factionName, 'Faction');
+	const actionType = asString(action.actionType, 'internal');
+	const urgency = asString(action.urgency, 'medium');
+	const actionText = asString(action.action);
+	const target = asNullableString(action.target);
+	const knownFactions = await getDb().select({ id: factions.id, name: factions.name })
+		.from(factions)
+		.where(eq(factions.storyId, storyId))
+		.limit(500);
+	const normalizedName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+	const actingFaction = knownFactions.find((faction) => normalizedName(faction.name) === normalizedName(factionName));
+	const targetFaction = target
+		? knownFactions.find((faction) => normalizedName(faction.name) === normalizedName(target))
+		: undefined;
+	const factionIds = [...new Set([actingFaction?.id, targetFaction?.id].filter((value): value is string => Boolean(value)))];
+	const title = `${factionName} ${actionType}`;
 	const consequences = asStringArray(action.consequences);
-	const body = compactText(asString(action.action), consequences.length > 0 ? `Consequences: ${consequences.join('; ')}` : null);
+	const body = compactText(actionText, consequences.length > 0 ? `Consequences: ${consequences.join('; ')}` : null);
+	const actionMetadata = {
+		sourceType: 'faction_action_import',
+		factionId: actingFaction?.id ?? null,
+		factionName,
+		action: actionText,
+		actionType,
+		motivation: asString(action.motivation),
+		consequences,
+		urgency,
+		target,
+		legacyRecord: action,
+	};
 	const eventRow = {
 		id: `event_${actionId}`,
 		storyId,
@@ -2232,11 +2289,12 @@ async function importFactionAction(
 		actorEntityIds: [],
 		targetEntityIds: [],
 		locationId: null,
+		factionIds,
 		threadIds: [],
-		visibility: 'player_known',
+		visibility: 'secret',
 		sourceEntryIds: [],
 		sourcePatchIds: [],
-		metadata: { sourceType: 'faction_action_import', legacyRecord: action },
+		metadata: actionMetadata,
 		serverVersion,
 		createdAt: insertedAt,
 		updatedAt: insertedAt,
@@ -2260,17 +2318,17 @@ async function importFactionAction(
 		title,
 		content: body,
 		summary: body,
-		keywords: stringList(action.factionName, action.actionType, action.target, action.urgency),
+		keywords: stringList(factionName, actionType, target, urgency),
 		entityIds: [],
-		factionIds: stringList(action.factionName),
+		factionIds,
 		threadIds: [],
 		locationId: null,
-		visibility: 'player_known',
-		importance: asString(action.urgency) === 'critical' ? 0.9 : asString(action.urgency) === 'high' ? 0.75 : 0.55,
+		visibility: 'secret',
+		importance: urgency === 'critical' ? 0.9 : urgency === 'high' ? 0.75 : 0.55,
 		sourceEntryIds: [],
 		sourceEventIds: [`event_${actionId}`],
 		sourcePatchIds: [],
-		metadata: { sourceType: 'faction_action_import', legacyRecord: action },
+		metadata: actionMetadata,
 		serverVersion,
 		createdAt: insertedAt,
 		updatedAt: insertedAt,
@@ -2368,6 +2426,7 @@ async function importScheme(
 	if (options.mode === 'upsert') {
 		await threadInsert.onConflictDoUpdate({
 			target: storyThreads.id,
+			setWhere: sql`coalesce(${storyThreads.closureReason}, '') not like '[player:%'`,
 			set: mutableSyncFields(threadRow),
 		});
 	} else {
@@ -2402,6 +2461,7 @@ async function importScheme(
 	if (options.mode === 'upsert') {
 		await nodeInsert.onConflictDoUpdate({
 			target: memoryNodes.id,
+			setWhere: sql`coalesce(${memoryNodes.metadata}->>'playerDeleted', 'false') != 'true' and not exists (select 1 from story_threads t where t.story_id = ${storyId} and t.id = ${schemeId} and coalesce(t.closure_reason, '') like '[player:%')`,
 			set: mutableSyncFields(nodeRow),
 		});
 	} else {
@@ -2443,9 +2503,13 @@ export async function upsertBackendLivingMemoryFromLocal(
 export async function importIndexedDbBundle(input: unknown) {
 	const request = indexedDbImportRequestSchema.parse(input);
 	const { importEntryLimit } = getServerMemoryConfig();
+	const entryCount = asArray(request.bundle.storyEntries).length;
+	if (entryCount > importEntryLimit) {
+		throw new Error(`Legacy import contains ${entryCount} transcript entries; the limit is ${importEntryLimit}. No records were imported. Use a full world-database bundle for a larger campaign.`);
+	}
 	const bundle = request.options.preserveIds
 		? request.bundle
-		: remapImportedBundleIds(request.bundle);
+		: remapImportedRecordIds(request.bundle);
 	const legacyStory = asRecord(bundle.story);
 	const storyId = asNullableString(legacyStory.id) ?? id('story');
 	const counts: Record<string, number> = {};
@@ -2479,7 +2543,7 @@ export async function importIndexedDbBundle(input: unknown) {
 	});
 	counts.stories = 1;
 
-	const entries = asArray<JsonRecord>(bundle.storyEntries).slice(0, importEntryLimit);
+	const entries = asArray<JsonRecord>(bundle.storyEntries);
 	for (const entry of entries) {
 		const entryId = asNullableString(entry.id) ?? id('entry');
 		await getDb().insert(storyEntries).values({
@@ -2620,74 +2684,29 @@ export async function importIndexedDbBundle(input: unknown) {
 	return { storyId, serverVersion, counts, skipped, merged };
 }
 
-function remapImportedBundleIds(rawBundle: JsonRecord): JsonRecord {
-	const bundle = JSON.parse(JSON.stringify(rawBundle)) as JsonRecord;
-	const originalStoryId = asNullableString(asRecord(bundle.story).id);
-	const targetStoryId = id('story');
-	const idMap = new Map<string, string>();
-	if (originalStoryId) idMap.set(originalStoryId, targetStoryId);
-
-	const mapId = (value: string): string => {
-		const clean = value.trim();
-		if (!clean) return value;
-		let mapped = idMap.get(clean);
-		if (!mapped) {
-			mapped = id('import');
-			idMap.set(clean, mapped);
-		}
-		return mapped;
-	};
-
-	const remap = (value: unknown, key = ''): unknown => {
-		if (Array.isArray(value)) {
-			if (isIdListKey(key)) return value.map((item) => typeof item === 'string' ? mapId(item) : remap(item));
-			return value.map((item) => remap(item));
-		}
-		if (!value || typeof value !== 'object') return value;
-		const output: JsonRecord = {};
-		for (const [childKey, childValue] of Object.entries(value as JsonRecord)) {
-			if (childKey === 'storyId') {
-				output[childKey] = targetStoryId;
-			} else if (childKey === 'serverStoryId' || childKey === 'clientStoryId') {
-				output[childKey] = null;
-			} else if (childKey === 'syncStatus') {
-				output[childKey] = 'syncing';
-			} else if (isIdListKey(childKey)) {
-				output[childKey] = Array.isArray(childValue)
-					? childValue.map((item) => typeof item === 'string' ? mapId(item) : remap(item, childKey))
-					: childValue;
-			} else if (isIdKey(childKey)) {
-				output[childKey] = typeof childValue === 'string'
-					? mapId(childValue)
-					: childValue == null
-						? null
-						: remap(childValue, childKey);
-			} else {
-				output[childKey] = remap(childValue, childKey);
-			}
-		}
-		return output;
-	};
-
-	return remap(bundle) as JsonRecord;
-}
-
-function isIdKey(key: string): boolean {
-	return key === 'id' || key.endsWith('Id');
-}
-
-function isIdListKey(key: string): boolean {
-	return key.endsWith('Ids');
-}
-
 export async function exportBackendStory(storyId: string) {
-	const db = getDb();
+	return getDb().transaction((tx) => exportBackendStorySnapshot(storyId, tx), {
+		isolationLevel: 'repeatable read',
+		accessMode: 'read only',
+	});
+}
+
+async function exportBackendStorySnapshot(storyId: string, db: Tx) {
 	const [story] = await db.select().from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
+	const [project] = await db.select({ id: shelves.id, name: shelves.name, slug: shelves.slug,
+		description: shelves.description, genre: shelves.genre, coverImageUrl: shelves.coverImageUrl, settings: shelves.settings }).from(shelves).where(eq(shelves.id, story.shelfId)).limit(1);
+	if (!project) throw new Error(`Project not found: ${story.shelfId}`);
+	const portableProjectSettings: JsonRecord = {};
+	const sourceProjectSettings = asRecord(project.settings);
+	if (sourceProjectSettings.agentTools !== undefined) portableProjectSettings.agentTools = agentSettingsDocumentSchema.parse(sourceProjectSettings.agentTools);
+	if (sourceProjectSettings.imageStyle !== undefined) portableProjectSettings.imageStyle = projectImageStyleSchema.parse(sourceProjectSettings.imageStyle);
 
 	const [
 		entryRows,
 		entityRows,
+		locationMapRows,
+		locationMapRevisionRows,
 		aliasRows,
 		relationshipRows,
 		factionRows,
@@ -2712,6 +2731,8 @@ export async function exportBackendStory(storyId: string) {
 	] = await Promise.all([
 		db.select().from(storyEntries).where(eq(storyEntries.storyId, storyId)).orderBy(asc(storyEntries.position)),
 		db.select().from(entities).where(eq(entities.storyId, storyId)).orderBy(asc(entities.name)),
+		db.select().from(locationMaps).where(eq(locationMaps.storyId, storyId)),
+		db.select().from(locationMapRevisions).innerJoin(locationMaps, eq(locationMaps.locationId, locationMapRevisions.locationId)).where(eq(locationMaps.storyId, storyId)),
 		db.select().from(entityAliases).where(eq(entityAliases.storyId, storyId)).orderBy(asc(entityAliases.alias)),
 		db.select().from(relationships).where(eq(relationships.storyId, storyId)),
 		db.select().from(factions).where(eq(factions.storyId, storyId)).orderBy(asc(factions.name)),
@@ -2751,6 +2772,8 @@ export async function exportBackendStory(storyId: string) {
 		story,
 		entries: entryRows,
 		entities: entityRows,
+		locationMaps: locationMapRows,
+		locationMapRevisions: locationMapRevisionRows.map(row => row.location_map_revisions),
 		entityAliases: aliasRows,
 		relationships: relationshipRows,
 		factions: factionRows,
@@ -2772,6 +2795,7 @@ export async function exportBackendStory(storyId: string) {
 		chapters: chapterRows,
 		arcs: arcRows,
 		sagas: sagaRows,
+		canonicalContent: await exportCanonicalWorkspace(db,storyId),
 	};
 
 	return {
@@ -2779,7 +2803,16 @@ export async function exportBackendStory(storyId: string) {
 		version: TERMINAL_WORLD_DATABASE_SCHEMA_VERSION,
 		exportedAt: Date.now(),
 		source: 'terminal_world_database',
+		shelf: { ...project, settings: portableProjectSettings },
 		worldDatabase,
+		authoredContent: await exportContentSnapshot(db, { projectId: story.shelfId, gameId: storyId }),
+		storyImages: await exportStoryImageCards(db, story.shelfId, storyId),
+		locationMapAssets: await exportLocationMapAssets(story.shelfId, storyId, [...locationMapRows.map(row => row.map), ...locationMapRevisionRows.map(row => row.location_map_revisions.snapshot)]),
+		portraitAssets: await exportPortraitAssets({ projectId: story.shelfId, gameId: storyId }, [
+			...entityRows.filter(row => row.type === 'character').map(row => row.state),
+			...patchRows.map(row => row.operations),
+			...patchProposalRows.flatMap(row => [row.operations, row.metadata]),
+		]),
 		story: exportStoryRow(story),
 		storyEntries: entryRows.map(exportEntryRow),
 		characters: [],
@@ -3091,7 +3124,16 @@ export function assertSyncOpReplayMatches(
 
 export async function applySyncOperation(raw: unknown): Promise<{ op: SyncOperation; eventIds: string[]; patchIds: string[]; projectionJobIds: string[]; alreadyApplied?: boolean }> {
 	const op = syncOperationSchema.parse(raw);
-	const db = getDb();
+	const fromPosition = op.payload.fromPosition;
+	if (op.type === 'delete_entry' && fromPosition != null && (
+		typeof fromPosition !== 'number' || !Number.isSafeInteger(fromPosition) || fromPosition < 0
+	)) throw new Error('Transcript deletion requires a non-negative integer fromPosition.');
+	return getDb().transaction((tx) => applySyncOperationTx(op, tx));
+}
+
+async function applySyncOperationTx(op: SyncOperation, db: Tx) {
+	// Match turn insertion/extraction locking; the sync receipt and changes commit together.
+	await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`mtherios:story-entry:${op.storyId}`}, 0))`);
 	const createdAt = nowIso();
 	const eventIds: string[] = [];
 	const patchIds: string[] = [];
@@ -3142,7 +3184,7 @@ export async function applySyncOperation(raw: unknown): Promise<{ op: SyncOperat
 		return { op, eventIds, patchIds, projectionJobIds, alreadyApplied: true };
 	}
 
-	const serverVersion = await bumpStoryVersion(op.storyId);
+	const serverVersion = await bumpStoryVersionTx(db, op.storyId, createdAt);
 
 	if (op.type === 'state_correction') {
 		const patchId = id('patch');
@@ -3182,19 +3224,26 @@ export async function applySyncOperation(raw: unknown): Promise<{ op: SyncOperat
 	if (op.type === 'create_entry') {
 		const entry = asRecord(op.payload.entry);
 		const entryId = asNullableString(entry.id) ?? id('entry');
-		await db.insert(storyEntries).values({
-			id: entryId,
-			storyId: op.storyId,
-			type: asString(entry.type, 'user_action'),
-			content: asString(entry.content),
-			position: asNumber(entry.position, Date.now()),
-			parentId: asNullableString(entry.parentId),
-			branchId: asNullableString(entry.branchId),
-			metadata: asRecord(entry.metadata),
-			serverVersion,
-			createdAt,
-			updatedAt: createdAt,
-		}).onConflictDoNothing();
+		await db.transaction(async (tx) => {
+			const position = await allocateStoryEntryPosition(
+				tx,
+				op.storyId,
+				typeof entry.position === 'number' ? entry.position : null,
+			);
+			await tx.insert(storyEntries).values({
+				id: entryId,
+				storyId: op.storyId,
+				type: asString(entry.type, 'user_action'),
+				content: asString(entry.content),
+				position,
+				parentId: asNullableString(entry.parentId),
+				branchId: asNullableString(entry.branchId),
+				metadata: asRecord(entry.metadata),
+				serverVersion,
+				createdAt,
+				updatedAt: createdAt,
+			}).onConflictDoNothing();
+		});
 	}
 
 	if (op.type === 'turn_command') {
@@ -3202,29 +3251,20 @@ export async function applySyncOperation(raw: unknown): Promise<{ op: SyncOperat
 		const playerText = asString(op.payload.playerText).trim();
 		if (playerText) {
 			const entryId = asNullableString(op.payload.entryId) ?? `entry_${clientTurnId}`;
-			const position = asNumber(op.payload.position, await nextStoryEntryPosition(op.storyId));
-			await db.insert(storyEntries).values({
-				id: entryId,
-				storyId: op.storyId,
-				type: 'user_action',
-				content: playerText,
-				position,
-				parentId: null,
-				branchId: null,
-				metadata: {
-					clientTurnId,
-					source: 'queued_turn_command',
-					syncOpId: op.id,
-					clientContext: asRecord(op.payload.clientContext),
-					queuedAt: asNullableString(op.payload.queuedAt),
-				},
-				serverVersion,
-				createdAt,
-				updatedAt: createdAt,
-			}).onConflictDoUpdate({
-				target: storyEntries.id,
-				set: {
+			await db.transaction(async (tx) => {
+				const position = await allocateStoryEntryPosition(
+					tx,
+					op.storyId,
+					typeof op.payload.position === 'number' ? op.payload.position : null,
+				);
+				await tx.insert(storyEntries).values({
+					id: entryId,
+					storyId: op.storyId,
+					type: 'user_action',
 					content: playerText,
+					position,
+					parentId: null,
+					branchId: null,
 					metadata: {
 						clientTurnId,
 						source: 'queued_turn_command',
@@ -3233,8 +3273,23 @@ export async function applySyncOperation(raw: unknown): Promise<{ op: SyncOperat
 						queuedAt: asNullableString(op.payload.queuedAt),
 					},
 					serverVersion,
+					createdAt,
 					updatedAt: createdAt,
-				},
+				}).onConflictDoUpdate({
+					target: storyEntries.id,
+					set: {
+						content: playerText,
+						metadata: {
+							clientTurnId,
+							source: 'queued_turn_command',
+							syncOpId: op.id,
+							clientContext: asRecord(op.payload.clientContext),
+							queuedAt: asNullableString(op.payload.queuedAt),
+						},
+						serverVersion,
+						updatedAt: createdAt,
+					},
+				});
 			});
 
 			const eventId = id('event');
@@ -3261,9 +3316,12 @@ export async function applySyncOperation(raw: unknown): Promise<{ op: SyncOperat
 			...asStringArray(op.payload.entryIds),
 			asNullableString(op.payload.entryId),
 		].filter((value): value is string => Boolean(value));
-		for (const entryId of entryIds) {
-			await db.delete(storyEntries).where(and(eq(storyEntries.storyId, op.storyId), eq(storyEntries.id, entryId)));
-		}
+		const fromPosition = op.payload.fromPosition;
+		if (fromPosition == null && entryIds.length === 0) throw new Error('Transcript deletion requires entry IDs or fromPosition.');
+		const removed = await db.delete(storyEntries).where(and(
+			eq(storyEntries.storyId, op.storyId),
+			typeof fromPosition === 'number' ? gte(storyEntries.position, fromPosition) : inArray(storyEntries.id, entryIds),
+		)).returning({ id: storyEntries.id });
 		const eventId = id('event');
 		await db.insert(storyEvents).values({
 			id: eventId,
@@ -3272,9 +3330,9 @@ export async function applySyncOperation(raw: unknown): Promise<{ op: SyncOperat
 			title: 'Transcript context removed',
 			body: asString(op.payload.reason, 'Player removed transcript context.'),
 			visibility: 'player_known',
-			sourceEntryIds: entryIds,
+			sourceEntryIds: removed.map((entry) => entry.id),
 			sourcePatchIds: [],
-			metadata: { syncOpId: op.id, fromPosition: op.payload.fromPosition ?? null },
+			metadata: { syncOpId: op.id, fromPosition: fromPosition ?? null, transcriptOnly: true },
 			serverVersion,
 			createdAt,
 			updatedAt: createdAt,
@@ -3282,24 +3340,24 @@ export async function applySyncOperation(raw: unknown): Promise<{ op: SyncOperat
 		eventIds.push(eventId);
 	}
 
-	if (eventIds.length > 0 || patchIds.length > 0) {
-		try {
-			projectionJobIds.push(...await enqueueTurnProjectionJobs({
+	if (op.type === 'create_entry' || op.type === 'delete_entry') {
+		projectionJobIds.push(await enqueueBackendJob({
+			storyId: op.storyId, type: 'refresh_scene_checkpoint', dedupeKey: `sync-scene-${op.id}`, maxAttempts: 3,
+		}, db));
+	}
+	if (op.type !== 'delete_entry' && (eventIds.length > 0 || patchIds.length > 0)) {
+		projectionJobIds.push(...await enqueueTurnProjectionJobs({
 				storyId: op.storyId,
 				eventIds,
 				memoryNodeIds: [],
 				patchIds,
 				serverVersion,
-			}));
-		} catch (error) {
-			console.warn('[BackendMemory] Failed to queue sync projection jobs:', error);
-		}
+			}, db));
 	} else {
-		const jobId = await queueStoryVaultSync(op.storyId, serverVersion, 'sync-op', {
-			syncOpId: op.id,
-			type: op.type,
-		});
-		if (jobId) projectionJobIds.push(jobId);
+		projectionJobIds.push(await enqueueStoryVaultSyncJob({
+			storyId: op.storyId, serverVersion, reason: 'sync-op',
+			payload: { syncOpId: op.id, type: op.type },
+		}, db));
 	}
 
 	return { op, eventIds, patchIds, projectionJobIds };

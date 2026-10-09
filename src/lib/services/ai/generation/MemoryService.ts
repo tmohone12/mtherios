@@ -14,6 +14,7 @@ import { createLogger } from '../core/config';
 import { countTokens } from '$lib/utils/tokens';
 import type { Chapter, Arc, StoryEntry } from '$lib/types';
 import { buildMtheriosSummaryInstruction } from '$lib/services/ai/context/mtheriosSummaryFormat';
+import { isParallelPovEntry } from '$lib/services/ai/context/parallelPov';
 
 const log = createLogger('Memory');
 
@@ -23,39 +24,16 @@ const MAX_INPUT_TOKENS = 16000;
 const MAX_PREV_CHAPTERS = 5;
 
 export function formatEntryForSummary(entry: StoryEntry): string {
-	return `[${entry.type}]: ${entry.content}\n\n`;
+	const perspective = isParallelPovEntry(entry) ? 'parallel POV; not player-character knowledge' : 'primary story';
+	return `[${entry.type} source=${entry.id}; ${perspective}]: ${entry.content}\n\n`;
 }
 
-function entryImportance(entry: StoryEntry): string | null {
-	const metadata = entry.metadata && typeof entry.metadata === 'object' ? entry.metadata as Record<string, unknown> : {};
-	const importance = metadata.importance ?? metadata.significance;
-	return typeof importance === 'string' ? importance : null;
-}
-
-function isImportantMemoryEntry(entry: StoryEntry): boolean {
-	const importance = entryImportance(entry);
-	return importance === 'major'
-		|| importance === 'critical'
-		|| (entry.type as string) === 'world_event'
-		|| Boolean((entry as StoryEntry & { worldStateDelta?: unknown }).worldStateDelta);
-}
-
-export function selectEntriesForChapterMemory(entries: StoryEntry[], maxTokens = MAX_INPUT_TOKENS): StoryEntry[] {
-	const selected = new Map<string, StoryEntry>();
-	let tokens = 0;
-	const tryAdd = (entry: StoryEntry): void => {
-		if (selected.has(entry.id)) return;
-		const lineTokens = countTokens(formatEntryForSummary(entry));
-		if (tokens + lineTokens > maxTokens) return;
-		selected.set(entry.id, entry);
-		tokens += lineTokens;
-	};
-
-	for (const entry of entries.slice(0, 3)) tryAdd(entry);
-	for (const entry of entries.filter(isImportantMemoryEntry)) tryAdd(entry);
-	for (const entry of entries.slice(-24)) tryAdd(entry);
-
-	return [...selected.values()].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+export function selectEntriesForChapterMemory(entries: StoryEntry[], maxTokens = Infinity): StoryEntry[] {
+	const ordered = [...entries].sort((a, b) => a.position - b.position);
+	if (Number.isFinite(maxTokens) && ordered.reduce((sum, entry) => sum + countTokens(formatEntryForSummary(entry)), 0) > maxTokens) {
+		throw new Error('The complete chapter source exceeds the input budget. No partial summary was saved.');
+	}
+	return ordered;
 }
 
 export class MemoryService extends BaseAIService {
@@ -76,14 +54,14 @@ export class MemoryService extends BaseAIService {
 	): Promise<ChapterSummaryResult> {
 		log('summarizeChapter', { entryCount: entries.length, beats: enrichment?.storyBeats?.length ?? 0, priorArcs: previousArcs?.length ?? 0 });
 
-		// Select entries to fit the input budget without dropping chapter endings.
-		const entriesText = selectEntriesForChapterMemory(entries, MAX_INPUT_TOKENS)
+		// Every source is required; a provider context error must remain a failed summary.
+		const entriesText = selectEntriesForChapterMemory(entries)
 			.map(formatEntryForSummary)
 			.join('');
 
 		// Only include last N chapter summaries for context
 		const chapterCap = maxPrevChapters ?? MAX_PREV_CHAPTERS;
-		const recentChapters = previousChapters?.slice(-chapterCap) ?? [];
+		const recentChapters = chapterCap > 0 ? previousChapters?.slice(-chapterCap) ?? [] : [];
 		const prevContext = recentChapters.length
 			? `Previous chapters:\n${recentChapters.map(c => `Chapter ${c.number}: ${c.summary}`).join('\n\n')}`
 			: '';
@@ -110,110 +88,20 @@ export class MemoryService extends BaseAIService {
 			beatsContext += '\n';
 		}
 
-		const system = `You are a chapter summarizer for a ${mode} interactive fiction story (${pov} person, ${tense} tense).
+		const system = `Write factual chapter memory for a ${mode} interactive story (${pov} person, ${tense} tense).
 
-Your summary must capture everything a future AI narrator needs to maintain story continuity without re-reading the original text. You are the MEMORY of this story. If you forget it, the story forgets it.
+The supplied source covers 20 completed turns: each player action and its resulting narration, plus any opening or unpaired narrative evidence. Read every source in order. Summarize what happened throughout the whole window, including quiet scenes, discussions, choices, discoveries, refusals, failures, resolutions, and consequences. Preserve who acted, what they learned or agreed, exact commitment terms, relationship changes, travel, time passing, and the ending situation. Never replace the middle of the chapter with a few highlights.
 
-${arcContext}${prevContext ? `═══ PREVIOUS CHAPTERS ═══\n${prevContext}\n` : ''}${beatsContext}═══ WHAT TO CAPTURE (priority order) ═══
+Keep action requests distinct from narrated outcomes. A /pov instruction is a control command; its resulting scene is canon from that character's perspective, without granting other characters that knowledge. Preserve secrets, beliefs, plans, and completed events as distinct things. Never invent motives, inferred future payoffs, escalation, or events absent from the source.
 
-CRITICAL — Without these, future narration breaks:
-- Player DECISIONS and their consequences (chose to spare the guard → guard remembers later)
-- Agreements, promises, debts, and obligations — preserve the EXACT TERMS, not a summary (e.g., "swore to deliver the artifact to Lady Maren by the winter solstice in exchange for safe passage through the Thornwood" NOT "made a deal with Lady Maren")
-- Relationship changes with reasoning (Kael trusts player after rescue, not just "relationship improved")
-- Character deaths, departures, and status changes
-- Items acquired, lost, gifted, or destroyed — and WHY they matter
-- Secrets learned or revealed — WHO knows WHAT (information asymmetry is crucial)
-- Betrayals, lies told, and deceptions maintained — track both truth and what characters believe
+Earlier summaries provide context only. Do not retell earlier events as new events in this chapter. Classified beats are supporting evidence, not permission to ignore quieter source entries.
+${arcContext}${prevContext ? `Earlier chapters:\n${prevContext}\n` : ''}${beatsContext}
 
-IMPORTANT — Needed for consistency:
-- Locations visited and their current state (was the bridge destroyed? is the tavern still standing?)
-- Time progression (how many days passed, what time of day)
-- Faction standing changes with cause (helped the Guild → standing +20)
-- World-state changes (war declared, plague spreading, magic failing)
-
-CONTEXT — Enriches future narration:
-- Emotional beats and tonal shifts
-- Unresolved mysteries and open questions
-- NPC attitudes and dispositions toward the player
-- Foreshadowing planted by the narrator
-
-═══ INFORMATION ASYMMETRY TRACKING ═══
-
-After summarizing, build an explicit information map:
-
-SECRETS & REVELATIONS:
-- For each secret or revelation: WHO knows it, WHO suspects it, WHO is completely ignorant
-- Track the DIRECTION of information flow (A told B, B overheard C, D found a letter)
-
-LIES & DECEPTIONS:
-- Who lied, to whom, about what
-- Was the lie believed? Is it starting to unravel?
-- Who is close to discovering the truth?
-
-PROMISES & OATHS:
-- Who promised, to whom, the EXACT TERMS
-- Was the promise sincere? Is there hidden intent?
-- What is the deadline or trigger for fulfillment?
-
-═══ RELATIONSHIP WEB ═══
-
-After summarizing, build a micro-web of relationships that changed this chapter:
-- Format: "Character A → Character B: shifted from [state] to [state] because [event]"
-- Include player relationships separately
-- Note relationships that were SET UP but did not yet change (seeds for future)
-
-═══ FORESHADOWING & PAYOFF REGISTRY ═══
-
-After summarizing, list:
-- FORESHADOWING PLANTED: symbolic objects, ominous dialogue, recurring motifs, prophecies, dreams
-  For each: note EXPECTED PAYOFF and ESTIMATED DISTANCE (next chapter / next arc / distant)
-- PAYOFFS LANDED: which foreshadowing from earlier chapters paid off this chapter?
-- MISFIRED SETUPS: anything that was set up but now seems irrelevant or contradicted
-
-═══ AGREEMENT & DEBT LEDGER ═══
-
-Every binding commitment must be recorded with exact terms:
-- DEBTS: who owes whom, what, by when, consequence of default
-- OATHS: who swore, to what, witnessed by whom, penalty for breaking
-- TREATIES: parties, terms, duration, secrecy level
-- For each: SECRET (who knows), KNOWN (some know), or PUBLIC (everyone knows)
-
-═══ STAKES ESCALATION MAP ═══
-
-- What did the protagonist risk or lose this chapter?
-- What did they gain, and what hidden cost is attached?
-- How did the overall story stakes shift (personal → political → existential)?
-- What is now IRREVERSIBLE?
-
-═══ WHAT TO OMIT ═══
-
-- Scene descriptions of places already established
-- Combat blow-by-blow (keep only outcome + consequence)
-- Repeated dialogue (keep only new information exchanged)
-- Internal monologue that didn't lead to action
-- Atmosphere descriptions that don't carry state changes
-
-═══ SUMMARY STYLE ═══
-
-- Write in ${tense} tense, third person (regardless of story POV) — this is a reference summary, not narrative
-- Be thorough but focused: 400-700 words. Do not skimp on critical details.
-- Focus on WHAT CHANGED and WHAT MATTERS, not moment-by-moment play-by-play
-- The title should be evocative (2-5 words) capturing the chapter's essence
-- Use precise language: "swore" not "promised"; "stole" not "took"; "betrayed" not "turned against"
-
-═══ OUTPUT FORMAT ═══
+Write a chronological account in plain third-person past tense. Compress repeated wording and decorative description. Let the amount of story determine the length; there is no word target or maximum number of events. Preserve completed resolutions as well as still-open matters. Before returning, check every supplied source for meaningful details missing from your account.
 
 ${buildMtheriosSummaryInstruction('chapter')}
 
-Respond with JSON:
-{
-  "title": "Evocative 2-5 word chapter title",
-  "summary": "Mtherios bracketed summary string using the required format",
-  "keywords": ["keyword1", "keyword2", "...5-10 terms for retrieval"],
-  "keyCharacters": ["character names that appear in this chapter"],
-  "keyLocations": ["location names visited in this chapter"],
-  "emotionalTone": "one or two words describing the emotional tone"
-}`;
+Return JSON with title, summary (the required bracketed format), keywords, keyCharacters, keyLocations, and emotionalTone. Characters and locations must come from this chapter's source.`;
 
 		return this.generateStructured(chapterSummaryResultSchema, system, `Chapter content:\n${entriesText}`);
 	}

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
+import { resolveAppUrl } from './runtime-config.mjs';
+
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
-const DEFAULT_PORT = process.env.PORT || '5173';
-const DEFAULT_URL = process.env.MTHERIOS_APP_URL || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
+const DEFAULT_URL = resolveAppUrl();
 const BOOLEAN_FLAGS = new Set(['json', 'preserveIds', 'replaceExisting', 'syncWiki', 'index', 'lint', 'recreate', 'runNow']);
 
 async function main(argv = process.argv.slice(2)) {
@@ -155,7 +155,6 @@ async function syncWiki(url, flags) {
 			storyId,
 			runNow: flags.runNow !== false,
 			index: flags.index === true,
-			lint: flags.lint === true,
 			recreate: flags.recreate === true,
 		}),
 		timeoutMs: 180_000,
@@ -280,7 +279,7 @@ function printHelp() {
   npm run app:database -- create --title "World name"
   npm run app:database -- export --story <storyId> [--out world-db.json]
   npm run app:database -- import --file world-db.json [--replace-existing] [--no-preserve-ids] [--no-sync-wiki]
-  npm run app:database -- sync-wiki --story <storyId> [--index] [--lint] [--recreate]
+  npm run app:database -- sync-wiki --story <storyId> [--index] [--recreate]
 
 General options:
   --url <url>                Running terminal app URL. Default: ${DEFAULT_URL}

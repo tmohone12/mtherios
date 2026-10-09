@@ -41,8 +41,11 @@ describe('onboarding story prompt packs', () => {
 		expect(pack).toContain('Never reset them into an underdog');
 		expect(pack).toContain('current anime setting');
 		expect(pack).not.toContain('High School DxD');
-		expect(pack).toContain('Focus on the 2-4 NPCs');
-		expect(pack).toContain('Advance one existing plot pressure');
+		expect(pack).toContain('Focus only on NPCs whose responses materially change the scene');
+		expect(pack).toContain('canonical appearance, personality, voice or speech style');
+		expect(pack).toContain('Preserve emotional inertia');
+		expect(pack).toContain('Let quiet interactions finish without an unrelated development');
+		expect(pack).not.toContain('per turn');
 		expect(pack).toContain('Do not force a cliffhanger');
 		expect(pack).toContain('without canned shock lines');
 		expect(pack).not.toMatch(/Vael Anot|internal monologue|\bsession\b/i);

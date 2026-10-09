@@ -1,4 +1,24 @@
+import {migrateGame} from './gameMigration';
+import { getLocationMap, listLocationMapHistory, restoreLocationMap, saveLocationMap } from './locationMaps';
+import { addFactionDetail, readFactionProfile, saveFactionMembers } from '$lib/server/factions/authoring';
+import { contentCommand } from './content';
+import { selectContentCover } from './imageAssets';
+import { generateManualSceneImage } from './imageRequests';
+import { generatePortraitImage, readPortraitImageStatus } from './portraitImages';
+import { contentCoverSelectSchema } from '$lib/contracts/content';
+import { projectImageStyleSaveSchema } from '$lib/contracts/imageStyle';
+import { saveProjectImageStyle } from './imageStyle';
+import { startAgentRun, getAgentRun, getCurrentAgentRun, getAgentRunHistory, respondAgentRun, cancelAgentRun, retryFailedAgentRun } from './agentRuns';
+import { answerAssistantQuestion, cancelAssistantConversationBatch, cancelAssistantRun, createAssistantConversation, listAssistantConversations, readAssistantConversation, reviewAssistantApproval, sendAssistantMessage } from './assistantConversations';
+import { getAgentSettings, saveAgentSettings, runProjectAgentJob } from './agentSettings';
+import { agentSettingsReadSchema, agentSettingsSaveSchema } from '$lib/contracts/agentTools';
+import { MutationError } from './mutationSafety';
 import { randomUUID } from 'node:crypto';
+import { plotEditSchema } from '$lib/contracts/plotEditing';
+import { removeCampaignFact } from './campaignFacts';
+import { editPlotState, listPlotCommitments } from './plotEditing';
+import { findChapterCharacterCandidates, getBackendJobStats } from '$lib/server/jobs/processor';
+import { z } from 'zod';
 import {
 	apiCallLogCreateSchema,
 	apiCallLogListArgsSchema,
@@ -11,8 +31,12 @@ import {
 	engineEntriesAroundArgsSchema,
 	engineEntityDeleteArgsSchema,
 	engineJobStatusArgsSchema,
+	engineMemoryRecoveryArgsSchema,
+	engineRebuildSummariesArgsSchema,
+	engineRetryJobArgsSchema,
 	engineOrchestratorRunArgsSchema,
 	enginePlotBrainPlanArgsSchema,
+	enginePlotBrainRetireArgsSchema,
 	enginePromptPacketDebugArgsSchema,
 	engineRollupArcJobArgsSchema,
 	engineRunDueJobsArgsSchema,
@@ -32,6 +56,7 @@ import {
 	type EngineCommandRequest,
 	type EngineCommandResponse,
 	type EnginePlotBrainPlanArgs,
+	type EnginePlotBrainRetireArgs,
 	type LlmServiceSetting,
 	type LlmServiceSettingPatch,
 	type RecordPatchRequest,
@@ -94,6 +119,7 @@ import {
 	deleteBackendEntity,
 	deleteBackendStory,
 	deleteBackendShelf,
+	restoreBackendStory,
 	exportBackendStory,
 	createBackendStory,
 	createBackendShelf,
@@ -112,7 +138,7 @@ import {
 	upsertBackendLivingMemoryFromLocal,
 	upsertBackendSagaFromLocal,
 } from '$lib/server/memory/canonical';
-import { prepareServerTurn, processServerTurn, type PreparedServerTurnSummary } from '$lib/server/turn/orchestrator';
+import { normalizeGmToolArgs, prepareServerTurn, prepareServerTurnPreview, processServerTurn, type PreparedServerTurnSummary, type PreparedServerTurnPreview } from '$lib/server/turn/orchestrator';
 import { publishEngineEvent } from './events';
 import {
 	advanceStoryTurn,
@@ -123,9 +149,13 @@ import {
 import {
 	runMemoryRetrieveCommand,
 	listBackendJobsCommand,
+	retryBackendJobCommand,
+	recoverMemoryCoverageCommand,
+	rebuildSummariesCommand,
 	runDueBackendJobsCommand,
 	runReindexStoryJobCommand,
 	runPlotBrainPlanCommand,
+	runPlotBrainRetireCommand,
 	runRollupArcJobCommand,
 	runStoryVaultSyncJobCommand,
 	runSyncPullCommand,
@@ -156,8 +186,35 @@ import {
 	listWorldRecords as listWorldRecordsFromStore,
 	patchWorldRecord,
 } from './worldRecords';
-import { draftCharacterUpdateFromStoryContext, type CharacterDraftUpdateArgs } from './characterDrafts';
+import { getLocationWorkspace, saveLocationWorkspace } from './locationRecords';
+import {
+	characterDraftCreateArgsSchema,
+	characterSourceDraftArgsSchema,
+	draftCharacterFromCandidateSources,
+	draftCharacterCreateFromStoryContext,
+	draftCharacterUpdateFromStoryContext,
+	type CharacterDraftCreateArgs,
+	type CharacterDraftUpdateArgs,
+	type CharacterSourceDraftArgs,
+} from './characterDrafts';
 import { searchCanonicalWorld } from './canonicalSearch';
+import {
+	actorBriefArgsSchema,
+	affinityReadArgsSchema,
+	checkScene,
+	getActorBrief,
+	getRelationshipWeb,
+	getThreadBoard,
+	readAffinity,
+	relationshipWebArgsSchema,
+	sceneCheckArgsSchema,
+	threadBoardArgsSchema,
+	type ActorBriefArgs,
+	type AffinityReadArgs,
+	type RelationshipWebArgs,
+	type SceneCheckArgs,
+	type ThreadBoardArgs,
+} from './gmTools';
 import { importWorldDatabaseBundle } from '$lib/server/db/worldDatabaseImport';
 import { TERMINAL_WORLD_DATABASE_SCHEMA } from '$lib/server/db/worldDatabaseSchema';
 import { listGoogleAgentModels } from './googleAgentProxy';
@@ -185,6 +242,14 @@ type LlmSettingsSaveInput = {
 	secrets: Array<{ ref: string; value: string }>;
 };
 
+const patchProposalReviewArgsSchema = z.object({
+	proposalId: z.string().min(1),
+	decision: z.enum(['approved', 'rejected']),
+	reviewer: z.string().min(1).optional(),
+	notes: z.string().max(2_000).nullable().optional(),
+	expectedProposalVersion: z.number().int().nonnegative().optional(),
+});
+
 export interface EngineCommandHandlers {
 	loadAppStatus?: (input: AppStatusInput) => Promise<JsonRecord>;
 	loadDatabaseHealth?: () => Promise<JsonRecord>;
@@ -209,10 +274,18 @@ export interface EngineCommandHandlers {
 	readCampaignPage?: (input: Parameters<typeof readCampaignPage>[0]) => Promise<CampaignPageReadResult>;
 	writeCampaignPage?: (input: Parameters<typeof writeCampaignPage>[0]) => Promise<CampaignVaultWriteResult>;
 	listWorldRecords?: (storyId: string, options?: Parameters<typeof listWorldRecordsFromStore>[1]) => Promise<JsonRecord>;
-	getWorldRecord?: (type: string, recordId: string) => Promise<JsonRecord>;
-	patchWorldRecord?: (type: string, recordId: string, request: RecordPatchRequest) => Promise<JsonRecord>;
+	getWorldRecord?: (storyId: string, type: string, recordId: string) => Promise<JsonRecord>;
+	patchWorldRecord?: (storyId: string, type: string, recordId: string, request: RecordPatchRequest) => Promise<JsonRecord>;
 	draftCharacterUpdate?: (storyId: string, args: CharacterDraftUpdateArgs) => Promise<JsonRecord>;
+	draftCharacterCreate?: (storyId: string, args: CharacterDraftCreateArgs) => Promise<JsonRecord>;
+	draftCharacterFromSources?: (storyId: string, args: CharacterSourceDraftArgs) => Promise<JsonRecord>;
+	findCharacterCandidates?: (storyId: string, chapterLimit: number) => Promise<JsonRecord>;
 	searchWorld?: (input: Parameters<typeof searchCanonicalWorld>[0]) => Promise<JsonRecord>;
+	getActorBrief?: (storyId: string, args: ActorBriefArgs) => Promise<JsonRecord>;
+	readAffinity?: (storyId: string, args: AffinityReadArgs) => Promise<JsonRecord>;
+	checkScene?: (storyId: string, args: SceneCheckArgs) => Promise<JsonRecord>;
+	getRelationshipWeb?: (storyId: string, args: RelationshipWebArgs) => Promise<JsonRecord>;
+	getThreadBoard?: (storyId: string, args: ThreadBoardArgs) => Promise<JsonRecord>;
 	listShelves?: () => Promise<JsonRecord[]>;
 	getShelf?: (shelfId: string) => Promise<JsonRecord>;
 	createShelf?: (input: unknown) => Promise<JsonRecord>;
@@ -222,6 +295,7 @@ export interface EngineCommandHandlers {
 	createStory?: (input: unknown) => Promise<JsonRecord>;
 	exportStory?: (storyId: string) => Promise<JsonRecord>;
 	deleteStory?: (storyId: string, options: { mode: 'archive' | 'purge'; exportBeforeDelete: boolean }) => Promise<JsonRecord>;
+	restoreStory?: (storyId: string) => Promise<JsonRecord>;
 	importIndexedDbBundle?: (input: unknown) => Promise<JsonRecord>;
 	upsertEntity?: (storyId: string, entry: JsonRecord) => Promise<EntityCommandResponse>;
 	deleteEntity?: (storyId: string, entityId: string) => Promise<EntityDeleteResponse>;
@@ -245,16 +319,21 @@ export interface EngineCommandHandlers {
 	scheduleTimelineEvent?: (input: Parameters<typeof scheduleTimelineEvent>[0]) => Promise<StoryEventRow>;
 	advanceStoryTurn?: typeof advanceStoryTurn;
 	prepareTurn?: (input: unknown) => Promise<PreparedServerTurnSummary>;
+	previewTurn?: (input: unknown) => Promise<PreparedServerTurnPreview>;
 	retrieveMemory?: (input: Parameters<typeof runMemoryRetrieveCommand>[0]) => Promise<RetrievedMemoryPacket>;
 	pullSyncChanges?: (input: Parameters<typeof runSyncPullCommand>[0]) => Promise<SyncPullCommandResult>;
 	pushSyncOperations?: (input: Parameters<typeof runSyncPushCommand>[0]) => Promise<SyncPushCommandResult>;
 	runReindexStoryJob?: (input: unknown) => Promise<JsonRecord>;
 	listJobs?: (input: JobStatusCommandInput) => Promise<JsonRecord>;
+	retryJob?: (input: JsonRecord) => Promise<JsonRecord>;
+	recoverMemory?: (input: JsonRecord) => Promise<JsonRecord>;
+	rebuildSummaries?: (input: JsonRecord) => Promise<JsonRecord>;
 	runDueJobs?: (input: RunDueJobsCommandInput) => Promise<JsonRecord>;
 	runRollupArcJob?: (input: RollupArcJobCommandInput) => Promise<JsonRecord>;
 	runStoryVaultSyncJob?: (input: StoryVaultSyncJobCommandInput) => Promise<JsonRecord>;
 	runWorldSimJob?: (input: WorldSimJobCommandInput) => Promise<JsonRecord>;
 	runPlotBrainPlan?: (input: EnginePlotBrainPlanArgs & { storyId: string }) => Promise<JsonRecord>;
+	runPlotBrainRetire?: (input: EnginePlotBrainRetireArgs & { storyId: string }) => Promise<JsonRecord>;
 	runOrchestrator?: (input: EngineOrchestratorRunInput) => Promise<EngineOrchestratorRunResult>;
 }
 
@@ -360,7 +439,15 @@ export async function executeEngineCommand(
 	const readWorldRecord = handlers.getWorldRecord ?? getWorldRecord;
 	const writeWorldRecord = handlers.patchWorldRecord ?? patchWorldRecord;
 	const draftCharacterUpdate = handlers.draftCharacterUpdate ?? draftCharacterUpdateFromStoryContext;
+	const draftCharacterCreate = handlers.draftCharacterCreate ?? draftCharacterCreateFromStoryContext;
+	const draftCharacterFromSources = handlers.draftCharacterFromSources ?? draftCharacterFromCandidateSources;
+	const findCharacterCandidates = handlers.findCharacterCandidates ?? findChapterCharacterCandidates;
 	const searchWorld = handlers.searchWorld ?? searchCanonicalWorld;
+	const loadActorBrief = handlers.getActorBrief ?? getActorBrief;
+	const loadAffinity = handlers.readAffinity ?? readAffinity;
+	const loadSceneCheck = handlers.checkScene ?? checkScene;
+	const loadRelationshipWeb = handlers.getRelationshipWeb ?? getRelationshipWeb;
+	const loadThreadBoard = handlers.getThreadBoard ?? getThreadBoard;
 	const listShelves = handlers.listShelves ?? listBackendShelves;
 	const getShelf = handlers.getShelf ?? getBackendShelf;
 	const createShelf = handlers.createShelf ?? createBackendShelf;
@@ -372,6 +459,7 @@ export async function executeEngineCommand(
 	const createStory = handlers.createStory ?? createBackendStory;
 	const exportStory = handlers.exportStory ?? exportBackendStory;
 	const deleteStory = handlers.deleteStory ?? deleteBackendStory;
+	const restoreStory = handlers.restoreStory ?? restoreBackendStory;
 	const importIndexedDb = handlers.importIndexedDbBundle ?? importIndexedDbBundle;
 	const upsertEntity = handlers.upsertEntity ?? upsertBackendEntityFromEntry;
 	const deleteEntity = handlers.deleteEntity ?? deleteBackendEntity;
@@ -384,21 +472,25 @@ export async function executeEngineCommand(
 	const restoreContextCheckpoint = handlers.revertToContextCheckpoint ?? revertToContextCheckpoint;
 	const upsertSaga = handlers.upsertSaga ?? upsertBackendSagaFromLocal;
 	const upsertLivingMemory = handlers.upsertLivingMemory ?? upsertBackendLivingMemoryFromLocal;
-	const submitTurn = handlers.submitTurn ?? processServerTurn;
 	const loadTimelineBrief = handlers.loadTimelineBrief ?? loadGmTimelineBrief;
 	const scheduleTimeline = handlers.scheduleTimelineEvent ?? scheduleTimelineEvent;
 	const advanceTimelineTurn = handlers.advanceStoryTurn ?? advanceStoryTurn;
 	const prepareTurn = handlers.prepareTurn ?? prepareServerTurn;
+	const previewTurn = handlers.previewTurn ?? prepareServerTurnPreview;
 	const retrieveMemory = handlers.retrieveMemory ?? runMemoryRetrieveCommand;
 	const pullSyncChanges = handlers.pullSyncChanges ?? runSyncPullCommand;
 	const pushSyncOperations = handlers.pushSyncOperations ?? runSyncPushCommand;
 	const runReindexStoryJob = handlers.runReindexStoryJob ?? runReindexStoryJobCommand;
 	const listJobs = handlers.listJobs ?? listBackendJobsCommand;
+	const retryJob = handlers.retryJob ?? retryBackendJobCommand;
+	const recoverMemory = handlers.recoverMemory ?? recoverMemoryCoverageCommand;
+	const rebuildSummaries = handlers.rebuildSummaries ?? rebuildSummariesCommand;
 	const runDueJobs = handlers.runDueJobs ?? runDueBackendJobsCommand;
 	const runRollupArcJob = handlers.runRollupArcJob ?? runRollupArcJobCommand;
 	const runStoryVaultSyncJob = handlers.runStoryVaultSyncJob ?? runStoryVaultSyncJobCommand;
 	const runWorldSimJob = handlers.runWorldSimJob ?? runWorldSimJobCommand;
 	const runPlotBrainPlan = handlers.runPlotBrainPlan ?? runPlotBrainPlanCommand;
+	const runPlotBrainRetire = handlers.runPlotBrainRetire ?? runPlotBrainRetireCommand;
 	const previewResolution = handlers.previewEntityResolution ?? previewEntityResolutionCommand;
 	const addAlias = handlers.addEntityAlias ?? addEntityAliasCommand;
 	const mergeDuplicateEntities = handlers.mergeEntities ?? mergeEntitiesCommand;
@@ -412,6 +504,27 @@ export async function executeEngineCommand(
 			clientCommandId: `${input.clientCommandId ?? base.commandId}:${call.id}`,
 			args: call.args,
 		}, handlers),
+	}));
+	const submitTurn = handlers.submitTurn ?? ((input: unknown) => processServerTurn(input, {
+		runGmTool: async (call) => {
+			const response = await executeEngineCommand({
+				storyId: request.storyId,
+				command: call.command,
+				clientCommandId: `${request.clientCommandId ?? base.commandId}:${call.id}`,
+				args: normalizeGmToolArgs(call),
+			}, handlers);
+			if (response.status !== 'succeeded') {
+				throw new Error(response.error || `${call.command} failed.`);
+			}
+			return response.result;
+		},
+		onGmActivity: (activity) => {
+			publishEngineEvent({
+				storyId: request.storyId,
+				type: 'gm.activity',
+				data: { ...activity },
+			});
+		},
 	}));
 	const publishSucceededEvent = (response: EngineCommandResponse) => {
 		publishEngineEvent({
@@ -447,7 +560,112 @@ export async function executeEngineCommand(
 				status: 'running',
 			},
 		});
-		switch (request.command) {
+			switch (request.command) {
+			case 'assistant.conversation.list': case 'assistant.conversation.create': case 'assistant.conversation.read': case 'assistant.message.send': case 'assistant.question.answer': case 'assistant.restore.review': case 'assistant.approval.review': case 'assistant.run.cancel': case 'assistant.batch.cancel': {
+				if (request.storyId !== (request.args.gameId ?? '__app__')) throw new MutationError('SCOPE_DENIED', 'Command scope does not match the Assistant conversation.');
+				const result = request.command === 'assistant.conversation.list' ? await listAssistantConversations(request.args)
+					: request.command === 'assistant.conversation.create' ? await createAssistantConversation(request.args)
+					: request.command === 'assistant.conversation.read' ? await readAssistantConversation(request.args)
+					: request.command === 'assistant.message.send' ? await sendAssistantMessage(request.args)
+					: request.command === 'assistant.question.answer' ? await answerAssistantQuestion(request.args)
+					: request.command === 'assistant.restore.review' || request.command === 'assistant.approval.review' ? await reviewAssistantApproval(request.args)
+					: request.command === 'assistant.batch.cancel' ? await cancelAssistantConversationBatch(request.args) : await cancelAssistantRun(request.args);
+				const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				return response;
+			}
+			case 'research.preview': {
+				const { getDb } = await import('$lib/server/db/client');
+				const { sql } = await import('drizzle-orm');
+				const [story] = await getDb().execute(sql`select shelf_id from stories where id=${request.storyId}`);
+				if (!story) throw new MutationError('SCOPE_DENIED', 'Game not found.');
+				const researchSettings = await getAgentSettings({ projectId: String(story.shelf_id), gameId: request.storyId });
+				const result = researchSettings.effective.gmResearch
+					? await (await import('./research')).runCompactResearch({ storyId: request.storyId, projectId: String(story.shelf_id), question: String(request.args.question ?? ''), runId: 'preview', callId: base.commandId })
+					: { status: 'disabled', statements: [], unresolved: [String(request.args.question ?? '')], searchedSourceIds: [], mode: 'local_extract' };
+				const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'agent.run.start': case 'agent.run.status': case 'agent.run.current': case 'agent.run.history': case 'agent.run.respond': case 'agent.run.cancel': case 'agent.run.retry': {
+				const args = { ...request.args, storyId: request.storyId };
+				const result = request.command === 'agent.run.start' ? await startAgentRun(request.args, request.storyId)
+					: request.command === 'agent.run.status' ? await getAgentRun(args)
+					: request.command === 'agent.run.current' ? await getCurrentAgentRun(args)
+					: request.command === 'agent.run.history' ? await getAgentRunHistory(args)
+					: request.command === 'agent.run.respond' ? await respondAgentRun(args)
+					: request.command === 'agent.run.retry' ? await retryFailedAgentRun(args) : await cancelAgentRun(args);
+				const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				if (!['agent.run.current', 'agent.run.status', 'agent.run.history'].includes(request.command)) publishSucceededEvent(response);
+				return response;
+			}
+
+      case 'content.games.previewMove': case 'content.games.move': {
+        if(request.storyId!=='__app__'&&request.storyId!==request.args.gameId)throw new MutationError('SCOPE_DENIED','Command game scope does not match migration scope.');
+        const result=await migrateGame(request.args,request.command==='content.games.previewMove');
+        const response={...base,status:'succeeded',result,updatedAt:nowIso()} satisfies EngineCommandResponse;publishSucceededEvent(response);return response;
+      }
+      case 'content.canonicalTypes.read': case 'content.canonicalTypes.preview': case 'content.canonicalTypes.save': case 'content.canonicalTypes.history': case 'content.canonicalTypes.previewRestore': case 'content.canonicalTypes.restore':
+      case 'content.folders.previewArchive': case 'content.folders.archive': case 'content.folders.previewRestore': case 'content.folders.restore': case 'content.folders.previewCopy': case 'content.folders.copy': case 'content.folders.list': case 'content.folders.create': case 'content.folders.previewMove': case 'content.folders.move':
+      case 'content.history': case 'content.history.previewRestore': case 'content.history.restore':
+      case 'content.types.list': case 'content.types.preview': case 'content.types.save':
+      case 'content.list': case 'content.read': case 'content.write': case 'content.update': case 'content.organize': case 'content.canonical': case 'content.canonical.edit': case 'content.canonical.history': case 'content.canonical.previewRestore': case 'content.canonical.restore': case 'content.canonical.create': case 'content.canonical.copy': case 'content.export': case 'content.import.preview': case 'content.import': {
+        const result = await contentCommand(request.command, request.args, request.storyId);
+        const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+        publishSucceededEvent(response);
+        return response;
+      }
+			case 'content.cover.select': {
+				const args = contentCoverSelectSchema.parse(request.args);
+				if (request.storyId !== '__app__' && request.storyId !== args.gameId) throw new MutationError('SCOPE_DENIED', 'Command game scope does not match the content scope.');
+				const result = await selectContentCover(args);
+				const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'image.scene.request': {
+				const args = z.object({ projectId: z.string().min(1).max(200), gameId: z.string().min(1).max(200),
+					clientTurnId: z.string().min(1).max(200), callId: z.string().min(1).max(200),
+					prompt: z.string().trim().min(1).max(1000).optional() }).strict().parse(request.args);
+				if (request.storyId !== args.gameId) throw new MutationError('SCOPE_DENIED', 'Command game scope does not match the image origin.');
+				const result = await generateManualSceneImage(args);
+				const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'image.portrait.request': case 'image.portrait.status': {
+				const scope = z.object({ projectId: z.string().min(1).max(200), gameId: z.string().min(1).max(200),
+					characterId: z.string().min(1).max(200) });
+				const args = (request.command === 'image.portrait.request' ? scope.extend({ callId: z.string().min(1).max(200) }) : scope)
+					.strict().parse(request.args);
+				if (request.storyId !== args.gameId) throw new MutationError('SCOPE_DENIED', 'Command game scope does not match the portrait target.');
+				const result = request.command === 'image.portrait.request'
+					? await generatePortraitImage(args as typeof args & { callId: string }) : await readPortraitImageStatus(args);
+				const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				if (request.command === 'image.portrait.request') publishSucceededEvent(response);
+				return response;
+			}
+			case 'project.jobs.run':
+			case 'project.jobs.retry': {
+				if (request.storyId !== '__app__') throw new MutationError('SCOPE_DENIED', 'Project jobs require an explicit project scope.');
+				const result = await runProjectAgentJob(request.args, request.command === 'project.jobs.retry');
+				return { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+			}
+			case 'project.jobs.status': {
+				const args = agentSettingsReadSchema.parse(request.args ?? {});
+				if (request.storyId !== '__app__' || args.gameId) throw new MutationError('SCOPE_DENIED', 'Project jobs require an explicit project scope.');
+				await getAgentSettings(args);
+				const result = await getBackendJobStats(null, args.projectId);
+				return { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+			}
+			case 'settings.agent.get':
+			case 'settings.agent.save': {
+				const args = (request.command === 'settings.agent.save' ? agentSettingsSaveSchema : agentSettingsReadSchema).parse(request.args ?? {});
+				if (request.storyId !== '__app__' && request.storyId !== args.gameId) throw new MutationError('SCOPE_DENIED', 'Command game scope does not match the settings target.');
+				const result = request.command === 'settings.agent.save' ? await saveAgentSettings(args) : await getAgentSettings(args);
+				const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
 			case 'app.status': {
 				const storyId = request.storyId === '__app__' ? null : request.storyId;
 				const status = await loadAppStatus({ storyId });
@@ -579,6 +797,9 @@ export async function executeEngineCommand(
 					storyId: request.storyId,
 					query: args.query,
 					tokenBudget: args.tokenBudget,
+					contextBudget: args.contextBudget,
+					recentDialogueTokens: args.recentDialogueTokens,
+					recentDialogueTurns: args.recentDialogueTurns,
 				});
 				const retrieved = asRecord(diagnostics.retrieved);
 				const prompt = asRecord(diagnostics.prompt);
@@ -723,7 +944,6 @@ export async function executeEngineCommand(
 			case 'wiki.index':
 			case 'wiki.ingest':
 			case 'wiki.init':
-			case 'wiki.lint':
 			case 'wiki.page':
 			case 'wiki.pages':
 			case 'wiki.search':
@@ -772,7 +992,7 @@ export async function executeEngineCommand(
 				return response;
 			}
 			case 'wiki.storyVault.status': {
-				const args = asRecord(request.args);
+				const args = withCommandStoryId(request.storyId, request.args ?? {});
 				const storyId = typeof args.storyId === 'string' && args.storyId.trim() ? args.storyId.trim() : request.storyId;
 				const result = await loadWikiStoryVaultStatus(storyId);
 				const record = asRecord(result);
@@ -853,18 +1073,13 @@ export async function executeEngineCommand(
 					},
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;
-				publishEngineEvent({ storyId: request.storyId, type: 'campaign.status', data: response.projectionChanges });
-				publishEngineEvent({
-					storyId: request.storyId,
-					type: 'command.succeeded',
-					data: {
-						commandId: response.commandId,
-						clientCommandId: response.clientCommandId,
-						command: response.command,
-						status: response.status,
-						projectionChanges: response.projectionChanges,
-					},
-				});
+				return response;
+			}
+			case 'settings.image.save': {
+				if (request.storyId !== '__app__') throw new MutationError('SCOPE_DENIED', 'Project image style requires project scope.');
+				const result = await saveProjectImageStyle(projectImageStyleSaveSchema.parse(request.args ?? {}));
+				const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
 				return response;
 			}
 			case 'campaign.status': {
@@ -888,18 +1103,6 @@ export async function executeEngineCommand(
 					},
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;
-				publishEngineEvent({ storyId: request.storyId, type: 'campaign.status', data: response.projectionChanges });
-				publishEngineEvent({
-					storyId: request.storyId,
-					type: 'command.succeeded',
-					data: {
-						commandId: response.commandId,
-						clientCommandId: response.clientCommandId,
-						command: response.command,
-						status: response.status,
-						projectionChanges: response.projectionChanges,
-					},
-				});
 				return response;
 			}
 			case 'campaign.transcriptPage': {
@@ -1093,9 +1296,113 @@ export async function executeEngineCommand(
 				publishSucceededEvent(response);
 				return response;
 			}
+			case 'world.actor.brief': {
+				const args = actorBriefArgsSchema.parse(request.args ?? {});
+				const result = await loadActorBrief(request.storyId, args);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { gmTool: { command: request.command, target: args.actorId ?? args.name ?? null } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.affinity.read': {
+				const args = affinityReadArgsSchema.parse(request.args ?? {});
+				const result = await loadAffinity(request.storyId, args);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { gmTool: { command: request.command, target: args.actorIds[0] ?? args.actorNames[0] ?? null } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.scene.check': {
+				const args = sceneCheckArgsSchema.parse(request.args ?? {});
+				const result = await loadSceneCheck(request.storyId, args);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { gmTool: { command: request.command, target: args.locationId ?? args.locationName ?? null } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.relationship.web': {
+				const args = relationshipWebArgsSchema.parse(request.args ?? {});
+				const result = await loadRelationshipWeb(request.storyId, args);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { gmTool: { command: request.command, target: args.actorIds[0] ?? args.actorNames[0] ?? null } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'plot.thread.board': {
+				const args = threadBoardArgsSchema.parse(request.args ?? {});
+				const result = await loadThreadBoard(request.storyId, args);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { gmTool: { command: request.command, target: args.query ?? args.actorIds[0] ?? args.factionIds[0] ?? null } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.location.get':
+			case 'world.location.save': {
+				const result = request.command === 'world.location.get'
+					? await getLocationWorkspace(request.storyId, request.args as Parameters<typeof getLocationWorkspace>[1])
+					: await saveLocationWorkspace(request.storyId, request.args as Parameters<typeof saveLocationWorkspace>[1]);
+				const response = { ...base, status: 'succeeded', result, projectionChanges: { location: { storyId: request.storyId, locationId: request.args?.locationId } }, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				if (request.command === 'world.location.save') publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.location.map.get':
+			case 'world.location.map.history':
+			case 'world.location.map.save':
+			case 'world.location.map.restore': {
+				const result = request.command === 'world.location.map.get'
+					? await getLocationMap(request.storyId, request.args as Parameters<typeof getLocationMap>[1])
+					: request.command === 'world.location.map.history'
+						? await listLocationMapHistory(request.storyId, request.args as Parameters<typeof listLocationMapHistory>[1])
+						: request.command === 'world.location.map.save'
+							? await saveLocationMap(request.storyId, request.args as Parameters<typeof saveLocationMap>[1])
+							: await restoreLocationMap(request.storyId, request.args as Parameters<typeof restoreLocationMap>[1]);
+				const response = { ...base, status: 'succeeded', result, projectionChanges: { locationMap: { storyId: request.storyId, locationId: request.args?.locationId } }, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				if (request.command === 'world.location.map.save' || request.command === 'world.location.map.restore') publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.faction.profile.get':
+			case 'world.faction.profile.add':
+			case 'world.faction.profile.saveMembers': {
+				const result = request.command === 'world.faction.profile.get'
+					? await readFactionProfile(request.storyId, request.args)
+					: request.command === 'world.faction.profile.add'
+						? await addFactionDetail(request.storyId, request.args)
+						: await saveFactionMembers(request.storyId, request.args);
+				const response = { ...base, status: 'succeeded', result, projectionChanges: { worldRecord: { type: 'factions', recordId: result.factionId, storyId: request.storyId, serverVersion: result.version } }, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				if (request.command !== 'world.faction.profile.get') publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
 			case 'world.record.get': {
 				const args = engineWorldRecordDetailArgsSchema.parse(request.args ?? {});
-				const detail = await readWorldRecord(args.type, args.recordId);
+				const detail = await readWorldRecord(request.storyId, args.type, args.recordId);
 				const record = asRecord(detail.record);
 				const sourceEntries = Array.isArray(detail.sourceEntries) ? detail.sourceEntries : [];
 				const sourceEvents = Array.isArray(detail.sourceEvents) ? detail.sourceEvents : [];
@@ -1119,11 +1426,22 @@ export async function executeEngineCommand(
 				publishSucceededEvent(response);
 				return response;
 			}
+			case 'campaign.fact.remove': {
+				const result = await removeCampaignFact(request.storyId, request.args);
+				const response = { ...base, status: 'succeeded', result,
+					projectionChanges: { campaignState: { removedKey: result.removed.key } }, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
 			case 'world.record.patch': {
 				const args = engineWorldRecordPatchArgsSchema.parse(request.args ?? {});
-				const result = await writeWorldRecord(args.type, args.recordId, {
+				const result = await writeWorldRecord(request.storyId, args.type, args.recordId, {
 					updates: args.updates,
 					reason: args.reason,
+					...(args.expectedVersion !== undefined ? { expectedVersion: args.expectedVersion } : {}),
+					...(args.expectedUpdatedAt !== undefined ? { expectedUpdatedAt: args.expectedUpdatedAt } : {}),
+					...(args.jsonMode !== undefined ? { jsonMode: args.jsonMode } : {}),
 				});
 				const patched = asRecord(result);
 				const storyId = typeof patched.storyId === 'string' ? patched.storyId : null;
@@ -1161,6 +1479,48 @@ export async function executeEngineCommand(
 							status: typeof record.status === 'string' ? record.status : null,
 						},
 					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.character.draftCreate': {
+				const args = characterDraftCreateArgsSchema.parse(request.args ?? {});
+				const result = await draftCharacterCreate(request.storyId, args);
+				const record = asRecord(result);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						characterDraftCreate: {
+							name: args.name,
+							recordId: typeof record.recordId === 'string' ? record.recordId : null,
+							proposalId: typeof record.proposalId === 'string' ? record.proposalId : null,
+							status: typeof record.status === 'string' ? record.status : null,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.character.findCandidates': {
+				const args = z.object({ chapterLimit: z.number().int().min(1).max(12).default(8) }).parse(request.args ?? {});
+				const result = await findCharacterCandidates(request.storyId, args.chapterLimit);
+				const response = { ...base, status: 'succeeded', result, projectionChanges: { characterCandidates: result }, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.character.draftFromSources': {
+				const args = characterSourceDraftArgsSchema.parse(request.args ?? {});
+				const result = await draftCharacterFromSources(request.storyId, args);
+				const response = {
+					...base, status: 'succeeded', result,
+					projectionChanges: { characterDraftFromSources: { proposalId: args.proposalId, status: result.status } },
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;
 				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
@@ -1205,6 +1565,26 @@ export async function executeEngineCommand(
 							canonDeleted: resultRecord.canonDeleted === true,
 							artifactCleanup: asRecord(resultRecord.artifactCleanup),
 							warningCount: warnings.length,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'story.restore': {
+				const result = await restoreStory(request.storyId);
+				const restored = asRecord(result);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						story: {
+							storyId: request.storyId,
+							restored: restored.ok !== false,
+							serverVersion: typeof restored.serverVersion === 'number' ? restored.serverVersion : null,
 						},
 					},
 					updatedAt: nowIso(),
@@ -1319,7 +1699,10 @@ export async function executeEngineCommand(
 			}
 			case 'story.list': {
 				const args = asRecord(request.args ?? {});
-				const stories = await listStories({ shelfId: typeof args.shelfId === 'string' ? args.shelfId : null });
+				const stories = await listStories({
+					shelfId: typeof args.shelfId === 'string' ? args.shelfId : null,
+					includeArchived: args.includeArchived === true,
+				});
 				const response = {
 					...base,
 					status: 'succeeded',
@@ -1447,6 +1830,7 @@ export async function executeEngineCommand(
 					storyId: request.storyId,
 					keepEntityId: typeof args.keepEntityId === 'string' ? args.keepEntityId : '',
 					mergeEntityId: typeof args.mergeEntityId === 'string' ? args.mergeEntityId : '',
+					expectedVersion: typeof args.expectedVersion === 'number' ? args.expectedVersion : undefined,
 					reason: typeof args.reason === 'string' ? args.reason : null,
 				});
 				const response = {
@@ -1486,14 +1870,14 @@ export async function executeEngineCommand(
 				return response;
 			}
 			case 'patchProposal.review': {
-				const args = asRecord(request.args ?? {});
-				const decision = args.decision === 'rejected' ? 'rejected' : 'approved';
+				const args = patchProposalReviewArgsSchema.parse(request.args ?? {});
 				const result = await reviewProposal({
 					storyId: request.storyId,
-					proposalId: typeof args.proposalId === 'string' ? args.proposalId : '',
-					decision,
-					reviewer: typeof args.reviewer === 'string' ? args.reviewer : 'human',
-					notes: typeof args.notes === 'string' ? args.notes : null,
+					proposalId: args.proposalId,
+					decision: args.decision,
+					reviewer: args.reviewer ?? 'human',
+					notes: args.notes ?? null,
+					...(args.expectedProposalVersion !== undefined ? { expectedProposalVersion: args.expectedProposalVersion } : {}),
 				});
 				const response = {
 					...base,
@@ -1919,6 +2303,29 @@ export async function executeEngineCommand(
 				});
 				return response;
 			}
+			case 'turn.preview': {
+				const args = asRecord(request.args);
+				const turnInput = turnRequestSchema.parse({
+					...args,
+					storyId: request.storyId,
+					clientTurnId: typeof args.clientTurnId === 'string' ? args.clientTurnId : request.clientCommandId ?? base.commandId,
+				});
+				const preview = await previewTurn(turnInput);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: preview,
+					projectionChanges: {
+						turnPreview: {
+							clientTurnId: preview.clientTurnId,
+							preparationMs: preview.preparationMs,
+							sourceReferenceCount: preview.sourceReferences.length,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				return response;
+			}
 			case 'turn.prepare': {
 				const args = asRecord(request.args);
 				const turnInput = turnRequestSchema.parse({
@@ -1978,6 +2385,7 @@ export async function executeEngineCommand(
 							runId: orchestrator.runId,
 							mode: orchestrator.mode,
 							roleCount: orchestrator.roles.length,
+							stepCount: orchestrator.steps.length,
 							toolCallCount: orchestrator.toolCalls.length,
 							toolResultCount: orchestrator.toolResults.length,
 							executed: orchestrator.executed,
@@ -2181,6 +2589,7 @@ export async function executeEngineCommand(
 					storyId,
 					limit: args.limit,
 					allStories: args.allStories,
+					...(args.status ? { status: args.status } : {}),
 				});
 				const jobs = Array.isArray(jobStatus.jobs) ? jobStatus.jobs : [];
 				const stats = asRecord(jobStatus.stats);
@@ -2203,6 +2612,48 @@ export async function executeEngineCommand(
 				publishSucceededEvent(response);
 				return response;
 			}
+			case 'jobs.retry': {
+				const args = engineRetryJobArgsSchema.parse(request.args ?? {});
+				const result = await retryJob({ storyId: request.storyId, ...args });
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { jobs: { retry: result } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'jobs.recoverMemory': {
+				const args = engineMemoryRecoveryArgsSchema.parse(request.args ?? {});
+				const result = await recoverMemory({ storyId: request.storyId, ...args });
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { jobs: { recoverMemory: result } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'jobs.rebuildSummaries': {
+				const args = engineRebuildSummariesArgsSchema.parse(request.args ?? {});
+				const result = await rebuildSummaries({ storyId: request.storyId, ...args });
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { jobs: { rebuildSummaries: result } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
 			case 'jobs.runDue': {
 				const args = engineRunDueJobsArgsSchema.parse(request.args ?? {});
 				const storyId = args.allStories ? null : request.storyId;
@@ -2211,6 +2662,7 @@ export async function executeEngineCommand(
 					workerId: args.workerId,
 					limit: args.limit,
 					allStories: args.allStories,
+					scope: args.scope,
 				});
 				const failed = Array.isArray(job.failed) ? job.failed : [];
 				const response = {
@@ -2364,6 +2816,42 @@ export async function executeEngineCommand(
 				publishSucceededEvent(response);
 				return response;
 			}
+			case 'plot.edit': {
+				const result = await editPlotState(request.storyId, plotEditSchema.parse(request.args));
+				const response = { ...base, status: 'succeeded', result, projectionChanges: { plotBrain: result }, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'plot.commitments': {
+				const result = await listPlotCommitments(request.storyId);
+				const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'plotBrain.retire': {
+				const args = enginePlotBrainRetireArgsSchema.parse(request.args ?? {});
+				const result = await runPlotBrainRetire({ ...args, storyId: request.storyId });
+				const resultRecord = asRecord(result);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						plotBrain: {
+							active: false,
+							quietUntilTurn: resultRecord.quietUntilTurn ?? null,
+							retiredStoryThreads: resultRecord.retiredStoryThreads ?? 0,
+							retiredStoryEvents: resultRecord.retiredStoryEvents ?? 0,
+							serverVersion: resultRecord.serverVersion ?? null,
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
 			default: {
 				const response = {
 					...base,
@@ -2390,6 +2878,7 @@ export async function executeEngineCommand(
 			...base,
 			status: 'failed',
 			error: error instanceof Error ? error.message : String(error),
+			...(error instanceof MutationError ? { errorDetails: { code: error.code, details: error.details } } : {}),
 			updatedAt: nowIso(),
 		} satisfies EngineCommandResponse;
 		publishEngineEvent({

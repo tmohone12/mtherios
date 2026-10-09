@@ -31,13 +31,17 @@
 			temperature: def?.defaultTemp ?? 0.5,
 			maxTokens: def?.defaultMaxTokens ?? 4096,
 			systemPromptOverride: '',
-			enabled: true,
+			enabled: def?.defaultEnabled ?? true,
 			profileId: '',
 		};
 	}
 
 	function getProfileModel(profileId: string): string {
-		return editingProfileModels[profileId] ?? settings.getProfileModel(profileId);
+		const model = editingProfileModels[profileId] ?? settings.getProfileModel(profileId);
+		if (model) return model;
+		if (profileId === 'narrative') return getServiceModelOverride('narrative') || settings.narrativeSettings.model;
+		const services = SERVICE_PROFILES.find(profile => profile.id === profileId)?.serviceIds ?? [];
+		return services.length === 1 ? getServiceModelOverride(services[0]) : '';
 	}
 
 	function getServiceModelOverride(serviceId: string): string {
@@ -104,6 +108,7 @@
 
 	function updateProfileModel(profileId: string, model: string) {
 		editingProfileModels = { ...editingProfileModels, [profileId]: model };
+		if (profileId === 'narrative') updateConfig('narrative', { model });
 	}
 
 	function updateConfig(serviceId: string, updates: Partial<ServiceConfig>) {
@@ -113,10 +118,14 @@
 			temperature: def?.defaultTemp ?? 0.5,
 			maxTokens: def?.defaultMaxTokens ?? 4096,
 			systemPromptOverride: '',
-			enabled: true,
+			enabled: def?.defaultEnabled ?? true,
 			profileId: '',
 		};
 		editingConfigs = { ...editingConfigs, [serviceId]: { ...existing, ...updates } };
+	}
+
+	function optionalNumber(value: string): number | null {
+		return value.trim() === '' ? null : Number(value);
 	}
 
 	function resetService(serviceId: string) {
@@ -128,7 +137,7 @@
 				temperature: def.defaultTemp,
 				maxTokens: def.defaultMaxTokens,
 				systemPromptOverride: '',
-				enabled: true,
+				enabled: def.defaultEnabled ?? true,
 				profileId: '',
 			},
 		};
@@ -156,7 +165,13 @@
 			for (const [id, config] of Object.entries(editingConfigs)) {
 				await settings.setServiceConfig(id, config);
 			}
-			await syncTerminalLlmSettingsFromBrowser();
+			if (editingConfigs.narrative) {
+				settings.narrativeSettings.model = editingConfigs.narrative.model;
+				await settings.saveNarrativeSettings();
+			}
+			const changedServices = new Set(Object.keys(editingConfigs));
+			for (const profileId of Object.keys(editingProfileModels)) for (const serviceId of SERVICE_PROFILES.find(profile => profile.id === profileId)?.serviceIds ?? []) changedServices.add(serviceId);
+			await syncTerminalLlmSettingsFromBrowser([...changedServices]);
 			terminalSyncStatus = 'Terminal runtime settings synced.';
 			editingConfigs = {};
 			editingProfileModels = {};
@@ -174,8 +189,9 @@
 
 <div class="space-y-4">
 	<p class="text-xs text-[var(--text-muted)]">
-		Services are grouped into profiles. Set one model per profile — all services in that group share it.
-		Expand individual services to tune temperature, tokens, or prompt overrides.
+		GameMaster is the story model. Expand its services to configure World State tools, or set explicit task overrides.
+		NPC Dialogue is an optional second pass for spoken lines after the GameMaster draft. Enable it and select its provider/model to test it.
+		Memory & Context and Player Guidance run as bounded helpers with their own task settings.
 	</p>
 
 	{#if terminalSyncStatus}
@@ -390,6 +406,15 @@
 												class="w-full accent-[var(--color-gold-400)]" />
 										</div>
 
+										{#if serviceId === 'dialogue'}
+											<label for="dialogue-mode" class="block text-[10px] text-[var(--text-muted)]">Dialogue coverage</label>
+											<select id="dialogue-mode" value={config.dialogueMode ?? 'all'}
+												onchange={(e) => updateConfig(serviceId, { dialogueMode: (e.target as HTMLSelectElement).value as 'all' | 'important' })}
+												class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 text-xs text-[var(--text-primary)]">
+												<option value="all">All eligible NPC speech</option>
+												<option value="important">Important exchanges</option>
+											</select>
+										{/if}
 										<!-- Max Tokens -->
 										<div class="space-y-1">
 											<label for="service-max-tokens-{serviceId}" class="text-[10px] text-[var(--text-muted)]">Max Tokens</label>
@@ -397,6 +422,24 @@
 												oninput={(e) => updateConfig(serviceId, { maxTokens: parseInt((e.target as HTMLInputElement).value) || 4096 })}
 												class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none" />
 										</div>
+
+										{#if serviceId === 'batchAuthoring'}
+											<div class="space-y-2 rounded-lg border border-[var(--border-secondary)] p-2.5">
+												<p class="text-[10px] text-[var(--text-muted)]">Set conservative upper-bound prices for this model. A batch cannot be planned until all three values are saved to the server.</p>
+												<label for="batch-max-cost" class="block text-[10px] text-[var(--text-muted)]">Max batch spend (USD)</label>
+												<input id="batch-max-cost" type="number" min="0.000001" max="1000" step="any" value={config.batchMaxCostUsd ?? ''}
+													oninput={(e) => updateConfig(serviceId, { batchMaxCostUsd: optionalNumber((e.target as HTMLInputElement).value) })}
+													class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]" />
+												<label for="batch-input-price" class="block text-[10px] text-[var(--text-muted)]">Input USD per million tokens</label>
+												<input id="batch-input-price" type="number" min="0" max="1000" step="any" value={config.batchInputUsdPerMillion ?? ''}
+													oninput={(e) => updateConfig(serviceId, { batchInputUsdPerMillion: optionalNumber((e.target as HTMLInputElement).value) })}
+													class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]" />
+												<label for="batch-output-price" class="block text-[10px] text-[var(--text-muted)]">Output USD per million tokens</label>
+												<input id="batch-output-price" type="number" min="0" max="1000" step="any" value={config.batchOutputUsdPerMillion ?? ''}
+													oninput={(e) => updateConfig(serviceId, { batchOutputUsdPerMillion: optionalNumber((e.target as HTMLInputElement).value) })}
+													class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-primary)]" />
+											</div>
+										{/if}
 
 										<!-- System Prompt Override -->
 										<div class="space-y-1">

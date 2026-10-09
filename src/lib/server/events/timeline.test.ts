@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { npcEventLinks, stories, storyEvents } from '$lib/server/db/schema';
 import {
+	acknowledgedDueEventIdsFromNarration,
 	advanceStoryTurn,
 	buildDueTimelineEventPromotionPatch,
 	buildGmTimelineBrief,
 	buildNpcEventLinksForEvent,
 	buildScheduledTimelineEventInsert,
+	commitNarratedPlotBrainEvents,
+	isNarrativeTimelineEvent,
 	loadGmTimelineBrief,
 	promoteDueTimelineEvents,
 	scheduleTimelineEvent,
@@ -144,7 +147,7 @@ describe('timeline selection helpers', () => {
 			event({ id: 'committed_due_turn', status: 'committed', scheduledTurn: 2 }),
 		], 5);
 
-		expect(selected.map(item => item.id)).toEqual(['already_due', 'current']);
+		expect(selected.map(item => item.id)).toEqual(['current', 'already_due']);
 	});
 
 	it('keeps rows already marked due selected', () => {
@@ -154,6 +157,36 @@ describe('timeline selection helpers', () => {
 		], 4);
 
 		expect(selected.map(item => item.id)).toEqual(['due_without_turn']);
+	});
+
+	it('acknowledges due events only when narration carries concrete title and body evidence', () => {
+		const dueEvents = buildGmTimelineBrief({
+			storyId: 'story_1',
+			currentTurn: 5,
+			currentWorldTime: null,
+			events: [
+				event({ id: 'bread', status: 'due', title: 'Bread prices rise before dawn', body: 'Bakers raise prices before the public notice is posted.' }),
+				event({ id: 'gate', status: 'due', title: 'Gatehouse pressure', body: 'An envoy quietly tests the western gate.' }),
+			],
+			npcLinks: [],
+		}).dueEvents;
+
+		expect(acknowledgedDueEventIdsFromNarration(
+			dueEvents,
+			'Before dawn, bread prices have risen. The bakers raise them while the public notice is still being posted.',
+		)).toEqual(['bread']);
+		expect(acknowledgedDueEventIdsFromNarration(
+			dueEvents,
+			'Tension and pressure continue elsewhere in the city.',
+		)).toEqual([]);
+		expect(acknowledgedDueEventIdsFromNarration(
+			dueEvents,
+			'"Bread prices rise before dawn" remains a hypothetical warning, not something that occurs.',
+		)).toEqual([]);
+		expect(acknowledgedDueEventIdsFromNarration(
+			dueEvents,
+			'Bread prices have not risen; bakers did not raise them before the public notice.',
+		)).toEqual([]);
 	});
 
 	it('keeps null-turn due rows in the brief under tight due limits', () => {
@@ -172,6 +205,88 @@ describe('timeline selection helpers', () => {
 		});
 
 		expect(brief.dueEvents.map(item => item.id)).toEqual(['null_due']);
+	});
+
+	it('keeps multiple scene-reaching due effects ahead of remote pressure at the due limit', () => {
+		const remote = Array.from({ length: 12 }, (_, index) => event({
+			id: `remote_${index}`, status: 'due', scheduledTurn: null,
+			locationIds: ['distant_port'], createdTurn: 12 - index,
+		}));
+		const brief = buildGmTimelineBrief({
+			storyId: 'story_1', currentTurn: 20, currentWorldTime: null,
+			sceneLocationId: 'great_hall', sceneEntityIds: ['mara'],
+			events: [
+			...remote,
+			event({ id: 'local_hall', status: 'due', scheduledTurn: null, locationIds: ['great_hall'], createdTurn: 1 }),
+			event({ id: 'local_mara', status: 'due', scheduledTurn: null, actorEntityIds: ['mara'], createdTurn: 2 }),
+		], npcLinks: [], dueLimit: 2,
+		});
+		expect(brief.dueEvents.map(item => item.id)).toEqual(['local_mara', 'local_hall']);
+	});
+
+	it('keeps cancelled pressure out of due, scheduled, recent, and npc event context', () => {
+		const brief = buildGmTimelineBrief({
+			storyId: 'story_1',
+			currentTurn: 8,
+			currentWorldTime: null,
+			events: [event({ id: 'cancelled_plot', status: 'cancelled', scheduledTurn: 8 })],
+			npcLinks: [link({ eventId: 'cancelled_plot', npcEntityId: 'npc_mira' })],
+			presentNpcIds: ['npc_mira'],
+		});
+
+		expect(brief.dueEvents).toEqual([]);
+		expect(brief.scheduledEvents).toEqual([]);
+		expect(brief.recentEvents).toEqual([]);
+		expect(brief.npcEvents).toEqual([]);
+	});
+
+	it('keeps player background actions out of the GM brief while retaining NPC actions', () => {
+		const brief = buildGmTimelineBrief({
+			storyId: 'story_1',
+			playerEntityId: 'player',
+			currentTurn: 8,
+			currentWorldTime: null,
+			events: [
+				event({ id: 'player_move', actorEntityIds: ['player'], metadata: { sourceType: 'npc_independent_action' } }),
+				event({ id: 'npc_move', actorEntityIds: ['npc_vaeron'], metadata: { sourceType: 'npc_independent_action' } }),
+			],
+			npcLinks: [link({ eventId: 'player_move', npcEntityId: 'npc_vaeron' })],
+			presentNpcIds: ['npc_vaeron'],
+		});
+
+		expect(brief.recentEvents.map(item => item.id)).toEqual(['npc_move']);
+		expect(brief.npcEvents.flatMap(item => item.eventIds)).not.toContain('player_move');
+	});
+
+	it('rejects proposed, superseded, non-canon, invalidated, and OOC event rows from narrative context', () => {
+		const rejected = [
+			event({ id: 'proposed', status: 'proposed' }),
+			event({ id: 'superseded', status: 'committed', metadata: { superseded: true } }),
+			event({ id: 'superseded_by', status: 'scheduled', scheduledTurn: 8, metadata: { supersededById: 'event_replacement' } }),
+			event({ id: 'non_canon', status: 'due', metadata: { nonCanon: true } }),
+			event({ id: 'invalidated', status: 'committed', metadata: { invalidated: 'true' } }),
+			event({ id: 'ooc_source', status: 'committed', metadata: { sourceType: 'out-of-character' } }),
+			event({ id: 'ooc_action', status: 'committed', metadata: { action_type: 'ooc' } }),
+			event({ id: 'pending_correction', type: 'correction', status: 'committed', metadata: { syncOpId: 'sync_pending' } }),
+			event({ id: 'transcript_control', type: 'correction', status: 'committed', metadata: { transcriptOnly: true } }),
+		];
+		const accepted = event({ id: 'canon', status: 'committed' });
+		const brief = buildGmTimelineBrief({
+			storyId: 'story_1',
+			currentTurn: 8,
+			currentWorldTime: null,
+			events: [accepted, ...rejected],
+			npcLinks: [link({ eventId: 'canon', npcEntityId: 'npc_mira' }), ...rejected.map(row => link({ eventId: row.id, npcEntityId: 'npc_mira' }))],
+			presentNpcIds: ['npc_mira'],
+		});
+
+		expect(rejected.map(row => isNarrativeTimelineEvent(row))).toEqual(rejected.map(() => false));
+		expect(isNarrativeTimelineEvent(accepted)).toBe(true);
+		expect(isNarrativeTimelineEvent(event({ id: 'accepted_correction', type: 'correction', status: 'committed', metadata: { sourceType: 'patch_proposal_application' } }))).toBe(true);
+		expect(brief.recentEvents.map(row => row.id)).toEqual(['canon']);
+		expect(brief.dueEvents).toEqual([]);
+		expect(brief.scheduledEvents).toEqual([]);
+		expect(brief.npcEvents).toEqual([expect.objectContaining({ eventIds: ['canon'] })]);
 	});
 
 	it('does not create npc links from generic actor and target entity ids by default', () => {
@@ -561,6 +676,41 @@ describe('timeline selection helpers', () => {
 		expect(setPayload).not.toHaveProperty('occurredTurn');
 	});
 
+	it('commits acknowledged due event ids regardless of which background system scheduled them', async () => {
+		const rows = [event({ id: 'plot_due', status: 'committed', occurredTurn: 5, serverVersion: 42 })];
+		const returning = vi.fn().mockResolvedValue(rows);
+		const where = vi.fn((condition: unknown) => {
+			void condition;
+			return { returning };
+		});
+		const set = vi.fn(() => ({ where }));
+		const update = vi.fn(() => ({ set }));
+		dbMocks.getDb.mockReturnValue({ update });
+
+		const result = await commitNarratedPlotBrainEvents({
+			storyId: 'story_1',
+			eventIds: ['plot_due', 'plot_due'],
+			currentTurn: 5,
+			now,
+			serverVersion: 42,
+		});
+		const condition = where.mock.calls[0]?.[0];
+
+		expect(result).toBe(rows);
+		expect(set).toHaveBeenCalledWith({
+			status: 'committed',
+			occurredTurn: 5,
+			updatedAt: now,
+			serverVersion: 42,
+		});
+		expect(conditionIncludesEq(condition, storyEvents.storyId, 'story_1')).toBe(true);
+		expect(sqlExpressionIncludes(condition, storyEvents.id)).toBe(true);
+		expect(sqlExpressionIncludes(condition, 'plot_due')).toBe(true);
+		expect(sqlExpressionIncludes(condition, 'plotBrain')).toBe(false);
+		expect(sqlExpressionIncludes(condition, storyEvents.status)).toBe(true);
+		expect(sqlExpressionIncludes(condition, 'due')).toBe(true);
+	});
+
 	it('loads a timeline brief from bounded due, recent, scheduled, npc-link, and linked-event queries', async () => {
 		const storyRow = {
 			id: 'story_1',
@@ -643,7 +793,7 @@ describe('timeline selection helpers', () => {
 
 		expect(select).toHaveBeenCalledTimes(6);
 		expect(chains[1].limit).toHaveBeenCalledWith(1);
-		expect(chains[2].limit).toHaveBeenCalledWith(1);
+		expect(chains[2].limit).toHaveBeenCalledWith(13);
 		expect(chains[3].limit).toHaveBeenCalledWith(1);
 		expect(chains[4].limit).toHaveBeenCalledWith(expect.any(Number));
 		expect(chains[5].limit).toHaveBeenCalledWith(1);

@@ -1,189 +1,171 @@
 <script lang="ts">
-	import { BookOpen, Database, Library, Scale, Settings, Server, Cpu, ChevronDown, X } from 'lucide-svelte';
+	import { Library, Settings, Server, Cpu, ChevronRight, Plus, Compass, Ellipsis, Feather } from 'lucide-svelte';
+	import { app } from '$lib/stores/app.svelte';
 	import { onMount } from 'svelte';
 	import SettingsModal from '$lib/components/settings/SettingsModal.svelte';
+	import ContentWorkspace from '$lib/components/content/ContentWorkspace.svelte';
 	import LibraryPanel from '$lib/components/library/LibraryPanel.svelte';
-	import StoryMemoryPanel from '$lib/components/memory/StoryMemoryPanel.svelte';
 	import WorldExplorer from '$lib/components/database/WorldExplorer.svelte';
-	import CanonRepairCockpit from '$lib/components/canon/CanonRepairCockpit.svelte';
 	import EnginePanel from '$lib/components/system/EnginePanel.svelte';
 	import TerminalPanel from '$lib/components/system/TerminalPanel.svelte';
 
-	type MainPanel = 'library' | 'chapters';
-	type ToolPanel = 'database' | 'canon' | 'engine' | 'terminal' | null;
-
-	let activeMain = $state<MainPanel>('library');
-	let activeTool = $state<ToolPanel>(null);
+	type Panel = 'content' | 'library' | 'database' | 'engine' | 'terminal';
+	let activePanel = $state<Panel>('library');
+	onMount(() => { if (new URLSearchParams(window.location.search).has('source')) activePanel = 'content'; });
+	let libraryVisit = $state(0);
 	let settingsOpen = $state(false);
-	let systemOpen = $state(false);
-	let systemDropdownEl = $state<HTMLDivElement | null>(null);
-
-	const mainNavItems = [
-		{ id: 'library' as const, icon: Library, label: 'Shelves' },
-		{ id: 'chapters' as const, icon: BookOpen, label: 'Chapters' },
+	let mobileToolsOpen = $state(false);
+	let loreDirty = $state(false);
+	let navigationNotice = $state('');
+	const workspaceItems = [
+		{ id: 'content' as const, icon: Feather, label: 'Project content', shortLabel: 'Content' },
+		{ id: 'library' as const, icon: Library, label: 'Shelves', shortLabel: 'Shelves' },
 	];
-
 	const systemItems = [
-		{ id: 'database' as const, icon: Database, label: 'Database Viewer' },
-		{ id: 'canon' as const, icon: Scale, label: 'Canon' },
-		{ id: 'engine' as const, icon: Server, label: 'Engine Core' },
-		{ id: 'terminal' as const, icon: Cpu, label: 'Terminal Sync' },
+		{ id: 'database' as const, icon: Compass, label: 'World explorer' },
+		{ id: 'engine' as const, icon: Server, label: 'Engine core' },
+		{ id: 'terminal' as const, icon: Cpu, label: 'Terminal sync' },
 	];
-
-	function selectMain(id: MainPanel) {
-		activeMain = id;
-		activeTool = null;
+	const activeLabel = $derived([...workspaceItems, ...systemItems].find(item => item.id === activePanel)?.label ?? 'Story library');
+	function selectPanel(id: Panel) {
+		if (id !== activePanel && !canLeaveLore()) return;
+		if (id === 'library' && activePanel === 'library') libraryVisit += 1;
+		activePanel = id;
+		mobileToolsOpen = false;
 	}
-
-	function selectTool(id: ToolPanel) {
-		activeTool = id;
-		systemOpen = false;
+	function canLeaveLore() {
+		if (!loreDirty) return true;
+		navigationNotice = 'Save or discard your changes before leaving this workspace.';
+		return false;
 	}
-
-	function openSettings() {
-		settingsOpen = true;
-		systemOpen = false;
+	function startNewStory() {
+		if (canLeaveLore()) app.startNewStory();
 	}
-
-	function closeTool() {
-		activeTool = null;
+	function updateLoreDirty(dirty: boolean) {
+		loreDirty = dirty;
+		if (!dirty) navigationNotice = '';
 	}
-
-	function handleClickOutside(event: MouseEvent) {
-		if (systemDropdownEl && !systemDropdownEl.contains(event.target as Node)) {
-			systemOpen = false;
-		}
-	}
-
-	onMount(() => {
-		document.addEventListener('click', handleClickOutside);
-		return () => document.removeEventListener('click', handleClickOutside);
-	});
 </script>
 
-<div class="app-shell relative flex h-[100dvh] w-screen flex-col bg-[var(--bg-primary)]">
-	<div class="grain-overlay"></div>
-	<div class="cathedral-glow"></div>
-
-	<!-- Header (desktop) -->
-	<header class="parchment-surface relative z-10 hidden h-16 items-center justify-between border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-5 sm:flex">
-		<div class="flex items-center gap-3">
-			<svg viewBox="0 0 48 48" fill="none" class="h-7 w-7 text-[var(--text-accent)]">
-				<path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="currentColor" stroke-width="1.5" fill="none"/>
-				<circle cx="24" cy="24" r="5" fill="currentColor" opacity="0.6"/>
-			</svg>
-			<span class="font-display text-lg font-semibold tracking-wide text-[var(--text-accent)]">Mtherios</span>
-		</div>
-
-		<!-- Main nav -->
-		<nav class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-1 rounded-xl border border-[var(--border-secondary)] bg-[var(--bg-primary)] p-1 shadow-sm">
-			{#each mainNavItems as item}
-				{@const isActive = activeMain === item.id && !activeTool}
-				<button
-					class="group relative flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm transition-all duration-200
-						{isActive
-							? 'text-[var(--text-accent)]'
-							: 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'}"
-					onclick={() => selectMain(item.id)}
-				>
-					{#if isActive}
-						<span class="absolute inset-0 rounded-lg bg-[var(--bg-tertiary)]" aria-hidden="true"></span>
-						<span class="absolute -bottom-[5px] left-1/2 h-[2px] w-4 -translate-x-1/2 rounded-full bg-[var(--text-accent)]" aria-hidden="true"></span>
-					{/if}
-					<span class="relative flex items-center gap-2">
-						<item.icon class="h-4 w-4" />
-						<span class="font-display text-xs tracking-wider">{item.label}</span>
-					</span>
+<div class="app-shell workspace-shell">
+	<a class="skip-link" href="#workspace-content">Skip to content</a>
+	<aside class="workspace-sidebar" aria-label="Workspace sidebar">
+		<button class="workspace-brand" onclick={() => selectPanel('library')} aria-label="MythEngine story library">
+			<span class="brand-mark"><Feather size={23} strokeWidth={1.3} /></span>
+			<span class="brand-wordmark">MythEngine<span>THE STORY WORKSPACE</span></span>
+		</button>
+		<button class="sidebar-create" onclick={startNewStory} title="New story"><Plus size={17} /><span>New story</span></button>
+		<nav class="sidebar-navigation" aria-label="Workspace">
+			<p class="nav-eyebrow">Your workspace</p>
+			{#each workspaceItems as item}
+				<button class="sidebar-link" class:active={activePanel === item.id} aria-current={activePanel === item.id ? 'page' : undefined} onclick={() => selectPanel(item.id)} title={item.label}>
+					<item.icon size={18} strokeWidth={1.6} /><span>{item.label}</span>
+					{#if activePanel === item.id}<span class="active-dot" aria-hidden="true"></span>{/if}
+				</button>
+			{/each}
+			<p class="nav-eyebrow system-eyebrow">Behind the story</p>
+			{#each systemItems as item}
+				<button class="sidebar-link" class:active={activePanel === item.id} aria-current={activePanel === item.id ? 'page' : undefined} onclick={() => selectPanel(item.id)} title={item.label}>
+					<item.icon size={18} strokeWidth={1.6} /><span>{item.label}</span>
+					{#if activePanel === item.id}<span class="active-dot" aria-hidden="true"></span>{/if}
 				</button>
 			{/each}
 		</nav>
-
-		<!-- System menu -->
-		<div class="relative flex items-center gap-2" bind:this={systemDropdownEl}>
-			{#if activeTool}
-				<div class="flex items-center gap-2 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-1.5">
-					<span class="font-display text-xs tracking-wider text-[var(--text-accent)]">
-						{systemItems.find(i => i.id === activeTool)?.label ?? activeTool}
-					</span>
-					<button onclick={closeTool} class="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
-						<X class="h-3.5 w-3.5" />
-					</button>
-				</div>
-			{/if}
-			<button
-				class="flex items-center gap-1.5 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-2 text-sm text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]"
-				onclick={() => systemOpen = !systemOpen}
-			>
-				<Settings class="h-4 w-4" />
-				<span class="font-display text-xs tracking-wider">System</span>
-				<ChevronDown class="h-3 w-3 transition-transform {systemOpen ? 'rotate-180' : ''}" />
-			</button>
-
-			{#if systemOpen}
-				<div class="absolute right-0 top-full mt-2 w-56 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-1.5 shadow-xl">
-					{#each systemItems as item}
-						<button
-							class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-							onclick={() => selectTool(item.id)}
-						>
-							<item.icon class="h-4 w-4 text-[var(--text-muted)]" />
-							<span class="font-display text-xs tracking-wider">{item.label}</span>
-						</button>
-					{/each}
-					<div class="my-1 border-t border-[var(--border-secondary)]"></div>
-					<button
-						class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-						onclick={openSettings}
-					>
-						<Settings class="h-4 w-4 text-[var(--text-muted)]" />
-						<span class="font-display text-xs tracking-wider">Settings</span>
-					</button>
-				</div>
-			{/if}
+		<div class="sidebar-footer">
+			<div class="sidebar-note"><Feather size={19} strokeWidth={1.2} /><p>A world of possibilities.<br /><span>One story at a time.</span></p></div>
+			<button class="sidebar-link" onclick={() => settingsOpen = true} title="Settings"><Settings size={18} strokeWidth={1.6} /><span>Settings</span></button>
 		</div>
-	</header>
-
-	<!-- Main content -->
-	<main class="relative z-[1] min-h-0 flex-1 overflow-hidden">
-		{#if activeTool === 'database'}
-			<WorldExplorer />
-		{:else if activeTool === 'canon'}
-			<CanonRepairCockpit />
-		{:else if activeTool === 'engine'}
-			<EnginePanel />
-		{:else if activeTool === 'terminal'}
-			<TerminalPanel />
-		{:else if activeMain === 'library'}
-			<LibraryPanel />
-		{:else if activeMain === 'chapters'}
-			<StoryMemoryPanel />
-		{/if}
-	</main>
-
-	<!-- Mobile bottom nav -->
-	<nav class="relative z-10 flex items-center justify-around border-t border-[var(--border-primary)] bg-[var(--bg-secondary)] pb-[env(safe-area-inset-bottom)] sm:hidden">
-		{#each mainNavItems as item}
-			{@const isActive = activeMain === item.id && !activeTool}
-			<button
-				class="relative flex flex-col items-center gap-1 px-3 py-3 transition-colors duration-200
-					{isActive ? 'text-[var(--text-accent)]' : 'text-[var(--text-muted)]'}"
-				onclick={() => selectMain(item.id)}
-			>
-				{#if isActive}
-					<span class="absolute -top-[1px] left-1/2 h-[2px] w-6 -translate-x-1/2 rounded-b-full bg-[var(--text-accent)]" aria-hidden="true"></span>
-				{/if}
-				<item.icon class="h-5 w-5" />
-				<span class="text-[10px] font-display tracking-wider">{item.label}</span>
-			</button>
+	</aside>
+	<div class="workspace-body">
+		<header class="workspace-topbar">
+			<div class="workspace-breadcrumb"><span class="desktop-crumb">Workspace</span><ChevronRight class="desktop-crumb" size={13} /><span class="mobile-wordmark">MythEngine<span>/</span></span><strong>{activeLabel}</strong></div>
+			<div class="topbar-actions"><span class="workspace-edition">A place for living stories</span><button class="topbar-settings" onclick={() => settingsOpen = true} aria-label="Open settings"><Settings size={18} strokeWidth={1.6} /></button></div>
+		</header>
+		{#if navigationNotice}<p class="navigation-notice" role="alert">{navigationNotice}</p>{/if}
+		<main id="workspace-content" class="workspace-content" tabindex="-1">
+			{#if activePanel === 'library'}{#key libraryVisit}<LibraryPanel />{/key}
+			{:else if activePanel === 'content'}<ContentWorkspace onDirtyChange={updateLoreDirty} />
+			{:else if activePanel === 'database'}<WorldExplorer title="World explorer" onDirtyChange={updateLoreDirty} />
+			{:else if activePanel === 'engine'}<EnginePanel />
+			{:else if activePanel === 'terminal'}<TerminalPanel />{/if}
+		</main>
+	</div>
+	<nav class="workspace-mobile-nav" aria-label="Mobile workspace">
+		{#each workspaceItems as item}
+			<button class:active={activePanel === item.id} aria-current={activePanel === item.id ? 'page' : undefined} onclick={() => selectPanel(item.id)}><item.icon size={20} strokeWidth={1.6} /><span>{item.shortLabel}</span></button>
 		{/each}
-		<button
-			class="relative flex flex-col items-center gap-1 px-3 py-3 text-[var(--text-muted)] transition-colors"
-			onclick={() => { settingsOpen = true; }}
-		>
-			<Settings class="h-5 w-5" />
-			<span class="text-[10px] font-display tracking-wider">System</span>
-		</button>
+		<details class="mobile-tools" bind:open={mobileToolsOpen}>
+			<summary class:active={systemItems.some(item => item.id === activePanel)}><Ellipsis size={21} /><span>More</span></summary>
+			<div class="mobile-tools-menu">
+				<button onclick={() => { mobileToolsOpen = false; startNewStory(); }}><Plus size={17} />New story</button>
+				{#each systemItems as item}<button class:active={activePanel === item.id} onclick={() => selectPanel(item.id)}><item.icon size={17} />{item.label}</button>{/each}
+				<button onclick={() => { mobileToolsOpen = false; settingsOpen = true; }}><Settings size={17} />Settings</button>
+			</div>
+		</details>
 	</nav>
 </div>
-
 <SettingsModal open={settingsOpen} onClose={() => settingsOpen = false} />
+
+<style>
+	.navigation-notice { flex-shrink: 0; margin: 0; padding: 12px 20px; color: var(--text-accent); background: var(--bg-secondary); border-bottom: 1px solid var(--border-primary); font-size: 12px; }
+	.workspace-shell { display: flex; width: 100%; overflow: hidden; background: var(--bg-primary); }
+	.skip-link { position: fixed; left: 16px; top: -60px; z-index: 100; padding: 12px 20px; background: var(--primary); color: var(--primary-foreground); border-radius: 8px; }
+	.skip-link:focus { top: 12px; }
+	.workspace-sidebar { width: 232px; flex-shrink: 0; display: flex; flex-direction: column; padding: 28px 16px 16px; background: var(--bg-secondary); border-right: 1px solid var(--border-secondary); }
+	.workspace-brand { display: flex; align-items: center; gap: 12px; padding: 0 10px; text-align: left; }
+	.brand-mark { display: grid; place-items: center; width: 36px; height: 42px; color: var(--text-accent); border: 1px solid color-mix(in srgb, var(--primary) 32%, transparent); border-radius: 16px 16px 5px 5px; }
+	.brand-wordmark { font-family: var(--font-display); font-size: 25px; line-height: 1; letter-spacing: -.035em; color: var(--text-primary); }
+	.brand-wordmark > span { display: block; margin-top: 9px; font: 8px var(--font-ui); letter-spacing: .17em; color: var(--text-muted); }
+	.sidebar-create { margin: 34px 0 29px; display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 42px; border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--primary) 9%, transparent); color: var(--text-accent); font-size: 13px; font-weight: 600; transition: background 150ms; }
+	.sidebar-create:hover { background: color-mix(in srgb, var(--primary) 16%, transparent); }
+	.sidebar-navigation { flex: 1; overflow-y: auto; }
+	.nav-eyebrow { padding: 0 12px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .15em; font-size: 9px; font-weight: 600; color: var(--text-muted); }
+	.system-eyebrow { margin-top: 35px; }
+	.sidebar-link { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 43px; margin: 3px 0; padding: 10px 12px; border-radius: 6px; font-size: 12px; text-align: left; color: var(--text-secondary); transition: background 150ms, color 150ms; }
+	.sidebar-link > :global(svg) { color: var(--text-muted); flex-shrink: 0; }
+	.sidebar-link:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+	.sidebar-link.active { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--text-accent); }
+	.sidebar-link.active > :global(svg) { color: var(--text-accent); }
+	.active-dot { margin-left: auto; width: 5px; height: 5px; border-radius: 50%; background: var(--primary); }
+	.sidebar-footer { margin-top: 24px; border-top: 1px solid var(--border-secondary); padding-top: 14px; }
+	.sidebar-note { display: flex; gap: 12px; align-items: flex-start; padding: 12px 12px 24px; color: var(--text-muted); }
+	.sidebar-note p { font-family: var(--font-story); font-size: 12px; line-height: 1.6; }
+	.sidebar-note p span { color: var(--text-secondary); }
+	.workspace-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+	.workspace-topbar { min-height: 67px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 35px; border-bottom: 1px solid var(--border-secondary); }
+	.workspace-breadcrumb { display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--text-muted); }
+	.workspace-breadcrumb strong { font-weight: 500; color: var(--text-secondary); }
+	.topbar-actions { display: flex; align-items: center; gap: 16px; }
+	.workspace-edition { font-family: var(--font-story); font-size: 12px; font-style: italic; color: var(--text-muted); }
+	.topbar-settings { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 6px; color: var(--text-secondary); }
+	.topbar-settings:hover { background: var(--bg-tertiary); color: var(--text-accent); }
+	.workspace-content { position: relative; min-height: 0; flex: 1; overflow: hidden; }
+	.mobile-wordmark, .workspace-mobile-nav { display: none; }
+	@media (min-width: 640px) and (max-width: 1023px) {
+		.workspace-sidebar { width: 76px; padding: 24px 12px 12px; }
+		.workspace-brand { padding: 0; justify-content: center; }
+		.brand-wordmark, .sidebar-create span, .sidebar-link span, .nav-eyebrow, .sidebar-note { display: none; }
+		.sidebar-link { justify-content: center; padding: 12px; }
+		.sidebar-create { margin-top: 28px; }
+		.sidebar-link:nth-of-type(4) { margin-top: 28px; }
+		.workspace-topbar { padding-inline: 24px; }
+	}
+	@media (max-width: 639px) {
+		.workspace-shell { flex-direction: column; }
+		.workspace-sidebar, .desktop-crumb, .workspace-edition { display: none; }
+		.workspace-breadcrumb > :global(svg) { display: none; }
+		.workspace-body { min-height: 0; }
+		.workspace-topbar { min-height: 56px; padding: 8px 16px; }
+		.workspace-breadcrumb { gap: 9px; font-size: 10px; }
+		.mobile-wordmark { display: inline-flex; gap: 12px; align-items: center; color: var(--text-primary); font-family: var(--font-display); font-size: 20px; }
+		.mobile-wordmark span { font: 13px var(--font-ui); color: var(--border-primary); }
+		.workspace-mobile-nav { position: relative; display: flex; justify-content: space-around; flex-shrink: 0; padding: 6px 8px max(6px, env(safe-area-inset-bottom)); border-top: 1px solid var(--border-primary); background: var(--bg-secondary); z-index: 10; }
+		.workspace-mobile-nav > button, .mobile-tools > summary { display: flex; min-width: 64px; min-height: 50px; flex-direction: column; justify-content: center; align-items: center; gap: 5px; color: var(--text-muted); font-size: 10px; border-radius: 6px; cursor: pointer; }
+		.workspace-mobile-nav .active { color: var(--text-accent); }
+		.mobile-tools > summary { list-style: none; }
+		.mobile-tools > summary::-webkit-details-marker { display: none; }
+		.mobile-tools-menu { position: absolute; right: 12px; bottom: calc(100% + 8px); width: 215px; padding: 6px; border-radius: 10px; border: 1px solid var(--border-primary); background: var(--popover); box-shadow: var(--shadow-panel); }
+		.mobile-tools-menu > button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px 12px; text-align: left; font-size: 13px; border-radius: 5px; color: var(--text-secondary); }
+		.mobile-tools-menu > button:hover { background: var(--bg-elevated); }
+	}
+</style>

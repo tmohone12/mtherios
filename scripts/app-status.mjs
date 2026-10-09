@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
-const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
-const DEFAULT_PORT = process.env.PORT || '5173';
+import { resolveAppUrl } from './runtime-config.mjs';
+
+const DEFAULT_URL = resolveAppUrl();
 
 async function main(argv = process.argv.slice(2)) {
 	const { url, json } = parseArgs(argv);
 	const endpoint = `${url.replace(/\/$/, '')}/api/app/status`;
-	const response = await fetch(endpoint, { signal: AbortSignal.timeout(5000) });
+	const response = await fetch(endpoint, { signal: AbortSignal.timeout(15_000) });
 	if (!response.ok) {
 		throw new Error(`Status request failed: HTTP ${response.status}`);
 	}
@@ -34,7 +35,7 @@ function parseArgs(argv) {
 		}
 	}
 	return {
-		url: String(flags.url || process.env.MTHERIOS_APP_URL || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`),
+		url: String(flags.url || DEFAULT_URL),
 		json: flags.json,
 	};
 }
@@ -42,6 +43,7 @@ function parseArgs(argv) {
 function printStatus(status, url) {
 	const config = asRecord(status.config);
 	const runtime = asRecord(status.runtime);
+	const build = asRecord(status.build);
 	const services = asRecord(status.services);
 	const jobs = asRecord(status.jobs);
 	const wiki = asRecord(status.wiki);
@@ -49,20 +51,21 @@ function printStatus(status, url) {
 	const ollama = asRecord(services.ollama);
 
 	console.log('');
-	console.log('Mtherios terminal app status');
+	console.log('MythEngine terminal app status');
 	console.log(`  app:      ${url}`);
 	console.log(`  mode:     ${status.mode || 'unknown'}`);
+	console.log(`  build:    ${build.identity || 'unknown'} (${build.source || 'unknown'} / ${build.artifact || 'unknown'}${build.externalId ? ` / ${build.externalId}` : ''})`);
 	console.log(`  runtime:  pid ${runtime.pid ?? 'unknown'}, uptime ${formatDuration(Number(runtime.uptimeSeconds ?? 0))}`);
 	console.log(`  data:     ${config.dataRoot || 'unknown'}`);
 	console.log(`  vaults:   ${config.vaultRoot || 'unknown'}`);
 	console.log(`  database: ${config.databaseConfigured ? 'configured' : 'not configured'}`);
-	console.log(`  jobs:     ${config.jobWorkerEnabled ? `enabled every ${config.jobIntervalMs ?? 'unknown'}ms` : 'disabled'}`);
+	console.log(`  jobs:     ${config.jobWorkerEnabled ? `enabled (${config.jobWorkerScope ?? 'all'}) every ${config.jobIntervalMs ?? 'unknown'}ms` : 'disabled'}`);
 	console.log(`  qdrant:   ${serviceLine(qdrant)} ${config.qdrantUrl || ''}`);
 	printQdrantCollections(qdrant);
 	console.log(`  ollama:   ${serviceLine(ollama)} ${config.ollamaUrl || ''}`);
-	console.log(`  wiki:     ${config.wikiEmbedProvider || 'unknown'} / ${config.wikiEmbedModel || 'unknown'}, auto-index ${config.wikiAutoIndexStoryVaults ? 'on' : 'off'}, auto-lint ${config.wikiAutoLintStoryVaults ? 'on' : 'off'}`);
+	console.log(`  wiki:     ${config.wikiEmbedProvider || 'unknown'} / ${config.wikiEmbedModel || 'unknown'}, auto-index ${config.wikiAutoIndexStoryVaults ? 'on' : 'off'}`);
 	printWikiStatus(wiki, qdrant);
-	console.log(`  memory:   chapters every ${config.chapterThreshold ?? 'unknown'} entries (+${config.postChapterBuffer ?? 'unknown'} buffer), arcs every ${config.chaptersPerArc ?? 'unknown'} chapters`);
+	console.log(`  memory:   chapters every ${config.chapterThreshold ?? 'unknown'} completed turns, arcs every ${config.chaptersPerArc ?? 'unknown'} chapters`);
 	console.log(`  vectors:  ${config.memoryEmbeddingsConfigured ? `${config.memoryEmbeddingProvider} / ${config.memoryEmbeddingModel} (${config.memoryEmbeddingDimensions}d)` : 'disabled'}`);
 	console.log(`  backlog:  total=${jobs.total ?? 0} ready=${jobs.ready ?? 0} retry=${jobs.retry ?? 0} running=${jobs.running ?? 0} delayed=${jobs.delayed ?? 0} failed=${jobs.failed ?? 0}`);
 	printRecentFailures(jobs.recentFailures);
@@ -123,10 +126,12 @@ function printQdrantCollections(qdrant) {
 	const total = qdrant.totalCollections ?? collections.length;
 	const points = qdrant.totalPoints ?? collections.reduce((sum, row) => sum + Number(row.pointsCount ?? 0), 0);
 	const orphaned = qdrant.orphanedStoryCollections ?? collections.filter((row) => row.orphaned).length;
+	const legacy = qdrant.legacyStoryCollections ?? collections.filter((row) => row.legacy).length;
 	const orphanText = orphaned > 0 ? `, ${orphaned} orphaned story collection${orphaned === 1 ? '' : 's'}` : '';
-	console.log(`  qdrant collections: ${total} collection${total === 1 ? '' : 's'}, ${points} point${points === 1 ? '' : 's'}${orphanText}`);
+	const legacyText = legacy > 0 ? `, ${legacy} legacy story collection${legacy === 1 ? '' : 's'}` : '';
+	console.log(`  qdrant collections: ${total} collection${total === 1 ? '' : 's'}, ${points} point${points === 1 ? '' : 's'}${orphanText}${legacyText}`);
 	for (const row of collections.slice(0, 8)) {
-		const role = row.orphaned ? 'orphaned story ' : row.role && row.role !== 'other' ? `${row.role} ` : '';
+		const role = row.legacy ? 'legacy story ' : row.orphaned ? 'orphaned story ' : row.role && row.role !== 'other' ? `${row.role} ` : '';
 		const count = row.pointsCount ?? '?';
 		const vector = row.vectorSize ? `${row.vectorSize}d ${row.distance || ''}`.trim() : 'unknown vectors';
 		const status = row.status || 'unknown';

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
-const DEFAULT_PORT = process.env.PORT || '5173';
+import { resolveAppUrl } from './runtime-config.mjs';
+
+const DEFAULT_URL = resolveAppUrl();
 
 async function main(argv = process.argv.slice(2)) {
 	const { command, flags } = parseArgs(argv);
@@ -35,7 +36,7 @@ function parseArgs(argv) {
 		limit: 25,
 		maxCycles: 25,
 		timeoutMs: readInt(process.env.MTHERIOS_JOB_TIMEOUT_MS, 120_000),
-		url: process.env.MTHERIOS_APP_URL || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`,
+		url: DEFAULT_URL,
 	};
 	let command = 'status';
 	for (let index = 0; index < argv.length; index += 1) {
@@ -144,7 +145,7 @@ async function requestJson(baseUrl, path, options = {}) {
 function printStatus(status, flags) {
 	const jobs = asRecord(status.jobs);
 	console.log('');
-	console.log('Mtherios backend jobs');
+	console.log('MythEngine backend jobs');
 	console.log(`  app:      ${flags.url}`);
 	console.log(`  scope:    ${flags.storyId || 'all stories'}`);
 	printBacklog(jobs);
@@ -158,7 +159,7 @@ function printRun(result, flags) {
 	if (result.mode === 'until-empty') {
 		const final = asRecord(result.final);
 		console.log('');
-		console.log(`Mtherios job drain: ${result.cycles} cycle${result.cycles === 1 ? '' : 's'}`);
+		console.log(`MythEngine job drain: ${result.cycles} cycle${result.cycles === 1 ? '' : 's'}`);
 		console.log(`  app:      ${flags.url}`);
 		console.log(`  scope:    ${result.storyId || 'all stories'}`);
 		for (const [index, cycle] of result.results.entries()) {
@@ -169,7 +170,7 @@ function printRun(result, flags) {
 		return;
 	}
 	console.log('');
-	console.log('Mtherios job run');
+	console.log('MythEngine job run');
 	console.log(`  app:      ${flags.url}`);
 	console.log(`  scope:    ${flags.storyId || 'all stories'}`);
 	console.log(`  worker:   ${result.workerId || flags.workerId}`);
@@ -217,14 +218,14 @@ function asRecord(value) {
 }
 
 function printHelp() {
-	console.log(`Mtherios backend job CLI
+	console.log(`MythEngine backend job CLI
 
 Usage:
   npm run app:jobs -- status [--story <storyId>] [--json]
   npm run app:jobs -- run [--story <storyId>] [--limit 25] [--until-empty] [--json]
 
 Options:
-  --url <u>         Running app URL. Defaults to MTHERIOS_APP_URL or http://127.0.0.1:5173.
+  --url <u>         Running app URL. Defaults to MTHERIOS_APP_URL or http://127.0.0.1:5174.
   --story <id>     Scope status and job claiming to one backend story.
   --worker <id>    Worker id prefix for claimed jobs.
   --limit <n>      Jobs to claim per run request. Max 100.

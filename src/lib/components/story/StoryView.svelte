@@ -3,24 +3,47 @@
 	import { app } from '$lib/stores/app.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
 	import { ai } from '$lib/services/ai';
+	import { uuid } from '$lib/utils/uuid';
+	import { imageUsageCostLabel } from '$lib/utils/imageUsage';
 	import ActionInput from './ActionInput.svelte';
+	import AssistantPanel from '$lib/components/content/AssistantPanel.svelte';
+	import PrivateImagePreview from '$lib/components/content/PrivateImagePreview.svelte';
+	import DiceRollCard from './DiceRollCard.svelte';
+	import ResearchEvidenceCard from './ResearchEvidenceCard.svelte';
+	import { agentHistoryNarrationEntries, getBackendAgentHistory, narrationTurnId, readBackendDiceRoll, requestBackendSceneImage, visibleRollPortrait, type BackendAgentHistory, type BackendDiceRoll, type BackendImageJob, type BackendResearchTool } from '$lib/services/backendAgentRuns';
+	import ContextSelection from './ContextSelection.svelte';
 	import WorldDrawer from './WorldDrawer.svelte';
+	import WorldSheet from './WorldSheet.svelte';
+	import StoryMemoryPanel from '$lib/components/memory/StoryMemoryPanel.svelte';
 	import WorldExplorer from '$lib/components/database/WorldExplorer.svelte';
 	import { downloadStoryAsJson } from '$lib/services/storySync';
 	import { deleteStoryEverywhere } from '$lib/services/serverStories';
 	import { formatNarrative } from '$lib/utils/narrativeHtml';
-	import { ArrowLeft, Database, Loader2, Users, BookOpen, Image, AlertTriangle, Download, Trash2, MoreVertical, X, ScrollText, Scissors } from 'lucide-svelte';
+	import { gmTurnReceiptSchema, turnContextReceiptSchema, type GmTurnReceipt } from '$lib/contracts/memory';
+	import { ArrowLeft, ArrowDown, Database, Loader2, Users, BookOpen, Image, AlertTriangle, Download, Trash2, MoreVertical, X, ScrollText, Scissors, Wifi, WifiOff, MapPin, Feather } from 'lucide-svelte';
 	import { tick, onMount } from 'svelte';
-	import type { StyleReview } from '$lib/services/ai/sdk/schemas/style';
+	import type { Suggestion } from '$lib/services/ai/sdk/schemas/suggestions';
 	import type { StoryEntry } from '$lib/types';
 
 
 	let scrollContainer = $state<HTMLDivElement | null>(null);
 	let streamingContent = $state('');
 	let isStreaming = $state(false);
+	let readerNearBottom = $state(true);
+	let showLatestButton = $state(false);
+	let suggestions = $state<Suggestion[]>([]);
+	let suggestionsLoading = $state(false);
+	let suggestionRequestId = 0;
+	let enrichmentRequestId = 0;
+	let imageRequestId = 0;
+	let enrichmentStoryId = '';
+	let activeStreamStoryId = '';
+	let agentHistory = $state<BackendAgentHistory>({ interactions: [], rolls: [], images: [], research: [] });
+	let agentHistoryRequest = 0;
+	let initialScrollStoryId = '';
+	const SCROLL_FOLLOW_THRESHOLD = 96;
 
 	// Service output states
-	let styleReview = $state<StyleReview | null>(null);
 	let sceneImageUrl = $state<string | null>(null);
 	let loadingImage = $state(false);
 	let imageError = $state<string | null>(null);
@@ -28,8 +51,15 @@
 
 	// World drawer & floating menu
 	let drawerOpen = $state(false);
+	let playerMenuOpen = $state(false);
 	let exporting = $state(false);
+	let storyActionError = $state('');
+	let headerSaving = $state(false);
+	let headerError = $state('');
+	let loreDirty = $state(false);
+	let navigationNotice = $state('');
 	let fabOpen = $state(false);
+	let assistantOpen = $state(false);
 	let confirmingDelete = $state(false);
 	let headerEditorOpen = $state(false);
 	let headerDraft = $state('');
@@ -40,40 +70,104 @@
 	let characterDescriptionDraft = $state('');
 	let characterTraitsDraft = $state('');
 	let reputationDraft = $state('');
-	let confirmingEntryDeleteId = $state<string | null>(null);
-	let confirmingDeleteFromId = $state<string | null>(null);
+	const transcriptDeleteNotice = 'This only removes transcript text. World state, memories, and plot plans are not rewound. Use a saved context checkpoint to restore earlier state.';
 	let messageControlError = $state<string | null>(null);
-	let workspaceTab = $state<'play' | 'lore'>('play');
+	let workspaceTab = $state<'play' | 'lore' | 'chapters'>('play');
+	async function focusStorySource(entryId: string) {
+		const gameId = story.currentStory?.serverStoryId;
+		workspaceTab = 'play';
+		while (gameId && story.currentStory?.serverStoryId === gameId && !story.entries.some(entry => entry.id === entryId) && story.hasOlderEntries) {
+			const oldestPosition = story.entries[0]?.position;
+			await story.loadOlderEntries();
+			if (story.entries[0]?.position === oldestPosition) break;
+		}
+		if (story.currentStory?.serverStoryId !== gameId) return;
+		requestAnimationFrame(() => {
+			const target = document.getElementById(`story-entry-${entryId}`);
+			if (!target) {
+				storyActionError = 'The cited entry is not in the loaded transcript.';
+				return;
+			}
+			target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+			target.focus({ preventScroll: true });
+		});
+	}
+	function openAssistantStorySource(entryId: string) {
+		assistantOpen = false;
+		void focusStorySource(entryId);
+	}
+	let online = $state(true);
+	let headerTitleInput = $state<HTMLInputElement | null>(null);
+	let headerReturnFocus: HTMLElement | null = null;
+
+	function invalidateEnrichments(): void {
+		enrichmentRequestId += 1;
+		imageRequestId += 1;
+		suggestionRequestId += 1;
+		suggestions = [];
+		suggestionsLoading = false;
+		sceneImageUrl = null;
+		loadingImage = false;
+		imageError = null;
+		enrichmentErrors = [];
+	}
 
 	async function handleExport() {
 		if (!story.currentStory || exporting) return;
 		exporting = true;
+		storyActionError = '';
 		try {
 			await downloadStoryAsJson(story.currentStory.id);
 		} catch (e) {
 			console.error('Export failed:', e);
+			storyActionError = `Export failed: ${e instanceof Error ? e.message : 'Please try again.'}`;
 		}
 		exporting = false;
 	}
 
 	function openHeaderEditor() {
+		headerError = '';
+		headerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		titleDraft = story.currentStory?.title ?? '';
 		headerDraft = story.currentStory?.headerPrompt ?? '';
 		descriptionDraft = story.currentStory?.description ?? '';
 		editorTab = 'story';
 		headerEditorOpen = true;
+		requestAnimationFrame(() => headerTitleInput?.focus());
+	}
+
+	function closeHeaderEditor() {
+		if (headerSaving) return;
+		headerEditorOpen = false;
+		requestAnimationFrame(() => {
+			const fallback = document.querySelector<HTMLButtonElement>('button[aria-label="Open story actions"]');
+			(headerReturnFocus?.isConnected ? headerReturnFocus : fallback)?.focus();
+		});
+	}
+
+	function closeWorldDrawer() {
+		drawerOpen = false;
+		setTimeout(() => {
+			const fallback = window.matchMedia('(min-width: 640px)').matches
+				? document.querySelector<HTMLButtonElement>('button[aria-label="Open GM tools and connection state"]')
+				: document.querySelector<HTMLButtonElement>('button[aria-label="Open story actions"]');
+			fallback?.focus();
+		}, 240);
 	}
 
 	async function saveHeaderPrompt() {
-		const newTitle = titleDraft.trim();
-		if (newTitle && newTitle !== story.currentStory?.title) {
-			await story.updateTitle(newTitle);
+		if (!story.currentStory || headerSaving) return;
+		headerSaving = true;
+		headerError = '';
+		try {
+			await story.updateStoryDetails({ title: titleDraft, headerPrompt: headerDraft, description: descriptionDraft });
+			headerSaving = false;
+			closeHeaderEditor();
+		} catch (error) {
+			headerError = error instanceof Error ? error.message : 'Could not save story controls. Please retry.';
+		} finally {
+			headerSaving = false;
 		}
-		await story.updateHeaderPrompt(headerDraft);
-		if (descriptionDraft !== (story.currentStory?.description ?? '')) {
-			await story.updateDescription(descriptionDraft);
-		}
-		headerEditorOpen = false;
 	}
 
 	async function handleDelete() {
@@ -86,14 +180,10 @@
 
 	async function handleDeleteEntry(entry: StoryEntry) {
 		messageControlError = null;
-		confirmingDeleteFromId = null;
-		if (confirmingEntryDeleteId !== entry.id) {
-			confirmingEntryDeleteId = entry.id;
-			return;
-		}
+		if (!confirm(`Delete this message?\n\n${transcriptDeleteNotice}`)) return;
 		try {
 			await story.deleteEntry(entry.id);
-			confirmingEntryDeleteId = null;
+			invalidateEnrichments();
 		} catch (e) {
 			messageControlError = e instanceof Error ? e.message : 'Failed to delete message.';
 		}
@@ -101,66 +191,97 @@
 
 	async function handleDeleteFromEntry(entry: StoryEntry) {
 		messageControlError = null;
-		confirmingEntryDeleteId = null;
-		if (confirmingDeleteFromId !== entry.id) {
-			confirmingDeleteFromId = entry.id;
-			return;
-		}
+		if (!confirm(`Delete this message and all later messages?\n\n${transcriptDeleteNotice}`)) return;
 		try {
 			await story.deleteEntriesFromPosition(entry.position);
-			confirmingDeleteFromId = null;
+			invalidateEnrichments();
 		} catch (e) {
 			messageControlError = e instanceof Error ? e.message : 'Failed to delete transcript range.';
 		}
 	}
 
-	function clearMessageConfirmations() {
-		confirmingEntryDeleteId = null;
-		confirmingDeleteFromId = null;
-	}
-
 	async function generateSceneImage() {
-		if (loadingImage || story.entries.length === 0) return;
+		const originStoryId = story.currentStory?.id;
+		if (loadingImage || !originStoryId || story.entries.length === 0) return;
+		const requestId = ++imageRequestId;
 		loadingImage = true;
 		sceneImageUrl = null;
 		imageError = null;
 		try {
-			const recentNarration = story.entries
-				.filter(e => e.type === 'narration')
-				.slice(-3)
-				.map(e => e.content)
-				.join('\n');
-			if (!recentNarration) { loadingImage = false; return; }
-
-			// Build scene context from world state
-			const currentLoc = story.locations.find(l => l.current);
-			const sceneContext = {
-				characters: story.characters
-					.filter(c => c.status === 'active')
-					.slice(0, 3)
-					.map(c => ({ name: c.name, visualDescriptors: c.visualDescriptors })),
-				currentLocation: currentLoc
-					? { name: currentLoc.name, description: currentLoc.description }
-					: undefined,
-			};
-
-			const lastEntry = story.entries[story.entries.length - 1];
-			const result = await ai.imageGen.generateSceneImage(recentNarration, sceneContext, undefined, lastEntry?.id);
-			if (result.image) {
-				sceneImageUrl = result.image.url;
-			} else {
-				imageError = result.error ?? 'Image generation failed.';
+			const generated = await generateServerSceneImage(uuid());
+			if (requestId === imageRequestId && story.currentStory?.id === originStoryId) {
+				sceneImageUrl = generated.imageResult.url ?? null;
+				await refreshImageHistory();
 			}
 		} catch (e) {
+			if (requestId !== imageRequestId || story.currentStory?.id !== originStoryId) return;
 			console.error('Image generation failed:', e);
 			imageError = e instanceof Error ? e.message : 'Image generation failed.';
 		}
-		loadingImage = false;
-		scrollToBottom();
+		if (requestId === imageRequestId && story.currentStory?.id === originStoryId) {
+			loadingImage = false;
+			scrollToBottom();
+		}
+	}
+
+	async function generateServerSceneImage(callId: string) {
+		const current = story.currentStory;
+		const narration = story.entries.filter(entry => entry.type === 'narration').at(-1);
+		const clientTurnId = narrationTurnId(narration);
+		if (!current?.serverStoryId || !current.shelfId || !clientTurnId) throw new Error('A saved game turn is required for a server image.');
+		return requestBackendSceneImage({ projectId: current.shelfId,
+			gameId: current.serverStoryId, clientTurnId, callId });
+	}
+
+	async function refreshImageHistory() {
+		const gameId = historyGameId;
+		const request = ++agentHistoryRequest;
+		const turnIds = JSON.parse(visibleAgentTurnKey) as string[];
+		if (!gameId || !turnIds.length) return;
+		const value = await getBackendAgentHistory(gameId, turnIds);
+		if (request === agentHistoryRequest && gameId === historyGameId) agentHistory = value;
 	}
 
 	const isAdventure = $derived(story.storyMode === 'adventure');
 	const visibleEntries = $derived(story.entries);
+	const historyGameId = $derived(story.currentStory?.serverStoryId ?? '');
+	const agentNarrationEntries = $derived(agentHistoryNarrationEntries(story.entries));
+	const visibleAgentTurnKey = $derived(JSON.stringify([...agentNarrationEntries.keys()]));
+	$effect(() => {
+		const gameId = historyGameId;
+		const turnKey = visibleAgentTurnKey;
+		const request = ++agentHistoryRequest;
+		agentHistory = { interactions: [], rolls: [], images: [], research: [] };
+		const turnIds = JSON.parse(turnKey) as string[];
+		if (!gameId || !turnIds.length) return;
+		void getBackendAgentHistory(gameId, turnIds).then(value => {
+			if (request === agentHistoryRequest) agentHistory = value;
+		}).catch(error => console.warn('[StoryView] Agent interaction history unavailable:', error));
+	});
+	type HistoryCard = { kind: 'roll'; actor: string; roll: BackendDiceRoll } | { kind: 'question'; prompt: string; answer: string } | { kind: 'image'; image: BackendImageJob } | { kind: 'research'; research: BackendResearchTool['result'] };
+	const historyCards = $derived.by(() => {
+		const cards = new Map<string, HistoryCard[]>();
+		const add = (turnId: string, card: HistoryCard) => {
+			const key = agentNarrationEntries.get(turnId);
+			if (!key) return;
+			cards.set(key, [...(cards.get(key) ?? []), card]);
+		};
+		for (const item of agentHistory.interactions) {
+			if (item.kind === 'roll') {
+				const roll = readBackendDiceRoll(item.response);
+				if (roll) add(item.client_turn_id, { kind: 'roll', actor: roll.targetCharacterName ?? 'Player', roll });
+			} else {
+				const response = item.response && typeof item.response === 'object' ? item.response as { optionId?: string; text?: string } : {};
+				const answer = response.text ?? item.options.find(option => option.id === response.optionId)?.label ?? '';
+				if (answer) add(item.client_turn_id, { kind: 'question', prompt: item.prompt, answer });
+			}
+		}
+		for (const item of agentHistory.rolls) add(item.client_turn_id, { kind: 'roll', actor: 'Game Master', roll: item.result });
+		for (const item of agentHistory.images) add(item.client_turn_id, { kind: 'image', image: item });
+		for (const item of agentHistory.research) add(item.client_turn_id, { kind: 'research', research: item.result });
+		return cards;
+	});
+	const currentLocation = $derived(story.locations.find(location => location.current) ?? null);
 	const dialogueSpeakers = $derived.by(() => {
 		const names = new Set<string>();
 		const addName = (name: string | null | undefined) => {
@@ -176,77 +297,102 @@
 		return [...names];
 	});
 
-	async function scrollToBottom() {
+	function getGmTurnReceipt(entry: StoryEntry): GmTurnReceipt | null {
+		const metadata = entry.metadata as unknown as Record<string, unknown> | null;
+		const parsed = gmTurnReceiptSchema.safeParse(metadata?.gmTurnReceipt);
+		return parsed.success ? parsed.data : null;
+	}
+
+	function getTurnContextReceipt(entry: StoryEntry) {
+		const metadata = entry.metadata as unknown as Record<string, unknown> | null;
+		const parsed = turnContextReceiptSchema.safeParse(metadata?.contextReceipt);
+		return parsed.success ? parsed.data : null;
+	}
+
+	function receiptChangeCount(receipt: GmTurnReceipt): number {
+		return receipt.changes.statePatches + receipt.changes.events + receipt.changes.memoryNodes;
+	}
+
+	function compactTokenCount(value: number | null): string {
+		if (value === null) return 'context sized';
+		if (value < 1_000) return `${value} tokens`;
+		return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k tokens`;
+	}
+
+	function stateExtractionLabel(receipt: GmTurnReceipt): string {
+		if (receipt.stateExtractionStatus === 'failed') return 'State update failed; narration kept';
+		if (receipt.stateExtractionStatus === 'running') return 'State update running';
+		if (receipt.stateExtractionStatus === 'queued') return 'State update queued';
+		if (receipt.stateExtractionStatus === 'succeeded') return 'State checked';
+		return receipt.stateExtractionMode === 'none' ? 'No durable update needed' : 'State update skipped';
+	}
+
+	function updateReaderPosition() {
+		if (!scrollContainer) return;
+		const distanceFromBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
+		readerNearBottom = distanceFromBottom <= SCROLL_FOLLOW_THRESHOLD;
+		showLatestButton = !readerNearBottom;
+	}
+
+	async function scrollToBottom(behavior: ScrollBehavior = 'smooth', force = false) {
 		await tick();
-		if (scrollContainer) {
-			scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: 'smooth' });
+		if (!scrollContainer) return;
+		if (!force && (!settings.uiSettings.autoScroll || !readerNearBottom)) {
+			showLatestButton = true;
+			return;
 		}
+		scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior });
+		readerNearBottom = true;
+		showLatestButton = false;
 	}
 
 	function handleStreamStart() {
+		activeStreamStoryId = story.currentStory?.id ?? '';
+		enrichmentRequestId += 1;
+		imageRequestId += 1;
+		suggestionRequestId += 1;
+		suggestions = [];
+		suggestionsLoading = false;
 		streamingContent = '';
 		isStreaming = true;
-		styleReview = null;
+		story.beginGmActivity();
 		// Don't clear sceneImageUrl here — leave the previous scene visible
 		// until the new image actually arrives (or image gen is disabled,
 		// in which case the user keeps their last scene). The user has an
 		// explicit dismiss button (×) on the image card if they want to clear.
-		scrollToBottom();
+		scrollToBottom('auto');
 	}
 
 	function handleStreamChunk(text: string) {
 		streamingContent = text;
-		scrollToBottom();
+		scrollToBottom('auto');
 	}
 
 	async function handleStreamEnd(fullText: string) {
+		const originStoryId = activeStreamStoryId;
+		const requestId = enrichmentRequestId;
 		streamingContent = '';
 		isStreaming = false;
-		scrollToBottom();
-		if (!fullText.trim()) return;
+		story.clearGmActivity();
+		scrollToBottom('auto');
+		if (!fullText.trim() || !originStoryId || story.currentStory?.id !== originStoryId) return;
+		const isCurrentRequest = () => requestId === enrichmentRequestId && story.currentStory?.id === originStoryId;
 
 		// Orchestrator already updated world state in ActionInput. Here we run
 		// only optional UI enrichment services in parallel.
 		const errors: string[] = [];
 		const jobs: Promise<void>[] = [];
 
-		const styleConfig = settings.getServiceConfig('styleReviewer');
-		if (styleConfig.enabled) {
-			jobs.push(
-				(async () => {
-					try {
-						styleReview = await ai.styleReviewer.review(fullText, story.pov, story.tense, story.currentStory?.genre ?? '');
-					} catch (e) {
-						errors.push(`StyleReview: ${e}`);
-					}
-				})()
-			);
-		}
-
 		const imageMode = settings.uiSettings.imageGenerationMode ?? story.currentStory?.settings?.imageGenerationMode;
 		if (imageMode && imageMode !== 'none') {
+			const currentImageRequestId = ++imageRequestId;
 			jobs.push(
 				(async () => {
 					try {
-						const recentNarration = story.entries
-							.filter(e => e.type === 'narration')
-							.slice(-3)
-							.map(e => e.content)
-							.join('\n');
-						if (!recentNarration) return;
-						const currentLoc = story.locations.find(l => l.current);
-						const sceneContext = {
-							characters: story.characters
-								.filter(c => c.status === 'active')
-								.slice(0, 3)
-								.map(c => ({ name: c.name, visualDescriptors: c.visualDescriptors })),
-							currentLocation: currentLoc
-								? { name: currentLoc.name, description: currentLoc.description }
-								: undefined,
-						};
-						const latestEntry = story.entries[story.entries.length - 1];
-						const imgResult = await ai.imageGen.generateSceneImage(recentNarration, sceneContext, undefined, latestEntry?.id);
-						if (imgResult.image) sceneImageUrl = imgResult.image.url;
+						const narration = story.entries.filter(entry => entry.type === 'narration').at(-1);
+						if (!narration) return;
+						await generateServerSceneImage(`automatic-scene-${narrationTurnId(narration)}`);
+						if (isCurrentRequest() && currentImageRequestId === imageRequestId) await refreshImageHistory();
 					} catch (e) {
 						errors.push(`ImageGen: ${e}`);
 					}
@@ -254,85 +400,264 @@
 			);
 		}
 
+		const suggestionsConfig = settings.getServiceConfig('suggestions');
+		if (isAdventure && !settings.uiSettings.disableSuggestions && suggestionsConfig.enabled) {
+			const requestId = ++suggestionRequestId;
+			suggestionsLoading = true;
+			jobs.push(
+				(async () => {
+					try {
+						const result = await ai.suggestions.suggest(story.entries, story.protagonist, story.storyMode, story.pov);
+						if (requestId === suggestionRequestId) suggestions = result.suggestions.slice(0, 3);
+					} catch (error) {
+						console.warn('[StoryView] Suggestions unavailable:', error);
+					} finally {
+						if (requestId === suggestionRequestId) suggestionsLoading = false;
+					}
+				})()
+			);
+		}
+
 		await Promise.allSettled(jobs);
 
-		if (errors.length > 0) {
+		if (errors.length > 0 && isCurrentRequest()) {
 			enrichmentErrors = errors;
 		}
 
-		scrollToBottom();
+		scrollToBottom('auto');
 	}
 
-	function handleSuggestionSelect(text: string) {
-		window.dispatchEvent(new CustomEvent('mtherios:inject-input', { detail: text }));
+	function handleStreamClear() {
+		streamingContent = '';
+		isStreaming = false;
+		story.clearGmActivity();
+	}
+
+	function handleSuggestionSelect(suggestion: Suggestion) {
+		window.dispatchEvent(new CustomEvent('mtherios:inject-input', {
+			detail: {
+				text: suggestion.text,
+				actionType: suggestion.type === 'thought' ? 'think' : 'do',
+			},
+		}));
+		suggestions = [];
 	}
 
 	function goBack() {
+		if (!canLeaveLore() || headerSaving) return;
 		story.clear();
 		app.closeStory();
 	}
 
+	function canLeaveLore() {
+		if (!loreDirty) return true;
+		navigationNotice = 'Save or discard your lore changes before leaving this workspace.';
+		return false;
+	}
+
+	function selectWorkspaceTab(tab: 'play' | 'lore' | 'chapters') {
+		if (tab !== workspaceTab && !canLeaveLore()) return;
+		workspaceTab = tab;
+	}
+
+	function updateLoreDirty(dirty: boolean) {
+		loreDirty = dirty;
+		if (!dirty) navigationNotice = '';
+	}
+
 	onMount(() => {
-		scrollToBottom();
+		online = navigator.onLine;
+		const updateOnline = () => online = navigator.onLine;
+		window.addEventListener('online', updateOnline);
+		window.addEventListener('offline', updateOnline);
+		return () => {
+			story.clearGmActivity();
+			window.removeEventListener('online', updateOnline);
+			window.removeEventListener('offline', updateOnline);
+		};
+	});
+
+	$effect(() => {
+		const storyId = story.currentStory?.id ?? '';
+		if (storyId !== enrichmentStoryId) {
+			enrichmentStoryId = storyId;
+			invalidateEnrichments();
+		}
+		const ready = storyId && !story.loading && story.entries.length > 0;
+		if (!ready || initialScrollStoryId === storyId) return;
+		initialScrollStoryId = storyId;
+		if (!app.pendingStoryEntryId) void scrollToBottom('auto', true);
+	});
+
+	$effect(() => {
+		const entryId = app.pendingStoryEntryId;
+		if (!entryId || story.loading || story.currentStory?.serverStoryId !== app.currentStoryId) return;
+		app.pendingStoryEntryId = null;
+		void focusStorySource(entryId);
 	});
 </script>
 
-<div class="app-shell flex h-[100dvh] min-h-0 flex-col overflow-hidden">
+<div class="reader-workspace app-shell flex min-h-0 flex-col overflow-hidden bg-[var(--bg-reader)]">
 	<!-- Header -->
-	<div class="flex items-center gap-3 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 py-3">
-		<button onclick={goBack} class="-ml-2 flex h-11 w-11 shrink-0 items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] sm:ml-0 sm:h-auto sm:w-auto" title="Back to library" aria-label="Back to library">
-			<ArrowLeft class="h-5 w-5" />
+	<div class="reader-header">
+		<button onclick={goBack} class="reader-back" title="Back to library" aria-label="Back to library">
+			<ArrowLeft class="h-4 w-4" /><span>Library</span>
 		</button>
-		<div class="flex-1 min-w-0">
-			<h1 class="truncate font-display text-sm font-semibold tracking-wide text-[var(--text-primary)]">
+		<div class="reader-title">
+			<span class="reader-eyebrow">{story.currentStory?.genre || (isAdventure ? 'Interactive fiction' : 'Creative writing')}</span>
+			<h1 class="truncate font-display">
 				{story.currentStory?.title ?? 'Untitled'}
 			</h1>
-			<span class="text-xs text-[var(--text-muted)]">
-				{story.currentStory?.genre ?? ''} · {isAdventure ? 'Adventure' : 'Creative Writing'}
-			</span>
 		</div>
-		<div class="hidden items-center gap-1 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] p-1 sm:flex">
+		<div class="reader-navigation" role="group" aria-label="Story workspace">
 			<button
-				onclick={() => workspaceTab = 'play'}
-				class="rounded-md px-3 py-1.5 text-xs transition-colors {workspaceTab === 'play' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				onclick={() => selectWorkspaceTab('play')}
+				aria-pressed={workspaceTab === 'play'}
 			>
-				Play
+				<BookOpen class="h-3.5 w-3.5" /> Story
 			</button>
 			<button
-				onclick={() => workspaceTab = 'lore'}
-				class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors {workspaceTab === 'lore' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				onclick={() => selectWorkspaceTab('lore')}
+				aria-pressed={workspaceTab === 'lore'}
 			>
 				<Database class="h-3.5 w-3.5" />
-				Lore
+				World lore
 			</button>
+			<button onclick={() => selectWorkspaceTab('chapters')} aria-pressed={workspaceTab === 'chapters'}><ScrollText class="h-3.5 w-3.5" /> Chapters</button>
 		</div>
-		<button onclick={() => drawerOpen = true} class="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-auto sm:w-auto sm:p-2" title="World State" aria-label="World State">
-			<Users class="h-4 w-4" />
-			{#if story.characters.length > 0}
-				<span class="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--color-gold-400)] text-[8px] font-bold text-[var(--bg-primary)]">{story.characters.length}</span>
-			{/if}
+		<button onclick={() => playerMenuOpen = true} class="reader-tool reader-world" title="Player menu" aria-label="Open player menu">
+			<Users class="h-4 w-4" /><span>Player</span>
 		</button>
+		<button onclick={() => drawerOpen = true} class="reader-tool reader-connection" title="GM tools and connection state" aria-label="Open GM tools and connection state">
+			{#if online}<Wifi class="h-4 w-4 {story.engineStreamStatus.connected ? 'text-[var(--success)]' : ''}" />{:else}<WifiOff class="h-4 w-4 text-[var(--color-crimson-400)]" />{/if}
+		</button>
+		<div class="relative shrink-0">
+			<button
+				onclick={() => { fabOpen = !fabOpen; confirmingDelete = false; }}
+				class="reader-tool"
+				title={fabOpen ? 'Close story actions' : 'Open story actions'}
+				aria-label={fabOpen ? 'Close story actions' : 'Open story actions'}
+				aria-expanded={fabOpen}
+			>
+				{#if fabOpen}
+					<X class="h-4 w-4 text-[var(--text-primary)]" />
+				{:else}
+					<MoreVertical class="h-4 w-4 text-[var(--text-accent)]" />
+				{/if}
+			</button>
+
+			{#if fabOpen}
+				<div class="story-actions-menu absolute right-0 top-12 z-30 flex min-w-[210px] flex-col gap-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 shadow-2xl">
+					{#if story.currentStory?.serverStoryId && story.currentStory?.shelfId}
+						<button onclick={() => { assistantOpen = true; fabOpen = false; }} class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"><Feather class="h-4 w-4 text-[var(--text-accent)]" /><span class="text-xs font-medium text-[var(--text-primary)]">Assistant</span></button>
+					{/if}
+					<button
+				onclick={() => { playerMenuOpen = true; fabOpen = false; }}
+						class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+					>
+						<Users class="h-4 w-4 text-[var(--text-accent)]" />
+						<span class="text-xs font-medium text-[var(--text-primary)]">World</span>
+						{#if story.characters.length > 0}
+							<span class="ml-auto flex h-4 w-4 items-center justify-center rounded-full bg-[var(--color-gold-400)] text-[8px] font-bold text-[var(--bg-primary)]">{story.characters.length}</span>
+						{/if}
+					</button>
+					<button
+						onclick={() => { selectWorkspaceTab('lore'); fabOpen = false; }}
+						class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+					>
+						<Database class="h-4 w-4 text-[var(--text-accent)]" />
+						<span class="text-xs font-medium text-[var(--text-primary)]">Lore</span>
+					</button>
+					<button
+						onclick={() => { drawerOpen = true; fabOpen = false; }}
+						class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)] sm:hidden"
+					>
+						{#if online}<Wifi class="h-4 w-4 text-[var(--text-accent)]" />{:else}<WifiOff class="h-4 w-4 text-[var(--color-crimson-400)]" />{/if}
+						<span class="text-xs font-medium text-[var(--text-primary)]">GM tools</span>
+					</button>
+					<button
+						onclick={() => { openHeaderEditor(); fabOpen = false; }}
+						class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+					>
+						<ScrollText class="h-4 w-4 text-[var(--text-accent)]" />
+						<span class="text-xs font-medium text-[var(--text-primary)]">Story controls</span>
+						{#if story.currentStory?.headerPrompt}
+							<span class="ml-auto h-1.5 w-1.5 rounded-full bg-[var(--text-accent)]"></span>
+						{/if}
+					</button>
+					<button
+						onclick={() => { generateSceneImage(); fabOpen = false; }}
+						disabled={loadingImage || story.entries.length === 0}
+						class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
+					>
+						{#if loadingImage}
+							<Loader2 class="h-4 w-4 animate-spin text-sky-400" />
+						{:else}
+							<Image class="h-4 w-4 text-sky-400" />
+						{/if}
+						<span class="text-xs font-medium text-[var(--text-primary)]">Scene Image</span>
+					</button>
+					<button
+						onclick={() => { handleExport(); fabOpen = false; }}
+						disabled={exporting}
+						class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
+					>
+						{#if exporting}
+							<Loader2 class="h-4 w-4 animate-spin text-emerald-400" />
+						{:else}
+							<Download class="h-4 w-4 text-emerald-400" />
+						{/if}
+						<span class="text-xs font-medium text-[var(--text-primary)]">Export</span>
+					</button>
+					{#if !confirmingDelete}
+						<button
+							onclick={() => confirmingDelete = true}
+							class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--color-crimson-900)]/20"
+						>
+							<Trash2 class="h-4 w-4 text-[var(--color-crimson-400)]" />
+							<span class="text-xs font-medium text-[var(--color-crimson-400)]">Delete</span>
+						</button>
+					{:else}
+						<button
+							onclick={handleDelete}
+							class="flex items-center gap-2 rounded-lg bg-[var(--color-crimson-900)]/30 px-3 py-2 text-left border border-[var(--color-crimson-500)]/40"
+						>
+							<Trash2 class="h-4 w-4 text-[var(--color-crimson-400)]" />
+							<span class="text-xs font-bold text-[var(--color-crimson-400)]">Confirm</span>
+						</button>
+					{/if}
+				</div>
+			{/if}
+		</div>
 	</div>
 
-	<div class="grid grid-cols-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] sm:hidden">
+	<div class="reader-context">
+		<div class="mobile-reader-navigation" role="group" aria-label="Story workspace">
 		<button
-			onclick={() => workspaceTab = 'play'}
-			class="min-h-11 px-3 py-2 text-xs transition-colors {workspaceTab === 'play' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)]'}"
+			onclick={() => selectWorkspaceTab('play')}
+			aria-pressed={workspaceTab === 'play'}
 		>
-			Play
+			<BookOpen class="h-3.5 w-3.5" /> Story
 		</button>
 		<button
-			onclick={() => workspaceTab = 'lore'}
-			class="inline-flex min-h-11 items-center justify-center gap-1.5 px-3 py-2 text-xs transition-colors {workspaceTab === 'lore' ? 'bg-[var(--bg-tertiary)] text-[var(--text-accent)]' : 'text-[var(--text-muted)]'}"
+			onclick={() => selectWorkspaceTab('lore')}
+			aria-pressed={workspaceTab === 'lore'}
 		>
 			<Database class="h-3.5 w-3.5" />
 			Lore
 		</button>
+		<button onclick={() => selectWorkspaceTab('chapters')} aria-pressed={workspaceTab === 'chapters'}><ScrollText class="h-3.5 w-3.5" /> Chapters</button>
+		</div>
+		<div class="scene-location">
+			{#if currentLocation}<MapPin class="h-3 w-3 shrink-0" /><span class="truncate">{currentLocation.name}</span>
+			{:else}<Feather class="h-3 w-3 shrink-0" /><span>{isAdventure ? 'An unfolding adventure' : 'A story in the making'}</span>{/if}
+		</div>
+		{#if story.protagonist}<span class="reader-protagonist">Playing as <strong>{story.protagonist.name}</strong></span>{/if}
 	</div>
 
 	<!-- Meters HUD: visible meters tracked by the GM -->
 	{#if story.currentStory?.meters && story.currentStory.meters.some(m => m.visible)}
-		<div class="flex flex-wrap items-center gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)]/60 px-4 py-2">
+		<div class="reader-meters mobile-hud flex flex-nowrap items-center gap-2 overflow-x-auto border-b border-[var(--border-secondary)] bg-[var(--bg-secondary)]/60 px-4 py-2 sm:flex-wrap">
 			{#each story.currentStory.meters.filter(m => m.visible) as meter}
 				{@const pct = meter.max > 0 ? Math.round((meter.value / meter.max) * 100) : 0}
 				<div class="flex items-center gap-1.5 rounded-md bg-[var(--bg-tertiary)] px-2 py-1" title="{meter.name}: {meter.value}/{meter.max}">
@@ -349,25 +674,31 @@
 		</div>
 	{/if}
 
-	{#if workspaceTab === 'lore'}
+	{#if navigationNotice}<p class="shrink-0 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-5 py-3 text-xs text-[var(--text-accent)]" role="alert">{navigationNotice}</p>{/if}
+	{#if storyActionError}<div class="flex shrink-0 items-center gap-3 border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-5 py-3 text-xs text-[var(--color-crimson-400)]" role="alert"><p class="flex-1">{storyActionError}</p><button onclick={() => storyActionError = ''} aria-label="Dismiss story action error"><X size={16} /></button></div>{/if}
+	{#if workspaceTab === 'chapters'}
+		<div class="min-h-0 flex-1 overflow-hidden"><StoryMemoryPanel storyId={story.currentStory?.id ?? null} /></div>
+	{:else if workspaceTab === 'lore'}
 		<div class="min-h-0 flex-1 overflow-hidden">
-			<WorldExplorer storyId={story.currentStory?.serverStoryId ?? story.currentStory?.id ?? null} title="Story Lore" />
+			<WorldExplorer storyId={story.currentStory?.serverStoryId ?? story.currentStory?.id ?? null} title="Story Lore" onDirtyChange={updateLoreDirty} />
 		</div>
 	{:else}
 	<!-- Story entries -->
-	<div bind:this={scrollContainer} class="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-4">
+	<div class="relative min-h-0 flex-1">
+	<div bind:this={scrollContainer} onscroll={updateReaderPosition} class="reader-scroll h-full overflow-y-auto overscroll-contain pb-4">
 		{#if story.loading}
 			<div class="flex items-center justify-center py-20">
 				<Loader2 class="h-6 w-6 animate-spin text-[var(--text-accent)]" />
 			</div>
 		{:else if story.entries.length === 0 && !isStreaming}
-			<div class="flex flex-col items-center justify-center gap-4 px-8 py-20 text-center">
-				<div class="flex h-16 w-16 items-center justify-center rounded-full bg-[rgba(212,168,83,0.1)]">
-					<BookOpen class="h-8 w-8 text-[var(--text-accent)]" />
-				</div>
-				<div>
-					<p class="font-display text-base text-[var(--text-primary)]">Your story begins here</p>
-					<p class="mt-2 text-sm text-[var(--text-muted)]">
+			<div class="reader-opening mx-auto flex min-h-full max-w-xl flex-col items-center justify-center gap-5 px-7 py-16 text-center">
+				<span class="opening-mark"><Feather class="h-6 w-6" /></span>
+				<div class="space-y-2">
+					<p class="reader-eyebrow mb-3">The first page</p>
+					<p class="font-display text-3xl text-[var(--text-primary)]">{story.currentStory?.title ?? 'Your story begins here'}</p>
+					{#if currentLocation}<p class="text-sm text-[var(--text-accent)]">{currentLocation.name}</p>{/if}
+					{#if story.protagonist}<p class="font-story text-lg leading-relaxed text-[var(--text-secondary)]"><strong>{story.protagonist.name}</strong>{story.protagonist.description ? ` — ${story.protagonist.description}` : ''}</p>{/if}
+					<p class="pt-2 text-sm text-[var(--text-muted)]">
 						{#if isAdventure}
 							Type what you want to do and the AI will narrate the world around you.
 						{:else}
@@ -377,7 +708,7 @@
 				</div>
 			</div>
 		{:else}
-			<div class="mx-auto max-w-2xl space-y-4 px-4 pt-4">
+			<div class="reader-pages mx-auto max-w-[50rem] space-y-6 px-5 pt-7 sm:px-10 sm:pt-10">
 				{#if story.hasOlderEntries}
 					<div class="flex justify-center">
 						<button
@@ -400,35 +731,47 @@
 				{/if}
 				{#each visibleEntries as entry (entry.id)}
 					{#if entry.type === 'user_action'}
-						<div class="group flex flex-col items-end gap-1" role="group" onmouseleave={clearMessageConfirmations}>
-							<div class="max-w-[85%] rounded-2xl rounded-br-md bg-[rgba(212,168,83,0.12)] px-4 py-3">
-								<p class="text-base leading-relaxed text-[var(--text-primary)] sm:text-sm">{entry.content.replace(/^>\s*/, '')}</p>
+						<div id={`story-entry-${entry.id}`} class="player-turn group flex flex-col gap-1" role="group" tabindex="-1">
+							<div class="player-turn-card">
+								<span class="turn-label"><Feather class="h-3 w-3" /> Your move</span>
+								<p class="whitespace-pre-wrap text-base leading-relaxed text-[var(--text-primary)] sm:text-sm">{entry.content.replace(/^>\s*/, '')}</p>
 							</div>
-							<div class="flex gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+							<div class="flex justify-end gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
 								<button
 									onclick={() => handleDeleteFromEntry(entry)}
-									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-amber-500/40 hover:text-amber-300 {confirmingDeleteFromId === entry.id ? 'border-amber-500/60 bg-amber-500/10 text-amber-300' : ''}"
-									title={confirmingDeleteFromId === entry.id ? 'Confirm delete from here' : 'Delete from here'}
-									aria-label={confirmingDeleteFromId === entry.id ? 'Confirm delete from here' : 'Delete from here'}
+									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-amber-500/40 hover:text-amber-300"
+									title="Delete transcript from here"
+									aria-label="Delete transcript from here"
 								>
 									<Scissors class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
 								</button>
 								<button
 									onclick={() => handleDeleteEntry(entry)}
-									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)] {confirmingEntryDeleteId === entry.id ? 'border-[var(--color-crimson-500)]/60 bg-[var(--color-crimson-900)]/20 text-[var(--color-crimson-400)]' : ''}"
-									title={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}
-									aria-label={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}
+									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)]"
+									title="Delete message"
+									aria-label="Delete message"
 								>
 									<Trash2 class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
 								</button>
 							</div>
 						</div>
 					{:else if entry.type === 'narration'}
-						<div class="group space-y-1" role="group" onmouseleave={clearMessageConfirmations}>
-							<div class="prose-mtherios">
-							<div class="rounded-2xl rounded-bl-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
-								{@html formatNarrative(entry.content, dialogueSpeakers)}
-							</div>
+						{@const receipt = getGmTurnReceipt(entry)}
+						{@const contextReceipt = getTurnContextReceipt(entry)}
+						<div id={`story-entry-${entry.id}`} class="narration-passage group space-y-1" role="group" tabindex="-1">
+						{#each historyCards.get(entry.id) ?? [] as card}
+							{#if card.kind === 'roll'}
+								<DiceRollCard actor={card.actor} portrait={card.roll.portraitUrl ?? visibleRollPortrait(story.characters, card.roll.targetCharacterId)} roll={card.roll} />
+							{:else if card.kind === 'image'}
+								<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-xs text-[var(--text-secondary)]" aria-label="Game Master image"><strong class="block text-[var(--text-primary)]">{card.image.tool === 'generateFileImage' ? 'File cover' : 'Image'} · {card.image.job_status ?? 'generating'}</strong>{#if card.image.image_result?.url?.startsWith('/api/assets/')}<img src={card.image.image_result.url} alt="Game Master artwork" class="mt-2 max-h-80 max-w-full object-contain" />{:else if card.image.image_result?.assetId && story.currentStory?.shelfId && story.currentStory?.serverStoryId}<PrivateImagePreview assetId={card.image.image_result.assetId} projectId={story.currentStory.shelfId} gameId={story.currentStory.serverStoryId} alt="Game Master artwork" />{/if}{#if card.image.job_status === 'complete'}<small>{imageUsageCostLabel(card.image.image_usage)}</small>{/if}{#if card.image.job_error}<p role="alert">{card.image.job_error}</p>{/if}</section>
+							{:else if card.kind === 'research'}
+								<ResearchEvidenceCard research={card.research} projectId={story.currentStory?.shelfId} gameId={story.currentStory?.serverStoryId} />
+							{:else}
+								<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-xs text-[var(--text-secondary)]" aria-label="Answered Game Master question"><strong class="block text-[var(--text-primary)]">{card.prompt}</strong>Answered: {card.answer}</section>
+							{/if}
+						{/each}
+						<div class="prose-mtherios px-1 sm:px-2">
+							{@html formatNarrative(entry.content, dialogueSpeakers)}
 							{#if story.getImageForEntry(entry.id)}
 								{@const img = story.getImageForEntry(entry.id)}
 								{#if img}
@@ -436,7 +779,7 @@
 									<img src={img.imageData} alt="Scene" class="w-full" loading="lazy" />
 									<button
 										onclick={() => story.removeImage(img.id)}
-										class="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg bg-black/50 text-white/80 backdrop-blur-sm hover:bg-black/70"
+										class="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-xl bg-black/50 text-white/80 backdrop-blur-sm hover:bg-black/70 sm:h-7 sm:w-7 sm:rounded-lg"
 										title="Remove image"
 									>
 										<X class="h-3.5 w-3.5" />
@@ -445,20 +788,58 @@
 								{/if}
 							{/if}
 							</div>
+							{#if receipt}
+								<details class="turn-receipt mx-1 mt-3 overflow-hidden rounded-xl border border-[var(--border-primary)] text-xs sm:mx-2">
+									<summary class="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-[var(--text-muted)] marker:hidden">
+										<span class="flex items-center gap-2 font-semibold text-[var(--text-secondary)]"><span class="h-1.5 w-1.5 rounded-full bg-[var(--text-accent)]"></span>GM turn receipt</span>
+										<span class="truncate text-right">{receipt.tools.length} {receipt.tools.length === 1 ? 'tool' : 'tools'} · {receiptChangeCount(receipt)} {receiptChangeCount(receipt) === 1 ? 'change' : 'changes'} · {compactTokenCount(receipt.context.totalTokens)}</span>
+									</summary>
+									<div class="grid gap-3 border-t border-[var(--border-primary)] px-3 py-3 sm:grid-cols-3">
+										<section>
+											<p class="mb-1.5 font-semibold uppercase tracking-[0.14em] text-[var(--text-accent)]">Explored</p>
+											{#if receipt.tools.length}
+												<ul class="space-y-1 text-[var(--text-secondary)]">
+													{#each receipt.tools as tool}
+														<li class="flex gap-1.5"><span class={tool.ok ? 'text-emerald-400' : 'text-amber-400'}>{tool.ok ? '✓' : '!'}</span><span>{tool.label}</span></li>
+													{/each}
+												</ul>
+											{:else}<p class="text-[var(--text-muted)]">Prepared scene context was enough.</p>{/if}
+										</section>
+										<section>
+											<p class="mb-1.5 font-semibold uppercase tracking-[0.14em] text-[var(--text-accent)]">Context</p>
+											<p class="leading-relaxed text-[var(--text-secondary)]">{receipt.context.recentEntries} recent · {receipt.context.memoryNodes} memories · {receipt.context.wikiChunks} lore · {receipt.context.timelineEvents} timeline</p>
+											<p class="mt-1 text-[var(--text-muted)]">{compactTokenCount(receipt.context.totalTokens)} · {receipt.context.truncated ? 'budget trimmed' : 'full selection'}</p>
+										</section>
+										<section>
+											<p class="mb-1.5 font-semibold uppercase tracking-[0.14em] text-[var(--text-accent)]">Canon</p>
+											<p class="leading-relaxed text-[var(--text-secondary)]">{receipt.changes.statePatches} patches · {receipt.changes.events} events · {receipt.changes.memoryNodes} memories</p>
+											<p class="mt-1 {receipt.stateExtractionStatus === 'failed' ? 'text-amber-400' : 'text-[var(--text-muted)]'}">{stateExtractionLabel(receipt)}{receipt.warningCount ? ` · ${receipt.warningCount} notices` : ''}</p>
+											{#if receipt.stateExtractionStatus === 'failed' && receipt.stateExtractionError}
+												<p class="mt-1 line-clamp-3 text-[var(--text-muted)]">{receipt.stateExtractionError}</p>
+											{/if}
+										</section>
+									</div>
+									{#if contextReceipt?.selection}
+										<div class="border-t border-[var(--border-primary)] px-3 py-2">
+											<ContextSelection selection={contextReceipt.selection} projectId={story.currentStory?.shelfId ?? undefined} gameId={story.currentStory?.id ?? undefined} />
+										</div>
+									{/if}
+								</details>
+							{/if}
 							<div class="flex justify-end gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
 								<button
 									onclick={() => handleDeleteFromEntry(entry)}
-									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-amber-500/40 hover:text-amber-300 {confirmingDeleteFromId === entry.id ? 'border-amber-500/60 bg-amber-500/10 text-amber-300' : ''}"
-									title={confirmingDeleteFromId === entry.id ? 'Confirm delete from here' : 'Delete from here'}
-									aria-label={confirmingDeleteFromId === entry.id ? 'Confirm delete from here' : 'Delete from here'}
+									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-amber-500/40 hover:text-amber-300"
+									title="Delete transcript from here"
+									aria-label="Delete transcript from here"
 								>
 									<Scissors class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
 								</button>
 								<button
 									onclick={() => handleDeleteEntry(entry)}
-									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)] {confirmingEntryDeleteId === entry.id ? 'border-[var(--color-crimson-500)]/60 bg-[var(--color-crimson-900)]/20 text-[var(--color-crimson-400)]' : ''}"
-									title={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}
-									aria-label={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}
+									class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)]"
+									title="Delete message"
+									aria-label="Delete message"
 								>
 									<Trash2 class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
 								</button>
@@ -466,24 +847,24 @@
 						</div>
 					{:else if entry.type === 'system'}
 						{#if entry.content.startsWith('Roll:')}
-							<div class="group space-y-1" role="group" onmouseleave={clearMessageConfirmations}>
+							<div class="group space-y-1" role="group">
 							<div class="dice-player-roll">
 								<span class="dice-card-icon">&#127922;</span>
 								<span>{entry.content.slice(5).trim()}</span>
 							</div>
 							<div class="flex justify-end gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-								<button onclick={() => handleDeleteEntry(entry)} class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)] {confirmingEntryDeleteId === entry.id ? 'border-[var(--color-crimson-500)]/60 bg-[var(--color-crimson-900)]/20 text-[var(--color-crimson-400)]' : ''}" title={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'} aria-label={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}>
+								<button onclick={() => handleDeleteEntry(entry)} class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)]" title="Delete message" aria-label="Delete message">
 									<Trash2 class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
 								</button>
 							</div>
 							</div>
 						{:else}
-							<div class="group space-y-1" role="group" onmouseleave={clearMessageConfirmations}>
+							<div class="group space-y-1" role="group">
 							<div class="rounded-lg bg-[var(--color-crimson-900)]/20 border border-[var(--color-crimson-500)]/20 px-4 py-3 text-center text-xs text-[var(--color-crimson-400)]">
 								{entry.content}
 							</div>
 							<div class="flex justify-end gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-								<button onclick={() => handleDeleteEntry(entry)} class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)] {confirmingEntryDeleteId === entry.id ? 'border-[var(--color-crimson-500)]/60 bg-[var(--color-crimson-900)]/20 text-[var(--color-crimson-400)]' : ''}" title={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'} aria-label={confirmingEntryDeleteId === entry.id ? 'Confirm delete message' : 'Delete message'}>
+								<button onclick={() => handleDeleteEntry(entry)} class="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] text-[var(--text-muted)] active:scale-95 sm:h-7 sm:w-7 hover:border-[var(--color-crimson-500)]/40 hover:text-[var(--color-crimson-400)]" title="Delete message" aria-label="Delete message">
 									<Trash2 class="h-4 w-4 sm:h-3.5 sm:w-3.5" />
 								</button>
 							</div>
@@ -494,16 +875,29 @@
 
 				<!-- Streaming narration -->
 				{#if isStreaming && streamingContent}
-					<div class="prose-mtherios">
-						<div class="rounded-2xl rounded-bl-md border border-[var(--color-gold-600)]/30 bg-[var(--bg-tertiary)] px-4 py-3">
+					<div class="prose-mtherios px-1 sm:px-2">
 							{@html formatNarrative(streamingContent, dialogueSpeakers)}
 							<span class="inline-block h-4 w-0.5 animate-pulse bg-[var(--text-accent)]"></span>
-						</div>
 					</div>
 				{:else if isStreaming}
-					<div class="flex items-center gap-2 px-4 py-3 text-sm text-[var(--text-muted)]">
-						<Loader2 class="h-4 w-4 animate-spin" />
-						<span>Weaving the narrative...</span>
+					<div class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/70 px-4 py-3" role="status" aria-live="polite">
+						<div class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+							<Loader2 class="h-4 w-4 shrink-0 animate-spin text-[var(--text-accent)]" />
+							<span>{story.gmActivities.at(-1)?.label ?? 'Preparing the turn context'}</span>
+						</div>
+						{#if story.gmActivities.length > 1}
+							<ol class="mt-3 space-y-1.5 border-l border-[var(--border-primary)] pl-3" aria-label="GM turn activity">
+								{#each story.gmActivities as activity, index}
+									<li class="flex min-w-0 items-center gap-2 text-xs {index === story.gmActivities.length - 1 ? 'text-[var(--text-accent)]' : 'text-[var(--text-muted)]'}" aria-current={index === story.gmActivities.length - 1 ? 'step' : undefined}>
+										<span class="h-1.5 w-1.5 shrink-0 rounded-full {index === story.gmActivities.length - 1 ? 'bg-[var(--text-accent)]' : 'bg-[var(--success)]'}"></span>
+										<span class="truncate">{activity.label}</span>
+										{#if activity.command}
+											<code class="ml-auto hidden shrink-0 text-[10px] text-[var(--text-muted)] sm:inline">{activity.command}</code>
+										{/if}
+								</li>
+							{/each}
+							</ol>
+						{/if}
 					</div>
 				{/if}
 
@@ -514,15 +908,15 @@
 						<div class="absolute right-2 top-2 flex gap-1.5">
 							<button
 								onclick={generateSceneImage}
-								disabled={loadingImage}
-								class="flex h-8 w-8 items-center justify-center rounded-lg bg-black/50 text-white/80 backdrop-blur-sm active:scale-95 hover:bg-black/70 disabled:opacity-40"
+								disabled={loadingImage || story.entries.length === 0}
+								class="flex h-11 w-11 items-center justify-center rounded-xl bg-black/50 text-white/80 backdrop-blur-sm active:scale-95 hover:bg-black/70 disabled:opacity-40 sm:h-8 sm:w-8 sm:rounded-lg"
 								title="Regenerate"
 							>
 								<Image class="h-4 w-4" />
 							</button>
 							<button
 								onclick={() => sceneImageUrl = null}
-								class="flex h-8 w-8 items-center justify-center rounded-lg bg-black/50 text-white/80 backdrop-blur-sm active:scale-95 hover:bg-black/70"
+								class="flex h-11 w-11 items-center justify-center rounded-xl bg-black/50 text-white/80 backdrop-blur-sm active:scale-95 hover:bg-black/70 sm:h-8 sm:w-8 sm:rounded-lg"
 								title="Dismiss"
 							>
 								<X class="h-4 w-4" />
@@ -564,125 +958,53 @@
 					</div>
 				{/if}
 
-				<!-- Style Review Warning -->
-				{#if styleReview && !styleReview.approved && styleReview.issues.length > 0}
-					<div class="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
-						<AlertTriangle class="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
-						<div class="text-xs text-amber-300">
-							<span class="font-semibold">Style note:</span>
-							{styleReview.issues[0].description}
-							{#if styleReview.issues.length > 1}
-								<span class="text-amber-400/60"> +{styleReview.issues.length - 1} more</span>
-							{/if}
-						</div>
-					</div>
-				{/if}
-
 			</div>
 		{/if}
 	</div>
+	{#if showLatestButton && !story.loading && story.entries.length > 0}
+		<button
+			onclick={() => scrollToBottom('smooth', true)}
+			class="absolute bottom-3 left-1/2 z-10 flex min-h-10 -translate-x-1/2 items-center gap-1.5 rounded-full border border-[var(--border-primary)] bg-[var(--bg-secondary)]/95 px-3 py-2 text-xs font-medium text-[var(--text-accent)] shadow-lg backdrop-blur transition-colors hover:bg-[var(--bg-tertiary)]"
+			aria-label="Jump to latest story entry"
+		>
+			<ArrowDown class="h-3.5 w-3.5" />
+			Latest
+		</button>
+	{/if}
+	</div>
 
 	<!-- Input tray with menu -->
-	<div class="shrink-0 border-t border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-3 pb-[max(env(safe-area-inset-bottom),12px)] sm:px-4">
-		<div class="mx-auto max-w-2xl">
-			<div class="flex items-end gap-2">
-				<!-- Tray menu button -->
-				{#if story.entries.length > 0}
-					<div class="relative shrink-0 mb-0.5">
+	<div class="composer-dock shrink-0 px-3 py-3 pb-[max(env(safe-area-inset-bottom),12px)] sm:px-6 sm:py-4">
+		<div class="mx-auto max-w-[50rem]">
+			{#if isAdventure && (suggestionsLoading || suggestions.length > 0)}
+				<div class="mb-2 flex items-center gap-2 overflow-x-auto pb-0.5 sm:flex-wrap">
+					{#if suggestionsLoading}
+						<span class="flex shrink-0 items-center gap-1.5 px-1 text-[11px] text-[var(--text-muted)]">
+							<Loader2 class="h-3 w-3 animate-spin" /> Considering the scene…
+						</span>
+					{:else}
+						<span class="shrink-0 px-1 text-[11px] font-medium uppercase tracking-wide text-[var(--text-muted)]">Try</span>
+					{/if}
+					{#each suggestions as suggestion}
 						<button
-							onclick={() => { fabOpen = !fabOpen; confirmingDelete = false; }}
-							class="flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] transition-all hover:bg-[var(--bg-primary)] active:scale-95 sm:h-9 sm:w-9"
-							title={fabOpen ? 'Close story actions' : 'Open story actions'}
-							aria-label={fabOpen ? 'Close story actions' : 'Open story actions'}
+							onclick={() => handleSuggestionSelect(suggestion)}
+							class="shrink-0 rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-1.5 text-left text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]"
+							title={suggestion.text}
+							aria-label={`Use suggestion: ${suggestion.text}`}
 						>
-							{#if fabOpen}
-								<X class="h-4 w-4 text-[var(--text-primary)]" />
-							{:else}
-								<MoreVertical class="h-4 w-4 text-[var(--text-accent)]" />
-							{/if}
+							{suggestion.brief ?? suggestion.text}
 						</button>
-
-						{#if fabOpen}
-							<div class="absolute bottom-11 left-0 z-30 flex flex-col gap-1.5 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 shadow-xl shadow-black/30 min-w-[160px]">
-								<button
-									onclick={() => { drawerOpen = true; fabOpen = false; }}
-									class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-								>
-									<Users class="h-4 w-4 text-[var(--text-accent)]" />
-									<span class="text-xs font-medium text-[var(--text-primary)]">World</span>
-									{#if story.characters.length > 0}
-										<span class="ml-auto flex h-4 w-4 items-center justify-center rounded-full bg-[var(--color-gold-400)] text-[8px] font-bold text-[var(--bg-primary)]">{story.characters.length}</span>
-									{/if}
-								</button>
-								<button
-									onclick={() => { workspaceTab = 'lore'; fabOpen = false; }}
-									class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-								>
-									<Database class="h-4 w-4 text-[var(--text-accent)]" />
-									<span class="text-xs font-medium text-[var(--text-primary)]">Lore</span>
-								</button>
-								<button
-									onclick={() => { openHeaderEditor(); fabOpen = false; }}
-									class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-								>
-									<ScrollText class="h-4 w-4 text-purple-400" />
-									<span class="text-xs font-medium text-[var(--text-primary)]">Header</span>
-									{#if story.currentStory?.headerPrompt}
-										<span class="ml-auto h-1.5 w-1.5 rounded-full bg-purple-400"></span>
-									{/if}
-								</button>
-								<button
-									onclick={() => { generateSceneImage(); fabOpen = false; }}
-									disabled={loadingImage}
-									class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
-								>
-									{#if loadingImage}
-										<Loader2 class="h-4 w-4 animate-spin text-sky-400" />
-									{:else}
-										<Image class="h-4 w-4 text-sky-400" />
-									{/if}
-									<span class="text-xs font-medium text-[var(--text-primary)]">Scene Image</span>
-								</button>
-								<button
-									onclick={() => { handleExport(); fabOpen = false; }}
-									disabled={exporting}
-									class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
-								>
-									{#if exporting}
-										<Loader2 class="h-4 w-4 animate-spin text-emerald-400" />
-									{:else}
-										<Download class="h-4 w-4 text-emerald-400" />
-									{/if}
-									<span class="text-xs font-medium text-[var(--text-primary)]">Export</span>
-								</button>
-								{#if !confirmingDelete}
-									<button
-										onclick={() => confirmingDelete = true}
-										class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--color-crimson-900)]/20"
-									>
-										<Trash2 class="h-4 w-4 text-[var(--color-crimson-400)]" />
-										<span class="text-xs font-medium text-[var(--color-crimson-400)]">Delete</span>
-									</button>
-								{:else}
-									<button
-										onclick={handleDelete}
-										class="flex items-center gap-2 rounded-lg bg-[var(--color-crimson-900)]/30 px-3 py-2 text-left border border-[var(--color-crimson-500)]/40"
-									>
-										<Trash2 class="h-4 w-4 text-[var(--color-crimson-400)]" />
-										<span class="text-xs font-bold text-[var(--color-crimson-400)]">Confirm</span>
-									</button>
-								{/if}
-							</div>
-						{/if}
-					</div>
-				{/if}
+					{/each}
+				</div>
+			{/if}
+			<div class="flex items-end gap-2">
 
 				<div class="flex-1 min-w-0">
 					<ActionInput
 						onStreamStart={handleStreamStart}
 						onStreamChunk={handleStreamChunk}
 						onStreamEnd={handleStreamEnd}
-						onStreamClear={() => { streamingContent = ''; isStreaming = false; }}
+						onStreamClear={handleStreamClear}
 					/>
 				</div>
 			</div>
@@ -690,10 +1012,16 @@
 	</div>
 	{/if}
 </div>
+	{#if assistantOpen && story.currentStory?.serverStoryId && story.currentStory?.shelfId}<AssistantPanel projectId={story.currentStory.shelfId} gameId={story.currentStory.serverStoryId} onClose={() => assistantOpen = false} onOpenStoryEntry={openAssistantStorySource} />{/if}
 
 
 <!-- World State Drawer -->
-<WorldDrawer open={drawerOpen} onClose={() => drawerOpen = false} />
+<WorldSheet
+	open={playerMenuOpen}
+	onClose={() => playerMenuOpen = false}
+	onOpenLore={() => { playerMenuOpen = false; selectWorkspaceTab('lore'); }}
+/>
+<WorldDrawer open={drawerOpen} onClose={closeWorldDrawer} />
 
 <!-- Header Prompt Editor Modal -->
 {#if headerEditorOpen}
@@ -701,19 +1029,26 @@
 		<!-- Backdrop -->
 		<button
 			class="absolute inset-0 bg-black/60 backdrop-blur-sm"
-			onclick={() => headerEditorOpen = false}
+			disabled={headerSaving} onclick={closeHeaderEditor}
 			aria-label="Close header editor"
 		></button>
 
 		<!-- Panel -->
-		<div class="relative z-10 flex max-h-[85dvh] w-full max-w-xl flex-col rounded-t-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] pb-[env(safe-area-inset-bottom)] shadow-2xl sm:rounded-2xl sm:pb-0">
+		<div
+			class="relative z-10 flex max-h-[85dvh] w-full max-w-xl flex-col rounded-t-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] pb-[env(safe-area-inset-bottom)] shadow-2xl sm:rounded-2xl sm:pb-0"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="story-controls-title"
+			tabindex="-1"
+			onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); closeHeaderEditor(); } }}
+		>
 			<!-- Header -->
 			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-5 py-4">
 				<div class="flex items-center gap-2.5">
-					<ScrollText class="h-4 w-4 text-purple-400" />
-					<h3 class="font-display text-sm font-semibold tracking-wide text-[var(--text-primary)]">Story Controls</h3>
+					<ScrollText class="h-4 w-4 text-[var(--text-accent)]" />
+					<h3 id="story-controls-title" class="font-display text-xl font-medium text-[var(--text-primary)]">Story controls</h3>
 				</div>
-				<button onclick={() => headerEditorOpen = false} class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-8 sm:w-8">
+				<button disabled={headerSaving} onclick={closeHeaderEditor} class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-8 sm:w-8" aria-label="Close story controls">
 					<X class="h-4 w-4" />
 				</button>
 			</div>
@@ -721,7 +1056,7 @@
 			<div class="flex border-b border-[var(--border-primary)] px-5 pt-2">
 				<button
 					onclick={() => editorTab = 'story'}
-					class="flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors {editorTab === 'story' ? 'border-purple-400 text-purple-300' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+					class="flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors {editorTab === 'story' ? 'border-[var(--text-accent)] text-[var(--text-accent)]' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
 				>
 					<ScrollText class="h-3.5 w-3.5" />
 					<span>Story</span>
@@ -735,11 +1070,12 @@
 				<div class="space-y-1.5">
 					<label for="story-title-input" class="text-xs font-medium text-[var(--text-muted)]">Story Title</label>
 					<input
+						bind:this={headerTitleInput}
 						id="story-title-input"
 						type="text"
-						bind:value={titleDraft}
+						disabled={headerSaving} bind:value={titleDraft}
 						placeholder="Enter story title..."
-						class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+						class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-[var(--text-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--text-accent)]/20"
 					/>
 				</div>
 
@@ -753,10 +1089,10 @@
 					</p>
 					<textarea
 						id="story-description-input"
-						bind:value={descriptionDraft}
+						disabled={headerSaving} bind:value={descriptionDraft}
 						placeholder="A crumbling empire where ancient magic seeps through fractured ley lines..."
 						rows="4"
-						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-[var(--text-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--text-accent)]/20"
 					></textarea>
 				</div>
 
@@ -767,15 +1103,16 @@
 					This preamble is prepended to every AI prompt for this story. Use it to define tone, rules, content guidelines, or narrative constraints unique to this story.
 				</p>
 				<textarea
-					bind:value={headerDraft}
+					aria-label="AI preamble"
+					disabled={headerSaving} bind:value={headerDraft}
 					placeholder={"Example:\nYou are narrating a gritty noir detective story. Keep dialogue sharp and cynical. Avoid flowery language. Violence is implied, never graphic. Every scene should feel like it's raining, even when it isn't."}
 					rows="10"
-					class="w-full resize-none rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30 leading-relaxed"
+					class="w-full resize-none rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-[var(--text-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--text-accent)]/20 leading-relaxed"
 				></textarea>
 				<div class="flex items-center justify-between text-[10px] text-[var(--text-muted)]">
 					<span>{headerDraft.length > 0 ? `~${Math.ceil(headerDraft.length / 4)} tokens` : 'Empty — default behavior'}</span>
 					{#if headerDraft !== (story.currentStory?.headerPrompt ?? '') || titleDraft !== (story.currentStory?.title ?? '') || descriptionDraft !== (story.currentStory?.description ?? '')}
-						<span class="text-purple-400">Unsaved changes</span>
+						<span class="text-[var(--text-accent)]">Unsaved changes</span>
 					{/if}
 				</div>
 				{:else}
@@ -786,7 +1123,7 @@
 						type="text"
 						bind:value={characterNameDraft}
 						placeholder="Who the player controls..."
-						class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+						class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-[var(--text-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--text-accent)]/20"
 					/>
 				</div>
 
@@ -797,7 +1134,7 @@
 						bind:value={characterDescriptionDraft}
 						placeholder="Age, appearance, background, current condition, role, and anything the narrator must keep current..."
 						rows="8"
-						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-[var(--text-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--text-accent)]/20"
 					></textarea>
 				</div>
 
@@ -808,7 +1145,7 @@
 						bind:value={characterTraitsDraft}
 						placeholder="Comma or line separated traits..."
 						rows="3"
-						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-[var(--text-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--text-accent)]/20"
 					></textarea>
 				</div>
 
@@ -822,7 +1159,7 @@
 						bind:value={reputationDraft}
 						placeholder="How the realm, smallfolk, noble courts, factions, enemies, and rumor networks currently speak of the player..."
 						rows="6"
-						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+						class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 focus:border-[var(--text-accent)] focus:outline-none focus:ring-1 focus:ring-[var(--text-accent)]/20"
 					></textarea>
 				</div>
 
@@ -830,34 +1167,97 @@
 					This is the live protagonist record used in prompts. Update age, injuries, identity changes, titles, or appearance here when long play drifts.
 				</div>
 				{#if characterNameDraft !== (story.protagonist?.name ?? '') || characterDescriptionDraft !== (story.protagonist?.description ?? '') || characterTraitsDraft !== (story.protagonist?.traits?.join(', ') ?? '') || reputationDraft !== (story.currentStory?.playerReputation ?? '')}
-					<div class="text-right text-[10px] text-purple-400">Unsaved changes</div>
+					<div class="text-right text-[10px] text-[var(--text-accent)]">Unsaved changes</div>
 				{/if}
 				{/if}
 			</div>
 
+			{#if headerError}<p class="px-5 py-3 text-xs text-[var(--color-crimson-400)]" role="alert">{headerError}</p>{/if}
 			<!-- Footer -->
 			<div class="flex items-center justify-end gap-2 border-t border-[var(--border-primary)] px-5 py-3">
 				{#if editorTab === 'story' && headerDraft.trim()}
 					<button
-						onclick={() => { headerDraft = ''; }}
+						disabled={headerSaving} onclick={() => { headerDraft = ''; }}
 						class="rounded-lg px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--color-crimson-400)] transition-colors"
 					>
 						Clear
 					</button>
 				{/if}
 				<button
-					onclick={() => headerEditorOpen = false}
+					disabled={headerSaving} onclick={closeHeaderEditor}
 					class="rounded-lg px-4 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
 				>
 					Cancel
 				</button>
 				<button
-					onclick={saveHeaderPrompt}
-					class="rounded-lg bg-purple-500/20 border border-purple-500/30 px-4 py-2 text-xs font-medium text-purple-300 hover:bg-purple-500/30 transition-colors"
+					disabled={headerSaving} onclick={saveHeaderPrompt}
+					class="rounded-lg bg-[var(--text-accent)]/15 border border-[var(--text-accent)]/25 px-4 py-2 text-xs font-medium text-[var(--text-accent)] hover:bg-[var(--text-accent)]/25 transition-colors"
 				>
-					Save
+					{headerSaving ? 'Saving…' : 'Save'}
 				</button>
 			</div>
 		</div>
 	</div>
 {/if}
+
+<style>
+	.reader-workspace { background-image: radial-gradient(ellipse at 50% 15%, color-mix(in srgb, var(--text-accent) 3%, transparent), transparent 65%); }
+	.reader-header { position: relative; z-index: 20; display: flex; align-items: center; gap: 0.75rem; min-height: 5.25rem; flex-shrink: 0; padding: 0.85rem 1.75rem; border-bottom: 1px solid var(--border-secondary); background: var(--bg-secondary); }
+	.reader-back, .reader-tool { display: inline-flex; align-items: center; justify-content: center; gap: 0.6rem; min-width: 2.75rem; min-height: 2.75rem; flex-shrink: 0; border-radius: 0.65rem; padding: 0 0.7rem; color: var(--text-muted); font-size: 0.75rem; transition: color 150ms ease, background 150ms ease; }
+	.reader-back { margin-right: 0.5rem; border-right: 1px solid var(--border-primary); border-radius: 0; padding-right: 1.25rem; }
+	.reader-back:hover, .reader-tool:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+	.reader-title { min-width: 0; flex: 1; }
+	.reader-title h1 { margin-top: 0.1rem; color: var(--text-primary); font-size: 1.3rem; font-weight: 500; line-height: 1.35; letter-spacing: -0.015em; }
+	.reader-eyebrow { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-accent); font-size: 0.59rem; line-height: 1.5; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; }
+	.reader-navigation { display: flex; gap: 0.25rem; padding: 0.3rem; border: 1px solid var(--border-primary); border-radius: 0.75rem; background: var(--bg-primary); }
+	.reader-navigation button, .mobile-reader-navigation button { display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; min-height: 2.2rem; border-radius: 0.45rem; padding: 0 0.8rem; color: var(--text-muted); font-size: 0.75rem; transition: color 150ms ease, background 150ms ease; }
+	.reader-navigation button[aria-pressed='true'] { color: var(--text-accent); background: var(--bg-tertiary); }
+	.reader-navigation button:hover, .mobile-reader-navigation button:hover { color: var(--text-primary); }
+	.reader-world { color: var(--text-secondary); }
+	.reader-context { display: flex; align-items: center; gap: 1.5rem; min-height: 2.5rem; flex-shrink: 0; padding: 0.45rem 2rem; border-bottom: 1px solid var(--border-secondary); font-size: 0.69rem; color: var(--text-muted); }
+	.scene-location { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
+	.reader-protagonist { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.reader-protagonist strong { margin-left: 0.25rem; color: var(--text-secondary); font-weight: 500; }
+	.mobile-reader-navigation { display: none; }
+	.reader-meters { padding-left: 2rem; padding-right: 2rem; }
+	.reader-scroll { scrollbar-gutter: stable both-edges; }
+	.reader-pages { padding-bottom: 1.5rem; }
+	.reader-opening { padding-top: 3rem; padding-bottom: 3rem; }
+	.opening-mark { display: flex; align-items: center; justify-content: center; width: 4rem; height: 4rem; border: 1px solid color-mix(in srgb, var(--text-accent) 28%, transparent); border-radius: 50%; color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 5%, transparent); }
+	.player-turn { margin-left: 1.5rem; }
+	.player-turn-card { padding: 1rem 1.25rem; border-left: 2px solid color-mix(in srgb, var(--text-accent) 65%, transparent); border-radius: 0 0.7rem 0.7rem 0; background: color-mix(in srgb, var(--text-accent) 6%, transparent); }
+	.turn-label { display: inline-flex; align-items: center; gap: 0.45rem; margin-bottom: 0.5rem; color: var(--text-accent); font-size: 0.58rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.12em; }
+	.narration-passage { padding-bottom: 0.5rem; }
+	.turn-receipt { border-color: var(--border-secondary); background: color-mix(in srgb, var(--bg-secondary) 65%, transparent); }
+	.turn-receipt summary { font-size: 0.65rem; }
+	.turn-receipt[open] { border-color: var(--border-primary); }
+	.composer-dock { background: linear-gradient(180deg, transparent, var(--bg-reader) 15%); }
+	.story-actions-menu { max-height: min(70dvh, 32rem); overflow-y: auto; }
+	.story-actions-menu button { min-height: 2.75rem; }
+	@media (max-width: 900px) {
+		.reader-header { gap: 0.4rem; padding-left: 1rem; padding-right: 1rem; }
+		.reader-back span, .reader-world span { display: none; }
+		.reader-back { margin-right: 0; padding: 0 0.75rem; border-right: 0; border-radius: 0.65rem; }
+		.reader-context { padding-left: 1.5rem; padding-right: 1.5rem; }
+	}
+	@media (max-width: 639px) {
+		.reader-header { min-height: 4.5rem; gap: 0.125rem; padding: 0.5rem; }
+		.reader-title { padding: 0 0.35rem; }
+		.reader-title h1 { font-size: 1.05rem; }
+		.reader-eyebrow { font-size: 0.53rem; letter-spacing: 0.12em; }
+		.reader-navigation, .reader-connection, .reader-protagonist { display: none; }
+		.reader-tool { padding: 0 0.65rem; }
+		.reader-context { min-height: 2.85rem; gap: 1rem; padding: 0 1rem 0 0.5rem; }
+		.mobile-reader-navigation { display: flex; gap: 0.15rem; flex-shrink: 0; align-self: stretch; }
+		.mobile-reader-navigation button { min-height: 2.75rem; border-radius: 0; padding: 0 0.65rem; border-bottom: 2px solid transparent; font-size: 0.69rem; }
+		.mobile-reader-navigation button[aria-pressed='true'] { border-color: var(--text-accent); color: var(--text-accent); }
+		.scene-location { margin-left: auto; font-size: 0.61rem; }
+		.scene-location span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.reader-meters { padding-left: 1rem; padding-right: 1rem; }
+		.reader-scroll { scrollbar-gutter: auto; }
+		.player-turn { margin-left: 0.35rem; }
+		.player-turn-card { padding: 0.85rem 1rem; }
+		.turn-receipt summary { flex-wrap: wrap; gap: 0.25rem; }
+	}
+	@media (hover: none) and (pointer: coarse) { .reader-navigation button { min-height: 2.75rem; } }
+</style>

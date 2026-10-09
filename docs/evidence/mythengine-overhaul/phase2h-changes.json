@@ -1,0 +1,143 @@
+{
+  "recordedAt": "2026-09-22T16:50:43.302Z",
+  "baseline": "MythEngine clone after folder archive/recovery milestone",
+  "changes": [
+    {
+      "path": "drizzle/0028_project_migration_constraints.sql",
+      "beforeSha256": null,
+      "afterSha256": "0128f1fa79c74edb01414530d6f34a507c0b9deb30224ad6b32f4f8d8d5c3ae4"
+    },
+    {
+      "path": "src/lib/components/content/CanonicalTypeEditor.svelte",
+      "beforeSha256": "771bdf2f74d122125ec065ee6f0ac6cf4a9ae7b6c84a07e1fab1e1502d1261d4",
+      "afterSha256": "cf109571d598f69d2b7746d17b2bb2e32a0856684eae4efdc85359156b761c77"
+    },
+    {
+      "path": "src/lib/components/content/ContentWorkspace.svelte",
+      "beforeSha256": "a3c88fa7cc0653416550b78740a7a1892bad8ac74c746d1c369c98ac71e4bfe0",
+      "afterSha256": "aa51263ce890bf744592b7a3a56973a64735b433e7c87e0647b156bd859ae2c1"
+    },
+    {
+      "path": "src/lib/components/content/GameMigration.svelte",
+      "beforeSha256": null,
+      "afterSha256": "967a21afa5fb89afab123a2f4b70378e964cd828931fff4a5f57da00c7692479"
+    },
+    {
+      "path": "src/lib/contracts/canonicalTypes.ts",
+      "beforeSha256": "a6aa10d76550adb03f4fc6a99cc6b3ff8d4924509b62a7ac89f598d11cfd01d1",
+      "afterSha256": "fcabb4c008d26867368ee6df762da65d4930b27013c4c3585c237a8bf56aaab1"
+    },
+    {
+      "path": "src/lib/contracts/content.ts",
+      "beforeSha256": "dd4ceb9dc9f0b86014992987f7df41b5ad07cb82027987da347dc0f526515fca",
+      "afterSha256": "68de5e29ff184a75a0d9634aeb43bdde490f399767dd0cf913542500c28a711e"
+    },
+    {
+      "path": "src/lib/contracts/contentFields.ts",
+      "beforeSha256": null,
+      "afterSha256": "0f1986f0bc2b13edee4dbf9f092415d695133fc7f7fb0ef8f83518a79e65406b"
+    },
+    {
+      "path": "src/lib/contracts/contentFolders.ts",
+      "beforeSha256": "018064b41989380367daf76d96ef5e6178aa327c66242bd6540da9d8f1fa40f0",
+      "afterSha256": "c05891d0dbc95abed561df687fd7486c94bd65f15526371167a0237d606eecbb"
+    },
+    {
+      "path": "src/lib/server/db/worldDatabaseImport.ts",
+      "beforeSha256": "d4b0d06abe1ef3ac5c38d16dbef6403a806eeeb53d41cb90d1a7cc2e600bfb27",
+      "afterSha256": "f5e997ee9a693488c7edc8c39cb5b428f52dcbc14d8ea18a635df6f93febe8e3"
+    },
+    {
+      "path": "src/lib/server/engine/canonicalExtensions.ts",
+      "beforeSha256": null,
+      "afterSha256": "ec75ef6d6b7960c71be6b855d0f4e65d15cc4dd3850b828f3a84ac8c74dd27c3"
+    },
+    {
+      "path": "src/lib/server/engine/canonicalTypes.ts",
+      "beforeSha256": "0eaff1d3456c6235db5d5022204879b4788c3f179ab29ac65977e178052622a2",
+      "afterSha256": "9c4c7731aef0422fa6bb1345d834874487523cc96fca63dc615834b37d11d148"
+    },
+    {
+      "path": "src/lib/server/engine/command.ts",
+      "beforeSha256": "3bd517a0949a5afd02d51f88aeb826b9df6fee5df2c0bf516be6082c7f4b6b29",
+      "afterSha256": "f187a643b194da6804eaafa4d4b3b11281e1dcf4c6df85ea9362c8e5fbf10f03"
+    },
+    {
+      "path": "src/lib/server/engine/content.ts",
+      "beforeSha256": "b0cfce0f54d399b9e6246786ef1fa9a274ad87075035c49344f54e4b36a35dfc",
+      "afterSha256": "10c28c128b4cd95445e7622d1e6812339aadb7fcf396536dffe55af5695f5cdf"
+    },
+    {
+      "path": "src/lib/server/engine/gameMigration.ts",
+      "beforeSha256": null,
+      "afterSha256": "ada2cb741c2dddbbf1b93f32221e3fbd7554c2bbab1794f4f658ee02739339e8"
+    },
+    {
+      "path": "src/lib/server/engine/worldRecords.ts",
+      "beforeSha256": "ad411b6e030a695fdb25913c297a6befa9aa333c3ff2b473f65fd9a671604d73",
+      "afterSha256": "e7d30d2e89a2921fbbab0442ac2316db83d3d455ab4523e945d7d5222b102823"
+    },
+    {
+      "path": "src/lib/server/engine/phase2Completion.test.ts",
+      "beforeSha256": null,
+      "afterSha256": "72bc03f4b28a7f221ea82d1887d14489472aec31aeb0805b5a2337df5b05b420"
+    },
+    {
+      "path": "src/lib/components/content/CanonicalContentEditor.svelte",
+      "beforeSha256": "3c3be7569103bc6bf1f17466dd9e7605f1ed37c08fe34ce46124c4a3d6e9883c",
+      "afterSha256": "a4a2b11afc58858fd776ec6765743fcccc9d67d4d57885fa0d146ce0032601c0"
+    },
+    {
+      "path": "src/lib/server/db/worldDatabaseImport.test.ts",
+      "beforeSha256": "77d06cd7a9b7233a2f17019fcc0b120305eca3e6bf4d761cc4ccda5da5438614",
+      "afterSha256": "2d9d77a4f1c7b67d37bd2ed671dfa685cdbd4379c0c54d644308cb9ad097c13a"
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "beforeSha256": "e314d87d13d4da5d269e61ad61350c46028b6a14384b09414908eb602cf299ef",
+      "afterSha256": "797030c912273816028edf5c933273fe466d21ca274db5ae19eff770a7a8a61a"
+    },
+    {
+      "path": "docs/evidence/mythengine-overhaul/phase2h-browser-fixture.mjs",
+      "beforeSha256": null,
+      "afterSha256": "f86048ff5f56930b0331cb499e7f294d66a6ca844f3d5fd417747b83f45af176"
+    },
+    {
+      "path": "docs/evidence/mythengine-overhaul/phase2h-live-fixture.mjs",
+      "beforeSha256": null,
+      "afterSha256": "430601e13e99f02cea2567f7a36509408e2b234f6568960d3bab27e8037fa0cc"
+    },
+    {
+      "path": "docs/evidence/mythengine-overhaul/phase2h-test-summary.json",
+      "beforeSha256": null,
+      "afterSha256": "6860d8e0b164e6e0134fde1c2caa711182b543bbff044e19de8f95e11129a576"
+    },
+    {
+      "path": "docs/mythengine-overhaul-plan-2026-09-21.md",
+      "beforeSha256": "b5a6d5f30854487e0c39df1af249e09e01c99eb3f28421bac5944e7c8362c7b6",
+      "afterSha256": "d231cd2bddc42dfa9a093cc602e02b5e4a55055678b2add0189fd6e189259f9a"
+    },
+    {
+      "path": "docs/mythengine-phase2-2026-09-21.md",
+      "beforeSha256": "6a5e87c234bcbb004081d6f9d674375993cb05e2d3c9ee38c4acb2bfbd70af28",
+      "afterSha256": "621b6926b22d79781cc0f6c6546580fcbda1ba128d84106493435b16a193de76"
+    },
+    {
+      "path": "docs/mythengine-phase2-complete-2026-09-22.md",
+      "beforeSha256": null,
+      "afterSha256": "acdd2977d3b231e658e65c66566a5c233005240b3bc312b5e3551d24cc92bf0e"
+    },
+    {
+      "path": "README.md",
+      "beforeSha256": "1681d8a7e5c7bc61e7352d8fb4ca3b4fbf6fe17065ebc02b1d8621cd8c917755",
+      "afterSha256": "05eae15f938568e1281d3feb77bef9a2c068a6288b6f7bc8d6a757cded731dc9"
+    }
+  ],
+  "checks": {
+    "phaseScopedDiff": "passed",
+    "documentationLinks": "passed",
+    "originalFilesChecked": 760,
+    "originalNotWrittenByThisMilestone": true,
+    "preExistingOriginalDifferences": 5
+  }
+}

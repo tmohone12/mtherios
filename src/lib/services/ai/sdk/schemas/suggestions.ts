@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
 export const suggestionSchema = z.object({
-	text: z.string(),
+	text: z.string().min(1).max(120),
 	type: z.enum(['action', 'dialogue', 'thought', 'direction']),
-	brief: z.string().optional(),
+	brief: z.string().max(40).optional(),
 });
 
 export const suggestionsResultSchema = z.object({

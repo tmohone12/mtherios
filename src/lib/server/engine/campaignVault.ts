@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getMtheriosAppConfig, type MtheriosAppConfig } from '$lib/server/app/config';
 import { getDb } from '$lib/server/db/client';
-import { campaignFiles } from '$lib/server/db/schema';
+import { campaignFiles, storyEntries } from '$lib/server/db/schema';
 import type { CampaignVaultStatus } from '$lib/contracts/engine';
 
 type JsonRecord = Record<string, unknown>;
@@ -42,6 +42,8 @@ export interface CampaignFileIndexRecord {
 export interface AppendTurnEvidenceInput {
 	story: CampaignStoryRef;
 	clientTurnId: string;
+	playerEntryId?: string | null;
+	assistantEntryId?: string | null;
 	position: number;
 	playerText: string;
 	narration: string;
@@ -442,6 +444,10 @@ export async function appendTurnEvidence(
 		serverVersion,
 		metadata: {
 			clientTurnId: input.clientTurnId,
+			playerEntryId: input.playerEntryId ?? `entry_${input.clientTurnId}`,
+			assistantEntryId: input.assistantEntryId ?? `narration_${input.clientTurnId}`,
+			playerContentHash: hashText(input.playerText),
+			narrationContentHash: hashText(input.narration),
 			position: turnPosition,
 			eventIds: input.eventIds ?? [],
 			statePatchIds: input.statePatchIds ?? [],
@@ -550,6 +556,76 @@ export function campaignFileContentHash(value: unknown): string {
 	return hashText(stableJson(value));
 }
 
+type RawTurnSourceEntry = {
+	id: string;
+	type: string;
+	content: string;
+	parentId: string | null;
+	metadata: Record<string, unknown> | null;
+};
+
+function rawTurnMarkdownSection(content: string, heading: string, nextHeadings: string[]): string | null {
+	const marker = `\n## ${heading}\n\n`;
+	const markerIndex = content.indexOf(marker);
+	if (markerIndex < 0) return null;
+	const start = markerIndex + marker.length;
+	const ends = nextHeadings
+		.map((nextHeading) => content.indexOf(`\n## ${nextHeading}\n`, start))
+		.filter((index) => index >= 0);
+	const end = ends.length > 0 ? Math.min(...ends) : content.length;
+	return content.slice(start, end).trim();
+}
+
+function renderedRawTurnText(value: string, emptyMarker: string): string {
+	return value === emptyMarker ? '' : value.trim();
+}
+
+export function rawTurnSourcePairError(
+	metadata: Record<string, unknown>,
+	entries: RawTurnSourceEntry[],
+	evidence: { rawContent?: string; indexedContentHash?: string } = {},
+): string | null {
+	const clientTurnId = typeof metadata.clientTurnId === 'string' ? metadata.clientTurnId.trim() : '';
+	const playerEntryId = typeof metadata.playerEntryId === 'string' && metadata.playerEntryId.trim()
+		? metadata.playerEntryId.trim()
+		: clientTurnId ? `entry_${clientTurnId}` : '';
+	const assistantEntryId = typeof metadata.assistantEntryId === 'string' && metadata.assistantEntryId.trim()
+		? metadata.assistantEntryId.trim()
+		: clientTurnId ? `narration_${clientTurnId}` : '';
+	if (!playerEntryId || !assistantEntryId) return 'source_entry_ids_missing';
+	const player = entries.find((entry) => entry.id === playerEntryId);
+	const assistant = entries.find((entry) => entry.id === assistantEntryId);
+	if (!player || !assistant) return 'source_entries_missing';
+	if (player.type !== 'user_action' || assistant.type !== 'narration') return 'source_entry_types_changed';
+	if (assistant.parentId !== player.id) return 'source_entry_pair_changed';
+	for (const entry of [player, assistant]) {
+		const sourceMetadata = entry.metadata ?? {};
+		if (sourceMetadata.nonCanon === true || sourceMetadata.actionType === 'ooc' || sourceMetadata.narrativeMode === 'ooc') {
+			return 'source_entries_non_canon';
+		}
+	}
+	if (evidence.rawContent !== undefined && evidence.indexedContentHash
+		&& hashText(evidence.rawContent) !== evidence.indexedContentHash) {
+		return 'raw_turn_file_content_changed';
+	}
+	const playerContentHash = typeof metadata.playerContentHash === 'string' ? metadata.playerContentHash : '';
+	const narrationContentHash = typeof metadata.narrationContentHash === 'string' ? metadata.narrationContentHash : '';
+	if ((playerContentHash && playerContentHash !== hashText(player.content))
+		|| (narrationContentHash && narrationContentHash !== hashText(assistant.content))) {
+		return 'source_entry_content_changed';
+	}
+	if (evidence.rawContent !== undefined && (!playerContentHash || !narrationContentHash)) {
+		const playerSection = rawTurnMarkdownSection(evidence.rawContent, 'Player Action', ['Narration']);
+		const narrationSection = rawTurnMarkdownSection(evidence.rawContent, 'Narration', ['Generation Timings', 'Metadata']);
+		if (playerSection === null || narrationSection === null) return 'raw_turn_content_invalid';
+		if ((!playerContentHash && renderedRawTurnText(playerSection, '(empty player action)') !== player.content.trim())
+			|| (!narrationContentHash && renderedRawTurnText(narrationSection, '(empty narration)') !== assistant.content.trim())) {
+			return 'source_entry_content_changed';
+		}
+	}
+	return null;
+}
+
 export async function readCampaignPage(options: {
 	storyId: string;
 	kind: string;
@@ -557,14 +633,66 @@ export async function readCampaignPage(options: {
 	relativePath?: string | null;
 	missingOk?: boolean;
 	config?: MtheriosAppConfig;
+	requireIndexedRawTurn?: boolean;
 }): Promise<CampaignPageReadResult> {
 	const config = options.config ?? getMtheriosAppConfig();
 	const vaultRoot = campaignVaultPath(options.storyId, config);
+	const fileKind = campaignPageFileKind(options.kind);
 	const relativePath = campaignPageRelativePath({
 		kind: options.kind,
 		name: options.name,
 		relativePath: options.relativePath,
 	});
+	let indexedRawTurn: { metadata: Record<string, unknown>; contentHash: string } | null = null;
+	let rawTurnSourceEntries: RawTurnSourceEntry[] = [];
+	if (fileKind === 'raw_turn' && options.requireIndexedRawTurn !== false) {
+		const [indexed] = await getDb()
+			.select({ id: campaignFiles.id, metadata: campaignFiles.metadata, contentHash: campaignFiles.contentHash })
+			.from(campaignFiles)
+			.where(sql`${campaignFiles.storyId} = ${options.storyId} AND ${campaignFiles.path} = ${relativePath} AND ${campaignFiles.kind} = 'raw_turn'`)
+			.limit(1);
+		let sourceError = indexed ? null : 'raw_turn_not_indexed';
+		if (indexed) {
+			indexedRawTurn = { metadata: indexed.metadata, contentHash: indexed.contentHash };
+			const clientTurnId = typeof indexed.metadata.clientTurnId === 'string' ? indexed.metadata.clientTurnId.trim() : '';
+			const playerEntryId = typeof indexed.metadata.playerEntryId === 'string' && indexed.metadata.playerEntryId.trim()
+				? indexed.metadata.playerEntryId.trim()
+				: clientTurnId ? `entry_${clientTurnId}` : '';
+			const assistantEntryId = typeof indexed.metadata.assistantEntryId === 'string' && indexed.metadata.assistantEntryId.trim()
+				? indexed.metadata.assistantEntryId.trim()
+				: clientTurnId ? `narration_${clientTurnId}` : '';
+			const sourceIds = [playerEntryId, assistantEntryId].filter(Boolean);
+			const entries = sourceIds.length === 2
+				? await getDb().select({
+					id: storyEntries.id,
+					type: storyEntries.type,
+					content: storyEntries.content,
+					parentId: storyEntries.parentId,
+					metadata: storyEntries.metadata,
+				}).from(storyEntries).where(and(
+					eq(storyEntries.storyId, options.storyId),
+					inArray(storyEntries.id, sourceIds),
+				)).limit(2)
+				: [];
+			rawTurnSourceEntries = entries;
+			sourceError = rawTurnSourcePairError(indexed.metadata, entries);
+		}
+		if (sourceError) {
+			if (options.missingOk) {
+				return {
+					storyId: options.storyId,
+					kind: options.kind,
+					relativePath,
+					content: '',
+					contentHash: '',
+					updatedAt: null,
+					byteLength: 0,
+					missing: true,
+				};
+			}
+			throw new Error(`Campaign raw turn is not part of the current story: ${relativePath} (${sourceError})`);
+		}
+	}
 	const absolutePath = resolveVaultFile(vaultRoot, relativePath);
 	let content: string;
 	try {
@@ -583,6 +711,27 @@ export async function readCampaignPage(options: {
 			};
 		}
 		throw error;
+	}
+	if (indexedRawTurn) {
+		const sourceError = rawTurnSourcePairError(indexedRawTurn.metadata, rawTurnSourceEntries, {
+			rawContent: content,
+			indexedContentHash: indexedRawTurn.contentHash,
+		});
+		if (sourceError) {
+			if (options.missingOk) {
+				return {
+					storyId: options.storyId,
+					kind: options.kind,
+					relativePath,
+					content: '',
+					contentHash: '',
+					updatedAt: null,
+					byteLength: 0,
+					missing: true,
+				};
+			}
+			throw new Error(`Campaign raw turn is not part of the current story: ${relativePath} (${sourceError})`);
+		}
 	}
 	const fileStat = await stat(absolutePath).catch(() => null);
 	return {

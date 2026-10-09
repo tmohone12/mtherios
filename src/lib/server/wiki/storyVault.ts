@@ -1,7 +1,8 @@
-import { asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import JSZip from 'jszip';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { withQdrantCollectionLock } from '../../../../scripts/wiki-core/lib/collection-lock.mjs';
 import { getDb } from '$lib/server/db/client';
 import {
 	agreements,
@@ -29,6 +30,7 @@ import {
 	resolveVaultPath,
 	type MtheriosAppConfig,
 } from '$lib/server/app/config';
+import { storyScopedCollection, storyScopedSegment } from './storyIdentity';
 import {
 	buildCharacterProjectionMarkdown,
 	CHARACTER_PROJECTION_SCHEMA_VERSION,
@@ -233,11 +235,11 @@ export function resolveWikiTarget(
 
 export function storyVaultPath(storyId: string, config: MtheriosAppConfig = getMtheriosAppConfig()): string {
 	ensureServerDataDirs(config);
-	return path.resolve(config.vaultRoot, 'stories', safeSegment(storyId));
+	return path.resolve(config.vaultRoot, 'stories', storyScopedSegment(storyId));
 }
 
 export function storyVaultCollection(storyId: string, config: MtheriosAppConfig = getMtheriosAppConfig()): string {
-	return `${config.qdrantCollection}_${safeSegment(storyId).replace(/-/g, '_')}`;
+	return storyScopedCollection(config.qdrantCollection, storyId);
 }
 
 export async function materializeStoryVault(input: MaterializeStoryVaultInput): Promise<MaterializedStoryVault> {
@@ -399,25 +401,6 @@ export async function readStoryVaultLintRecord(
 		if ((error as { code?: string }).code === 'ENOENT') return null;
 		throw error;
 	}
-}
-
-export async function writeStoryVaultLintReport(input: {
-	storyId: string;
-	report: unknown;
-}, config: MtheriosAppConfig = getMtheriosAppConfig()): Promise<StoryVaultLintRecord> {
-	const manifest = await readStoryVaultManifest(input.storyId, config);
-	const record: StoryVaultLintRecord = {
-		schemaVersion: 1,
-		storyId: input.storyId,
-		serverVersion: manifest?.serverVersion ?? 0,
-		lintedAt: nowIso(),
-		report: input.report,
-	};
-	const reportPath = storyVaultLintPath(input.storyId, config);
-	assertPathInside(storyVaultPath(input.storyId, config), reportPath);
-	await fs.mkdir(path.dirname(reportPath), { recursive: true });
-	await fs.writeFile(reportPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
-	return record;
 }
 
 export async function getStoryVaultStatus(
@@ -672,7 +655,7 @@ async function loadStoryVaultData(storyId: string) {
 		db.select().from(factionGoals).where(eq(factionGoals.storyId, storyId)).orderBy(asc(factionGoals.factionId), desc(factionGoals.priority), asc(factionGoals.goal)).limit(5000),
 		db.select().from(factionProjects).where(eq(factionProjects.storyId, storyId)).orderBy(asc(factionProjects.factionId), asc(factionProjects.status), desc(factionProjects.priority), asc(factionProjects.project)).limit(5000),
 		db.select().from(npcBeliefs).where(eq(npcBeliefs.storyId, storyId)).orderBy(desc(npcBeliefs.updatedAt)).limit(5000),
-		db.select().from(agreements).where(eq(agreements.storyId, storyId)).orderBy(desc(agreements.updatedAt)).limit(2000),
+		db.select().from(agreements).where(and(eq(agreements.storyId, storyId), sql`${agreements.status} != 'deleted'`)).orderBy(desc(agreements.updatedAt)).limit(2000),
 		db.select().from(storyThreads).where(eq(storyThreads.storyId, storyId)).orderBy(desc(storyThreads.updatedAt)).limit(2000),
 		db.select().from(chapters).where(eq(chapters.storyId, storyId)).orderBy(asc(chapters.number)).limit(2000),
 		db.select().from(arcs).where(eq(arcs.storyId, storyId)).orderBy(asc(arcs.number)).limit(1000),
@@ -699,7 +682,7 @@ async function loadStoryVaultData(storyId: string) {
 		arcs: arcRows,
 		sagas: sagaRows,
 		events: eventRows,
-		memoryNodes: nodeRows,
+		memoryNodes: nodeRows.filter(row => asRecord(row.metadata).playerDeleted !== true),
 	};
 }
 
@@ -975,6 +958,11 @@ function renderCharacterProjection(
 	const outgoing = data.relationships.filter((rel) => rel.sourceEntityId === entity.id || rel.targetEntityId === entity.id);
 	const relatedFactionLines = factionLinesForEntity(entity, data, entityTitleMap);
 	const profileLines = entityProfileLines(entity, entityTitleMap);
+	const state = asRecord(entity.state);
+	// Character biography is canonical state. A legacy description may be a
+	// short summary or a stale import, so it must not replace the player/NPC bio
+	// in the compact lore archive.
+	const biography = firstString(state, ['bio', 'background']) || entity.description || '_No description yet._';
 	const metadata = asRecord(entity.metadata);
 	const resolver = asRecord(metadata.entityResolver);
 	const confidence = typeof resolver.confidence === 'number' ? resolver.confidence : null;
@@ -1002,7 +990,7 @@ function renderCharacterProjection(
 		firstSeenEntryId: entity.sourceEntryIds[0] ?? null,
 		sourceRefs,
 		confidence,
-		description: entity.description || '_No description yet._',
+		description: biography,
 		currentStateLines: characterCurrentStateLines(entity, entityTitleMap),
 		profileLines,
 		eventMemoryLines: characterEventMemoryLines(entity),
@@ -1601,10 +1589,6 @@ function pageFile(title: string, id: string): string {
 	return `${slug(title)}--${id.slice(0, 8)}.md`;
 }
 
-function safeSegment(value: string): string {
-	return slug(value, 90).replace(/-/g, '_') || 'story';
-}
-
 function storyVaultManifestPath(storyId: string, config: MtheriosAppConfig = getMtheriosAppConfig()): string {
 	return path.join(storyVaultPath(storyId, config), '.mtherios', 'story-vault.json');
 }
@@ -1711,33 +1695,35 @@ async function deleteQdrantCollection(
 	collection: string,
 	config: MtheriosAppConfig,
 ): Promise<{ deleted: boolean | null; status: number | null; error: string | null }> {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), 2500);
-	try {
-		const response = await fetch(
-			`${config.qdrantUrl.replace(/\/$/, '')}/collections/${encodeURIComponent(collection)}`,
-			{ method: 'DELETE', signal: controller.signal },
-		);
-		const text = await response.text();
-		if (response.status === 404) return { deleted: false, status: 404, error: null };
-		if (!response.ok) {
-			return {
-				deleted: null,
-				status: response.status,
-				error: `Qdrant DELETE ${collection} failed (${response.status}): ${text.slice(0, 500)}`,
-			};
+	return withQdrantCollectionLock({ url: config.qdrantUrl, collection }, async () => {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 2500);
+		try {
+			const response = await fetch(
+				`${config.qdrantUrl.replace(/\/$/, '')}/collections/${encodeURIComponent(collection)}`,
+				{ method: 'DELETE', signal: controller.signal },
+			);
+			const text = await response.text();
+			if (response.status === 404) return { deleted: false, status: 404, error: null };
+			if (!response.ok) {
+				return {
+					deleted: null,
+					status: response.status,
+					error: `Qdrant DELETE ${collection} failed (${response.status}): ${text.slice(0, 500)}`,
+				};
+			}
+			return { deleted: true, status: response.status, error: null };
+		} catch (error) {
+			const reason = (error as { name?: string }).name === 'AbortError'
+				? 'Qdrant delete timed out.'
+				: error instanceof Error
+					? error.message
+					: String(error);
+			return { deleted: null, status: null, error: reason };
+		} finally {
+			clearTimeout(timeout);
 		}
-		return { deleted: true, status: response.status, error: null };
-	} catch (error) {
-		const reason = (error as { name?: string }).name === 'AbortError'
-			? 'Qdrant delete timed out.'
-			: error instanceof Error
-				? error.message
-				: String(error);
-		return { deleted: null, status: null, error: reason };
-	} finally {
-		clearTimeout(timeout);
-	}
+	});
 }
 
 function tailLines(value: string, count: number): string {

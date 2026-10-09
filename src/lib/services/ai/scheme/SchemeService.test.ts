@@ -4,9 +4,13 @@ vi.mock('$lib/stores/story.svelte', () => ({ story: { currentStory: null, scheme
 vi.mock('$lib/stores/settings.svelte', () => ({ settings: { getServiceConfig: () => ({ model: '', temperature: 0, maxTokens: 0, enabled: true, profileId: '', systemPromptOverride: '' }) } }));
 vi.mock('$lib/services/ai/sdk/generate', () => ({ generateStructuredWithTools: vi.fn() }));
 vi.mock('$lib/services/database', () => ({ getChapters: vi.fn() }));
-vi.mock('$lib/services/canonicalWrites', () => ({ saveCanonicalScheme: vi.fn(), saveCanonicalSchemes: vi.fn() }));
+vi.mock('$lib/services/canonicalWrites', () => ({ saveCanonicalScheme: vi.fn() }));
 
-import { findUniqueSchemeByIdOrPrefix, shouldEvaluate } from './SchemeService';
+import { declarePlayerScheme, injectSchemes } from './SchemeService';
+import { story } from '$lib/stores/story.svelte';
+import { generateStructuredWithTools } from '$lib/services/ai/sdk/generate';
+import { getChapters } from '$lib/services/database';
+import { saveCanonicalScheme } from '$lib/services/canonicalWrites';
 import type { Scheme } from '$lib/types';
 
 function scheme(id: string): Scheme {
@@ -33,26 +37,34 @@ function scheme(id: string): Scheme {
 }
 
 describe('SchemeService safety gates', () => {
-	it('evaluates schemes for faction-relevant timeline events', () => {
-		expect(shouldEvaluate({
-			timeline_events: [{
-				title: 'A public marriage pact is announced',
-				description: '',
-				type: 'marriage',
-				status: 'committed',
-			}],
-		} as any)).toBe(true);
+	it('keeps explicit player plan authoring after automatic scheme removal', async () => {
+		const localStory = story as any;
+		localStory.currentStory = { id: 'story-1', currentBranchId: null, timeTracker: null, serverVersion: 1 };
+		localStory.protagonist = { name: 'Mara' };
+		localStory.entries = [{ id: 'entry-1' }];
+		localStory.schemes = [];
+		vi.mocked(getChapters).mockResolvedValue([]);
+		vi.mocked(saveCanonicalScheme).mockResolvedValue(2);
+		vi.mocked(generateStructuredWithTools).mockResolvedValue({ toolCalls: [{ name: 'declare_player_scheme',
+			arguments: { goal: 'Book passage', stages: [{ label: 'Ask clerk', hook: 'Buy a ticket' },
+				{ label: 'Board ship', hook: 'Present the ticket' }] } }] } as never);
+		const result = await declarePlayerScheme('Book passage');
+		expect(result.error).toBeNull();
+		expect(result.scheme).toMatchObject({ ownerType: 'player', ownerName: 'Mara', triggerEntryId: 'entry-1' });
+		expect(saveCanonicalScheme).toHaveBeenCalledOnce();
+		expect(localStory.schemes).toHaveLength(1);
 	});
 
-	it('rejects ambiguous scheme ID prefixes', () => {
-		const schemes = [
-			scheme('abcdef12-first-scheme'),
-			scheme('abcdef12-second-scheme'),
-			scheme('12345678-third-scheme'),
-		];
-
-		expect(findUniqueSchemeByIdOrPrefix(schemes, 'abcdef12')).toBeNull();
-		expect(findUniqueSchemeByIdOrPrefix(schemes, '12345678')?.id).toBe('12345678-third-scheme');
-		expect(findUniqueSchemeByIdOrPrefix(schemes, 'abc')).toBeNull();
+	it('does not force antagonist hooks into browser narration', () => {
+		const secret = { ...scheme('secret-scheme'), pressure: 95,
+			stages: [{ index: 0, label: 'Ambush', hook: 'Attack at the inn', condition: 'time', conditionPayload: {}, completed: false, completedAt: null }] } as Scheme;
+		const publicScheme = { ...secret, id: 'public-scheme', secrecy: 'known' } as Scheme;
+		const playerPlan = { ...secret, id: 'player-plan', ownerType: 'player', goal: 'Book passage',
+			stages: [{ ...secret.stages[0], label: 'Ask clerk', hook: 'Buy a ticket' }] } as Scheme;
+		expect(injectSchemes([secret, publicScheme])).toBe('');
+		const prompt = injectSchemes([secret, publicScheme, playerPlan]);
+		expect(prompt).toContain('Book passage');
+		expect(prompt).not.toContain('Ambush');
+		expect(prompt).not.toContain('THIS chapter');
 	});
 });

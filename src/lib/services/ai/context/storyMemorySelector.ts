@@ -1,4 +1,5 @@
 import { countTokens, truncateToTokenBudget } from '$lib/utils/tokens';
+import { summarizeMtheriosMemoryForContext } from './mtheriosSummaryFormat';
 
 export interface StoryMemorySelectorOptions {
 	query?: string;
@@ -135,7 +136,7 @@ function normalizeChapter(value: unknown): NormalizedMemoryCandidate {
 	const number = asNumber(record.number);
 	const title = asString(record.title) || `Chapter ${number || '?'}`;
 	const sceneOutcome = asString(record.sceneOutcome);
-	const summary = asString(record.summary) || sceneOutcome;
+	const summary = asString(record.summary) || summarizeMtheriosMemoryForContext(sceneOutcome);
 	const irreversible = relationList(record, ['irreversibleChanges', 'promisesDebtsOaths', 'discoveredClues']);
 	const relationship = relationList(record, ['relationshipChanges', 'factionChanges']);
 	const knowledge = objectListSummary(record.npcKnowledgeChanges);

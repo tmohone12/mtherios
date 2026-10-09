@@ -77,7 +77,7 @@ describe('canonical character writes', () => {
 		});
 	});
 
-	it('preserves explicit character control fields in the canonical entry state', async () => {
+	it.each(['ally', 'self'])('preserves explicit character control fields for %s', async relationship => {
 		const character = {
 			id: 'char_mira',
 			storyId: 'local-story-1',
@@ -85,15 +85,19 @@ describe('canonical character writes', () => {
 			name: 'Mira of the Harbor',
 			description: 'A harbor fixer with an eye for debt and silence.',
 			traits: ['watchful', 'pragmatic'],
-			relationship: 'ally',
+			relationship,
 			status: 'active',
 			metadata: {
+				currentDisposition: 'focused on the letter',
+				playerSheet: { abilities: { str: 16 }, armorClass: 15, hitPoints: { current: 7, max: 12 } },
 				appearance: 'Salt-stiff cloak, copper rings, narrow scar over one brow.',
 				voice: 'Low, amused, never rushed.',
 				mannerisms: ['taps coin twice before lying'],
 				personalityDescriptors: ['patient', 'transactional'],
 				lastSeenLocation: 'Black Quay',
 				factionName: 'Harbor Compact',
+				partyMember: true,
+				partyRole: 'Face',
 				rank: 'Broker',
 				role: 'Informant',
 				visibilityNote: 'Player-known contact; her patron remains secret.',
@@ -116,12 +120,17 @@ describe('canonical character writes', () => {
 			name: 'Mira of the Harbor',
 			state: {
 				type: 'character',
+				relationship: { status: relationship === 'self' ? 'self' : 'focused on the letter' },
+				currentDisposition: 'focused on the letter',
+				playerSheet: { abilities: { str: 16 }, armorClass: 15, hitPoints: { current: 7, max: 12 } },
 				appearance: 'Salt-stiff cloak, copper rings, narrow scar over one brow.',
 				voice: 'Low, amused, never rushed.',
 				mannerisms: ['taps coin twice before lying'],
 				personalityDescriptors: ['patient', 'transactional'],
 				lastSeenLocation: 'Black Quay',
 				factionName: 'Harbor Compact',
+				partyMember: true,
+				partyRole: 'Face',
 				rank: 'Broker',
 				role: 'Informant',
 				visibilityNote: 'Player-known contact; her patron remains secret.',
@@ -130,6 +139,30 @@ describe('canonical character writes', () => {
 		expect(mocks.serverStories.createBackendLorebookEntry).toHaveBeenCalledWith('server-story-1', result.entry);
 		expect(mocks.database.putLorebookEntry).toHaveBeenCalledWith(result.entry);
 		expect(mocks.database.putCharacter).toHaveBeenCalledWith(character);
+	});
+
+	it.each([false, true])('clears a saved party role when membership is %s and the role is explicitly cleared', async partyMember => {
+		mocks.database.getLorebookEntry.mockResolvedValue({
+			id: 'char_mira', type: 'character', state: { type: 'character', partyMember: true, partyRole: 'Scout' },
+		});
+		const character = {
+			id: 'char_mira', storyId: 'local-story-1', branchId: null, name: 'Mira', description: 'A scout.',
+			traits: [], relationship: 'ally', status: 'active', visualDescriptors: {}, portrait: null,
+			metadata: { partyMember, partyRole: null },
+		} satisfies Character;
+		const result = await saveCanonicalCharacter(character);
+		expect(result.entry.state).toMatchObject({ partyMember, partyRole: null });
+		expect(mocks.serverStories.upsertBackendLorebookEntry).toHaveBeenCalledWith('server-story-1', expect.objectContaining({ state: expect.objectContaining({ partyMember, partyRole: null }) }));
+	});
+
+	it('preserves existing capabilities on unrelated edits and commits explicit clears', async () => {
+		const capabilities = { abilities: ['Keen senses'], buffs: ['Cold ward until dawn'] };
+		mocks.database.getLorebookEntry.mockResolvedValue({ id: 'char_mira', type: 'character', state: { type: 'character', playerCapabilities: capabilities } });
+		const character = { id: 'char_mira', storyId: 'local-story-1', branchId: null, name: 'Mira', description: 'A scout.', traits: [], relationship: 'self', status: 'active', visualDescriptors: {}, portrait: null, metadata: {} } satisfies Character;
+		expect((await saveCanonicalCharacter(character)).entry.state).toMatchObject({ playerCapabilities: capabilities });
+		const cleared = { abilities: [], buffs: [] };
+		await saveCanonicalCharacter({ ...character, metadata: { playerCapabilities: cleared } });
+		expect(mocks.serverStories.upsertBackendLorebookEntry).toHaveBeenLastCalledWith('server-story-1', expect.objectContaining({ state: expect.objectContaining({ playerCapabilities: cleared }) }));
 	});
 
 	it('adopts the backend-resolved character id before updating local canon projections', async () => {

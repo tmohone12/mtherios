@@ -5,7 +5,8 @@
 
 import { getSetting, setSetting, getAllSettings } from '$lib/services/database';
 import { PROVIDERS, type ProviderConfig } from '$lib/services/ai/sdk/providers/config';
-import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET } from '$lib/services/memorySettings';
+import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET, DEFAULT_RECENT_DIALOGUE_TOKENS, DEFAULT_RECENT_DIALOGUE_TURNS, normalizeRecentDialogueTokens, normalizeRecentDialogueTurns } from '$lib/services/memorySettings';
+import { FIXED_CHAPTER_SETTINGS } from '$lib/services/chapterCadence';
 import type { UISettings, APIProfile, ProviderType, ReasoningEffort } from '$lib/types';
 
 // ── Per-Service Configuration ──
@@ -16,26 +17,31 @@ export interface ServiceConfig {
 	systemPromptOverride: string; // empty = use default
 	enabled: boolean;
 	profileId: string; // API profile to use — empty = active profile (default)
+	dialogueMode?: 'all' | 'important';
+	batchMaxCostUsd?: number | null;
+	batchInputUsdPerMillion?: number | null;
+	batchOutputUsdPerMillion?: number | null;
 }
 
-export const SERVICE_DEFINITIONS: Record<string, { label: string; description: string; profile: string; defaultTemp: number; defaultMaxTokens: number }> = {
-	narrative: { label: 'Narrative', description: 'Main story generation', profile: 'narrative', defaultTemp: 1.0, defaultMaxTokens: 4096 },
+export const SERVICE_DEFINITIONS: Record<string, { label: string; description: string; profile: string; defaultTemp: number; defaultMaxTokens: number; defaultEnabled?: boolean }> = {
+	assistant: { label: 'Authoring Assistant', description: 'Separate model for project and game authoring conversations', profile: 'assistant', defaultTemp: 0.5, defaultMaxTokens: 4096, defaultEnabled: false },
+	batchAuthoring: { label: 'Batch Authoring', description: 'Separate model and spend ceiling for bounded authoring helpers', profile: 'batchAuthoring', defaultTemp: 0.3, defaultMaxTokens: 4096, defaultEnabled: false },
+	narrative: { label: 'GameMaster', description: 'Main story generation and turn authority', profile: 'narrative', defaultTemp: 1.0, defaultMaxTokens: 4096 },
+	dialogue: { label: 'NPC Dialogue', description: 'Optional second model that revises NPC speech after the GameMaster sets the scene', profile: 'dialogue', defaultTemp: 0.7, defaultMaxTokens: 2048, defaultEnabled: false },
 	storySetupAssist: { label: 'Story Setup Assist', description: 'Helps draft new-story titles, worlds, protagonists, and lore seeds', profile: 'narrative', defaultTemp: 0.8, defaultMaxTokens: 2048 },
-	classifier: { label: 'Classifier', description: 'Extract world state from narrative', profile: 'worldState', defaultTemp: 0.3, defaultMaxTokens: 4096 },
-	smallBrain: { label: 'Lore Master', description: 'Read-only cited context synthesis and canon review', profile: 'worldState', defaultTemp: 0.3, defaultMaxTokens: 1200 },
-	characterUpdate: { label: 'Character Update', description: 'Refresh known character continuity from completed chapters', profile: 'worldState', defaultTemp: 0.2, defaultMaxTokens: 4096 },
+	classifier: { label: 'Turn Memory Extraction', description: 'Extract world state from completed turns for Memory & Context', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	smallBrain: { label: 'Lore Master', description: 'Read-only cited context synthesis and canon review', profile: 'narrative', defaultTemp: 0.3, defaultMaxTokens: 1200 },
+	actorDecision: { label: 'Actor Decisions', description: 'Propose evidence-bound NPC responses for pivotal interactions', profile: 'narrative', defaultTemp: 0.2, defaultMaxTokens: 700, defaultEnabled: false },
+	continuityReview: { label: 'Continuity Review', description: 'Shadow-review completed narration for source-linked continuity risks', profile: 'narrative', defaultTemp: 0.1, defaultMaxTokens: 900, defaultEnabled: false },
+	characterUpdate: { label: 'Character Update', description: 'Refresh known character continuity from completed chapters', profile: 'narrative', defaultTemp: 0.2, defaultMaxTokens: 4096 },
 	suggestions: { label: 'Suggestions', description: 'Generate action suggestions', profile: 'guidance', defaultTemp: 0.8, defaultMaxTokens: 2048 },
-	actionChoices: { label: 'Action Choices', description: 'Generate branching choices', profile: 'guidance', defaultTemp: 0.8, defaultMaxTokens: 2048 },
 	memory: { label: 'Memory', description: 'Chapter summarization & retrieval', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
-	styleReviewer: { label: 'Style Reviewer', description: 'Review narrative quality', profile: 'style', defaultTemp: 0.3, defaultMaxTokens: 4096 },
-	loreManagement: { label: 'Lore Management', description: 'Discover and curate lorebook entries automatically', profile: 'lorebook', defaultTemp: 0.3, defaultMaxTokens: 4096 },
-	entryRefinement: { label: 'Entry Refinement', description: 'Per-entry AI refinement from the lorebook entry modal', profile: 'lorebook', defaultTemp: 0.4, defaultMaxTokens: 4096 },
+	loreManagement: { label: 'Lore Management', description: 'Discover and curate lorebook entries automatically', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
+	entryRefinement: { label: 'Entry Refinement', description: 'Refine an entry with the memory and lore context', profile: 'memoryContext', defaultTemp: 0.4, defaultMaxTokens: 4096 },
 	imageGeneration: { label: 'Image Generation', description: 'Scene image generation', profile: 'image', defaultTemp: 0.7, defaultMaxTokens: 1024 },
-	worldSimulation: { label: 'World Simulation', description: 'Living world DM — plot injection, faction movements, rumors, world tension', profile: 'worldState', defaultTemp: 0.6, defaultMaxTokens: 8192 },
-	strategicWorldBrain: { label: 'Strategic World Brain', description: 'Deep arc-level simulation for factions, schemes, plots, subplots, and world pressure', profile: 'deepSimulation', defaultTemp: 0.45, defaultMaxTokens: 9000 },
+	strategicWorldBrain: { label: 'Strategic World Brain', description: 'Deep arc-level simulation for factions, schemes, plots, subplots, and world pressure', profile: 'narrative', defaultTemp: 0.45, defaultMaxTokens: 8192 },
 	arcCondensation: { label: 'Arc Condensation', description: 'Condense chapters into arc summaries', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
 	sagaCondensation: { label: 'Saga Condensation', description: 'Condense arcs into long-term saga summaries', profile: 'memoryContext', defaultTemp: 0.25, defaultMaxTokens: 4096 },
-	wikiLint: { label: 'Wiki Lint', description: 'Health-check the lorebook for contradictions, stale claims, orphan entries, and missing entries.', profile: 'lorebook', defaultTemp: 0.2, defaultMaxTokens: 16384 },
 };
 
 // ── Service Profile Groups ──
@@ -49,15 +55,39 @@ export interface ServiceProfile {
 }
 
 export const SERVICE_PROFILES: ServiceProfile[] = [
-	{ id: 'deepSimulation', label: 'Deep Simulation', description: 'Rare strategic planning for factions, schemes, plots, and arc pressure', icon: 'S', serviceIds: ['strategicWorldBrain'] },
-	{ id: 'narrative', label: 'Narrative', description: 'Main story generation and new-story writing assistance', icon: '✍️', serviceIds: ['narrative', 'storySetupAssist'] },
-	{ id: 'worldState', label: 'World State', description: 'Extracts characters, locations, living world simulation, and plot momentum', icon: '🌍', serviceIds: ['classifier', 'smallBrain', 'characterUpdate', 'worldSimulation'] },
-	{ id: 'guidance', label: 'Player Guidance', description: 'Suggestions and branching action choices', icon: '🧭', serviceIds: ['suggestions', 'actionChoices'] },
-	{ id: 'memoryContext', label: 'Memory & Context', description: 'Chapter, arc, and saga memory', icon: '🧠', serviceIds: ['memory', 'arcCondensation', 'sagaCondensation'] },
-	{ id: 'lorebook', label: 'Lorebook', description: 'Discover, curate, query, and lint lore entries', icon: '📜', serviceIds: ['loreManagement', 'entryRefinement', 'wikiLint'] },
-	{ id: 'style', label: 'Style Review', description: 'POV, tense, and prose quality checks', icon: '✨', serviceIds: ['styleReviewer'] },
+	{ id: 'narrative', label: 'GameMaster', description: 'Story model; expand services for World State and other tools', icon: '✍️', serviceIds: ['narrative', 'storySetupAssist', 'smallBrain', 'actorDecision', 'continuityReview', 'characterUpdate', 'strategicWorldBrain'] },
+	{ id: 'dialogue', label: 'NPC Dialogue', description: 'Optional model for spoken lines after the GameMaster draft', icon: '💬', serviceIds: ['dialogue'] },
+	{ id: 'memoryContext', label: 'Memory & Context subagent', description: 'Turn memory, chapter/arc/saga history, lore management, and entry refinement', icon: '🧠', serviceIds: ['classifier', 'memory', 'arcCondensation', 'sagaCondensation', 'loreManagement', 'entryRefinement'] },
+	{ id: 'guidance', label: 'Player Guidance subagent', description: 'Optional player-visible suggestions', icon: '🧭', serviceIds: ['suggestions'] },
+	{ id: 'assistant', label: 'Authoring Assistant', description: 'Authoring model and bounded batch helpers', icon: 'A', serviceIds: ['assistant', 'batchAuthoring'] },
 	{ id: 'image', label: 'Image Generation', description: 'Scene and character image generation', icon: '🎨', serviceIds: ['imageGeneration'] },
 ];
+
+/** Preserve old profile selections as explicit task overrides before changing group ownership. */
+export function migrateConsolidatedProfiles(configs: Record<string, ServiceConfig>, models: Record<string, string>) {
+	const nextConfigs = { ...configs };
+	const nextModels = { ...models };
+	for (const [oldGroup, services] of Object.entries({
+		worldState: ['classifier', 'smallBrain', 'actorDecision', 'continuityReview', 'characterUpdate'],
+		deepSimulation: ['strategicWorldBrain'],
+		batchAuthoring: ['batchAuthoring'],
+		lorebook: ['loreManagement', 'entryRefinement'],
+	})) {
+		const model = models[oldGroup];
+		if (!model) continue;
+		for (const serviceId of services) {
+			const existing = nextConfigs[serviceId];
+			if (existing?.model) continue;
+			const def = SERVICE_DEFINITIONS[serviceId];
+			nextConfigs[serviceId] = existing ? { ...existing, model } : {
+				model, temperature: def.defaultTemp, maxTokens: def.defaultMaxTokens,
+				systemPromptOverride: '', enabled: def.defaultEnabled ?? true, profileId: '',
+			};
+		}
+	}
+	if (!nextModels.memoryContext && models.lorebook) nextModels.memoryContext = models.lorebook;
+	return { configs: nextConfigs, models: nextModels };
+}
 
 // ── Service Settings ──
 export interface NarrativeSettings {
@@ -119,14 +149,14 @@ class SettingsStore {
 		// Memory settings
 		maxMessages: 250,
 		maxHistoryEntries: 50,
-		chapterThreshold: 20,
-		postChapterBuffer: 10,
+		...FIXED_CHAPTER_SETTINGS,
 		maxPrevChaptersInSummary: 5,
-		chaptersPerArc: 5,
 		retrievedChapterLimit: 3,
 		retrievedLoreEntryLimit: 8,
 		conversationMemoryLimit: 6,
 		backendMemoryTokenBudget: DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET,
+		recentDialogueTokens: DEFAULT_RECENT_DIALOGUE_TOKENS,
+		recentDialogueTurns: DEFAULT_RECENT_DIALOGUE_TURNS,
 		snapshotTokenCap: 0,
 		serverAuthoritativeTurns: true,
 	});
@@ -228,6 +258,14 @@ class SettingsStore {
 			if (all.profileModels) {
 				try { this.profileModels = JSON.parse(all.profileModels); } catch (e) { console.warn('[Settings] Failed to parse profileModels:', e); }
 			}
+			if (!all.consolidatedProfilesV1) {
+				const migrated = migrateConsolidatedProfiles(this.serviceConfigs, this.profileModels);
+				this.serviceConfigs = migrated.configs;
+				this.profileModels = migrated.models;
+				await this.saveServiceConfigs();
+				await this.saveProfileModels();
+				await setSetting('consolidatedProfilesV1', '1');
+			}
 
 			// UI settings
 			const hadSavedUiSettings = Boolean(all.uiSettings);
@@ -268,12 +306,12 @@ class SettingsStore {
 	}
 
 	private normalizeUiSettings() {
+		this.uiSettings.recentDialogueTokens = normalizeRecentDialogueTokens(this.uiSettings.recentDialogueTokens);
+		this.uiSettings.recentDialogueTurns = normalizeRecentDialogueTurns(this.uiSettings.recentDialogueTurns);
 		this.uiSettings.maxMessages = this.clampNumber(this.uiSettings.maxMessages, 1, 1000, 250);
 		this.uiSettings.maxHistoryEntries = this.clampNumber(this.uiSettings.maxHistoryEntries, 1, 1000, 50);
-		this.uiSettings.chapterThreshold = this.clampNumber(this.uiSettings.chapterThreshold, 5, 200, 20);
-		this.uiSettings.postChapterBuffer = this.clampNumber(this.uiSettings.postChapterBuffer, 0, 100, 10);
+		Object.assign(this.uiSettings, FIXED_CHAPTER_SETTINGS);
 		this.uiSettings.maxPrevChaptersInSummary = this.clampNumber(this.uiSettings.maxPrevChaptersInSummary, 0, 50, 5);
-		this.uiSettings.chaptersPerArc = this.clampNumber(this.uiSettings.chaptersPerArc, 2, 50, 5);
 		this.uiSettings.retrievedChapterLimit = this.clampNumber(this.uiSettings.retrievedChapterLimit, 0, 12, 3);
 		this.uiSettings.retrievedLoreEntryLimit = this.clampNumber(this.uiSettings.retrievedLoreEntryLimit, 0, 24, 8);
 		this.uiSettings.conversationMemoryLimit = this.clampNumber(this.uiSettings.conversationMemoryLimit, 0, 24, 6);
@@ -313,7 +351,7 @@ class SettingsStore {
 		const def = SERVICE_DEFINITIONS[serviceId];
 		// Resolve model: per-service override → profile model → empty (provider default)
 		const profileModel = def ? (this.profileModels[def.profile] ?? '') : '';
-		const narrativeFallback = serviceId === 'narrative' && !existing?.profileId
+		const narrativeFallback = def && ['narrative', 'memoryContext', 'guidance'].includes(def.profile) && !existing?.profileId
 			? this.narrativeSettings.model
 			: '';
 		const fallbackModel = profileModel || narrativeFallback || '';
@@ -325,7 +363,7 @@ class SettingsStore {
 			temperature: serviceId === 'narrative' ? this.narrativeSettings.temperature : (def?.defaultTemp ?? 0.5),
 			maxTokens: serviceId === 'narrative' ? this.narrativeSettings.maxTokens : (def?.defaultMaxTokens ?? 4096),
 			systemPromptOverride: '',
-			enabled: true,
+			enabled: def?.defaultEnabled ?? true,
 			profileId: '',
 		};
 	}
@@ -336,7 +374,7 @@ class SettingsStore {
 			temperature: SERVICE_DEFINITIONS[serviceId]?.defaultTemp ?? 0.5,
 			maxTokens: SERVICE_DEFINITIONS[serviceId]?.defaultMaxTokens ?? 4096,
 			systemPromptOverride: '',
-			enabled: true,
+			enabled: SERVICE_DEFINITIONS[serviceId]?.defaultEnabled ?? true,
 			profileId: '',
 		};
 		this.serviceConfigs = { ...this.serviceConfigs, [serviceId]: { ...current, ...config } };

@@ -1,0 +1,69 @@
+{
+  "capturedAt": "2026-09-06T19:19:03.587Z",
+  "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+  "apiHealthy": true,
+  "runtime": {
+    "appUrl": "http://127.0.0.1:5175",
+    "pageStatus": 200,
+    "workerUrl": "http://127.0.0.1:5173",
+    "primaryUiNeedsRestart": true,
+    "restartBlockedReason": "Automatic approval review rejected both restart attempts with blocked by policy and no specific reason."
+  },
+  "previews": [
+    {
+      "budget": 4000,
+      "messages": 14,
+      "dialogueTokens": 2879,
+      "partialSources": 0,
+      "memoryNodes": 5,
+      "durationMs": 799
+    },
+    {
+      "budget": 12000,
+      "messages": 48,
+      "dialogueTokens": 11866,
+      "partialSources": 0,
+      "memoryNodes": 5,
+      "durationMs": 800
+    },
+    {
+      "budget": 24000,
+      "messages": 104,
+      "dialogueTokens": 23386,
+      "partialSources": 0,
+      "memoryNodes": 5,
+      "durationMs": 759
+    }
+  ],
+  "memoryProcessing": {
+    "complete": 855,
+    "failed": 0,
+    "waiting": 0,
+    "running": 0
+  },
+  "baselineEvidence": "docs/evidence/agent-harness-review-2026-09-06.json",
+  "baselineCapturedAt": null,
+  "initialFailedExtractions": 50,
+  "recoveryReasons": {
+    "reasoningRequired": 8,
+    "historicalInsufficientBalance": 42
+  },
+  "fixtureBrowser": {
+    "savedRecentDialogueTokens": 24000,
+    "persistedAfterReload": true,
+    "persistedNarrationReceiptRecentDialogueTokensMax": 24000,
+    "syntheticFailureVisible": true
+  },
+  "benchmark": "evals/memory/results/2026-09-06T18-47-40-292Z.json",
+  "limitations": [
+    "Prompt debug previews are read-only compiler diagnostics, not exact provider requests.",
+    "Recovery counts are a snapshot; the normal durable worker continues processing.",
+    "Token counting is estimated with gpt-tokenizer, not a provider-native tokenizer."
+  ],
+  "retriedExtractionJobs": {
+    "complete": 50,
+    "failed": 0,
+    "waiting": 0,
+    "running": 0
+  }
+}

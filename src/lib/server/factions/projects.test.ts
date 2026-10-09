@@ -118,16 +118,16 @@ describe('auditDueFactionProjects', () => {
 			currentTurn: 12,
 			dueProjectCount: 1,
 			proposalCount: 1,
-			warningCount: 0,
+			warningCount: 1,
 			proposalIds: ['proposal_due_project_project_harbor_blockade'],
 		});
 		expect(proposal).toMatchObject({
 			id: 'proposal_due_project_project_harbor_blockade',
 			storyId: 'story_1',
-			proposalType: 'faction_project_due_resolution',
+			proposalType: 'faction_project_deadline_review',
 			targetTable: 'faction_projects',
 			targetRecordId: 'project_harbor_blockade',
-			status: 'pending',
+			status: 'needs_review',
 			metadata: {
 				sourceType: 'due_faction_project_audit',
 				projectId: 'project_harbor_blockade',
@@ -172,7 +172,13 @@ describe('auditDueFactionProjects', () => {
 				risks: ['Smugglers defect', 'City guard notices missing ships'],
 			},
 		});
-		expect(insertCalls.find((call) => call.table === continuityWarnings)).toBeUndefined();
+		expect(insertCalls.find((call) => call.table === continuityWarnings)?.value).toEqual([
+			expect.objectContaining({
+				warningType: 'faction_project_deadline_missed',
+				factionIds: ['faction_harbor'],
+				details: 'Deadline reached at 65% progress.',
+			}),
+		]);
 		expect(insertCalls.find((call) => call.table === sourceRefs)?.value).toHaveLength(3);
 	});
 });

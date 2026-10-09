@@ -2,15 +2,18 @@ import { sql } from 'drizzle-orm';
 import {
 	boolean,
 	check,
+	foreignKey,
 	customType,
 	index,
 	integer,
 	jsonb,
 	pgTable,
+	primaryKey,
 	real,
 	text,
 	timestamp,
 	uniqueIndex,
+	unique,
 } from 'drizzle-orm/pg-core';
 
 const jsonArray = sql`'[]'::jsonb`;
@@ -78,6 +81,7 @@ export const stories = pgTable('stories', {
 	...syncColumns,
 }, (table) => ({
 	clientStoryIdx: index('stories_client_story_id_idx').on(table.clientStoryId),
+	projectIdentity: unique('stories_project_identity').on(table.shelfId, table.id),
 	shelfIdx: index('stories_shelf_idx').on(table.shelfId),
 	shelfUpdatedIdx: index('stories_shelf_updated_idx').on(table.shelfId, table.updatedAt),
 	updatedAtIdx: index('stories_updated_at_idx').on(table.updatedAt),
@@ -94,7 +98,8 @@ export const storyEntries = pgTable('story_entries', {
 	metadata: jsonb('metadata').$type<Record<string, unknown> | null>().default(null),
 	...syncColumns,
 }, (table) => ({
-	storyPositionIdx: index('story_entries_story_position_idx').on(table.storyId, table.position),
+	storyPositionIdx: uniqueIndex('story_entries_story_position_unique_idx').on(table.storyId, table.position),
+	contentSearchIdx: index('story_entries_content_fts_idx').using('gin', sql`to_tsvector('english', coalesce(${table.content}, ''))`),
 }));
 
 export const entities = pgTable('entities', {
@@ -115,6 +120,19 @@ export const entities = pgTable('entities', {
 	storyTypeIdx: index('entities_story_type_idx').on(table.storyId, table.type),
 	storyNameIdx: index('entities_story_name_idx').on(table.storyId, table.name),
 }));
+
+export const locationMaps = pgTable('location_maps', {
+  locationId: text('location_id').primaryKey().references(() => entities.id, { onDelete: 'cascade' }),
+  storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(), map: jsonb('map').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, t => ({ storyIdx: index('location_maps_story_idx').on(t.storyId), revisionCheck: check('location_maps_revision_check', sql`${t.revision}>0`) }));
+export const locationMapRevisions = pgTable('location_map_revisions', {
+  locationId: text('location_id').notNull().references(() => locationMaps.locationId, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(), snapshot: jsonb('snapshot').notNull(), actor: jsonb('actor').notNull(),
+  reason: text('reason').notNull(), createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, t => ({ identity: primaryKey({ columns: [t.locationId, t.revision] }), revisionCheck: check('location_map_revisions_revision_check', sql`${t.revision}>0`) }));
 
 export const entityAliases = pgTable('entity_aliases', {
 	id: text('id').primaryKey(),
@@ -569,7 +587,8 @@ export const contextCheckpoints = pgTable('context_checkpoints', {
 
 export const backendJobs = pgTable('backend_jobs', {
 	id: text('id').primaryKey(),
-	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	projectId: text('project_id').notNull().references(() => shelves.id, { onDelete: 'cascade' }),
+	storyId: text('story_id').references(() => stories.id, { onDelete: 'cascade' }),
 	type: text('type').notNull(),
 	payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default(jsonObject),
 	status: text('status').notNull().default('queued'),
@@ -583,6 +602,9 @@ export const backendJobs = pgTable('backend_jobs', {
 	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (table) => ({
+	projectStatusIdx: index('backend_jobs_project_status_idx').on(table.projectId, table.status),
+	gameProject: foreignKey({ name: 'backend_jobs_game_project_fk', columns: [table.projectId, table.storyId], foreignColumns: [stories.shelfId, stories.id] }).onDelete('cascade'),
+	scopeCheck: check('backend_jobs_scope_check', sql`(${table.storyId} is null and ${table.type} in ('validate_agent_settings', 'generate_image', 'assistant_batch_child')) or (${table.storyId} is not null and ${table.type} not in ('validate_agent_settings', 'assistant_batch_child'))`),
 	storyStatusIdx: index('backend_jobs_story_status_idx').on(table.storyId, table.status),
 	typeStatusIdx: index('backend_jobs_type_status_idx').on(table.type, table.status),
 	runAfterIdx: index('backend_jobs_run_after_idx').on(table.status, table.runAfter),
@@ -600,6 +622,7 @@ export const llmServiceSettings = pgTable('llm_service_settings', {
 	presencePenalty: real('presence_penalty'),
 	reasoningEffort: text('reasoning_effort'),
 	contextBudget: integer('context_budget'),
+	contextWindowTokens: integer('context_window_tokens'),
 	enabled: boolean('enabled').notNull().default(true),
 	systemPromptOverride: text('system_prompt_override'),
 	apiKeyRef: text('api_key_ref'),
@@ -696,7 +719,69 @@ export const apiCallLogs = pgTable('api_call_logs', {
 	statusCreatedIdx: index('api_call_logs_status_created_idx').on(table.status, table.createdAt),
 }));
 
+export const canonicalContent = pgTable('canonical_content', {
+  id: text('id').primaryKey().default(sql`gen_random_uuid()::text`), projectId: text('project_id').notNull().references(() => shelves.id, { onDelete: 'cascade' }), gameId: text('game_id').notNull(), kind: text('kind').notNull(), recordId: text('record_id').notNull(),
+  folder: text('folder').notNull().default(''), slug: text('slug').notNull(), gmContextMode: text('gm_context_mode'), branchId: text('branch_id'), povCharacter: text('pov_character'), hidden: boolean('hidden').notNull().default(false), sourceDeleted: boolean('source_deleted').notNull().default(false), revision: integer('revision').notNull().default(1), adapterVersion: integer('adapter_version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(), updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, t => ({ target: unique('canonical_content_target_unique').on(t.gameId,t.kind,t.recordId), path: unique('canonical_content_path_unique').on(t.gameId,t.kind,t.folder,t.slug),
+  gameProject: foreignKey({ name: 'canonical_content_game_project_fk', columns: [t.projectId,t.gameId], foreignColumns: [stories.shelfId,stories.id] }).onDelete('cascade'),
+  kind: check('canonical_content_kind_check',sql`${t.kind} in ('characters','locations','items','factions')`), mode: check('canonical_content_gm_context_mode_check',sql`${t.gmContextMode} in ('pinned','partial','searchable')`), revision: check('canonical_content_revision_check',sql`${t.revision}>0`), adapter: check('canonical_content_adapter_version_check',sql`${t.adapterVersion}=1`),
+}));
+export const canonicalContentHistory = pgTable('canonical_content_history', {
+  contentId: text('content_id').notNull().references(() => canonicalContent.id, {onDelete:'cascade'}), revision: integer('revision').notNull(), snapshot: jsonb('snapshot').notNull(), actor: jsonb('actor').notNull(), reason: text('reason').notNull(), createdAt: timestamp('created_at', {withTimezone:true,mode:'string'}).notNull().defaultNow(),
+}, t => ({ identity: primaryKey({ columns:[t.contentId,t.revision] }) }));
+
+export const contentTypes = pgTable('content_types', {
+  id: text('id').primaryKey(), projectId: text('project_id').notNull().references(() => shelves.id, { onDelete: 'cascade' }),
+  key: text('key').notNull(), extension: text('extension').notNull(), name: text('name').notNull(), definition: jsonb('definition').notNull(),
+  revision: integer('revision').notNull().default(1), createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(), updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, t => ({ projectIdentity: unique('content_types_project_identity').on(t.projectId,t.id), keyUnique: unique('content_types_key_unique').on(t.projectId,t.key), extensionUnique: unique('content_types_extension_unique').on(t.projectId,t.extension), revisionCheck: check('content_types_revision_check',sql`${t.revision} > 0`) }));
+export const assets = pgTable('assets', {
+  id: text('id').primaryKey(), projectId: text('project_id').notNull().references(() => shelves.id, { onDelete: 'cascade' }), gameId: text('game_id'),
+  storageKey: text('storage_key').notNull().unique(), mediaType: text('media_type').notNull(), byteSize: integer('byte_size').notNull(), sha256: text('sha256').notNull(),
+  visibility: text('visibility').notNull().default('gm'), originJobId: text('origin_job_id'), provider: text('provider'), model: text('model'),
+  promptStyleRevision: integer('prompt_style_revision'), usage: jsonb('usage').$type<Record<string, unknown>>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, t => ({ projectIdentity: unique('assets_project_identity').on(t.projectId,t.id),
+  gameProject: foreignKey({ name: 'assets_game_project_fk', columns: [t.projectId,t.gameId], foreignColumns: [stories.shelfId,stories.id] }).onDelete('cascade'),
+  scopeIdx: index('assets_scope_idx').on(t.projectId,t.gameId,t.createdAt), originJobUnique: uniqueIndex('assets_origin_job_unique').on(t.originJobId).where(sql`${t.originJobId} is not null`),
+  typeCheck: check('assets_media_type_check',sql`${t.mediaType} in ('image/png','image/jpeg','image/webp')`),
+  sizeCheck: check('assets_byte_size_check',sql`${t.byteSize} > 0 and ${t.byteSize} <= 10000000`),
+  hashCheck: check('assets_sha256_check',sql`${t.sha256} ~ '^[0-9a-f]{64}$'`),
+  visibilityCheck: check('assets_visibility_check',sql`${t.visibility} in ('public','gm')`),
+}));
+export const contentItems = pgTable('content_items', {
+  id: text('id').primaryKey(), projectId: text('project_id').notNull().references(() => shelves.id, { onDelete: 'cascade' }), gameId: text('game_id'), typeId: text('type_id').notNull(),
+  title: text('title').notNull(), description: text('description').notNull().default(''), folder: text('folder').notNull().default(''), slug: text('slug').notNull(), data: jsonb('data').notNull(),
+  gmContextMode: text('gm_context_mode'), branchId: text('branch_id'), povCharacter: text('pov_character'), visibility: text('visibility').notNull().default('gm'), revision: integer('revision').notNull().default(1), coverAssetId: text('cover_asset_id'), coverRevision: integer('cover_revision').notNull().default(0), deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(), updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, t => ({ typeProject: foreignKey({ name: 'content_items_type_project_fk', columns: [t.projectId,t.typeId], foreignColumns: [contentTypes.projectId,contentTypes.id] }), gameProject: foreignKey({ name: 'content_items_game_project_fk', columns: [t.projectId,t.gameId], foreignColumns: [stories.shelfId,stories.id] }).onDelete('cascade'),
+  coverAssetProject: foreignKey({ name: 'content_items_cover_asset_project_fk', columns: [t.projectId,t.coverAssetId], foreignColumns: [assets.projectId,assets.id] }), coverRevisionCheck: check('content_items_cover_revision_check',sql`${t.coverRevision} >= 0`),
+  projectIdentity: unique('content_items_project_identity').on(t.projectId,t.id), scopeIdx: index('content_items_scope_idx').on(t.projectId,t.gameId),
+  pathUnique: uniqueIndex('content_items_path_unique').on(t.projectId,sql`coalesce(${t.gameId},'')`,t.folder,t.slug,t.typeId).where(sql`${t.deletedAt} is null`),
+  modeCheck: check('content_items_gm_context_mode_check',sql`${t.gmContextMode} in ('pinned','partial','searchable')`), visibilityCheck: check('content_items_visibility_check',sql`${t.visibility} in ('public','gm')`), revisionCheck: check('content_items_revision_check',sql`${t.revision} > 0`),
+}));
+export const contentRevisions = pgTable('content_revisions', {
+  id: text('id').primaryKey(), projectId: text('project_id').notNull().references(() => shelves.id, { onDelete: 'cascade' }), targetKind: text('target_kind').notNull(), targetId: text('target_id').notNull(),
+  revision: integer('revision').notNull(), priorRevision: integer('prior_revision'), typeRevision: integer('type_revision'), snapshot: jsonb('snapshot').notNull(), actor: jsonb('actor').notNull(), reason: text('reason').notNull(), createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, t=>({ identity: unique('content_revisions_identity').on(t.targetKind,t.targetId,t.revision), kindCheck: check('content_revisions_target_kind_check',sql`${t.targetKind} in ('type','item','folder')`) }));
+
+export const canonicalTypeSettings=pgTable('canonical_type_settings',{
+  projectId:text('project_id').notNull().references(()=>shelves.id,{onDelete:'cascade'}),kind:text('kind').notNull(),definition:jsonb('definition').notNull(),revision:integer('revision').notNull().default(0),updatedAt:timestamp('updated_at',{withTimezone:true,mode:'string'}).notNull().defaultNow(),
+},t=>({identity:primaryKey({columns:[t.projectId,t.kind]}),kind:check('canonical_type_settings_kind_check',sql`${t.kind} in ('characters','locations','items','factions')`),revision:check('canonical_type_settings_revision_check',sql`${t.revision}>=0`)}));
+export const canonicalTypeHistory=pgTable('canonical_type_history',{
+  projectId:text('project_id').notNull(),kind:text('kind').notNull(),revision:integer('revision').notNull(),definition:jsonb('definition').notNull(),actor:jsonb('actor').notNull(),reason:text('reason').notNull(),createdAt:timestamp('created_at',{withTimezone:true,mode:'string'}).notNull().defaultNow(),
+},t=>({identity:primaryKey({columns:[t.projectId,t.kind,t.revision]}),type:foreignKey({columns:[t.projectId,t.kind],foreignColumns:[canonicalTypeSettings.projectId,canonicalTypeSettings.kind]}).onDelete('cascade')}));
+export const contentFolders=pgTable('content_folders',{
+  archivedAt:timestamp('archived_at',{withTimezone:true,mode:'string'}),archiveReceipt:jsonb('archive_receipt'),
+  id:text('id').primaryKey(),projectId:text('project_id').notNull().references(()=>shelves.id,{onDelete:'cascade'}),gameId:text('game_id'),path:text('path').notNull(),revision:integer('revision').notNull().default(1),createdAt:timestamp('created_at',{withTimezone:true,mode:'string'}).notNull().defaultNow(),updatedAt:timestamp('updated_at',{withTimezone:true,mode:'string'}).notNull().defaultNow(),
+},t=>({scope:foreignKey({columns:[t.projectId,t.gameId],foreignColumns:[stories.shelfId,stories.id]}).onDelete('cascade'),path:uniqueIndex('content_folders_path_unique').on(t.projectId,sql`coalesce(${t.gameId},'')`,t.path),pathLength:check('content_folders_path_check',sql`length(${t.path})>0 and length(${t.path})<=500`),revision:check('content_folders_revision_check',sql`${t.revision}>0`)}));
 export const schema = {
+  locationMaps, locationMapRevisions,
+  contentFolders,
+  canonicalTypeSettings,canonicalTypeHistory,
+  canonicalContent, canonicalContentHistory,
+  contentTypes, contentItems, contentRevisions,
 	shelves,
 	stories,
 	storyEntries,

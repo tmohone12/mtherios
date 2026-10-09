@@ -4,6 +4,7 @@ import {
 	createBackendStoryShell,
 	createContextCheckpoint,
 	cacheBackendStoryFromBootstrap,
+	cacheBackendStory,
 	createBackendArc,
 	createBackendChapter,
 	createBackendLorebookEntry,
@@ -18,6 +19,7 @@ import {
 	fetchEngineCacheStatus,
 	listBackendStories,
 	repairBackendWikiNow,
+	restoreBackendStory,
 	refreshStoryCatalog,
 	listContextCheckpoints,
 	resolveBackendStoryBootstrap,
@@ -67,6 +69,8 @@ const projection: CampaignProjection = {
 	story: { id: 'story_alpha', title: 'Long Campaign', serverVersion: 7 },
 	entries: [{ id: 'entry_1', position: 1 }],
 	entities: [],
+	threads: [],
+	recentEvents: [],
 	chapters: [],
 	arcs: [],
 	sagas: [],
@@ -175,6 +179,93 @@ describe('server story control-surface client', () => {
 		expect(vi.mocked(deleteStory)).toHaveBeenCalledWith('local_1');
 	});
 
+	it('defaults deleteStoryEverywhere to archive mode and supports explicit purge', async () => {
+		const fetchMock = vi.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce(jsonResponse(engineResponse('story.delete', 'story_alpha', {
+				ok: true,
+				storyId: 'story_alpha',
+				mode: 'archive',
+				canonDeleted: false,
+				artifactCleanup: null,
+				warnings: [],
+			})))
+			.mockResolvedValueOnce(jsonResponse(engineResponse('story.delete', 'story_alpha', {
+				ok: true,
+				storyId: 'story_alpha',
+				mode: 'purge',
+				canonDeleted: true,
+				artifactCleanup: { filesDeleted: 1 },
+				warnings: [],
+			})));
+
+		const archived = await deleteStoryEverywhere({
+			id: 'local_1',
+			serverStoryId: 'story_alpha',
+		} as Story);
+
+		expect(archived).toEqual(expect.objectContaining({
+			ok: true,
+			storyId: 'story_alpha',
+			mode: 'archive',
+			canonDeleted: false,
+		}));
+		expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).args).toEqual({
+			mode: 'archive',
+			exportBeforeDelete: false,
+		});
+
+		const purged = await deleteStoryEverywhere({
+			id: 'local_1',
+			serverStoryId: 'story_alpha',
+		} as Story, { mode: 'purge' });
+
+		expect(purged).toEqual(expect.objectContaining({
+			ok: true,
+			storyId: 'story_alpha',
+			mode: 'purge',
+			canonDeleted: true,
+		}));
+		expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)).args).toEqual({
+			mode: 'purge',
+			exportBeforeDelete: false,
+		});
+	});
+
+	it('restores an archived backend story through the engine command gateway', async () => {
+		const fetchMock = vi.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce(jsonResponse(
+				engineResponse('story.restore', 'story_alpha', { ok: true, storyId: 'story_alpha', serverVersion: 9 }),
+			))
+			.mockResolvedValueOnce(jsonResponse(
+				engineResponse('story.list', '__app__', {
+					stories: [{ id: 'story_alpha', title: 'Long Campaign', metadata: {}, serverVersion: 9 }],
+				}),
+			));
+
+		await expect(restoreBackendStory('story_alpha')).resolves.toEqual({
+			ok: true,
+			storyId: 'story_alpha',
+			serverVersion: 9,
+		});
+		expect(fetchMock).toHaveBeenCalledWith('/api/engine/command', expect.objectContaining({ method: 'POST' }));
+		expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+			storyId: 'story_alpha',
+			command: 'story.restore',
+			args: {},
+		});
+	});
+
+	it('lists backend stories with includeArchived passed through', async () => {
+		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(
+			engineResponse('story.list', '__app__', { stories: [{ id: 'story_archived' }] }),
+		));
+
+		await expect(listBackendStories({ includeArchived: true })).resolves.toEqual([
+			{ id: 'story_archived' },
+		]);
+		expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).args).toEqual({ includeArchived: true });
+	});
+
 	it('fetches backend story bootstrap through the engine command gateway', async () => {
 		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(
 			engineResponse('campaign.bootstrap', 'story_alpha', bootstrap),
@@ -189,7 +280,7 @@ describe('server story control-surface client', () => {
 			command: 'campaign.bootstrap',
 			args: {
 				entryLimit: 80,
-				entityLimit: 120,
+				entityLimit: 200,
 				relationshipLimit: 200,
 				factionLimit: 80,
 				factionMembershipLimit: 160,
@@ -306,6 +397,32 @@ describe('server story control-surface client', () => {
 			serverVersion: 7,
 			syncStatus: 'synced',
 		}));
+	});
+
+	it('preserves backend chronology in both cached records and recent-story sorting', async () => {
+		const createdAt = '2026-06-01T12:00:00Z';
+		const rows = [
+			{ id: 'newer', title: 'Newest story', createdAt, updatedAt: '2026-09-07T21:00:00Z' },
+			{ id: 'older', title: 'Older story', createdAt, updatedAt: '2026-08-01T12:00:00Z' },
+		];
+		vi.mocked(getStory).mockImplementation(async id => ({ id, updatedAt: Date.now() }) as Story);
+		for (const row of rows) {
+			const cached = await cacheBackendStory(row);
+			expect(cached.updatedAt).toBe(Date.parse(row.updatedAt));
+			expect(updateStory).toHaveBeenCalledWith(row.id, expect.objectContaining({ createdAt: Date.parse(createdAt), updatedAt: Date.parse(row.updatedAt) }));
+		}
+		vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(engineResponse('story.list', '__app__', { stories: rows })));
+		const catalog = await refreshStoryCatalog();
+		expect(catalog.map(row => row.id)).toEqual(['newer', 'older']);
+	});
+
+	it('reports backend failure to the library while retaining its cached stories', async () => {
+		const cached = [{ id: 'cached', title: 'Cached story', updatedAt: 1000 }] as Story[];
+		vi.mocked(getAllStories).mockResolvedValueOnce(cached);
+		vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Offline'));
+		const unavailable = vi.fn();
+		await expect(refreshStoryCatalog({}, unavailable)).resolves.toEqual(cached);
+		expect(unavailable).toHaveBeenCalledOnce();
 	});
 
 	it('hides stale backend-bound local stories missing from the terminal catalog', async () => {

@@ -1,0 +1,166 @@
+{
+  "recordedAt": "2026-09-21T23:33:08.392Z",
+  "build": {
+    "identity": "mythengine@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "3812266f31c9563f9ea38e411ce4c58fd52c22b6ad9f884f9c831c1ed52f885e",
+    "externalId": "5fefc31d5e4c01accb5d39424c98aef4151d822939bbb91370c3cfedd008acb1"
+  },
+  "checks": [
+    "Legacy Research off survives migration",
+    "Fresh defaults, persisted false and stale-settings conflict",
+    "Project job claim, completion, retry and status with zero games",
+    "Game inheritance, explicit override, reset and project/game isolation",
+    "Required revision, nested merge, concurrent stale-write rejection, reference and adapter isolation",
+    "Forced second-outbox failure rolls back record, version, audit and first queued job",
+    "Audit records caller classification and prior/new snapshots without claiming human review",
+    "Database constraints reject mismatched project/game and game-less campaign jobs"
+  ],
+  "fixtureProjects": [
+    "shelf_3f334953-f4b2-41e8-a909-f1b1ca5abcb0",
+    "shelf_2c3d358d-917d-478a-bae3-5829d47b377e"
+  ],
+  "fixturesRemoved": true,
+  "originalPid": 39068,
+  "finalRuntime": {
+    "ok": true,
+    "mode": "terminal-process",
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "3812266f31c9563f9ea38e411ce4c58fd52c22b6ad9f884f9c831c1ed52f885e",
+      "externalId": "5fefc31d5e4c01accb5d39424c98aef4151d822939bbb91370c3cfedd008acb1"
+    },
+    "scope": {
+      "storyId": null
+    },
+    "runtime": {
+      "pid": 58128,
+      "uptimeSeconds": 107,
+      "timestamp": "2026-09-21T23:33:08.817Z"
+    },
+    "config": {
+      "dataRoot": "E:\\DEV\\Projects\\MythEngine\\data",
+      "vaultRoot": "E:\\DEV\\Projects\\MythEngine\\data\\vaults",
+      "defaultVault": "E:\\DEV\\Projects\\MythEngine\\data\\vaults\\default",
+      "allowExternalVaults": false,
+      "qdrantUrl": "http://127.0.0.1:6335",
+      "qdrantCollection": "mythengine_wiki",
+      "ollamaUrl": "http://127.0.0.1:11434",
+      "wikiEmbedProvider": "openrouter",
+      "wikiEmbedModel": "openai/text-embedding-3-small",
+      "wikiAutoIndexStoryVaults": false,
+      "wikiAutoLintStoryVaults": false,
+      "jobWorkerEnabled": false,
+      "jobIntervalMs": 5000,
+      "chapterThreshold": 20,
+      "postChapterBuffer": 0,
+      "chaptersPerArc": 10,
+      "memoryEmbeddingsConfigured": false,
+      "memoryEmbeddingProvider": null,
+      "memoryEmbeddingModel": null,
+      "memoryEmbeddingDimensions": 1536,
+      "memoryEmbeddingBatchSize": 8,
+      "databaseConfigured": true
+    },
+    "services": {
+      "qdrant": {
+        "ok": true,
+        "status": 200,
+        "collections": [],
+        "totalCollections": 0,
+        "totalPoints": 0,
+        "orphanedStoryCollections": 0,
+        "legacyStoryCollections": 0
+      },
+      "ollama": {
+        "ok": false,
+        "error": "fetch failed"
+      }
+    },
+    "jobs": {
+      "total": 0,
+      "memoryProcessing": {
+        "complete": 0,
+        "failed": 0,
+        "waiting": 0,
+        "running": 0
+      },
+      "memoryStageFreshness": {
+        "checkpoint": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        },
+        "consolidation": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        },
+        "optionalIndex": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        }
+      },
+      "queued": 0,
+      "retry": 0,
+      "running": 0,
+      "complete": 0,
+      "failed": 0,
+      "ready": 0,
+      "delayed": 0,
+      "storyCount": 0,
+      "byStatus": {},
+      "byType": {},
+      "readyByType": {},
+      "failedByType": {},
+      "failureClasses": [],
+      "oldestReadyAt": null,
+      "nextRunAfter": null,
+      "recentFailures": [],
+      "runningJobs": []
+    },
+    "wiki": {
+      "totalStories": 0,
+      "vaultFresh": 0,
+      "vaultStale": 0,
+      "vaultMissing": 0,
+      "indexFresh": 0,
+      "indexStale": 0,
+      "indexMissing": 0,
+      "lintFresh": 0,
+      "lintStale": 0,
+      "lintMissing": 0,
+      "attention": []
+    }
+  },
+  "migrationProbe": {
+    "passed": true,
+    "temporaryTablesDropped": true,
+    "legacyJobBackfilled": true,
+    "explicitDocumentPreserved": true,
+    "legacyImageChoicePreserved": true
+  },
+  "browser": {
+    "savedQuestionsOn": true,
+    "serverReadConfirmed": true,
+    "persistedAfterReload": true,
+    "restoredToInheritedOff": true,
+    "validationJobsCompleted": 2
+  }
+}

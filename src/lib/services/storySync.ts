@@ -1,6 +1,6 @@
 /**
  * Story Export/Import — JSON-based sync between devices.
- * Export downloads a .mtherios.json file; import reads it and creates a new story.
+ * Export downloads a .mythengine.json file; import reads it and creates a new story.
  */
 
 import { uuid } from '$lib/utils/uuid';
@@ -26,6 +26,7 @@ import {
 	getSetting,
 	setSetting,
 	createStory,
+	deleteStory,
 	updateStory,
 	createStoryEntry,
 	putCharacter,
@@ -37,7 +38,8 @@ import {
 	putArc,
 	putSaga,
 } from '$lib/services/database';
-import { importStoryBundleToBackend } from '$lib/services/backendImport';
+import { BackendImportRejectedError, importStoryBundleToBackend } from '$lib/services/backendImport';
+import { parseStoryExportBundle } from '$lib/contracts/worldDatabase';
 import type {
 	Story,
 	StoryEntry,
@@ -72,7 +74,7 @@ interface ExportedSettings {
 }
 
 export interface StoryExportData {
-	version: 1;
+	version: number;
 	exportedAt: number;
 	source?: 'backend_canon' | string;
 	story: Story;
@@ -93,6 +95,7 @@ export interface StoryExportData {
 	rumors?: RumorRecord[];
 	schemes?: Scheme[];
 	storyThreads?: StoryThread[];
+	worldDatabase?: unknown;
 	backendCanon?: unknown;
 	/** API profiles & service configs — lets the other device connect without re-setup. */
 	settings?: ExportedSettings;
@@ -204,11 +207,7 @@ async function fetchBackendStoryExport(serverStoryId: string): Promise<StoryExpo
 			? (body as { error: string }).error
 			: 'Terminal export failed.');
 	}
-	const data = (body as { result?: unknown }).result as StoryExportData;
-	if (!data || data.version !== 1 || !data.story || !Array.isArray(data.storyEntries)) {
-		throw new Error('Backend export returned an invalid story bundle.');
-	}
-	return data;
+	return parseStoryExportBundle((body as { result?: unknown }).result) as unknown as StoryExportData;
 }
 
 export async function downloadStoryAsJson(storyId: string): Promise<void> {
@@ -223,7 +222,7 @@ export async function downloadStoryAsJson(storyId: string): Promise<void> {
 		.replace(/^-|-$/g, '')
 		.slice(0, 40);
 	const date = new Date().toISOString().slice(0, 10);
-	const filename = `${slug}-${date}.mtherios.json`;
+	const filename = `${slug}-${date}.mythengine.json`;
 
 	const a = document.createElement('a');
 	a.href = url;
@@ -313,6 +312,7 @@ function remapStoryBundle(data: StoryExportData): StoryExportData {
 			storyId: newStoryId,
 			startEntryId: remap(chapter.startEntryId),
 			endEntryId: remap(chapter.endEntryId),
+			...(chapter.sourceEntryIds ? { sourceEntryIds: chapter.sourceEntryIds.map(remap) } : {}),
 			branchId: remapNullable(chapter.branchId),
 		})),
 		lorebookEntries: data.lorebookEntries.map((entry) => ({
@@ -423,7 +423,7 @@ async function restoreImportedSettings(settings?: ExportedSettings): Promise<voi
 	await setSetting('onboardingComplete', 'true');
 }
 
-export async function importStoryFromJson(file: File): Promise<string> {
+export async function importStoryFromJson(file: File, merge?: { sourceProjectId: string; destinationProjectId: string }): Promise<string> {
 	const text = await file.text();
 	let parsed: unknown;
 	try {
@@ -432,29 +432,20 @@ export async function importStoryFromJson(file: File): Promise<string> {
 		throw new Error('Invalid JSON file — could not parse.');
 	}
 
-	const data = parsed as StoryExportData;
-
-	if (!data || typeof data !== 'object') {
-		throw new Error('Invalid story file — expected a JSON object.');
-	}
-	if (data.version !== 1) {
-		throw new Error(`Unsupported export version: ${data.version}`);
-	}
-	if (!data.story || typeof data.story.id !== 'string' || typeof data.story.title !== 'string') {
-		throw new Error('Invalid story file — missing or malformed story data.');
-	}
-	if (!Array.isArray(data.storyEntries)) {
-		throw new Error('Invalid story file — missing storyEntries array.');
-	}
-
+	const data = parseStoryExportBundle(parsed) as unknown as StoryExportData;
+	const fullDatabase = Boolean(data.worldDatabase || data.backendCanon);
 	const bundle = remapStoryBundle(data);
 	const newStoryId = bundle.story.id;
 
 	await createStory(bundle.story);
 
 	try {
-		await importStoryBundleToBackend(bundle, newStoryId);
+		await importStoryBundleToBackend(bundle, newStoryId, merge);
 	} catch (error) {
+		if (fullDatabase || error instanceof BackendImportRejectedError) {
+			await deleteStory(newStoryId);
+			throw new Error(`${fullDatabase ? 'World database' : 'Story'} import failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
 		console.warn('[StorySync] Imported story remains local until backend is reachable:', error);
 		await updateStory(newStoryId, { syncStatus: 'offline' });
 	}

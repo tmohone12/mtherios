@@ -1,0 +1,55 @@
+{
+  "createdAt": "2026-09-07T11:04:59.446Z",
+  "mode": "preview-load",
+  "build": {
+    "identity": "mtherios@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "externalId": null,
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 511,
+    "dirtyStatusSha256": "8a2abed58693161b7d8c54358cb6d5ebaf8f9e7a2cf70e0c8337bb2088f273dd",
+    "sourceHashes": {
+      "scripts/bench-generation.mjs": "16a5ad17983343701ff074c122b3c262501fed750a920ebb04bb0cea79de4981",
+      "scripts/bench-generation-core.mjs": "c09fed5007630df6d4141425b42f5c47abd6b4ab8138d53d4897dad0644f007f",
+      "src/lib/server/turn/orchestrator.ts": "cd347862810b2272bc18dc22854c981044572eb6e9fd3043111dd0137700efac",
+      "src/lib/server/turn/provider.ts": "d1b8fe0ac1802923ac2aecbb853f916c039511ee9493ed2a2b40a9cfd372839f",
+      "src/lib/server/memory/retrieval.ts": "495432d526b7d0fc58e7dd464b049ddb41cc637c049930565cc9c08e81662e5b"
+    }
+  },
+  "url": "http://127.0.0.1:5177",
+  "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+  "samples": 8,
+  "concurrency": 4,
+  "durationMs": {
+    "p50": 1059,
+    "p95": 1175,
+    "max": 1175
+  },
+  "preparationMs": {
+    "p50": 1050,
+    "p95": 1142,
+    "max": 1142
+  },
+  "hardware": {
+    "platform": "win32",
+    "arch": "x64",
+    "cpuCount": 16,
+    "cpuModel": "AMD Ryzen 7 7800X3D 8-Core Processor           ",
+    "totalMemoryMb": 64656
+  },
+  "corpus": {
+    "storyEntries": 2405,
+    "memoryNodes": 2233
+  },
+  "providerCalls": 0,
+  "writes": false,
+  "retrievalDeadlineMs": 3000,
+  "gate": {
+    "serialPreparationP95Ms": null,
+    "concurrentPreparationP95Ms": null,
+    "note": "Compare serial and concurrent reports for the same build/corpus; concurrency is not treated as a pass when it exceeds the proposed 1-second local target."
+  }
+}

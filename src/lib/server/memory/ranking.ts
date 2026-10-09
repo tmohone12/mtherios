@@ -1,9 +1,10 @@
 import type { MemoryNode, MemoryRetrievalTraceItem, MemoryRetrieveRequest } from '$lib/contracts/memory';
-import { summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
+import { isNarrativeCommandInput, isNarrativeControlInput } from '$lib/services/ai/context/controlInput';
+import { summarizeMtheriosMemoryForContext } from '$lib/services/ai/context/mtheriosSummaryFormat';
 
 const MEMORY_PACKET_HEADER = [
 	'## Retrieved Memory Packet',
-	'Use these as durable evidence-linked facts for this turn. Do not reveal secret belief facts to NPCs unless the scene gives them a source.',
+	'Evidence for recall: current canon wins over past events and summaries. Historical records are not current duties. NPC beliefs may be false; only their owner knows them without a source.',
 ];
 const MEMORY_LINE_BODY_CHAR_LIMIT = 1200;
 const MEMORY_LINE_MIN_BODY_CHAR_LIMIT = 160;
@@ -11,9 +12,12 @@ const RETRIEVAL_TRACE_LIMIT = 32;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BM25_K1 = 1.2;
 const BM25_B = 0.65;
+const KEYWORD_RARITY_WEIGHT = 0.85;
+const HISTORICAL_QUERY_PATTERN = /\b(?:before|earlier|old|previous|withdrawn|replaced)\b/i;
+const REVISION_QUERY_PATTERN = /\b(?:after|before|earlier|old|previous|current|replaced|replace|correction|corrected|withdrawn|instead|now|valid)\b/i;
 
 type ScoredMemoryNode = MemoryNode & { score: number };
-type RetrievalTraceReason = 'selected' | 'low_score' | 'over_budget' | 'budget_exhausted' | 'max_nodes';
+type RetrievalTraceReason = 'selected' | 'low_score' | 'over_budget' | 'budget_exhausted' | 'max_nodes' | 'redundant_cluster';
 type JsonRecord = Record<string, unknown>;
 type MemoryNodeScoreExplanation = {
 	total: number;
@@ -21,8 +25,11 @@ type MemoryNodeScoreExplanation = {
 };
 
 const UNSAFE_DURABLE_MEMORY_PATTERNS = [
-	/\*\*ooc:\*\*/i,
-	/\booc\b.{0,80}\b(overreached|correction|context|deleted|poisoned)\b/i,
+	/\booc\b/i,
+	/\bout[ -]of[ -]character\b/i,
+	/\b(?:gm|narrator)\s+(?:note|correction|feedback|instruction)\b/i,
+	/\b(?:ignore|disregard|forget)\s+(?:the\s+)?(?:previous|last|above)\s+(?:response|reply|context|instruction|turn)\b/i,
+	/^\s*(?:you|the gm|the narrator)\s+(?:is|are|was|were|'re)\s+(?:playing|narrating|overcomplicating|ignoring)\b/im,
 	/\bpoisoned context\b/i,
 	/\bdeleted a poisoned context\b/i,
 	/\bi overreached\b/i,
@@ -35,7 +42,21 @@ const STOPWORDS = new Set([
 	'there', 'their', 'about', 'into', 'then', 'than', 'they', 'them', 'your',
 	'you', 'for', 'are', 'was', 'were', 'will', 'would', 'could', 'should',
 	'after', 'before', 'again', 'just', 'like', 'tell', 'ask', 'said', 'says',
-	'him', 'his', 'her', 'hers', 'its', 'who', 'whom', 'whose',
+	'him', 'his', 'her', 'hers', 'its', 'who', 'whom', 'whose', 'did', 'does',
+	'ooc', 'meta', 'not', 'never', 'no', 'dont', 'didnt', 'isnt', 'arent', 'wasnt', 'werent',
+]);
+
+const NEGATION_TOKENS = new Set(['not', 'never', 'no', 'dont', 'didnt', 'isnt', 'arent', 'wasnt', 'werent']);
+const NEGATION_BRIDGE_TOKENS = new Set([
+	...STOPWORDS,
+	'in', 'at', 'on', 'from', 'currently', 'actually', 'still', 'anymore',
+	'use', 'mention', 'include', 'recall', 'retrieve', 'search', 'treat', 'assume', 'set',
+	'go', 'going', 'travel', 'traveling', 'return', 'returning', 'sail', 'sailing',
+	'move', 'moving', 'head', 'heading', 'visit', 'visiting', 'located',
+]);
+const NEGATION_BOUNDARY_TOKENS = new Set([
+	'but', 'however', 'instead', 'rather', 'except', 'yet', 'though', 'although', 'while', 'then',
+	'i', 'we', 'you', 'he', 'she', 'they', 'it', 'this', 'that', 'currently', 'actually', 'anymore',
 ]);
 
 export function normalizeLookup(text: string): string {
@@ -49,11 +70,48 @@ export function lookupMentioned(query: string, candidate: string): boolean {
 		&& ` ${normalizedQuery} `.includes(` ${normalizedCandidate} `);
 }
 
+export function isOocControlText(text: string): boolean {
+	return isNarrativeControlInput(text)
+		|| isNarrativeCommandInput(text)
+		|| UNSAFE_DURABLE_MEMORY_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function repeatedWorldTickCluster(node: MemoryNode): string | null {
+	const metadata = asRecord(node.metadata) ?? {};
+	if (metadata.sourceType !== 'terminal_world_sim_tick' && !node.id.startsWith('mem_world_tick_')) return null;
+	const factionId = typeof metadata.factionId === 'string' && metadata.factionId.trim()
+		? metadata.factionId.trim()
+		: node.factionIds[0]?.trim();
+	const projectId = typeof metadata.projectId === 'string' && metadata.projectId.trim()
+		? metadata.projectId.trim()
+		: '';
+	return `world_tick:${factionId || normalizeLookup(node.title)}:${projectId}`;
+}
+
 export function memoryQueryTokens(text: string, max = 36): string[] {
+	const normalizedTokens = normalizeLookup(text).split(/\s+/).filter(Boolean);
+	const negatedTokens = new Set<string>();
+	for (const [index, token] of normalizedTokens.entries()) {
+		if (!NEGATION_TOKENS.has(token)) continue;
+		let foundSubject = false;
+		let subjectTokens = 0;
+		for (let offset = index + 1; offset < Math.min(normalizedTokens.length, index + 10); offset += 1) {
+			const candidate = normalizedTokens[offset];
+			if (foundSubject && NEGATION_BOUNDARY_TOKENS.has(candidate)) break;
+			if (candidate.length <= 2) continue;
+			if (NEGATION_BRIDGE_TOKENS.has(candidate)) {
+				if (!STOPWORDS.has(candidate)) negatedTokens.add(candidate);
+				continue;
+			}
+			negatedTokens.add(candidate);
+			foundSubject = true;
+			subjectTokens += 1;
+			if (subjectTokens >= 3) break;
+		}
+	}
 	return [...new Set(
-		normalizeLookup(text)
-			.split(/\s+/)
-			.filter((token) => token.length > 2 && !STOPWORDS.has(token)),
+		normalizedTokens
+			.filter((token) => token.length > 2 && !STOPWORDS.has(token) && !negatedTokens.has(token)),
 	)].slice(0, max);
 }
 
@@ -79,15 +137,147 @@ function storyTurn(node: MemoryNode): number | null {
 	const metadata = asRecord(node.metadata);
 	return integer(metadata?.occurredTurn)
 		?? integer(metadata?.validFromTurn)
-		?? integer(metadata?.scheduledTurn);
+		?? integer(metadata?.createdTurn)
+		?? integer(metadata?.scheduledTurn)
+		?? integer(metadata?.dueTurn)
+		?? integer(metadata?.deadlineTurn);
+}
+
+function metadataStrings(metadata: JsonRecord, keys: string[]): string[] {
+	return keys.flatMap((key) => {
+		const value = metadata[key];
+		if (typeof value === 'string') return value.trim() ? [value.trim()] : [];
+		return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())) : [];
+	});
+}
+
+export const MEMORY_REVISION_KEYS = ['correctionKey', 'supersessionKey', 'deadlineKey', 'temporalKey'] as const;
+export const MEMORY_SUPERSESSION_KEYS = [
+	'supersedesId', 'supersedesIds', 'supersedesMemoryNodeIds', 'supersedesMemoryNodeId',
+	'supersedesEventIds', 'supersedesEventId', 'supersedesEntryIds', 'supersedesEntryId',
+	'supersedesPatchIds', 'supersedesPatchId', 'replacesId', 'replacesIds', 'invalidatesIds',
+] as const;
+
+function memoryRevisionKey(node: MemoryNode): string | null {
+	const metadata = asRecord(node.metadata) ?? {};
+	for (const key of MEMORY_REVISION_KEYS) {
+		const value = metadata[key];
+		if (typeof value === 'string' && value.trim()) return `${key}:${value.trim()}`;
+	}
+	return null;
+}
+
+function hasRevisionMetadata(node: MemoryNode): boolean {
+	const metadata = asRecord(node.metadata) ?? {};
+	return metadata.supersessionMarker === true
+		|| ['supersedesId', 'supersedesIds', 'replacesId', 'replacesIds', 'correctionKey', 'supersessionKey']
+			.some((key) => metadataStrings(metadata, [key]).length > 0);
+}
+
+function keywordTerms(node: MemoryNode): Set<string> {
+	return new Set(normalizedTokens([node.title, ...node.keywords, node.summary ?? '', node.content].join(' ')));
+}
+
+function buildKeywordRarityScores(corpus: MemoryNode[], queryTokens: string[]): Map<MemoryNode, number> {
+	if (!queryTokens.length || !corpus.length) return new Map();
+	const documentFrequency = new Map<string, number>();
+	const termSets = corpus.map(keywordTerms);
+	for (const terms of termSets) {
+		for (const queryToken of queryTokens) {
+			if (![...terms].some((term) => tokenMatchesQueryToken(term, queryToken))) continue;
+			documentFrequency.set(queryToken, (documentFrequency.get(queryToken) ?? 0) + 1);
+		}
+	}
+	return new Map(corpus.map((node, index) => {
+		const terms = termSets[index];
+		const score = queryTokens.reduce((total, queryToken) => {
+			if (![...terms].some((term) => tokenMatchesQueryToken(term, queryToken))) return total;
+			const frequency = documentFrequency.get(queryToken) ?? 0;
+			return total + KEYWORD_RARITY_WEIGHT * Math.log((corpus.length + 1) / (frequency + 1));
+		}, 0);
+		return [node, score] as const;
+	}));
+}
+
+function memoryOrder(node: MemoryNode): number {
+	const metadata = asRecord(node.metadata);
+	const turn = integer(metadata?.validFromTurn)
+		?? integer(metadata?.createdTurn)
+		?? integer(metadata?.occurredTurn)
+		?? storyTurn(node);
+	if (turn !== null) return turn * 1_000_000_000_000;
+	const timestamp = Date.parse(node.updatedAt);
+	return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+export function activeMemoryCandidates(nodes: MemoryNode[], currentTurn?: number): MemoryNode[] {
+	const flagged = (value: unknown) => value === true || value === 1
+		|| (typeof value === 'string' && ['true', 'yes', '1'].includes(value.trim().toLowerCase()));
+	const scope = (node: MemoryNode) => `${node.storyId}:${node.type === 'npc_belief' ? `belief:${asRecord(node.metadata)?.believerEntityId ?? node.entityIds[0] ?? node.id}` : 'canon'}`;
+	const eligible = nodes.filter(node => {
+		const metadata = asRecord(node.metadata) ?? {};
+		return !flagged(metadata.invalidated) && !flagged(metadata.deleted)
+			&& !['proposed', 'rejected', 'invalidated'].includes(String(metadata.status))
+			&& (currentTurn === undefined || integer(metadata.validFromTurn) === null || (metadata.validFromTurn as number) <= currentTurn);
+	});
+	const initiallyActive = eligible.filter((node) => {
+		const metadata = asRecord(node.metadata) ?? {};
+		const status = normalizeLookup(typeof metadata.status === 'string' ? metadata.status : '');
+		return !flagged(metadata.invalidated)
+			&& !flagged(metadata.deleted)
+			&& !flagged(metadata.superseded)
+			&& !(typeof metadata.supersededById === 'string' && metadata.supersededById.trim())
+			&& !(typeof metadata.superseded_by_id === 'string' && metadata.superseded_by_id.trim())
+			&& !['proposed', 'cancelled', 'canceled', 'superseded', 'rejected', 'invalidated', 'archived'].includes(status)
+			&& (currentTurn === undefined || integer(metadata.validFromTurn) === null || (metadata.validFromTurn as number) <= currentTurn)
+			&& (currentTurn === undefined || integer(metadata.validToTurn) === null || (metadata.validToTurn as number) > currentTurn);
+	});
+	const supersededByNodeIds = new Map<string, Set<string>>();
+	for (const node of eligible) {
+		for (const targetId of metadataStrings(asRecord(node.metadata) ?? {}, [...MEMORY_SUPERSESSION_KEYS])) {
+			const scopedTargetId = `${asRecord(node.metadata)?.supersessionMarker === true ? `${node.storyId}:removed` : scope(node)}:${targetId}`;
+			const owners = supersededByNodeIds.get(scopedTargetId) ?? new Set<string>();
+			owners.add(node.id);
+			supersededByNodeIds.set(scopedTargetId, owners);
+		}
+	}
+	const notSuperseded = initiallyActive.filter((node) => ![
+		node.id,
+		...node.sourceEventIds,
+		...node.sourceEntryIds,
+		...node.sourcePatchIds,
+	].some((id) => {
+		if (supersededByNodeIds.has(`${node.storyId}:removed:${id}`)) return true;
+		const owners = supersededByNodeIds.get(`${scope(node)}:${id}`);
+		return owners ? owners.size > 1 || !owners.has(node.id) : false;
+	}));
+	const newestRevision = new Map<string, MemoryNode>();
+	for (const node of eligible) {
+		const revisionKey = memoryRevisionKey(node);
+		const key = revisionKey ? `${scope(node)}:${revisionKey}` : null;
+		if (!key) continue;
+		const previous = newestRevision.get(key);
+		if (!previous || memoryOrder(node) > memoryOrder(previous)) newestRevision.set(key, node);
+	}
+	return notSuperseded.filter((node) => {
+		const revisionKey = memoryRevisionKey(node);
+		const key = revisionKey ? `${scope(node)}:${revisionKey}` : null;
+		return (!key || newestRevision.get(key)?.id === node.id)
+			&& asRecord(node.metadata)?.supersessionMarker !== true;
+	});
 }
 
 function normalizedTokens(text: string): string[] {
 	return normalizeLookup(text).split(/\s+/).filter(Boolean);
 }
 
+function tokenMatchesQueryToken(token: string, queryToken: string): boolean {
+	return token === queryToken
+		|| (Math.min(token.length, queryToken.length) >= 5 && token.slice(0, 5) === queryToken.slice(0, 5));
+}
+
 function tokenFrequency(tokens: string[], queryToken: string): number {
-	return tokens.reduce((count, token) => count + (token === queryToken ? 1 : 0), 0);
+	return tokens.reduce((count, token) => count + Number(tokenMatchesQueryToken(token, queryToken)), 0);
 }
 
 function bm25TermScore(termFrequency: number, fieldLength: number, averageLength: number, weight: number): number {
@@ -129,23 +319,51 @@ function vectorSimilarityScore(node: MemoryNode): number {
 	return 0;
 }
 
+function useHybridRanking(): boolean {
+	return typeof process !== 'undefined' && process.env.MTHERIOS_MEMORY_RANKING_MODE === 'hybrid';
+}
+
 function isUnsafeDurableMemory(node: MemoryNode): boolean {
-	const text = `${node.title}\n${node.summary ?? ''}\n${node.content}`;
-	return UNSAFE_DURABLE_MEMORY_PATTERNS.some((pattern) => pattern.test(text));
+	const metadata = asRecord(node.metadata);
+	const flagged = (value: unknown) => value === true
+		|| value === 1
+		|| (typeof value === 'string' && ['true', 'yes', '1'].includes(value.trim().toLowerCase()));
+	if (flagged(metadata?.nonCanon) || flagged(metadata?.non_canon)) return true;
+	if (['sourceType', 'source_type', 'actionType', 'action_type', 'narrativeMode', 'narrative_mode']
+		.some((key) => ['ooc', 'out of character'].includes(normalizeLookup(typeof metadata?.[key] === 'string' ? metadata[key] as string : '')))) return true;
+	const fields = [node.title, node.summary ?? '', node.content];
+	const text = fields.join('\n');
+	if (/\[(?:CHECKPOINT|RECENT STORY STATE|CHARACTER STATE|ACTIVE THREADS)\s*=/i.test(text)) return false;
+	return fields.some(isOocControlText) || isOocControlText(text);
 }
 
 function scoreExplanation(node: MemoryNode, request: MemoryRetrieveRequest): MemoryNodeScoreExplanation {
 	const queryTokens = memoryQueryTokens(request.query);
+	const historicalQuery = request.includeHistorical === true && HISTORICAL_QUERY_PATTERN.test(request.query);
+	const revisionQuery = REVISION_QUERY_PATTERN.test(request.query);
 	const keyword = keywordScore(node, queryTokens);
 	const vectorSimilarity = vectorSimilarityScore(node);
-	const vectorScore = vectorSimilarity > 0 ? Math.min(2.5, vectorSimilarity * 2.5) : 0;
+	// Content similarity and lexical relevance use the same bounded scale;
+	// routine recency must not erase the gap between strong and weak matches.
+	const vectorScore = vectorSimilarity * 10;
 	const nodeStoryTurn = storyTurn(node);
+	const metadata = asRecord(node.metadata) ?? {};
+	const retrieval = asRecord(metadata.retrieval) ?? {};
+	const scheduledTurn = integer(metadata.scheduledTurn)
+		?? integer(metadata.dueTurn)
+		?? integer(metadata.deadlineTurn)
+		?? integer(metadata.nextActionTurn);
+	const temporalStatus = normalizeLookup(typeof metadata.status === 'string' ? metadata.status : '');
 	const turnDistance = request.currentTurn === undefined || nodeStoryTurn === null
 		? null
 		: request.currentTurn - nodeStoryTurn;
 	const age = ageDays(node.updatedAt);
 	const storyRecencyBoost = turnDistance === null || turnDistance < 0 ? 0 : 1.8 * Math.exp(-turnDistance / 20);
-	const dueSoonBoost = turnDistance === null || turnDistance >= 0 ? 0 : 1.5 * Math.exp(turnDistance / 8);
+	const turnsUntilScheduled = request.currentTurn === undefined || scheduledTurn === null ? null : scheduledTurn - request.currentTurn;
+	const dueSoonBoost = turnsUntilScheduled === null || turnsUntilScheduled < 0 || turnsUntilScheduled > 12 ? 0 : 2.5 * Math.exp(-turnsUntilScheduled / 8);
+	const overdueBoost = turnsUntilScheduled === null || turnsUntilScheduled >= 0 || !['due', 'scheduled'].includes(temporalStatus)
+		? 0
+		: Math.min(2.25, 1.25 + (Math.abs(turnsUntilScheduled) / 20));
 	const storyAgeDecay = turnDistance === null || turnDistance <= 80 ? 0 : Math.min(1.8, ((turnDistance - 80) / 160) * Math.max(0.25, 1 - node.importance));
 	const recencyBoost = turnDistance === null && age != null ? 1.2 * Math.exp(-age / 45) : 0;
 	const ageDecay = turnDistance === null && age != null && age > 180 ? Math.min(1.8, ((age - 180) / 365) * Math.max(0.25, 1 - node.importance)) : 0;
@@ -155,13 +373,23 @@ function scoreExplanation(node: MemoryNode, request: MemoryRetrieveRequest): Mem
 	const factionScore = request.currentFactionId && node.factionIds.includes(request.currentFactionId) ? 2 : 0;
 	const plotScore = node.type === 'plot_ledger' ? 0.75 : 0;
 	const presentNpcScore = node.type === 'npc_belief' && overlaps(node.entityIds, request.presentNpcIds) ? 3 : 0;
+	const correctionScore = metadata.eventType === 'correction' || metadata.isCorrection === true ? 2.5 : 0;
+	const historicalEvidenceScore = historicalQuery && metadata.temporalState === 'historical' ? 2.25 : 0;
+	const revisionEvidenceScore = !request.includeHistorical && revisionQuery && hasRevisionMetadata(node) ? 2.5 : 0;
+	const keywordRarity = Number(retrieval.keywordRarityScore ?? 0);
+	const scratchPenalty = metadata.scratchSeed === true || retrieval.scratchEntityMatch === true ? 3.5 : 0;
 	const secretPenalty = node.visibility === 'secret' && !request.includeSecret ? 100 : 0;
 	const importanceScore = node.importance * 4;
+	const keywordWeight = useHybridRanking() ? 1.75 : 1;
+	const vectorWeight = useHybridRanking() ? 0.55 : 1;
+	const keywordContribution = keyword.score * keywordWeight;
+	const vectorContribution = vectorScore * vectorWeight;
 	const total = importanceScore
-		+ keyword.score
-		+ vectorScore
+		+ keywordContribution
+		+ vectorContribution
 		+ storyRecencyBoost
 		+ dueSoonBoost
+		+ overdueBoost
 		+ recencyBoost
 		- storyAgeDecay
 		- ageDecay
@@ -171,16 +399,22 @@ function scoreExplanation(node: MemoryNode, request: MemoryRetrieveRequest): Mem
 		+ factionScore
 		+ plotScore
 		+ presentNpcScore
+		+ correctionScore
+		+ historicalEvidenceScore
+		+ revisionEvidenceScore
+		+ keywordRarity
+		- scratchPenalty
 		- secretPenalty;
 	const sceneEntities = overlapValues(node.entityIds, request.sceneEntityIds);
 	const openThreads = overlapValues(node.threadIds, request.threadIds);
 	const presentNpcs = overlapValues(node.entityIds, request.presentNpcIds);
 	const signals = [
 		`importance ${importanceScore.toFixed(2)}`,
-		keyword.score > 0 ? `keyword ${keyword.score.toFixed(2)} (${keyword.matchedTokens.slice(0, 6).join(', ')})` : '',
-		vectorScore > 0 ? `vector ${vectorScore.toFixed(2)}` : '',
+		keywordContribution > 0 ? `keyword ${keywordContribution.toFixed(2)} (${keyword.matchedTokens.slice(0, 6).join(', ')})` : '',
+		vectorContribution > 0 ? `vector ${vectorContribution.toFixed(2)}` : '',
 		storyRecencyBoost > 0.05 ? `story recency ${storyRecencyBoost.toFixed(2)} (${turnDistance} turns)` : '',
-		dueSoonBoost > 0.05 ? `due soon ${dueSoonBoost.toFixed(2)} (+${Math.abs(turnDistance ?? 0)} turns)` : '',
+		dueSoonBoost > 0.05 ? `due soon ${dueSoonBoost.toFixed(2)} (+${turnsUntilScheduled} turns)` : '',
+		overdueBoost > 0.05 ? `overdue ${overdueBoost.toFixed(2)} (${Math.abs(turnsUntilScheduled ?? 0)} turns)` : '',
 		recencyBoost > 0.05 ? `recency ${recencyBoost.toFixed(2)}` : '',
 		storyAgeDecay > 0 ? `story age decay -${storyAgeDecay.toFixed(2)} (${turnDistance} turns)` : '',
 		ageDecay > 0 ? `age decay -${ageDecay.toFixed(2)}` : '',
@@ -190,6 +424,11 @@ function scoreExplanation(node: MemoryNode, request: MemoryRetrieveRequest): Mem
 		factionScore > 0 ? `current faction ${request.currentFactionId}` : '',
 		plotScore > 0 ? 'plot ledger' : '',
 		presentNpcScore > 0 ? `present npc belief ${presentNpcs.slice(0, 4).join(', ')}` : '',
+		correctionScore > 0 ? `correction ${correctionScore.toFixed(2)}` : '',
+		historicalEvidenceScore > 0 ? `historical query ${historicalEvidenceScore.toFixed(2)}` : '',
+		revisionEvidenceScore > 0 ? `revision query ${revisionEvidenceScore.toFixed(2)}` : '',
+		keywordRarity > 0 ? `keyword rarity ${keywordRarity.toFixed(2)}` : '',
+		scratchPenalty > 0 ? `scratch entity -${scratchPenalty.toFixed(2)}` : '',
 		secretPenalty > 0 ? 'secret excluded' : '',
 	].filter(Boolean);
 
@@ -252,22 +491,73 @@ export function scoreMemoryNode(node: MemoryNode, request: MemoryRetrieveRequest
 	return scoreExplanation(node, request).total;
 }
 
+function revisionRelevance(nodes: MemoryNode[], request: MemoryRetrieveRequest): Map<string, number> {
+	const scores = new Map(nodes.map(node => [node.id, scoreMemoryNode(node, request)]));
+	const scope = (node: MemoryNode) => `${node.storyId}:${node.type === 'npc_belief' ? `belief:${asRecord(node.metadata)?.believerEntityId ?? node.entityIds[0] ?? node.id}` : 'canon'}`;
+	// Match the bounded correction closure in retrieval. Relevance follows explicit
+	// provenance/topic links; it never crosses a believer or campaign boundary.
+	for (let round = 0; round < 4; round++) {
+		const sources = new Map<string, number>();
+		const topics = new Map<string, number>();
+		for (const node of nodes) {
+			const score = scores.get(node.id) ?? 0;
+			for (const id of [node.id, ...node.sourceEntryIds, ...node.sourceEventIds, ...node.sourcePatchIds]) {
+				const key = `${scope(node)}:${id}`;
+				sources.set(key, Math.max(sources.get(key) ?? 0, score));
+			}
+			const topic = memoryRevisionKey(node);
+			if (topic) {
+				const key = `${scope(node)}:${topic}`;
+				topics.set(key, Math.max(topics.get(key) ?? 0, score));
+			}
+		}
+		for (const node of nodes) {
+			const linked = metadataStrings(asRecord(node.metadata) ?? {}, [...MEMORY_SUPERSESSION_KEYS]);
+			scores.set(node.id, Math.max(scores.get(node.id) ?? 0,
+				topics.get(`${scope(node)}:${memoryRevisionKey(node)}`) ?? 0,
+				...linked.map(id => sources.get(`${scope(node)}:${id}`) ?? 0)));
+		}
+	}
+	return scores;
+}
+
 export function buildMemoryPacket(
 	nodes: MemoryNode[],
 	request: MemoryRetrieveRequest,
-): { packet: string; nodes: MemoryNode[]; tokenEstimate: number; retrievalDebug: string[]; retrievalTrace: MemoryRetrievalTraceItem[] } {
+): { packet: string; nodes: MemoryNode[]; renderedItems: Array<{ id: string; text: string }>; tokenEstimate: number; retrievalDebug: string[]; retrievalTrace: MemoryRetrievalTraceItem[] } {
 	const queryTokens = memoryQueryTokens(request.query);
-	const safeNodes = nodes.filter((node) => !isUnsafeDurableMemory(node));
+	const visibleNodes = nodes.filter(node => node.storyId === request.storyId && (request.includeSecret || node.visibility === 'public' || node.visibility === 'player_known'));
+	const revisionScores = revisionRelevance(visibleNodes.filter(node => !isUnsafeDurableMemory(node)), request);
+	const activeNodes = activeMemoryCandidates(visibleNodes, request.currentTurn);
+	if (request.includeHistorical) {
+		const activeIds = new Set(activeNodes.map(node => node.id));
+		// Removing a transcript/control record is distinct from retaining a former fact.
+		const removedIds = new Set(visibleNodes.filter(node => asRecord(node.metadata)?.supersessionMarker === true)
+			.flatMap(node => metadataStrings(asRecord(node.metadata) ?? {}, ['supersedesId', 'supersedesIds', 'supersedesMemoryNodeId', 'supersedesMemoryNodeIds', 'supersedesEntryId', 'supersedesEntryIds', 'supersedesEventId', 'supersedesEventIds', 'supersedesPatchId', 'supersedesPatchIds', 'replacesId', 'replacesIds', 'invalidatesIds'])));
+		for (const node of visibleNodes) {
+			const metadata = asRecord(node.metadata) ?? {};
+			if (activeIds.has(node.id) || metadata.supersessionMarker || metadata.deleted || metadata.invalidated
+				|| ['proposed', 'rejected', 'invalidated'].includes(String(metadata.status))
+				|| [node.id, ...node.sourceEntryIds, ...node.sourceEventIds, ...node.sourcePatchIds].some(id => removedIds.has(id))
+				|| (request.currentTurn !== undefined && integer(metadata.validFromTurn) !== null && (metadata.validFromTurn as number) > request.currentTurn)) continue;
+			activeNodes.push({ ...node, metadata: { ...metadata, temporalState: 'historical' } });
+		}
+	}
+	const safeNodes = activeNodes.filter((node) => !isUnsafeDurableMemory(node));
+	const rarityScores = buildKeywordRarityScores(safeNodes, queryTokens);
 	const scored = safeNodes
 		.map((node) => {
 			const vectorScore = vectorSimilarityScore(node);
 			const metadata = asRecord(node.metadata) ?? {};
 			const retrieval = asRecord(metadata.retrieval) ?? {};
-			return {
+			const rarity = rarityScores.get(node) ?? 0;
+			const rankedNode = {
 				...node,
-				metadata: vectorScore > 0 ? { ...metadata, retrieval: { ...retrieval, vectorScore } } : node.metadata,
-				score: scoreMemoryNode(node, request),
+				metadata: vectorScore > 0 || rarity > 0
+					? { ...metadata, retrieval: { ...retrieval, ...(vectorScore > 0 ? { vectorScore } : {}), ...(rarity > 0 ? { keywordRarityScore: rarity } : {}) } }
+					: node.metadata,
 			};
+			return { ...rankedNode, score: Math.max(scoreMemoryNode(rankedNode, request), revisionScores.get(node.id) ?? 0) };
 		})
 		.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
@@ -280,7 +570,9 @@ export function buildMemoryPacket(
 	const maxNodes = Math.min(8, Math.max(4, Math.ceil(request.tokenBudget / 190)));
 	let droppedLowScore = 0;
 	let droppedOverBudget = 0;
+	let droppedRedundant = 0;
 	let budgetExhausted = false;
+	const selectedClusterCounts = new Map<string, number>();
 
 	for (const [index, node] of scored.entries()) {
 		const score = node.score ?? 0;
@@ -288,7 +580,11 @@ export function buildMemoryPacket(
 		let reason: RetrievalTraceReason = 'selected';
 		let lineTokens = traceTokenEstimate(node);
 
-		if (selected.length >= maxNodes) {
+		const cluster = repeatedWorldTickCluster(node);
+		if (cluster && (selectedClusterCounts.get(cluster) ?? 0) >= 2) {
+			reason = 'redundant_cluster';
+			droppedRedundant += 1;
+		} else if (selected.length >= maxNodes) {
 			reason = 'max_nodes';
 		} else if (budgetExhausted) {
 			reason = 'budget_exhausted';
@@ -313,11 +609,11 @@ export function buildMemoryPacket(
 					MEMORY_LINE_MIN_BODY_CHAR_LIMIT,
 					Math.min(MEMORY_LINE_BODY_CHAR_LIMIT, (remainingTokens * 4) - 180),
 				);
-				let line = renderMemoryLine(node, bodyCharLimit);
+				let line = renderMemoryLine(node, bodyCharLimit, queryTokens);
 				lineTokens = estimateTokens(line);
 				if (tokenEstimate + lineTokens > request.tokenBudget) {
 					const overflowChars = ((tokenEstimate + lineTokens) - request.tokenBudget) * 4;
-					line = renderMemoryLine(node, Math.max(80, bodyCharLimit - overflowChars - 40));
+					line = renderMemoryLine(node, Math.max(80, bodyCharLimit - overflowChars - 40), queryTokens);
 					lineTokens = estimateTokens(line);
 				}
 				if (tokenEstimate + lineTokens > request.tokenBudget) {
@@ -327,6 +623,7 @@ export function buildMemoryPacket(
 					selected.push(node);
 					selectedLines.push(line);
 					tokenEstimate += lineTokens;
+					if (cluster) selectedClusterCounts.set(cluster, (selectedClusterCounts.get(cluster) ?? 0) + 1);
 					included = true;
 				}
 			}
@@ -345,24 +642,31 @@ export function buildMemoryPacket(
 		}
 	}
 
+	// Choose by relevance first, then present dated evidence in story order.
+	// Undated evidence retains relevance order; import/update timestamps are not story time.
+	const ordered = selected.map((node, index) => ({ node, line: selectedLines[index] }))
+		.sort((a, b) => (storyTurn(a.node) ?? Infinity) - (storyTurn(b.node) ?? Infinity));
 	const packet = selected.length > 0
 		? [
 			...MEMORY_PACKET_HEADER,
-			...selectedLines,
+			...ordered.map(item => item.line),
 		].join('\n')
 		: '';
 
 	return {
 		packet,
-		nodes: selected,
+		nodes: ordered.map(item => item.node),
+		renderedItems: ordered.map(({ node, line }) => ({ id: node.id, text: line })),
 		tokenEstimate: estimateTokens(packet),
 		retrievalDebug: [
 			`candidates=${nodes.length}`,
-			`filteredUnsafe=${nodes.length - safeNodes.length}`,
+			`filteredInactive=${nodes.length - activeNodes.length}`,
+			`filteredUnsafe=${activeNodes.length - safeNodes.length}`,
 			`selected=${selected.length}`,
 			`budget=${request.tokenBudget}`,
 			`droppedLowScore=${droppedLowScore}`,
 			`droppedOverBudget=${droppedOverBudget}`,
+			`droppedRedundant=${droppedRedundant}`,
 			`trace=${retrievalTrace.length}`,
 		],
 		retrievalTrace,
@@ -372,25 +676,82 @@ export function buildMemoryPacket(
 function compactMemoryBody(value: string, max: number): string {
 	const text = value.replace(/\s+/g, ' ').trim();
 	if (text.length <= max) return text;
-	return `${text.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
+	const end = Math.max(0, max - 3);
+	const wordEnd = text.lastIndexOf(' ', end);
+	return `${text.slice(0, wordEnd > end / 2 ? wordEnd : end).trimEnd()}...`;
 }
 
-function memoryBody(node: MemoryNode): string {
-	const raw = node.summary?.trim() || node.content.trim();
+export function relevantMemoryExcerpt(value: string, queryTokens: string[], max: number): string {
+	const text = value.replace(/\s+/g, ' ').trim();
+	if (text.length <= max || !queryTokens.length) return compactMemoryBody(text, max);
+	const hits = [...text.matchAll(/[a-z0-9]+/gi)].flatMap(match => {
+		const word = match[0].toLowerCase();
+		const token = queryTokens.find(token => word === token
+			|| (Math.min(word.length, token.length) >= 5 && (word.startsWith(token) || token.startsWith(word))));
+		return token ? [{ index: match.index!, token }] : [];
+	});
+	if (!hits.length) return compactMemoryBody(text, max);
+	const width = Math.max(1, max - 8);
+	let bestStart = 0;
+	let bestDistinct = -1;
+	let bestSpan = Number.POSITIVE_INFINITY;
+	for (const hit of hits) {
+		// Do not force an edge match to consume the whole remaining passage.
+		// A shorter tail window can contain the answer sentence without the
+		// repeated filler that preceded it.
+		const start = Math.max(0, hit.index - Math.floor(width / 3));
+		const windowHits = hits.filter((candidate) => candidate.index >= start && candidate.index < start + width);
+		const distinct = new Set(windowHits.map((candidate) => candidate.token)).size;
+		const span = windowHits.length > 1
+			? windowHits.at(-1)!.index - windowHits[0].index
+			: 0;
+		// Prefer concentrated coverage of distinct query terms. This keeps a
+		// repeated filler phrase from displacing a compact answer sentence at
+		// the end of a long source passage.
+		if (distinct > bestDistinct
+			|| (distinct === bestDistinct && (span < bestSpan || (span === bestSpan && start > bestStart)))) {
+			bestStart = start;
+			bestDistinct = distinct;
+			bestSpan = span;
+		}
+	}
+	const rawEnd = Math.min(text.length, bestStart + width);
+	const nextBoundary = text.indexOf(' ', Math.max(0, bestStart - 1));
+	// A long unbroken token may have no usable boundary; never reset to the
+	// beginning or skip beyond this bounded window while trying to trim it.
+	const start = bestStart > 0 && nextBoundary >= 0 && nextBoundary < rawEnd
+		? nextBoundary + 1 : bestStart;
+	const wordEnd = text.lastIndexOf(' ', rawEnd);
+	const end = rawEnd < text.length && wordEnd > start ? wordEnd : rawEnd;
+	return `${start ? '... ' : ''}${text.slice(start, end).trim()}${end < text.length ? ' ...' : ''}`;
+}
+
+function memoryBody(node: MemoryNode, queryTokens: string[] = []): string {
+	const content = node.content.trim();
+	const contentTokens = new Set(normalizedTokens(content));
+	const raw = queryTokens.some(token => contentTokens.has(token)) ? content : node.summary?.trim() || content;
 	if (/\[(?:CHECKPOINT|RECENT STORY STATE|CHARACTER STATE|ACTIVE THREADS)\s*=/i.test(raw)) {
-		return summarizeMtheriosMemoryForRollup(raw);
+		return (summarizeMtheriosMemoryForContext(raw).match(/[^.!?]+(?:[.!?]+|$)/g) ?? [])
+			.map((sentence) => sentence.trim())
+			.filter((sentence) => sentence && !isOocControlText(sentence))
+			.join(' ');
 	}
 	return raw;
 }
 
-export function renderMemoryLine(node: MemoryNode, maxBodyChars = MEMORY_LINE_BODY_CHAR_LIMIT): string {
+export function renderMemoryLine(node: MemoryNode, maxBodyChars = MEMORY_LINE_BODY_CHAR_LIMIT, queryTokens: string[] = []): string {
 	const refs = [
 		node.sourceEventIds.length ? `events:${node.sourceEventIds.slice(0, 4).join(',')}` : '',
 		node.sourceEntryIds.length ? `entries:${node.sourceEntryIds.slice(0, 4).join(',')}` : '',
 		node.sourcePatchIds.length ? `patches:${node.sourcePatchIds.slice(0, 4).join(',')}` : '',
 	].filter(Boolean).join(' ');
 	const source = refs ? ` [${refs}]` : '';
-	const label = node.type.replace(/_/g, ' ');
-	const body = compactMemoryBody(memoryBody(node), maxBodyChars);
+	const metadata = asRecord(node.metadata) ?? {};
+	const historical = metadata.temporalState === 'historical' || metadata.eventType === 'agreement' || Boolean(asRecord(metadata.agreement));
+	const label = metadata.recordKind === 'agreement'
+		? `${historical ? 'historical agreement; no current duty' : 'current agreement'}; ${metadata.agreementStatus}`
+		: node.type === 'npc_belief' ? `NPC belief; may be false; owner:${metadata.believerEntityId ?? node.entityIds[0] ?? 'unknown'}${historical ? '; historical' : ''}`
+		: `${historical ? 'historical evidence; ' : ''}${node.type.replace(/_/g, ' ')}`;
+	const body = relevantMemoryExcerpt(memoryBody(node, queryTokens), queryTokens, maxBodyChars);
 	return `- (${label}) ${node.title}: ${body}${source}`;
 }

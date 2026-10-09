@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const strategicBrainTriggerSchema = z.enum([
 	'arc_created',
 	'manual',
+	'world_tick',
+	'scheduled_refresh',
 	'major_event',
 	'scheme_threshold',
 	'faction_shock',
@@ -111,14 +113,32 @@ function normalizeClockVelocity(value: unknown): 'stalled' | 'slow' | 'steady' |
 	return 'steady';
 }
 
+function visibilityToken(value: unknown): string | undefined {
+	return asString(value)?.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
 function normalizeStrategicVisibility(value: unknown): 'public' | 'rumored' | 'secret' | 'unknown' | undefined {
-	const text = asString(value)?.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+	const text = visibilityToken(value);
 	if (!text) return undefined;
-	if (['public', 'rumored', 'secret', 'unknown'].includes(text)) return text as 'public' | 'rumored' | 'secret' | 'unknown';
-	if (/rumou?r|whisper|hearsay/.test(text)) return 'rumored';
-	if (/secret|hidden|covert|private|classified/.test(text)) return 'secret';
-	if (/public|visible|open|known|player_known/.test(text)) return 'public';
-	return 'unknown';
+	if (['public', 'open', 'broadcast'].includes(text)) return 'public';
+	if (['rumored', 'rumoured', 'rumor', 'rumour', 'whispered', 'hearsay', 'player_known', 'known_to_player', 'player_visible'].includes(text)) return 'rumored';
+	if (text === 'unknown') return 'unknown';
+	return 'secret';
+}
+
+function normalizePlotCardVisibility(value: unknown): 'secret' | 'rumored' | 'player_known' | 'public' {
+	const text = visibilityToken(value) ?? '';
+	if (['public', 'open', 'broadcast'].includes(text)) return 'public';
+	if (['rumored', 'rumoured', 'rumor', 'rumour', 'whispered', 'hearsay'].includes(text)) return 'rumored';
+	if (['player_known', 'known', 'known_to_player', 'player_visible', 'visible', 'obvious'].includes(text)) return 'player_known';
+	return 'secret';
+}
+
+function normalizePressureBeatVisibility(value: unknown): 'secret' | 'player_known' | 'public' {
+	const text = visibilityToken(value) ?? '';
+	if (['public', 'open', 'broadcast'].includes(text)) return 'public';
+	if (['player_known', 'known', 'known_to_player', 'player_visible', 'rumored', 'rumoured', 'rumor', 'rumour', 'visible', 'obvious'].includes(text)) return 'player_known';
+	return 'secret';
 }
 
 function normalizeTimeHorizon(value: unknown): 'next_tick' | 'next_few_turns' | 'this_arc' | 'future_arc' | 'long_burn' | undefined {
@@ -245,6 +265,7 @@ function normalizeSchemeDirective(value: unknown): unknown {
 		linkedThreadIds: value.linkedThreadIds ?? [],
 		linkedWorldEventIds: value.linkedWorldEventIds ?? [],
 		evidenceRefs: value.evidenceRefs ?? [],
+		visibility: normalizeStrategicVisibility(value.visibility ?? value.secrecy),
 		confidence: value.confidence,
 		reason: value.reason ?? description ?? 'Strategic directive proposed by the world brain.',
 	};
@@ -385,6 +406,7 @@ const strategicEvidenceSourceTypes = [
 export const strategicEvidenceRefSchema = z.object({
 	sourceType: z.preprocess((value) => {
 		const normalized = asString(value)?.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+		if (normalized === 'event') return 'world_event';
 		return strategicEvidenceSourceTypes.includes(normalized as typeof strategicEvidenceSourceTypes[number]) ? normalized : 'unknown';
 	}, z.enum(strategicEvidenceSourceTypes).default('unknown')),
 	sourceId: z.string().nullable().optional(),
@@ -479,7 +501,7 @@ export const plotBrainPressureBeatSchema = z.object({
 	title: z.string(),
 	body: z.string(),
 	urgency: z.preprocess(normalizePlotUrgency, z.enum(['simmer', 'emerging', 'immediate']).default('simmer')),
-	visibility: z.enum(['secret', 'player_known', 'public']).default('secret'),
+	visibility: z.preprocess(normalizePressureBeatVisibility, z.enum(['secret', 'player_known', 'public']).default('secret')),
 	actorEntityIds: stringArray,
 	targetEntityIds: stringArray,
 	locationIds: stringArray,
@@ -489,6 +511,7 @@ export const plotBrainPressureBeatSchema = z.object({
 
 export const plotBrainPlotCardSchema = z.object({
 	id: z.string().default(''),
+	storyThreadId: z.string().nullable().optional(),
 	title: z.string(),
 	logline: z.string().default(''),
 	kind: z.enum([
@@ -499,7 +522,7 @@ export const plotBrainPlotCardSchema = z.object({
 	lifecycleStage: z.enum(['seed', 'simmer', 'reveal', 'escalate', 'crisis', 'fallout', 'resolved', 'dormant']).default('seed'),
 	pressure: boundedScore,
 	urgency: z.enum(['dormant', 'simmer', 'emerging', 'immediate']).default('simmer'),
-	visibility: z.enum(['secret', 'rumored', 'player_known', 'public']).default('secret'),
+	visibility: z.preprocess(normalizePlotCardVisibility, z.enum(['secret', 'rumored', 'player_known', 'public']).default('secret')),
 	actorEntityIds: stringArray,
 	actorFactionIds: stringArray,
 	antagonistCandidateIds: stringArray,

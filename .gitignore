@@ -31,5 +31,13 @@ vite.config.ts.timestamp-*
 
 # Local Codex/runtime logs
 .codex-runtime/
+.codex-run/*.log
+.playwright-cli/
 .playwright-mcp/
+/.mtherios-*.log
+/logs/*.log
+/build-before-restart-*/
 .claude/worktrees/
+
+# MythEngine local configuration
+mythengine.config.json

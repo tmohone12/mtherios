@@ -80,12 +80,6 @@ export async function readCanonPage(storyId: string, page: string) {
 	});
 }
 
-export async function lintCanonWiki(storyId: string) {
-	return await runCanonCommand<JsonRecord>(storyId, 'wiki.lint', {
-		storyId,
-	});
-}
-
 export async function previewEntityResolution(storyId: string, candidate: CanonRepairCandidate, includeSemantic = true) {
 	return await runCanonCommand<JsonRecord>(storyId, 'entity.resolve', {
 		candidate,

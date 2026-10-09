@@ -343,7 +343,7 @@ function parseAgreement(md: string, storyId: string): Agreement | null {
 	if (!validCategories.includes(rawCategory as AgreementCategory)) return null;
 
 	const rawStatus = coerceStr(fm.status);
-	const validStatuses: AgreementStatus[] = ['active', 'broken', 'fulfilled', 'expired', 'contested'];
+	const validStatuses: AgreementStatus[] = ['active', 'broken', 'fulfilled', 'expired', 'contested', 'annulled', 'superseded'];
 	const status: AgreementStatus = validStatuses.includes(rawStatus as AgreementStatus)
 		? (rawStatus as AgreementStatus)
 		: 'active';

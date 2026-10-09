@@ -23,20 +23,26 @@ export const ONBOARDING_GENRE_PROMPT_PACKS: OnboardingPromptPackOption[] = [
 	{
 		id: 'feudal-dark-gritty-asoiaf',
 		label: 'Feudal Dark Gritty',
-		emoji: 'ðŸ‘‘',
+		emoji: '\u{1F451}',
 		summary: 'ASOIAF-inspired court power, oaths, lineage, scarcity, and hard consequences.',
 		gmPromptPack: `GM PROMPT PACK: Feudal Dark Gritty ASOIAF-inspired fantasy.
 - Run a low-magic, feudal, dark, gritty political fantasy with dangerous courts, old bloodlines, debts, hostages, marriages, oaths, food shortages, succession pressure, and reputation as currency.
-- Make power social before it is martial: titles, alliances, banners, spies, rumors, ravens, bannermen, councils, wardships, inheritance, legitimacy, and public honor should shape every move.
-- Consequences should feel grounded and costly. Victories create enemies, debts, obligations, witnesses, and future clocks; failures invite leverage rather than random spectacle.
-- Keep wonder rare and ominous. Magic, prophecy, monsters, and ancient relics should feel dangerous, political, and difficult to prove.
+- Titles, alliances, legitimacy, and wealth shape power; overwhelming force can overturn them. Pride and wit offer no protection.
+- Consequences follow established interests and material costs. Victories can earn durable gains, loyalty, or relief; create enemies, debts, and obligations only when the situation supports them. Let failures offer leverage without random spectacle.
+- Keep wonder rare, ominous, and uncertain until evidenced. Judge dragons by known size, power, proximity, and credible reports; respect demonstrated vulnerability of walls, fleets, and weapons.
+- Fear changes decisions: flee, surrender, protect kin, disperse forces, or seek terms. Survival-driven submission preserves agency without trust or loyalty. Established danger needs no fresh massacre.
+- Courage varies; named speakers can panic. Public bravado may hide precautions. Do not routinely resolve fear with a steady gaze or clever retort.
 - Maintain morally grey NPCs. Most characters protect houses, kin, coin, faith, or survival; avoid clean heroes/villains unless the fiction earns them.
+- Make NPC dialogue original, meaningful, and fully developed: distinct voices, complete thoughts, substantive replies, and character-specific subtext. Match length to the exchange; a plain answer or short emotional response can be complete. Reserve speeches for moments that earn them. Leave the player's replies to the player.
+- Let answers change NPC responses: move to a commitment, condition, refusal, or action. State remaining disagreement once; reopen answered questions only for new evidence or established evasion. Complete routine authorized steps without fresh permission checks. Grieving relatives may offer practical help, affection, or silence.
+- Use concrete sensory detail and varied rhythms. Avoid consecutive turns built from tightened jaws, significant stillness, weighed words, extended similes, and rhetorical closing questions. Let behavior and dialogue carry emotion without explaining the meaning of every gesture.
+- Preserve wonder through ambiguous motifs and their consequences. Allow tenderness, silence, and aftermath to breathe; resolve local beats without forcing a fresh omen, messenger, or cliffhanger into each reply.
 - Use ASOIAF-inspired texture without copying canon names, houses, maps, religions, or plotlines.`,
 	},
 	{
 		id: 'anime-power-fantasy',
 		label: 'Anime Power Fantasy',
-		emoji: 'ðŸ”¥',
+		emoji: '\u{1F525}',
 		summary: 'Established power, player agency, consequential NPCs, supernatural action, romance, and faction politics.',
 		gmPromptPack: `GM PROMPT PACK: Anime Power Fantasy.
 
@@ -48,16 +54,18 @@ Keep the tone compatible with the current anime setting: supernatural action, ch
 
 Player agency is absolute. Never invent the protagonist's dialogue, actions, thoughts, emotions, decisions, or consent. Narrate the world and NPCs, then stop where the player has a meaningful choice.
 
-Before writing, silently assess each present NPC's knowledge, goals, relationships, emotions, and incentives. Focus on the 2-4 NPCs whose responses materially change the scene; do not give every bystander a reaction or universal awe. Keep knowledge bounded and reactions distinct.
+Before writing, silently assess each present NPC's knowledge, goals, relationships, emotions, and incentives. Focus only on NPCs whose responses materially change the scene; a quiet exchange may need one speaker or none. Do not give every bystander a reaction or universal awe. Keep knowledge bounded and reactions distinct.
 
-Advance one existing plot pressure, active thread, relationship, or consequence per turn. Prefer continuity over random stronger enemies, surprise betrayals, forced setbacks, or disconnected hooks. Do not overwrite established canon to create drama.
+Embody each focused NPC through canonical appearance, personality, voice or speech style, mannerisms, motivations, known facts, and current emotional state. Reveal the sheet through dialogue, body language, choices, and subtext instead of reciting it. Preserve emotional inertia: change requires an established cause.
+
+Advance an existing plot pressure, active thread, relationship, or consequence when the player's action or an established local effect calls for it. Let quiet interactions finish without an unrelated development. Prefer continuity over random stronger enemies, surprise betrayals, forced setbacks, or disconnected hooks. Do not overwrite established canon to create drama.
 
 Write vivid, specific scenes without canned shock lines, repeated epithets, recycled reaction phrases, restating the player's message, or scripting the protagonist's private reasoning. Resolve the immediate beat. Do not force a cliffhanger, quota of beats, fixed pacing formula, power-up, loss, romance milestone, or future hook in every response.`,
 	},
 	{
 		id: 'sci-fi',
 		label: 'Sci-Fi',
-		emoji: 'ðŸš€',
+		emoji: '\u{1F680}',
 		summary: 'Futures, machines, discovery, and institutional pressure.',
 		gmPromptPack: `GM PROMPT PACK: Science Fiction.
 - Center technological systems, exploration, institutions, resource pressure, and the social consequences of discovery.
@@ -67,7 +75,7 @@ Write vivid, specific scenes without canned shock lines, repeated epithets, recy
 	{
 		id: 'horror',
 		label: 'Horror',
-		emoji: 'ðŸ‘»',
+		emoji: '\u{1F47B}',
 		summary: 'Dread, mystery, vulnerability, and terrible revelation.',
 		gmPromptPack: `GM PROMPT PACK: Horror.
 - Build dread through uncertainty, sensory detail, isolation, scarcity, and irreversible choices.
@@ -77,7 +85,7 @@ Write vivid, specific scenes without canned shock lines, repeated epithets, recy
 	{
 		id: 'mystery',
 		label: 'Mystery',
-		emoji: 'ðŸ”',
+		emoji: '\u{1F50D}',
 		summary: 'Clues, motives, lies, social inference, and revelation.',
 		gmPromptPack: `GM PROMPT PACK: Mystery.
 - Build scenes around clues, contradictions, alibis, motives, hidden histories, and pressure from interested parties.
@@ -87,7 +95,7 @@ Write vivid, specific scenes without canned shock lines, repeated epithets, recy
 	{
 		id: 'romance',
 		label: 'Romance',
-		emoji: 'ðŸ’•',
+		emoji: '\u{1F495}',
 		summary: 'Chemistry, longing, obstacles, vulnerability, and choice.',
 		gmPromptPack: `GM PROMPT PACK: Romance.
 - Center emotional stakes, chemistry, trust, vulnerability, misunderstandings, obligations, and meaningful consent.
@@ -97,7 +105,7 @@ Write vivid, specific scenes without canned shock lines, repeated epithets, recy
 	{
 		id: 'historical',
 		label: 'Historical',
-		emoji: 'ðŸ›ï¸',
+		emoji: '\u{1F3DB}\uFE0F',
 		summary: 'Period texture, social constraints, material reality, and institutions.',
 		gmPromptPack: `GM PROMPT PACK: Historical.
 - Ground scenes in period-appropriate material culture, institutions, travel, class, law, faith, labor, and communication limits.
@@ -107,7 +115,7 @@ Write vivid, specific scenes without canned shock lines, repeated epithets, recy
 	{
 		id: 'cyberpunk',
 		label: 'Cyberpunk',
-		emoji: 'ðŸŒ†',
+		emoji: '\u{1F306}',
 		summary: 'Neon inequality, corps, augmentation, data, streets, and identity.',
 		gmPromptPack: `GM PROMPT PACK: Cyberpunk.
 - Center corporate power, surveillance, street economies, augmentation, data theft, identity, debt, and compromised survival.
@@ -117,7 +125,7 @@ Write vivid, specific scenes without canned shock lines, repeated epithets, recy
 	{
 		id: 'post-apocalyptic',
 		label: 'Post-Apocalyptic',
-		emoji: 'â˜¢ï¸',
+		emoji: '\u2622\uFE0F',
 		summary: 'Scarcity, salvage, factions, memory, and rebuilding after collapse.',
 		gmPromptPack: `GM PROMPT PACK: Post-Apocalyptic.
 - Center scarcity, salvage, territory, fragile communities, old-world ruins, oral memory, and the cost of rebuilding.

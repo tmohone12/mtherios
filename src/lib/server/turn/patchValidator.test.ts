@@ -9,9 +9,11 @@ import {
 	memoryNodes,
 	npcEventLinks,
 	patchProposals,
+	relationships,
 	sourceRefs,
 	statePatches,
 	stories,
+	storyEntries,
 	storyEvents,
 } from '$lib/server/db/schema';
 import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
@@ -57,6 +59,13 @@ function createDbMock(options: {
 	story?: TestStoryRow | null;
 	patchProposalRows?: Array<typeof patchProposals.$inferSelect>;
 	entityRows?: Array<Record<string, unknown>>;
+	factionRows?: Array<Record<string, unknown>>;
+	membershipRows?: Array<Record<string, unknown>>;
+	persistEntities?: boolean;
+	relationshipRows?: Array<typeof relationships.$inferSelect>;
+	agreementRows?: Array<typeof agreements.$inferSelect>;
+	sourcePositions?: number[];
+	sceneSourceEntries?: Array<{ id?: string; position?: number; type: string; content: string; metadata: Record<string, unknown> }>;
 } = {}) {
 	type DbSource = 'root' | 'tx';
 	const insertCalls: Array<{ source: DbSource; table: unknown; value: unknown }> = [];
@@ -65,9 +74,13 @@ function createDbMock(options: {
 	const selectLocks: Array<{ source: DbSource; table: unknown; strength: string }> = [];
 	const storyUpdates: Array<Record<string, unknown>> = [];
 	const selectedStory = options.story === undefined ? storyRow : options.story;
+	const selectedEntities = [...(options.entityRows ?? entityRows)];
+	const selectedFactions = [...(options.factionRows ?? factionRows)];
 
 	function createConnection(source: DbSource) {
 		let selectedTable: unknown;
+		let selectedFields: Record<string, unknown> | undefined;
+		let sourceRead = 0;
 
 		const selectChain = {
 			from: vi.fn((table: unknown) => {
@@ -75,23 +88,39 @@ function createDbMock(options: {
 				return selectChain;
 			}),
 			where: vi.fn(() => selectChain),
+			orderBy: vi.fn(() => selectChain),
 			for: vi.fn((strength: string) => {
 				selectLocks.push({ source, table: selectedTable, strength });
 				return selectChain;
 			}),
 			limit: vi.fn(() => {
 				if (selectedTable === stories) return Promise.resolve(selectedStory ? [selectedStory] : []);
-				if (selectedTable === entities) return Promise.resolve(options.entityRows ?? entityRows);
-				if (selectedTable === factions) return Promise.resolve(factionRows);
+				if (selectedTable === entities) return Promise.resolve(selectedEntities);
+				if (selectedTable === factions) return Promise.resolve(selectedFactions);
+				if (selectedTable === factionMemberships) return Promise.resolve(options.membershipRows ?? []);
+				if (selectedTable === relationships) return Promise.resolve(options.relationshipRows ?? []);
+				if (selectedTable === agreements) return Promise.resolve(options.agreementRows ?? []);
+				if (selectedTable === storyEntries) {
+					if (selectedFields?.metadata) return Promise.resolve(options.sceneSourceEntries ?? []);
+					const position = options.sourcePositions?.[sourceRead++];
+					return Promise.resolve(position === undefined ? [] : [{ position }]);
+				}
 				if (selectedTable === patchProposals) return Promise.resolve(options.patchProposalRows ?? []);
 				return Promise.resolve([]);
 			}),
 		};
-		const select = vi.fn(() => selectChain);
+		const select = vi.fn((fields?: Record<string, unknown>) => { selectedFields = fields; return selectChain; });
 
 		const insert = vi.fn((table: unknown) => ({
 			values: vi.fn((value: unknown) => {
 				insertCalls.push({ source, table, value });
+				if (options.persistEntities && (table === entities || table === factions)) {
+					const records = table === entities ? selectedEntities : selectedFactions;
+					const row = value as Record<string, unknown>;
+					const index = records.findIndex(record => record.id === row.id);
+					if (index < 0) records.push(row);
+					else records[index] = row;
+				}
 				return {
 					onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
 					onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
@@ -143,6 +172,212 @@ beforeEach(() => {
 });
 
 describe('applyValidatedTurnUpdate', () => {
+	it.each([
+		['canonical', {}, true],
+		['noncanon', { nonCanon: true }, false],
+		['parallel', { narrativeMode: 'parallel_pov', povCharacter: 'Mira' }, false],
+	])('only persists sourced campaign facts for %s primary narration', async (_name, metadata, expected) => {
+		const evidence = 'The royal betrothal was annulled.';
+		const mock = createDbMock({ sceneSourceEntries: [{ id: 'narration_state', position: 20, type: 'narration', content: evidence, metadata }] });
+		dbMocks.getDb.mockReturnValue(mock.db);
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1', playerEntryId: 'player_state', assistantEntryId: 'narration_state', narration: evidence,
+			update: worldStateUpdateSchema.parse({ campaign_state: [{ key: 'royal_betrothal', kind: 'current', statement: evidence, evidence, expected_source_entry_id: null }] }),
+			parseWarnings: [], retrievedMemoryIds: [], serverVersion: 21,
+		});
+		expect(mock.updateCalls.some(call => call.table === stories && 'metadata' in call.value)).toBe(expected);
+		expect(mock.insertCalls.find(call => call.table === statePatches)?.value).toMatchObject({ sourceEntryIds: ['player_state', 'narration_state'] });
+		if (!expected) expect(result.warnings.join(' ')).toContain('Campaign state skipped');
+	});
+	const independentMove = 'Mira asked her merchant cousin to take her younger brother aboard.';
+	const agencyState = { currentGoal: 'Keep her brother out of royal service.', currentPlan: 'Secure an apprenticeship before the appointment.', lastIndependentAction: independentMove, nextOpportunity: 'The cousin returns tomorrow; meet him.', constraint: 'She will not openly accuse her husband.' };
+	const applyAgency = (character: Record<string, unknown>, extra: Partial<Parameters<typeof applyValidatedTurnUpdate>[0]> = {}) => applyValidatedTurnUpdate({
+		storyId: 'story_1', playerEntryId: 'agency_player', assistantEntryId: 'agency_narration', narration: independentMove,
+		update: worldStateUpdateSchema.parse({ characters: [{ name: 'Mira', entityId: 'entity_mira', ...character }] }),
+		parseWarnings: [], retrievedMemoryIds: [], serverVersion: 21, ...extra,
+	});
+	it('persists NPC intent and source-linked independent moves atomically with replay-stable event IDs', async () => {
+		const mock = createDbMock({ persistEntities: true, sceneSourceEntries: [{ id: 'agency_narration', type: 'narration', content: independentMove, metadata: {} }] });
+		dbMocks.getDb.mockReturnValue(mock.db);
+		const update = { ...agencyState, independentActionEvidence: independentMove, independentActionVisibility: 'secret' };
+		await applyAgency(update);
+		await applyAgency(update);
+		const character = mock.insertCalls.find(call => call.table === entities)?.value as Record<string, unknown>;
+		expect(character).toMatchObject({ state: { ...agencyState, nextOpportunityRecordedAt: 'Twilight of Ashes' }, sourceEntryIds: ['agency_narration'] });
+		const moves = mock.insertCalls.filter(call => call.table === storyEvents).map(call => call.value as Record<string, unknown>).filter(event => (event.metadata as Record<string, unknown>).sourceType === 'npc_independent_action');
+		expect(moves).toHaveLength(2);
+		expect(new Set(moves.map(event => event.id)).size).toBe(1);
+		expect(moves[0]).toMatchObject({ status: 'committed', body: independentMove, actorEntityIds: ['entity_mira'], visibility: 'secret', occurredTurn: 7, scheduledTurn: null, sourceEntryIds: ['agency_narration'], memoryImpact: { independentNpcAction: true, evidence: independentMove } });
+		expect(mock.insertCalls.filter(call => call.table === npcEventLinks).flatMap(call => call.value as Record<string, unknown>[])).toEqual(expect.arrayContaining([expect.objectContaining({ eventId: moves[0].id, npcEntityId: 'entity_mira', role: 'actor', visibility: 'secret' })]));
+		expect(mock.insertCalls.every(call => call.source === 'tx')).toBe(true);
+		expect(dbMocks.enqueueTurnProjectionJobs).toHaveBeenCalledWith(expect.objectContaining({ eventIds: expect.arrayContaining([moves[0].id]) }));
+	});
+	it('clears resolved intent without deleting its independent move history', async () => {
+		const mock = createDbMock({ entityRows: [{ ...entityRows[1], state: { ...agencyState, nextOpportunityRecordedAt: 'Yesterday' } }] });
+		dbMocks.getDb.mockReturnValue(mock.db);
+		await applyAgency({ currentGoal: null, currentPlan: null, nextOpportunity: null, constraint: null });
+		expect((mock.insertCalls.find(call => call.table === entities)?.value as Record<string, unknown>).state).toMatchObject({ currentGoal: null, currentPlan: null, lastIndependentAction: independentMove, nextOpportunity: null, nextOpportunityRecordedAt: null, constraint: null });
+		expect(mock.deleteCalls.some(call => call.table === storyEvents)).toBe(false);
+	});
+	it('stores a future plan and opportunity without manufacturing a completed or scheduled move', async () => {
+		const mock = createDbMock();
+		dbMocks.getDb.mockReturnValue(mock.db);
+		await applyAgency({ currentGoal: agencyState.currentGoal, currentPlan: agencyState.currentPlan, nextOpportunity: agencyState.nextOpportunity });
+		const events = mock.insertCalls.filter(call => call.table === storyEvents).map(call => call.value as Record<string, unknown>);
+		expect(events).toHaveLength(1);
+		expect(events[0].title).toBe('Turn resolved');
+	});
+	it('retains a late independent move without regressing the newer NPC plan or last-action pointer', async () => {
+		const newer = { currentGoal: 'Protect the new apprenticeship.', currentPlan: 'Pay the indenture.', lastIndependentAction: 'Mira signed the indenture.', nextOpportunity: 'The ship sails at dawn.', constraint: 'No public accusation.' };
+		const mock = createDbMock({ entityRows: [{ ...entityRows[1], state: newer }], sceneSourceEntries: [{ id: 'agency_narration', type: 'narration', content: independentMove, metadata: {} }] });
+		dbMocks.getDb.mockReturnValue(mock.db);
+		await applyAgency({ ...agencyState, independentActionEvidence: independentMove }, { mode: 'supplemental', timelineTurn: 3, suppressCurrentNpcAgency: true, narration: '' });
+		expect((mock.insertCalls.find(call => call.table === entities)?.value as Record<string, unknown>).state).toMatchObject(newer);
+		expect(mock.insertCalls.filter(call => call.table === storyEvents).map(call => call.value)).toEqual(expect.arrayContaining([expect.objectContaining({ body: independentMove, occurredTurn: 3, status: 'committed' })]));
+	});
+	it.each([
+		['unsupported action', 'Mira burned the royal appointment.', independentMove, {}],
+		['invented evidence', 'Mira burned the royal appointment.', 'Mira burned the royal appointment.', {}],
+		['non-canon narration', independentMove, independentMove, { nonCanon: true }],
+	])('withholds a completed move based on %s', async (_reason, action, evidence, metadata) => {
+		const mock = createDbMock({ sceneSourceEntries: [{ id: 'agency_narration', type: 'narration', content: independentMove, metadata }] });
+		dbMocks.getDb.mockReturnValue(mock.db);
+		const result = await applyAgency({ lastIndependentAction: action, independentActionEvidence: evidence });
+		expect((mock.insertCalls.find(call => call.table === entities)?.value as Record<string, unknown>).state).not.toHaveProperty('lastIndependentAction');
+		expect(mock.insertCalls.filter(call => call.table === storyEvents).map(call => call.value as Record<string, unknown>).some(event => (event.metadata as Record<string, unknown>).sourceType === 'npc_independent_action')).toBe(false);
+		expect(result.warnings.join(' ')).toContain('Independent move for Mira was not saved');
+	});
+	const introduction = 'Tala Venn, a courier sworn to The Watch, delivers the sealed dispatch.';
+	const newNpc = { name: 'Tala Venn', description: 'A courier delivering a sealed dispatch.', background: 'A courier sworn to The Watch.',
+		creation_evidence: introduction, faction_tags: ['The Watch'], faction_evidence: [{ faction: 'The Watch', quote: introduction }] };
+	const autoCreate = (characters: unknown[] = [newNpc]) => applyValidatedTurnUpdate({
+		storyId: 'story_1', playerEntryId: 'action', assistantEntryId: 'resolution', narration: introduction,
+		update: worldStateUpdateSchema.parse({ characters }), parseWarnings: [], retrievedMemoryIds: [], serverVersion: 20,
+	});
+	const source = { id: 'resolution', type: 'narration', content: introduction, metadata: {} };
+	it('automatically creates a sourced NPC and faction membership in one transaction, reusing identity on replay', async () => {
+		const mock = createDbMock({ persistEntities: true, sceneSourceEntries: [source], membershipRows: [] });
+		dbMocks.getDb.mockReturnValue(mock.db);
+		await autoCreate();
+		const created = mock.insertCalls.find(call => call.table === entities)?.value as Record<string, unknown>;
+		expect(created).toMatchObject({ name: 'Tala Venn', sourceEntryIds: ['resolution'], metadata: { sourceType: 'gm_auto_character', creationEvidence: introduction } });
+		const membership = mock.insertCalls.find(call => call.table === factionMemberships)?.value as Record<string, unknown>;
+		expect(membership).toMatchObject({ entityId: created.id, factionId: 'faction_watch', sourceEntryIds: ['resolution'], status: 'active' });
+		expect(mock.updateCalls.find(call => call.table === entities)?.value.state).toMatchObject({ factionTags: ['The Watch'] });
+		expect(mock.insertCalls.filter(call => [entities, factionMemberships, sourceRefs].includes(call.table as never)).every(call => call.source === 'tx')).toBe(true);
+		await autoCreate();
+		expect(new Set(mock.insertCalls.filter(call => call.table === entities).map(call => (call.value as Record<string, unknown>).id)).size).toBe(1);
+		expect(new Set(mock.insertCalls.filter(call => call.table === factionMemberships).map(call => (call.value as Record<string, unknown>).id)).size).toBe(1);
+	});
+	it.each([
+		['unquoted invention', { ...newNpc, creation_evidence: 'Tala Venn is the powerful captain of The Watch.' }, source],
+		['missing source', newNpc, { ...source, id: 'different_entry' }],
+		['non-canon source', newNpc, { ...source, metadata: { nonCanon: true } }],
+		['wrong explicit identity', { ...newNpc, entityId: 'other_story_entity' }, source],
+	])('withholds %s and retains a review candidate', async (_label, character, evidenceSource) => {
+		const mock = createDbMock({ persistEntities: true, sceneSourceEntries: [evidenceSource] });
+		dbMocks.getDb.mockReturnValue(mock.db);
+		await autoCreate([character]);
+		expect(mock.insertCalls.filter(call => call.table === entities || call.table === factionMemberships)).toHaveLength(0);
+		const proposals = mock.insertCalls.filter(call => call.table === patchProposals).flatMap(call => call.value as Record<string, unknown>[]);
+		expect(proposals).toEqual(expect.arrayContaining([expect.objectContaining({ proposalType: 'character_reference_review', status: 'needs_review' })]));
+	});
+	it('leaves ambiguous names for review without creating or overwriting either person', async () => {
+		const mock = createDbMock({ entityRows: [
+			{ id: 'tala_one', storyId: 'story_1', type: 'character', name: 'Tala Venn' },
+			{ id: 'tala_two', storyId: 'story_1', type: 'character', name: 'Tala Venn' },
+		], sceneSourceEntries: [source] });
+		dbMocks.getDb.mockReturnValue(mock.db);
+		await autoCreate();
+		expect(mock.insertCalls.filter(call => call.table === entities)).toHaveLength(0);
+		expect(mock.insertCalls.some(call => call.table === patchProposals)).toBe(true);
+	});
+	it('saves the character but withholds unsupported and ambiguous affiliations', async () => {
+		const mock = createDbMock({ persistEntities: true, sceneSourceEntries: [source], factionRows: [
+			...factionRows, { ...factionRows[0], id: 'duplicate_watch' },
+		] });
+		dbMocks.getDb.mockReturnValue(mock.db);
+		const result = await autoCreate([{ ...newNpc, faction_tags: ['The Watch', 'Secret Guild'], faction_evidence: [
+			...newNpc.faction_evidence, { faction: 'Secret Guild', quote: 'Tala Venn commands the Secret Guild.' },
+		] }]);
+		expect(mock.insertCalls.some(call => call.table === entities)).toBe(true);
+		expect(mock.insertCalls.filter(call => call.table === factionMemberships)).toHaveLength(0);
+		expect((mock.insertCalls.find(call => call.table === entities)?.value as any).state.factionTags).toBeUndefined();
+		expect(result.warnings.filter(warning => warning.startsWith('Faction affiliation'))).toHaveLength(2);
+	});
+	it('links an existing unresolved membership instead of adding a second member row', async () => {
+		const mock = createDbMock({ persistEntities: true, sceneSourceEntries: [source], membershipRows: [
+			{ id: 'unresolved_tala', factionId: 'faction_watch', entityId: null, status: 'active', metadata: { memberNameOrId: 'Tala Venn' }, sourceEntryIds: ['earlier'] },
+		] });
+		dbMocks.getDb.mockReturnValue(mock.db);
+		await autoCreate();
+		expect(mock.insertCalls.find(call => call.table === factionMemberships)?.value).toMatchObject({
+			id: 'unresolved_tala', sourceEntryIds: ['earlier', 'resolution'], metadata: { unresolvedCharacterReference: false },
+		});
+	});
+	const promise = {
+		id: 'promise_1', storyId: 'story_1', category: 'promise', parties: ['Valen', 'Mira'],
+		terms: 'Return the silver bell before dawn.', status: 'active', secrecy: 'secret', consequences: [],
+		sourceEntryIds: ['original_promise'], sourceEventIds: ['original_event'], sourcePatchIds: ['original_patch'],
+		serverVersion: 1, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+	} as typeof agreements.$inferSelect;
+	const applyAgreement = (change: Record<string, unknown>) => applyValidatedTurnUpdate({
+		storyId: 'story_1', playerEntryId: 'action', assistantEntryId: 'resolution',
+		narration: 'Mira returns the silver bell and releases Valen from the vow.',
+		update: worldStateUpdateSchema.parse({ agreements: [change] }), parseWarnings: [], retrievedMemoryIds: [], serverVersion: 20,
+	});
+	it.each([['fulfill', 'fulfilled'], ['annul', 'annulled'], ['break', 'broken'], ['expire', 'expired'], ['supersede', 'superseded']])('applies %s to the canonical obligation and retains its private source history', async (action, status) => {
+		const { db, updateCalls, insertCalls } = createDbMock({ agreementRows: [promise], sourcePositions: [200, 2] });
+		dbMocks.getDb.mockReturnValue(db);
+		await applyAgreement({ action, id: promise.id, terms: 'A resolution summary must not replace original terms.', parties: ['Wrong party'], secrecy: 'public' });
+		expect(updateCalls.find(call => call.table === agreements)?.value).toMatchObject({
+			status, terms: promise.terms, secrecy: 'secret', sourceEntryIds: ['original_promise', 'resolution'],
+		});
+		expect(insertCalls.filter(call => call.table === agreements)).toHaveLength(0);
+		expect(insertCalls.find(call => call.table === storyEvents && (call.value as { type: string }).type === 'agreement')?.value).toMatchObject({
+			visibility: 'secret', sourceEntryIds: ['resolution'], metadata: { agreementId: promise.id, previousAgreement: promise, currentAgreement: { status } },
+		});
+	});
+	it('revises the current terms without losing the original terms or publishing a secret', async () => {
+		const { db, updateCalls, insertCalls } = createDbMock({ agreementRows: [promise], sourcePositions: [200, 2] });
+		dbMocks.getDb.mockReturnValue(db);
+		await applyAgreement({ action: 'update', id: promise.id, terms: 'Return the silver bell next week.' });
+		expect(updateCalls.find(call => call.table === agreements)?.value).toMatchObject({ status: 'active', secrecy: 'secret', terms: 'Return the silver bell next week.' });
+		expect(insertCalls.find(call => call.table === storyEvents && (call.value as { type: string }).type === 'agreement')?.value).toMatchObject({ metadata: { previousAgreement: { terms: promise.terms } } });
+	});
+	it.each([
+		{ rows: [promise], change: { action: 'fulfill', id: 'wrong-id' }, positions: [200, 2] },
+		{ rows: [promise, { ...promise, id: 'promise_2' }], change: { action: 'fulfill', parties: ['Mira', 'Valen'], category: 'promise' }, positions: [200, 2] },
+		{ rows: [{ ...promise, storyId: 'foreign_story' }], change: { action: 'fulfill', id: promise.id }, positions: [200, 2] },
+		{ rows: [{ ...promise, status: 'fulfilled' }], change: { action: 'update', id: promise.id, terms: 'Owe it again' }, positions: [200, 2] },
+		{ rows: [promise], change: { action: 'update', id: promise.id, terms: 'Obsolete terms' }, positions: [2, 200] },
+		{ rows: [promise], change: { action: 'fulfill', id: promise.id }, positions: [] },
+		{ rows: [{ ...promise, sourceEntryIds: ['resolution'] }], change: { action: 'update', id: promise.id }, positions: [200, 200] },
+	])('does not guess, revive, or replay an agreement ($change.action)', async ({ rows, change, positions }) => {
+		const { db, updateCalls, insertCalls } = createDbMock({ agreementRows: rows, sourcePositions: positions });
+		dbMocks.getDb.mockReturnValue(db);
+		const result = await applyAgreement(change);
+		expect(updateCalls.filter(call => call.table === agreements)).toHaveLength(0);
+		expect(insertCalls.filter(call => call.table === storyEvents && (call.value as { type: string }).type === 'agreement')).toHaveLength(0);
+		expect(result.warnings.length).toBeGreaterThan(0);
+	});
+	it.each([undefined, 'missing_id', 'entity_mira_a'])('does not guess between duplicate names or mismatched IDs (%s)', async entityId => {
+		const rows = [
+			{ id: 'entity_mira_a', storyId: 'story_1', type: 'character', name: 'Mira', status: 'active', state: {} },
+			{ id: 'entity_mira_b', storyId: 'story_1', type: 'character', name: 'Mira', status: 'active', state: {} },
+		];
+		const { db, insertCalls } = createDbMock({ entityRows: rows });
+		dbMocks.getDb.mockReturnValue(db);
+		await applyValidatedTurnUpdate({ storyId: 'story_1', playerEntryId: 'user', assistantEntryId: 'reply', narration: 'The stranger waits.', update: worldStateUpdateSchema.parse({ characters: [{ name: entityId === 'entity_mira_a' ? 'Someone Else' : 'Mira', entityId, personality: 'Invented' }] }), parseWarnings: [], retrievedMemoryIds: [], serverVersion: 20 });
+		expect(insertCalls.filter(call => call.table === entities)).toHaveLength(0);
+	});
+	it('requires concrete evidence for nonzero affinity shifts and enforces bounds', () => {
+		expect(() => worldStateUpdateSchema.parse({ characters: [{ name: 'Mira', affinity_delta: 3 }] })).toThrow('affinity_reason');
+		expect(() => worldStateUpdateSchema.parse({ characters: [{ name: 'Mira', affinity_delta: 21, affinity_reason: 'Major betrayal.' }] })).toThrow();
+		expect(worldStateUpdateSchema.parse({ characters: [{ name: 'Mira', affinity_delta: 0 }] }).characters[0]?.affinity_delta).toBe(0);
+		expect(worldStateUpdateSchema.parse({ characters: [{ name: 'Mira', affinity_delta: -4, affinity_reason: 'The player broke the harbor promise.' }] }).characters[0]).toMatchObject({ affinity_delta: -4 });
+	});
+
 	it('throws before applying a patch when the story is missing', async () => {
 		const { db, insertCalls, updateCalls, selectLocks } = createDbMock({ story: null });
 		dbMocks.getDb.mockReturnValue(db);
@@ -165,6 +400,35 @@ describe('applyValidatedTurnUpdate', () => {
 		]);
 		expect(insertCalls).toEqual([]);
 		expect(updateCalls).toEqual([]);
+		expect(dbMocks.enqueueTurnProjectionJobs).not.toHaveBeenCalled();
+	});
+
+	it('can apply inside a caller-owned transaction without opening or projecting before commit', async () => {
+		const { tx, selectLocks } = createDbMock();
+		dbMocks.getDb.mockImplementation(() => {
+			throw new Error('caller-owned transaction should not open a root connection');
+		});
+
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: '',
+			update: worldStateUpdateSchema.parse({}),
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 12,
+			mode: 'supplemental',
+		}, {
+			transaction: tx as any,
+			enqueueProjectionJobs: false,
+		});
+
+		expect(result).toEqual({ eventIds: [], patchIds: [], memoryNodeIds: [], warnings: [] });
+		expect(selectLocks).toEqual([
+			expect.objectContaining({ source: 'tx', table: stories, strength: 'update' }),
+		]);
+		expect(dbMocks.getDb).not.toHaveBeenCalled();
 		expect(dbMocks.enqueueTurnProjectionJobs).not.toHaveBeenCalled();
 	});
 
@@ -398,6 +662,8 @@ describe('applyValidatedTurnUpdate', () => {
 					description: 'A harbor negotiator.',
 					status: 'active',
 					state: {
+						bio: 'A former captain.',
+						appearance: 'Grey eyes',
 						isPresent: false,
 						relationship: {
 							level: 42,
@@ -422,18 +688,24 @@ describe('applyValidatedTurnUpdate', () => {
 		const update = worldStateUpdateSchema.parse({
 			characters: [{
 				name: 'Mira',
+				entityId: 'entity_mira',
 				aliases: ['The Harbor Broker'],
 				present: true,
 				relationship: 'wary ally',
-				appearance: 'salt-stained blue cloak and ink-dark fingertips',
+				presentation: 'salt-stained blue cloak and ink-dark fingertips',
+				personality: 'Patient and exacting',
 				background: 'raised around harbor ledgers and old smuggling routes',
 				currentLocation: 'Ash Bridge counting room',
 				currentAction: 'holding the bridge bargain together while watching Valen',
 				emotionalState: 'controlled fear under professional calm',
+				party_member: true,
+				party_role: 'Face',
+				affinity_delta: -7,
+				affinity_reason: 'The player publicly endangered Mira\'s brother to force the bargain.',
 				goals: ['keep the bridge bargain alive'],
 				speechStyle: 'quiet, exact, with clipped harbor idioms',
 				eventMemory: {
-					did: ['Mira swore not to sell Valen out.'],
+					did: ['Mira swore not to sell Valen out.', 'promise: Armor polishing before dawn.'],
 					knew: ['Mira knows the bridge bargain has a hidden witness.'],
 				},
 			}],
@@ -461,25 +733,63 @@ describe('applyValidatedTurnUpdate', () => {
 			aliases: ['The Harbor Broker'],
 			isPresent: true,
 			present: true,
-			bio: 'raised around harbor ledgers and old smuggling routes',
-			appearance: 'salt-stained blue cloak and ink-dark fingertips',
-			background: 'raised around harbor ledgers and old smuggling routes',
+			bio: 'A former captain.\nraised around harbor ledgers and old smuggling routes',
+			appearance: 'Grey eyes',
+			presentation: 'salt-stained blue cloak and ink-dark fingertips',
+			personality: 'Patient and exacting',
+			background: 'A former captain.\nraised around harbor ledgers and old smuggling routes',
 			currentLocation: 'Ash Bridge counting room',
 			currentAction: 'holding the bridge bargain together while watching Valen',
 			emotionalState: 'controlled fear under professional calm',
+			partyMember: true,
+			partyRole: 'Face',
 			currentDisposition: 'wary ally',
-			relationship: {
-				level: 42,
-				status: 'wary ally',
-				history: [{ description: 'Mira kept the old bargain.', entryId: 'entry_old', timestamp: 1 }],
-			},
+				relationship: expect.objectContaining({
+					level: 35,
+					status: 'wary ally',
+				}),
 			motivations: ['keep the bridge bargain alive'],
 			goals: ['keep the bridge bargain alive'],
 			speechStyle: 'quiet, exact, with clipped harbor idioms',
 		});
+		const relationship = state.relationship as Record<string, unknown>;
+		expect(relationship.history).toEqual([
+			expect.objectContaining({ description: 'Mira kept the old bargain.', entryId: 'entry_old', timestamp: 1 }),
+			expect.objectContaining({ delta: -7, entryId: 'entry_assistant', timestamp: expect.any(Number) }),
+		]);
+		expect(state).not.toHaveProperty('affinityDelta');
+		expect(state).not.toHaveProperty('affinityReason');
 		expect(memory.did).toEqual(['Mira hid the old map.', 'Mira swore not to sell Valen out.']);
+		expect(memory.did).not.toContain('promise: Armor polishing before dawn.');
 		expect(memory.saw).toEqual(['Mira saw Valen hesitate at the bridge.']);
 		expect(memory.knew).toEqual(['Mira knows the bridge bargain has a hidden witness.']);
+	});
+
+	it('clears contradictory stale presence when an extracted actor is explicitly present', async () => {
+		const { db, updateCalls } = createDbMock({
+			entityRows: [
+				{ id: 'entity_valen', storyId: 'story_1', type: 'character', name: 'Valen', status: 'active', state: { present: true, currentLocation: 'Ash Bridge' } },
+				{ id: 'entity_mira', storyId: 'story_1', type: 'character', name: 'Mira', status: 'active', state: { present: true, isPresent: true, currentLocation: 'Distant Tower' } },
+				{ id: 'entity_bridge', storyId: 'story_1', type: 'location', name: 'Ash Bridge', state: { current: true } },
+			],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Valen remains at Ash Bridge while Mira is still far away.',
+			update: worldStateUpdateSchema.parse({ characters: [{ name: 'Valen', present: true }] }),
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 20,
+		});
+
+		expect(updateCalls.some((call) => call.table === entities
+			&& call.value.state
+			&& (call.value.state as Record<string, unknown>).present === false
+			&& (call.value.state as Record<string, unknown>).currentLocation === 'Distant Tower')).toBe(true);
 	});
 
 	it('uses the narration header as the event, story clock, and fallback current location', async () => {
@@ -527,6 +837,133 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(locationInsert).toMatchObject({
 			state: { current: true },
 			sourceEntryIds: ['entry_assistant'],
+		});
+	});
+
+	it.each(['turn', 'supplemental'] as const)('preserves primary location, clock and presence during %s parallel extraction', async (mode) => {
+		const { db, insertCalls, updateCalls, storyUpdates } = createDbMock({
+			sceneSourceEntries: [{ type: 'narration', content: '', metadata: { narrativeMode: 'parallel_pov', parallelPov: { character: 'Mira' } } }],
+			entityRows: [
+				{ id: 'entity_mira', storyId: 'story_1', type: 'character', name: 'Mira', status: 'active', state: { present: false, isPresent: false } },
+				...entityRows.filter(row => row.id !== 'entity_mira'),
+			],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1', playerEntryId: 'entry_player', assistantEntryId: 'entry_assistant', mode,
+			narration: '[ Time 06:15 | Day 3 | Location - Yin Hall | Weather Clear ]\nMira meets the envoy.',
+			update: worldStateUpdateSchema.parse({
+				characters: [{ name: 'Mira', entityId: 'entity_mira', present: true, currentLocation: 'Yin Hall', currentAction: 'Meeting an envoy' }],
+				locations: [{ name: 'Yin Hall', current: true, description: 'A public reception hall.' }],
+			}),
+			parseWarnings: [], retrievedMemoryIds: [], serverVersion: 22,
+		});
+		const canonicalEntities = insertCalls.filter(call => call.table === entities).map(call => call.value as Record<string, unknown>);
+		expect(canonicalEntities.find(row => row.id === 'entity_mira')?.state).toMatchObject({ present: false, isPresent: false, currentLocation: 'Yin Hall', currentAction: 'Meeting an envoy' });
+		const hall = canonicalEntities.find(row => row.name === 'Yin Hall');
+		expect(hall).toMatchObject({ description: 'A public reception hall.', sourceEntryIds: ['entry_assistant'] });
+		expect(hall?.state).not.toHaveProperty('current');
+		expect(updateCalls.filter(call => call.table === entities)).toHaveLength(0);
+		if (mode === 'turn') {
+			expect(storyUpdates).toContainEqual(expect.objectContaining({ currentTurn: 8, currentLocationId: 'entity_bridge', currentWorldTime: 'Twilight of Ashes' }));
+			expect(insertCalls.find(call => call.table === storyEvents)?.value).toMatchObject({ metadata: { narrativeMode: 'parallel_pov' }, worldTime: 'Day 3 | 06:15' });
+			expect(updateCalls).toContainEqual(expect.objectContaining({ table: storyEvents, value: expect.objectContaining({ locationId: hall?.id }) }));
+		} else {
+			expect(storyUpdates).toHaveLength(0);
+		}
+	});
+
+	it.each([undefined, 'unknown_room'])('queues ambiguous or invalid-id locations without creating another duplicate (%s)', async (entityId) => {
+		const { db, insertCalls, storyUpdates } = createDbMock({ entityRows: [
+			...entityRows,
+			{ id: 'room_1', storyId: 'story_1', type: 'location', name: 'Volantis — Aurion’s Chambers' },
+			{ id: 'room_2', storyId: 'story_1', type: 'location', name: "Volantis - Aurion's Chambers" },
+		] });
+		dbMocks.getDb.mockReturnValue(db);
+		const result = await applyValidatedTurnUpdate({
+			storyId: 'story_1', playerEntryId: 'entry_player', assistantEntryId: 'entry_assistant',
+			narration: 'The chamber is quiet.',
+			update: worldStateUpdateSchema.parse({ locations: [{ entityId, name: "Volantis - Aurion's Chambers", current: true }] }),
+			parseWarnings: [], retrievedMemoryIds: [], serverVersion: 22,
+		});
+		expect(insertCalls.filter(call => call.table === entities)).toHaveLength(0);
+		expect(insertCalls.some(call => call.table === patchProposals)).toBe(true);
+		expect(result.warnings.some(warning => warning.includes('identity review'))).toBe(true);
+		expect(storyUpdates).toContainEqual(expect.objectContaining({ currentLocationId: 'entity_bridge' }));
+	});
+
+	it('reuses an explicit location id and preserves omitted routes and region', async () => {
+		const { db, insertCalls, storyUpdates } = createDbMock({ entityRows: [
+			{ id: 'room_2', storyId: 'story_1', type: 'location', name: 'Chambers', state: { region: 'Volantis', connections: [{ targetName: 'Hall' }] } },
+			{ id: 'room_1', storyId: 'story_1', type: 'location', name: 'Chambers' },
+		] });
+		dbMocks.getDb.mockReturnValue(db);
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1', playerEntryId: 'entry_player', assistantEntryId: 'entry_assistant', narration: 'The room is quiet.',
+			update: worldStateUpdateSchema.parse({ locations: [{ entityId: 'room_2', name: 'Chambers', current: true }] }),
+			parseWarnings: [], retrievedMemoryIds: [], serverVersion: 22,
+		});
+		expect(insertCalls.find(call => call.table === entities)?.value).toMatchObject({ id: 'room_2', state: { current: true, region: 'Volantis', connections: [{ targetName: 'Hall' }] } });
+		expect(storyUpdates).toContainEqual(expect.objectContaining({ currentLocationId: 'room_2' }));
+	});
+
+	it('keeps a specific scene location separate from its parent place', async () => {
+		const { db, insertCalls, storyUpdates } = createDbMock({
+			story: { ...storyRow, currentLocationId: 'entity_volantis' },
+			entityRows: [
+				{ id: 'entity_volantis', storyId: 'story_1', type: 'location', name: 'Volantis', state: { current: true } },
+			],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: '[ Time 05:03 | Day 1, Eleventh Moon 296 AC | Location - The Lower Yard, Belaerys Manse, Volantis | Weather Clear ]\nDawn reaches the yard.',
+			update: worldStateUpdateSchema.parse({}),
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 13,
+		});
+
+		const locationInsert = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>)
+			.find(value => value.type === 'location' && value.name === 'The Lower Yard, Belaerys Manse, Volantis');
+		expect(locationInsert?.id).not.toBe('entity_volantis');
+		expect(storyUpdates.find(value => value.currentLocationId === locationInsert?.id)).toBeTruthy();
+	});
+
+	it('parses the live emoji scene header after placeholders have been replaced', async () => {
+		const { db, insertCalls, storyUpdates } = createDbMock({
+			story: { ...storyRow, currentWorldTime: null, currentLocationId: null },
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: '[🕰️ Time 15:05 | 🗓️ Sunday, Silver Moon 12, 299 AC | 📍 Chaos Breaker, Sky Castle | ☀️ Clear]\nThe engines settle into a low hum.',
+			update: worldStateUpdateSchema.parse({}),
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 12,
+		});
+
+		const event = insertCalls
+			.filter(call => call.table === storyEvents)
+			.map(call => call.value as Record<string, unknown>)
+			.find(value => value.title === 'Turn resolved');
+		const location = insertCalls
+			.filter(call => call.table === entities)
+			.map(call => call.value as Record<string, unknown>)
+			.find(value => value.type === 'location' && value.name === 'Chaos Breaker, Sky Castle');
+		expect(event?.worldTime).toBe('Day Sunday, Silver Moon 12, 299 AC | 15:05');
+		expect(storyUpdates.find(value => value.currentTurn === 8)).toMatchObject({
+			currentWorldTime: 'Day Sunday, Silver Moon 12, 299 AC | 15:05',
+			currentLocationId: location?.id,
 		});
 	});
 
@@ -957,6 +1394,56 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(result.warnings).toContain('Character reference "Ser Olyvar" was not created as canon; add it manually if this should become a character.');
 	});
 
+	it('normalizes extracted relationship strength and updates an existing edge instead of duplicating it', async () => {
+		const existingRelationship = {
+			id: 'rel_mira_valen',
+			storyId: 'story_1',
+			sourceEntityId: 'entity_mira',
+			targetEntityId: 'entity_valen',
+			type: 'allied-with',
+			label: 'uneasy allies',
+			strength: 0.2,
+			bidirectional: true,
+			metadata: {},
+			sourceEntryIds: ['entry_old'],
+			sourceEventIds: [],
+			sourcePatchIds: [],
+			serverVersion: 10,
+			createdAt: 'earlier',
+			updatedAt: 'earlier',
+		} as any;
+		const { db, insertCalls, updateCalls } = createDbMock({ relationshipRows: [existingRelationship] });
+		dbMocks.getDb.mockReturnValue(db);
+
+		await applyValidatedTurnUpdate({
+			storyId: 'story_1',
+			playerEntryId: 'entry_player',
+			assistantEntryId: 'entry_assistant',
+			narration: 'Mira and Valen openly renew their alliance.',
+			update: worldStateUpdateSchema.parse({
+				relationships: [{
+					sourceName: 'Mira',
+					targetName: 'Valen',
+					type: 'allied-with',
+					label: 'renewed alliance',
+					strength: 80,
+					bidirectional: true,
+				}],
+			}),
+			parseWarnings: [],
+			retrievedMemoryIds: [],
+			serverVersion: 18,
+		});
+
+		expect(insertCalls.filter((call) => call.table === relationships)).toEqual([]);
+		expect(updateCalls.find((call) => call.table === relationships)?.value).toMatchObject({
+			label: 'renewed alliance',
+			strength: 0.8,
+			bidirectional: true,
+			sourceEntryIds: ['entry_old', 'entry_assistant'],
+		});
+	});
+
 	it('keeps unknown relationship and conversation characters out of canon and reports warnings', async () => {
 		const { db, insertCalls } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
@@ -1185,8 +1672,8 @@ describe('applyValidatedTurnUpdate', () => {
 		});
 
 		expect(db.transaction).toHaveBeenCalledTimes(1);
-		expect(insertCalls.some(call => call.source === 'tx' && call.table === statePatches)).toBe(true);
-		expect(result.patchIds).toHaveLength(1);
+		expect(insertCalls.some(call => call.source === 'tx' && call.table === statePatches)).toBe(false);
+		expect(result.patchIds).toHaveLength(0);
 		expect(result.warnings).toEqual(['Queued projection jobs failed: outbox unavailable']);
 	});
 

@@ -24,12 +24,20 @@ export interface EngineOrchestratorToolCall {
 	reason: string;
 }
 
+export interface EngineOrchestratorStep {
+	id: string;
+	title: string;
+	focus: string;
+	toolCallIds: string[];
+}
+
 export interface EngineOrchestratorPlan {
 	runId: string;
 	storyId: string;
 	mode: EngineOrchestratorMode;
 	goal: string;
 	roles: EngineOrchestratorAgentDefinition[];
+	steps: EngineOrchestratorStep[];
 	toolCalls: EngineOrchestratorToolCall[];
 	warnings: string[];
 	createdAt: string;
@@ -66,67 +74,27 @@ export type EngineOrchestratorToolRunner = (call: EngineOrchestratorToolCall) =>
 
 export const ORCHESTRATOR_AGENT_ROLES: EngineOrchestratorAgentDefinition[] = [
 	{
-		id: 'dm_narrator',
-		name: 'DM / Narrator Agent',
+		id: 'game_master',
+		name: 'GameMaster',
 		responsibilities: [
-			'Prepare bounded narration context and author the text RPG response.',
-			'Keep player-facing prose grounded in current canon and visible evidence.',
+			'Own the authoritative turn and use rules, world state, faction, and continuity tools.',
+			'Ground player-facing prose in current canon and visible evidence.',
 		],
 	},
 	{
-		id: 'rules_referee',
-		name: 'Rules Referee Agent',
+		id: 'memory_context',
+		name: 'Memory & Context subagent',
 		responsibilities: [
-			'Check proposed actions against rules packs and current campaign constraints.',
-			'Keep adjudication separate from narration style.',
+			'Retrieve source-linked memory and lore with visibility boundaries.',
+			'Coordinate completed-turn state extraction and chapter, arc, and saga history.',
 		],
 	},
 	{
-		id: 'state_scribe',
-		name: 'State Scribe Agent',
+		id: 'player_guidance',
+		name: 'Player Guidance subagent',
 		responsibilities: [
-			'Turn narration and tool outcomes into bounded state updates.',
-			'Preserve raw evidence before derived projections change.',
-		],
-	},
-	{
-		id: 'lorekeeper',
-		name: 'Lorekeeper Agent',
-		responsibilities: [
-			'Query campaign projections, lore pages, and current state snapshots.',
-			'Prefer source-backed markdown and DB projections over browser cache.',
-		],
-	},
-	{
-		id: 'lore_curator',
-		name: 'Lore Curator Agent',
-		responsibilities: [
-			'Explore the generated markdown/wiki graph with search, context packs, and backlinks before proposing edits.',
-			'Curate source-linked lore pages for roleplay agents without treating unsupported drafts as canon.',
-		],
-	},
-	{
-		id: 'faction_simulator',
-		name: 'Faction Simulator Agent',
-		responsibilities: [
-			'Advance off-screen faction pressure, goals, resources, and delayed events.',
-			'Use timeline events instead of bloating prompt memory.',
-		],
-	},
-	{
-		id: 'npc_memory',
-		name: 'NPC Memory Agent',
-		responsibilities: [
-			'Retrieve NPC-scoped memory, beliefs, relationships, and event links.',
-			'Keep appearance and personality descriptors available for portrayal.',
-		],
-	},
-	{
-		id: 'continuity_auditor',
-		name: 'Continuity Auditor Agent',
-		responsibilities: [
-			'Check cache, timeline, and projection diagnostics for drift.',
-			'Flag contradictions before they become canon.',
+			'Offer optional suggestions from player-visible scene evidence.',
+			'Leave player intent and turn submission to the player and GameMaster.',
 		],
 	},
 ];
@@ -167,6 +135,8 @@ function turnClientContext(context: EngineOrchestratorContext): JsonRecord {
 		currentFactionId: context.currentFactionId,
 		memoryTokenBudget: context.memoryTokenBudget,
 		contextBudget: context.contextBudget,
+		recentDialogueTokens: context.recentDialogueTokens,
+		recentDialogueTurns: context.recentDialogueTurns,
 	});
 }
 
@@ -195,15 +165,15 @@ function buildTurnToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrch
 	const context = input.context;
 	const query = input.playerText ?? input.goal;
 	return [
-		makeToolCall(0, 'lorekeeper', 'campaign.status', {
+		makeToolCall(0, 'memory_context', 'campaign.status', {
 			entryLimit: context.entryLimit ?? 80,
 		}, 'Load the bounded current-state projection for the control surface and agents.'),
-		makeToolCall(1, 'rules_referee', 'campaign.page.read', {
+		makeToolCall(1, 'game_master', 'campaign.page.read', {
 			kind: 'rules_page',
 			path: 'rules/default.md',
 			missingOk: true,
 		}, 'Load the default rules pack when present; continue with system defaults if the vault page has not been created.'),
-		makeToolCall(2, 'state_scribe', 'timeline.brief', {
+		makeToolCall(2, 'game_master', 'timeline.brief', {
 			currentTurn: context.currentTurn,
 			presentNpcIds: cleanStringArray(context.presentNpcIds),
 			sceneEntityIds: cleanStringArray(context.sceneEntityIds),
@@ -213,7 +183,7 @@ function buildTurnToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrch
 			scheduledLimit: 8,
 			npcEventLimit: 12,
 		}, 'Inspect due, recent, and NPC-linked events before any state changes are proposed.'),
-		makeToolCall(3, 'faction_simulator', 'timeline.brief', {
+		makeToolCall(3, 'game_master', 'timeline.brief', {
 			currentTurn: context.currentTurn,
 			presentNpcIds: cleanStringArray(context.presentNpcIds),
 			sceneEntityIds: cleanStringArray(context.sceneEntityIds),
@@ -224,7 +194,7 @@ function buildTurnToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrch
 			npcLimit: 12,
 			npcEventLimit: 8,
 		}, 'Inspect delayed and off-screen faction pressure without advancing the clock.'),
-		makeToolCall(4, 'npc_memory', 'memory.retrieve', {
+		makeToolCall(4, 'memory_context', 'memory.retrieve', {
 			query,
 			sceneEntityIds: cleanStringArray(context.sceneEntityIds),
 			presentNpcIds: cleanStringArray(context.presentNpcIds),
@@ -233,30 +203,35 @@ function buildTurnToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrch
 			currentFactionId: context.currentFactionId ?? null,
 			tokenBudget: context.memoryTokenBudget,
 		}, 'Retrieve only the memory packet needed for the current action.'),
-		makeToolCall(5, 'dm_narrator', 'turn.prepare', {
+		makeToolCall(5, 'game_master', 'turn.prepare', {
 			playerText: input.playerText ?? input.goal,
 			clientTurnId: input.clientTurnId ?? input.clientCommandId ?? undefined,
 			clientContext: turnClientContext(context),
 		}, 'Prepare bounded turn context, prompt segments, timeline, and cache diagnostics without generating narration.'),
-		makeToolCall(6, 'continuity_auditor', 'campaign.cacheStatus', {
+		makeToolCall(6, 'game_master', 'campaign.cacheStatus', {
 			includeSegments: false,
 		}, 'Check prompt/cache health without exposing cached values.'),
+		makeToolCall(7, 'game_master', 'turn.submit', {
+			playerText: input.playerText ?? input.goal,
+			clientTurnId: input.clientTurnId ?? input.clientCommandId ?? undefined,
+			clientContext: turnClientContext(context),
+		}, 'Generate and persist the authoritative narration after the exploration steps finish.'),
 	];
 }
 
 function buildWorldTickToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrchestratorToolCall[] {
 	const context = input.context;
 	return [
-		makeToolCall(0, 'lorekeeper', 'timeline.brief', {
+		makeToolCall(0, 'memory_context', 'timeline.brief', {
 			currentTurn: context.currentTurn,
 			presentNpcIds: cleanStringArray(context.presentNpcIds),
 			sceneEntityIds: cleanStringArray(context.sceneEntityIds),
 			includeSecret: context.includeSecret,
 		}, 'Query due, scheduled, recent, and NPC-linked events before world simulation.'),
-		makeToolCall(1, 'faction_simulator', 'jobs.worldSim', {
+		makeToolCall(1, 'game_master', 'jobs.worldSim', {
 			force: true,
 		}, 'Run the backend world-sim job through the shared service command.'),
-		makeToolCall(2, 'continuity_auditor', 'campaign.status', {
+		makeToolCall(2, 'game_master', 'campaign.status', {
 			entryLimit: context.entryLimit ?? 80,
 		}, 'Refresh bounded projection after world simulation.'),
 	];
@@ -265,14 +240,14 @@ function buildWorldTickToolCalls(input: ParsedEngineOrchestratorRunInput): Engin
 function buildAuditToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrchestratorToolCall[] {
 	const context = input.context;
 	return [
-		makeToolCall(0, 'lorekeeper', 'campaign.status', {
+		makeToolCall(0, 'memory_context', 'campaign.status', {
 			entryLimit: context.entryLimit ?? 80,
 		}, 'Inspect bounded current-state projection.'),
-		makeToolCall(1, 'continuity_auditor', 'campaign.cacheStatus', {
+		makeToolCall(1, 'game_master', 'campaign.cacheStatus', {
 			includeSegments: true,
 			segmentLimit: 25,
 		}, 'Inspect cache diagnostics without cached values.'),
-		makeToolCall(2, 'lorekeeper', 'timeline.brief', {
+		makeToolCall(2, 'memory_context', 'timeline.brief', {
 			currentTurn: context.currentTurn,
 			presentNpcIds: cleanStringArray(context.presentNpcIds),
 			sceneEntityIds: cleanStringArray(context.sceneEntityIds),
@@ -284,7 +259,7 @@ function buildAuditToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrc
 function buildMemoryToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOrchestratorToolCall[] {
 	const context = input.context;
 	return [
-		makeToolCall(0, 'npc_memory', 'memory.retrieve', {
+		makeToolCall(0, 'memory_context', 'memory.retrieve', {
 			query: input.playerText ?? input.goal,
 			sceneEntityIds: cleanStringArray(context.sceneEntityIds),
 			presentNpcIds: cleanStringArray(context.presentNpcIds),
@@ -293,7 +268,7 @@ function buildMemoryToolCalls(input: ParsedEngineOrchestratorRunInput): EngineOr
 			currentFactionId: context.currentFactionId ?? null,
 			tokenBudget: context.memoryTokenBudget,
 		}, 'Retrieve the bounded memory packet for an NPC or scene question.'),
-		makeToolCall(1, 'lorekeeper', 'timeline.brief', {
+		makeToolCall(1, 'memory_context', 'timeline.brief', {
 			presentNpcIds: cleanStringArray(context.presentNpcIds),
 			sceneEntityIds: cleanStringArray(context.sceneEntityIds),
 			includeSecret: context.includeSecret,
@@ -305,25 +280,22 @@ function buildLoreCurationToolCalls(input: ParsedEngineOrchestratorRunInput): En
 	const context = input.context;
 	const query = input.playerText ?? input.goal;
 	return [
-		makeToolCall(0, 'lore_curator', 'wiki.brief', {
+		makeToolCall(0, 'memory_context', 'wiki.brief', {
 			query,
 			limit: 8,
 			followDepth: 2,
 			pageLimit: 24,
 			maxChars: context.contextBudget ?? 36000,
 		}, 'Explore the linked markdown wiki around the lore question and collect a bounded roleplay context pack.'),
-		makeToolCall(1, 'lore_curator', 'wiki.pages', {
+		makeToolCall(1, 'memory_context', 'wiki.pages', {
 			orphans: true,
 			limit: 80,
 			sort: 'title',
 		}, 'Find orphaned or thin lore pages that a curator should connect before agents rely on them.'),
-		makeToolCall(2, 'lore_curator', 'wiki.lint', {
-			orphanLayer: 'derived',
-		}, 'Run wiki lint so curation work is driven by concrete graph and markdown diagnostics.'),
-		makeToolCall(3, 'lorekeeper', 'campaign.status', {
+		makeToolCall(2, 'memory_context', 'campaign.status', {
 			entryLimit: context.entryLimit ?? 80,
 		}, 'Compare wiki lore against bounded canonical campaign state before proposing any durable page edit.'),
-		makeToolCall(4, 'npc_memory', 'memory.retrieve', {
+		makeToolCall(3, 'memory_context', 'memory.retrieve', {
 			query,
 			sceneEntityIds: cleanStringArray(context.sceneEntityIds),
 			presentNpcIds: cleanStringArray(context.presentNpcIds),
@@ -361,10 +333,50 @@ function parseInput(input: EngineOrchestratorRunInput): ParsedEngineOrchestrator
 	};
 }
 
+function buildSteps(mode: EngineOrchestratorMode, calls: EngineOrchestratorToolCall[]): EngineOrchestratorStep[] {
+	const step = (id: string, title: string, focus: string, indexes: number[]): EngineOrchestratorStep => ({
+		id,
+		title,
+		focus,
+		toolCallIds: indexes.map((index) => calls.find((call) => call.id === toolCallId(index))?.id).filter((id): id is string => Boolean(id)),
+	});
+	const keepUsed = (steps: EngineOrchestratorStep[]) => steps.filter((item) => item.toolCallIds.length > 0);
+
+	if (mode === 'turn') {
+		return keepUsed([
+			step('situation', 'Situation', 'Establish immediate canon, rules, and timeline stakes.', [0, 1, 2]),
+			step('dialogue', 'Dialogue', 'Load the present actors\' memories, knowledge, and pressures.', [4]),
+			step('location', 'Location', 'Prepare the bounded scene, place, clock, and narration context.', [5]),
+			step('plot', 'Plot', 'Check off-screen pressure and prompt health before the next turn boundary.', [3, 6]),
+			step('narrate', 'Narrate', 'Weave the inspected evidence into the authoritative scene and persist the turn.', [7]),
+		]);
+	}
+	if (mode === 'world_tick') {
+		return keepUsed([
+			step('inspect', 'Inspect', 'Read the current timeline before changing it.', [0]),
+			step('advance', 'Advance', 'Run the bounded off-screen simulation.', [1]),
+			step('verify', 'Verify', 'Refresh the projection after simulation.', [2]),
+		]);
+	}
+	if (mode === 'lore_curation') {
+		return keepUsed([
+			step('explore', 'Explore', 'Search and inspect the linked wiki graph.', [0, 1]),
+			step('verify', 'Verify', 'Cross-check lore against canon and source-linked memory.', [2, 3]),
+		]);
+	}
+	return keepUsed([
+		step('inspect', 'Inspect', 'Run the mode\'s independent read tools.', calls.map((_, index) => index)),
+	]);
+}
+
 export function buildEngineOrchestratorPlan(input: EngineOrchestratorRunInput): EngineOrchestratorPlan {
 	const parsed = parseInput(input);
 	const warnings: string[] = [];
-	const toolCalls = buildToolCalls(parsed).slice(0, parsed.maxToolCalls);
+	const availableToolCalls = buildToolCalls(parsed);
+	const submitCall = parsed.mode === 'turn' ? availableToolCalls.find((call) => call.command === 'turn.submit') : null;
+	const toolCalls = submitCall && parsed.maxToolCalls < availableToolCalls.length
+		? [...availableToolCalls.filter((call) => call !== submitCall).slice(0, parsed.maxToolCalls - 1), submitCall]
+		: availableToolCalls.slice(0, parsed.maxToolCalls);
 	if (parsed.mode === 'turn' && !parsed.playerText) {
 		warnings.push('Turn orchestration used goal text as playerText because playerText was omitted.');
 	}
@@ -375,6 +387,7 @@ export function buildEngineOrchestratorPlan(input: EngineOrchestratorRunInput): 
 		mode: parsed.mode,
 		goal: parsed.goal,
 		roles: selectedRoles(parsed.roles),
+		steps: buildSteps(parsed.mode, toolCalls),
 		toolCalls,
 		warnings,
 		createdAt: nowIso(),
@@ -424,6 +437,15 @@ function resultSummary(command: string, result: unknown): JsonRecord | null {
 			} : null,
 		};
 	}
+	if (command === 'turn.submit') {
+		return {
+			assistantEntryId: record.assistantEntryId ?? null,
+			serverVersion: record.serverVersion ?? null,
+			statePatchCount: Array.isArray(record.statePatchIds) ? record.statePatchIds.length : 0,
+			eventCount: Array.isArray(record.eventIds) ? record.eventIds.length : 0,
+			warningCount: Array.isArray(record.warnings) ? record.warnings.length : 0,
+		};
+	}
 	if (command === 'timeline.brief') {
 		return {
 			currentTurn: record.currentTurn ?? null,
@@ -462,18 +484,24 @@ export async function runEngineOrchestrator(
 	}
 	if (!options.runTool) throw new Error('Orchestrator execution requires a backend tool runner.');
 
+	const callsById = new Map(plan.toolCalls.map((call) => [call.id, call]));
 	const toolResults: EngineOrchestratorToolResult[] = [];
-	for (const call of plan.toolCalls) {
-		const response = await options.runTool(call);
-		toolResults.push({
-			toolCallId: call.id,
-			agentRole: call.agentRole,
-			command: call.command,
-			status: response.status,
-			commandId: response.commandId ?? null,
-			error: response.error ?? null,
-			summary: response.status === 'succeeded' ? resultSummary(call.command, response.result) : null,
-		});
+	for (const step of plan.steps) {
+		const stepResults = await Promise.all(step.toolCallIds.map(async (toolCallId) => {
+			const call = callsById.get(toolCallId);
+			if (!call) throw new Error(`Orchestrator step ${step.id} references missing tool call ${toolCallId}.`);
+			const response = await options.runTool!(call);
+			return {
+				toolCallId: call.id,
+				agentRole: call.agentRole,
+				command: call.command,
+				status: response.status,
+				commandId: response.commandId ?? null,
+				error: response.error ?? null,
+				summary: response.status === 'succeeded' ? resultSummary(call.command, response.result) : null,
+			} satisfies EngineOrchestratorToolResult;
+		}));
+		toolResults.push(...stepResults);
 	}
 
 	return {

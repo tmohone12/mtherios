@@ -3,6 +3,7 @@ import type { LlmServiceSetting } from '$lib/contracts/engine';
 import {
 	buildPromptOverridePatch,
 	loadTerminalPromptSettings,
+	loadNarrativePromptPreview,
 	saveTerminalPromptOverrides,
 } from './promptSettings';
 
@@ -61,6 +62,21 @@ describe('terminal prompt settings client', () => {
 	beforeEach(() => {
 		fetchMock.mockReset();
 		vi.stubGlobal('fetch', fetchMock);
+	});
+
+	it('loads the selected story prompt and surfaces preview failures without a fake default', async () => {
+		const preview = {
+			builtInPrompt: 'Server-compiled feudal prompt',
+			promptPackId: 'feudal-dark-gritty-asoiaf',
+			promptPackLabel: 'Feudal Dark Gritty',
+			storyId: 'story/court',
+			storyTitle: 'Court',
+		};
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(preview)));
+		await expect(loadNarrativePromptPreview({ storyId: 'story/court' })).resolves.toEqual(preview);
+		expect(fetchMock).toHaveBeenCalledWith('/api/settings/prompts/narrative?storyId=story%2Fcourt', { method: 'GET' });
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Story not found.' }), { status: 404 }));
+		await expect(loadNarrativePromptPreview({ storyId: 'missing' })).rejects.toThrow('Story not found.');
 	});
 
 	it('builds prompt override patches without changing provider or model settings', () => {

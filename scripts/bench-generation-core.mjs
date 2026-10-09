@@ -138,8 +138,12 @@ export function buildLongCampaignBenchmark(input = {}) {
 		{ key: 'character_sheet:party', hash: 'characters_v1', tokens: 1_400 },
 	];
 	const cache = new Map();
+	const coldStarted = nowMs();
 	const coldAssembly = assemblePromptSegments(stableSegments, cache);
+	const coldMs = nowMs() - coldStarted;
+	const warmStarted = nowMs();
 	const warmAssembly = assemblePromptSegments(stableSegments, cache);
+	const warmMs = nowMs() - warmStarted;
 	const afterCharacterEdit = assemblePromptSegments(
 		stableSegments.map((segment) => segment.key === 'character_sheet:party'
 			? { ...segment, hash: 'characters_v2' }
@@ -181,6 +185,7 @@ export function buildLongCampaignBenchmark(input = {}) {
 			coldAssembly,
 			warmAssembly,
 			afterCharacterEdit,
+			timings: { coldMs, warmMs },
 		},
 	};
 }
@@ -200,6 +205,33 @@ export function buildBenchTurnCommandRequest(input) {
 		body: {
 			storyId,
 			command: 'turn.submit',
+			clientCommandId: clientTurnId,
+			args: {
+				storyId,
+				clientTurnId,
+				playerText: optionalString(args.playerText) || 'Look around and let the world respond.',
+				localVersion: nonnegativeInteger(args.localVersion, 0),
+				clientContext: asRecord(args.clientContext),
+			},
+		},
+	};
+}
+
+/**
+ * @param {Record<string, unknown>} input
+ * @returns {{ requestPath: string; timeoutMs: number; body: Record<string, unknown> }}
+ */
+export function buildBenchPreviewCommandRequest(input) {
+	const args = asRecord(input);
+	const storyId = optionalString(args.storyId);
+	if (!storyId) throw new Error('--story-id is required.');
+	const clientTurnId = optionalString(args.clientTurnId) || `bench_preview_${Date.now()}`;
+	return {
+		requestPath: '/api/engine/command',
+		timeoutMs: 120_000,
+		body: {
+			storyId,
+			command: 'turn.preview',
 			clientCommandId: clientTurnId,
 			args: {
 				storyId,
@@ -291,6 +323,29 @@ export function buildBenchTranscriptPageCommandRequest(input) {
 }
 
 /**
+ * @param {Record<string, unknown>} input
+ * @returns {{ requestPath: string; body: Record<string, unknown> }}
+ */
+export function buildBenchMemoryRetrieveCommandRequest(input) {
+	const args = asRecord(input);
+	const storyId = optionalString(args.storyId);
+	if (!storyId) throw new Error('--story-id is required.');
+	return {
+		requestPath: '/api/engine/command',
+		body: {
+			storyId,
+			command: 'memory.retrieve',
+			clientCommandId: optionalString(args.clientCommandId) || `bench_memory_${Date.now()}`,
+			args: {
+				query: optionalString(args.query) || 'evidence',
+				tokenBudget: positiveIntegerCapped(args.tokenBudget, 600, 1200),
+				includeHistorical: true,
+			},
+		},
+	};
+}
+
+/**
  * @param {unknown} payload
  * @param {string} fallbackCommand
  * @returns {Record<string, unknown>}
@@ -347,7 +402,7 @@ function entryWindowSummary(rows) {
 
 /**
  * @param {Record<string, unknown>} input
- * @returns {{ ok: boolean; errors: string[]; entryCount: number; expectedEntryCount: number; projection: Record<string, unknown>; transcript: Record<string, unknown>; bootstrap: Record<string, unknown> | null }}
+ * @returns {{ ok: boolean; errors: string[]; entryCount: number; expectedEntryCount: number; projection: Record<string, unknown>; transcript: Record<string, unknown>; bootstrap: Record<string, unknown> | null; memory: Record<string, unknown> | null }}
  */
 export function verifyDbLongCampaignBenchmark(input) {
 	const args = asRecord(input);
@@ -411,6 +466,17 @@ export function verifyDbLongCampaignBenchmark(input) {
 		}
 	}
 
+	const memory = args.memory ? asRecord(args.memory) : null;
+	if (!memory) {
+		errors.push('memory.retrieve result missing');
+	} else {
+		const nodes = asArray(memory.nodes);
+		if (nodes.length > 32) errors.push(`memory.retrieve returned ${nodes.length} nodes above the bounded 32-node packet limit`);
+		const tokenEstimate = asNumber(memory.tokenEstimate);
+		if (tokenEstimate != null && tokenEstimate > 600) errors.push(`memory.retrieve tokenEstimate ${tokenEstimate} exceeds the 600-token benchmark budget`);
+		const retrievalDebug = asArray(memory.retrievalDebug).filter((item) => typeof item === 'string');
+	}
+
 	return {
 		ok: errors.length === 0,
 		errors,
@@ -431,6 +497,11 @@ export function verifyDbLongCampaignBenchmark(input) {
 			projectionCountEntries: asNumber(asRecord(asRecord(bootstrap.projection).counts).entries),
 			selectedLength: entryWindowSummary(asArray(asRecord(bootstrap.projection).entries)).length
 				|| entryWindowSummary(asArray(bootstrap.entries)).length,
+		} : null,
+		memory: memory ? {
+			nodeCount: asArray(memory.nodes).length,
+			tokenEstimate: asNumber(memory.tokenEstimate),
+			degradedSources: asArray(memory.retrievalDebug).filter((item) => typeof item === 'string' && /failed|unavailable|timed out/i.test(item)),
 		} : null,
 	};
 }

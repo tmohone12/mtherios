@@ -205,6 +205,11 @@ describe('generation benchmark turn mode', () => {
 					entries,
 				},
 			},
+			memory: {
+				nodes: [{ id: 'transcript_entry_19999' }],
+				tokenEstimate: 120,
+				retrievalDebug: [],
+			},
 		});
 
 		expect(result.ok).toBe(true);

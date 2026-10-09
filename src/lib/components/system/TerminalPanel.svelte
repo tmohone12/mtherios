@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { RefreshCw, Wifi, WifiOff, Database, ScrollText, AlertTriangle } from 'lucide-svelte';
+	import { RefreshCw, Wifi, WifiOff, ScrollText, AlertTriangle } from 'lucide-svelte';
 
 	let appStatus = $state<Record<string, unknown> | null>(null);
 	let wikiStatus = $state<Record<string, unknown> | null>(null);
@@ -26,18 +26,31 @@
 
 	onMount(load);
 
-	const gatewayOk = $derived(appStatus && typeof appStatus === 'object' && !appStatus.error);
-	const wikiOk = $derived(wikiStatus && typeof wikiStatus === 'object' && !wikiStatus.error);
+	const gatewayOk = $derived(appStatus?.ok === true);
+	const wikiOk = $derived(wikiStatus?.ok === true);
+	const jobs = $derived(appStatus?.jobs && typeof appStatus.jobs === 'object' ? appStatus.jobs as Record<string, unknown> : null);
+	const failureClasses = $derived(Array.isArray(jobs?.failureClasses)
+		? jobs.failureClasses.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+		: []);
+
+	function textValue(value: unknown): string {
+		return typeof value === 'string' ? value : value == null ? '' : String(value);
+	}
+
+	function displayLabel(value: unknown): string {
+		return textValue(value).replaceAll('_', ' ');
+	}
 </script>
 
-<div class="flex h-full flex-col overflow-y-auto p-6">
-	<div class="mb-6 flex items-center justify-between">
-		<div class="flex items-center gap-3">
-			<Database class="h-5 w-5 text-[var(--text-accent)]" />
-			<h2 class="font-display text-lg tracking-wide text-[var(--text-primary)]">Terminal Sync</h2>
+<div class="workspace-page diagnostic-page flex h-full flex-col overflow-y-auto">
+	<div class="workspace-page-heading">
+		<div>
+			<p class="workspace-eyebrow">Connected worlds</p>
+			<h2>Terminal sync.</h2>
+			<p class="workspace-subtitle">Connections, background work, and the knowledge behind your stories.</p>
 		</div>
-		<button onclick={load} disabled={loading} class="rounded-lg p-2 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-accent)] disabled:opacity-40">
-			<RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
+		<button onclick={load} disabled={loading} class="workspace-refresh">
+			<RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />{loading ? 'Refreshing' : 'Refresh status'}
 		</button>
 	</div>
 
@@ -63,13 +76,31 @@
 					<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Status</div>
 					<div class="{gatewayOk ? 'text-emerald-400' : 'text-amber-400'}">{gatewayOk ? 'Connected' : 'Offline / Error'}</div>
 				</div>
-				{#if appStatus.jobs}
-					<div>
-						<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Jobs</div>
-						<div class="text-[var(--text-primary)]">{typeof appStatus.jobs === 'object' && appStatus.jobs !== null ? JSON.stringify(appStatus.jobs).slice(0, 40) : String(appStatus.jobs)}</div>
-					</div>
+				{#if jobs}
+					{#each ['queued', 'running', 'failed'] as state}
+						<div><div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{state}</div><div class="text-[var(--text-primary)]">{typeof jobs[state] === 'number' ? jobs[state] : '—'}</div></div>
+					{/each}
 				{/if}
 			</div>
+			{#if failureClasses.length > 0}
+				<div class="mt-4 border-t border-[var(--border-primary)] pt-3" aria-label="Job recovery signals">
+					<div class="mb-2 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Recovery signals</div>
+					<div class="space-y-2">
+						{#each failureClasses.slice(0, 5) as failure}
+							<div class="rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-2 text-xs">
+								<div class="flex flex-wrap items-center justify-between gap-2 text-[var(--text-primary)]">
+									<strong>{displayLabel(failure.type)}</strong>
+									<span>{textValue(failure.count)} {textValue(failure.count) === '1' ? 'failure' : 'failures'}</span>
+								</div>
+								<div class="mt-1 text-[var(--text-muted)]">
+									{displayLabel(failure.cause)} · {failure.retryable === true ? 'retryable' : 'do not retry automatically'}
+									{#if Array.isArray(failure.sourceVersions) && failure.sourceVersions.length > 0} · source {failure.sourceVersions.join(', ')}{/if}
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
 		{:else}
 			<div class="text-sm text-[var(--text-muted)]">No gateway data available.</div>
 		{/if}

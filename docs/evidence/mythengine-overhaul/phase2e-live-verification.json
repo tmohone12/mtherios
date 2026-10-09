@@ -1,0 +1,216 @@
+{
+  "recordedAt": "2026-09-22T01:48:10.075Z",
+  "checks": [
+    "Empty folders and implicit ancestors persist in the exact game scope",
+    "Preview is read-only and adding a descendant invalidates the entire move",
+    "A history failure rolls back canonical metadata and document folder changes together",
+    "Moves retain IDs, payloads, archives and source-deleted history; shared documents and similarly named siblings stay unchanged",
+    "Self moves, destination merging and foreign game scopes are rejected",
+    "Content export/import preserves empty shared and remapped game folders and rejects foreign ownership",
+    "Campaign transfer preserves empty folders alongside remapped records"
+  ],
+  "existingStoryIds": [
+    "story_4c39f4c1-cd13-4488-a481-1dde5690df89"
+  ],
+  "fixturesRemoved": true,
+  "runtime": {
+    "ok": true,
+    "mode": "terminal-process",
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "af42608126d1baf6236f70e1c41bd5ee02f577b4c51bf542ab91ea08ec0c2bbf",
+      "externalId": "1b5b748e10fdaad3aad6148abe23d1fda1915aa62aeeca7fded91a22d1f876c4"
+    },
+    "scope": {
+      "storyId": null
+    },
+    "runtime": {
+      "pid": 24256,
+      "uptimeSeconds": 12,
+      "timestamp": "2026-09-22T01:48:10.846Z"
+    },
+    "config": {
+      "dataRoot": "E:\\DEV\\Projects\\MythEngine\\data",
+      "vaultRoot": "E:\\DEV\\Projects\\MythEngine\\data\\vaults",
+      "defaultVault": "E:\\DEV\\Projects\\MythEngine\\data\\vaults\\default",
+      "allowExternalVaults": false,
+      "qdrantUrl": "http://127.0.0.1:6335",
+      "qdrantCollection": "mythengine_wiki",
+      "ollamaUrl": "http://127.0.0.1:11434",
+      "wikiEmbedProvider": "openrouter",
+      "wikiEmbedModel": "openai/text-embedding-3-small",
+      "wikiAutoIndexStoryVaults": false,
+      "wikiAutoLintStoryVaults": false,
+      "jobWorkerEnabled": false,
+      "jobIntervalMs": 5000,
+      "chapterThreshold": 20,
+      "postChapterBuffer": 0,
+      "chaptersPerArc": 10,
+      "memoryEmbeddingsConfigured": false,
+      "memoryEmbeddingProvider": null,
+      "memoryEmbeddingModel": null,
+      "memoryEmbeddingDimensions": 1536,
+      "memoryEmbeddingBatchSize": 8,
+      "databaseConfigured": true
+    },
+    "services": {
+      "qdrant": {
+        "ok": true,
+        "status": 200,
+        "collections": [],
+        "totalCollections": 0,
+        "totalPoints": 0,
+        "orphanedStoryCollections": 0,
+        "legacyStoryCollections": 0
+      },
+      "ollama": {
+        "ok": false,
+        "error": "fetch failed"
+      }
+    },
+    "jobs": {
+      "total": 31,
+      "memoryProcessing": {
+        "complete": 0,
+        "failed": 0,
+        "waiting": 3,
+        "running": 0
+      },
+      "memoryStageFreshness": {
+        "checkpoint": {
+          "status": "updating",
+          "jobCount": 4,
+          "completedCount": 0,
+          "activeCount": 4,
+          "failedCount": 0,
+          "latestUpdatedAt": "2026-09-22 01:45:31.88+00",
+          "latestSourceVersion": null
+        },
+        "consolidation": {
+          "status": "updating",
+          "jobCount": 3,
+          "completedCount": 0,
+          "activeCount": 3,
+          "failedCount": 0,
+          "latestUpdatedAt": "2026-09-22 01:45:31.938+00",
+          "latestSourceVersion": 1249
+        },
+        "optionalIndex": {
+          "status": "updating",
+          "jobCount": 7,
+          "completedCount": 0,
+          "activeCount": 7,
+          "failedCount": 0,
+          "latestUpdatedAt": "2026-09-22 01:45:31.938+00",
+          "latestSourceVersion": 1249
+        }
+      },
+      "queued": 29,
+      "retry": 0,
+      "running": 0,
+      "complete": 2,
+      "failed": 0,
+      "ready": 29,
+      "delayed": 0,
+      "storyCount": 1,
+      "byStatus": {
+        "queued": 29,
+        "complete": 2
+      },
+      "byType": {
+        "sync_story_vault": 1,
+        "index_canonical_records": 4,
+        "extract_turn_state": 3,
+        "continuity_audit": 3,
+        "refresh_scene_checkpoint": 4,
+        "summarize_chapter": 3,
+        "plan_plot_brain": 3,
+        "create_memory_nodes_from_events": 3,
+        "validate_agent_settings": 2,
+        "rebuild_retrieval_projection": 1,
+        "update_faction_pressure": 3,
+        "embed_memory_nodes": 1
+      },
+      "readyByType": {
+        "sync_story_vault": 1,
+        "index_canonical_records": 4,
+        "extract_turn_state": 3,
+        "continuity_audit": 3,
+        "refresh_scene_checkpoint": 4,
+        "summarize_chapter": 3,
+        "plan_plot_brain": 3,
+        "create_memory_nodes_from_events": 3,
+        "rebuild_retrieval_projection": 1,
+        "update_faction_pressure": 3,
+        "embed_memory_nodes": 1
+      },
+      "failedByType": {},
+      "failureClasses": [],
+      "oldestReadyAt": "2026-09-22 01:38:18.083+00",
+      "nextRunAfter": null,
+      "recentFailures": [],
+      "runningJobs": []
+    },
+    "wiki": {
+      "totalStories": 1,
+      "vaultFresh": 0,
+      "vaultStale": 1,
+      "vaultMissing": 0,
+      "indexFresh": 0,
+      "indexStale": 0,
+      "indexMissing": 1,
+      "lintFresh": 0,
+      "lintStale": 0,
+      "lintMissing": 1,
+      "attention": [
+        {
+          "storyId": "story_4c39f4c1-cd13-4488-a481-1dde5690df89",
+          "storyTitle": "The Journey",
+          "serverVersion": 1249,
+          "manifestVersion": 1247,
+          "indexedVersion": null,
+          "exists": true,
+          "vaultFresh": false,
+          "indexFresh": false,
+          "lintExists": false,
+          "lintFresh": false,
+          "vaultPath": "E:\\DEV\\Projects\\MythEngine\\data\\vaults\\stories\\story_4c39f4c1_cd13_4488_a481_1dde5690df89_aaae5c9f58e62d4b",
+          "collection": "mythengine_wiki_story_4c39f4c1_cd13_4488_a481_1dde5690df89_aaae5c9f58e62d4b",
+          "updatedAt": "2026-09-22 01:45:31.886+00"
+        }
+      ]
+    }
+  },
+  "originalPid": 39068,
+  "browser": {
+    "separateTemporaryTab": true,
+    "emptyFolderCreated": true,
+    "dirtyScopeGuard": true,
+    "draftChangeClearsPreview": true,
+    "stalePreviewRejected": true,
+    "refreshedMoveSucceeded": true,
+    "persistedAfterReload": true,
+    "gameExcludesSharedFolders": true,
+    "visualCheck": true,
+    "fixtureRemoved": true,
+    "userTabPreserved": true
+  },
+  "originalProtection": {
+    "filesChecked": 760,
+    "changed": [],
+    "pid": 39068
+  },
+  "finalRuntime": {
+    "pid": 24256,
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "af42608126d1baf6236f70e1c41bd5ee02f577b4c51bf542ab91ea08ec0c2bbf",
+      "externalId": "1b5b748e10fdaad3aad6148abe23d1fda1915aa62aeeca7fded91a22d1f876c4"
+    },
+    "storyCount": 1
+  }
+}

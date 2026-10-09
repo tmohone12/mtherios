@@ -7,8 +7,8 @@
  */
 
 import { generateStructuredWithTools } from '$lib/services/ai/sdk/generate';
-import { GM_TOOLS, worldStateUpdateSchema, type WorldStateUpdate } from './schemas';
-import { executeToolCall, runSchemeEvaluation } from './executor';
+import { GM_TOOLS } from './schemas';
+import { executeToolCall } from './executor';
 import { runBackgroundJobs } from '$lib/services/ai/background/runner';
 import { settings } from '$lib/stores/settings.svelte';
 import { buildWarExtractionRulesBlock } from '$lib/services/ai/context/warDoctrine';
@@ -109,14 +109,9 @@ Be thorough and accurate. Only include entities that actually changed or appeare
 		} as any);
 
 		// Execute all tool calls
-		let worldStateArgs: WorldStateUpdate | null = null;
 		for (const toolCall of result.toolCalls) {
 			try {
 				await executeToolCall(toolCall.name, toolCall.arguments);
-				if (toolCall.name === 'update_world_state') {
-					const parsed = worldStateUpdateSchema.safeParse(toolCall.arguments);
-					if (parsed.success) worldStateArgs = parsed.data;
-				}
 			} catch (e) {
 				const msg = `Tool ${toolCall.name}: ${e}`;
 				errors.push(msg);
@@ -128,9 +123,6 @@ Be thorough and accurate. Only include entities that actually changed or appeare
 			console.warn('[Orchestrator] No tool calls returned from world update');
 		}
 
-		// ── Phase 1b: Scheme evaluator — reactive LLM pass gated on story beats ──
-		const schemeErrors = await runSchemeEvaluation(narrative, stateSnapshot, worldStateArgs, signal);
-		errors.push(...schemeErrors);
 	} catch (e) {
 		const msg = `World update: ${e instanceof Error ? e.message : e}`;
 		errors.push(msg);

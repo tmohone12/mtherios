@@ -1,0 +1,22 @@
+{
+  "version": 3308,
+  "staleRevisionRejected": true,
+  "cycleRejected": true,
+  "rollbackPreservedVersion": true,
+  "roomChain": [
+    {
+      "id": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "name": "Volantis"
+    },
+    {
+      "id": "entity_cd230b5e-9c11-4c86-aa0c-064e9088b850",
+      "name": "Belaerys Manse"
+    },
+    {
+      "id": "entity_b815d12f-b8b7-4f31-bebf-5c3d452eea3f",
+      "name": "Volantis — Belaerys Manse, upper sickroom"
+    }
+  ],
+  "inheritedRules": 12,
+  "foundationRulesAtTurnZero": 8
+}

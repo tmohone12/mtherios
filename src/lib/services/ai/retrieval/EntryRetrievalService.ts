@@ -15,6 +15,10 @@ export interface RetrievalResult {
 	contextBlock: string;
 }
 
+export function lorebookEmbeddingText(entry: Entry): string {
+	return [entry.name, ...(entry.aliases ?? []), ...(entry.injection?.keywords ?? []), entry.description, entry.hiddenInfo ?? ''].filter(Boolean).join(' ');
+}
+
 export class EntryRetrievalService {
 	/**
 	 * Retrieve lorebook entries relevant to the current context.
@@ -47,13 +51,7 @@ export class EntryRetrievalService {
 		const { ai } = await import('$lib/services/ai');
 		const embeddingItems = candidates.map(e => ({
 			id: e.id,
-			text: [
-				e.name,
-				...(e.aliases ?? []),
-				...(e.injection?.keywords ?? []),
-				e.description,
-				e.hiddenInfo ?? '',
-			].filter(Boolean).join(' '),
+			text: lorebookEmbeddingText(e),
 			sourceType: 'lorebook' as const,
 		}));
 

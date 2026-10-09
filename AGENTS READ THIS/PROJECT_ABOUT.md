@@ -1,106 +1,25 @@
 # About Mtherios
 
-Mtherios is a local-first AI text RPG engine with a browser frontend and terminal-owned backend.
+Mtherios is a local-first AI text RPG engine for persistent campaigns. The player acts through a browser workspace; a terminal Node process owns backend-bound story state, generation, background processing, and local service integrations.
 
-It is built for long campaigns where characters remember, factions act, secrets stay bounded, and the world can keep moving without loading the entire transcript into every model call.
+## What the player can do
 
-## What The User Experiences
+Play a story, inspect characters and world records, edit lore and player capabilities, review memory and prompt context, and manage Plot Director pressure. The intended experience combines responsive narration with a world whose history and consequences remain inspectable.
 
-The player opens the app, chooses a story, types an action, and receives narration. They can inspect lore, world state, memories, jobs, settings, and diagnostics.
+## How a turn becomes durable
 
-The desired experience is simple:
+The server prepares scene and memory context, runs generation, saves transcript evidence, and processes validated state changes. Background jobs maintain retrieval projections, scene checkpoints, larger summaries, and readable wiki vaults. Records retain links to their sources.
 
-- play a text RPG
-- keep continuity
-- preserve agency
-- make the world feel alive
-- avoid giant prompt bloat
+PostgreSQL holds authoritative campaign records. Qdrant and pgvector support search; Markdown provides a readable projection; IndexedDB supports client caching and compatibility. The browser displays and edits state through server contracts. Offline shell/content access does not imply offline narrative generation.
 
-## What The System Is Doing
+## Technology and documentation
 
-Behind the UI, Mtherios turns play into durable state:
+The stack uses SvelteKit/Svelte 5, Node, TypeScript, Zod, Drizzle, PostgreSQL/pgvector, Qdrant, Dexie, and Vitest. Model routing is configurable; project documentation does not select a narrator provider or model.
 
-```text
-player action
-  -> narration
-  -> evidence
-  -> proposed structured changes
-  -> validated backend canon
-  -> generated projections and search indexes
-```
+- [AGENTS.md](../AGENTS.md): how to work in the repository.
+- [Architecture task map](ARCHITECTURE.md): where to investigate a specific task.
+- [Main architecture](../ARCHITECTURE.md): current source responsibilities and system boundaries.
+- [Vision](VISION.md): product priorities and evaluation goals.
+- [README](../README.md): setup and user-facing project introduction.
 
-The backend tracks:
-
-- characters
-- locations
-- factions
-- facts
-- events
-- relationships
-- memories
-- chapters, arcs, sagas
-- jobs and projections
-
-## Technology
-
-- SvelteKit / Svelte 5 frontend
-- Node terminal app process
-- TypeScript
-- Zod contracts
-- Drizzle ORM
-- Postgres / pgvector
-- Qdrant for wiki search
-- Dexie / IndexedDB as browser cache
-- Vitest
-- OpenAI-compatible model providers
-
-## Current Product Direction
-
-The main work is moving Mtherios from a browser-heavy interactive fiction app into a terminal-owned engine.
-
-Near-term priorities:
-
-1. One canonical server prompt compiler
-2. Real model-provider cache telemetry
-3. Replay evaluation harness
-4. Scene-aware context loading
-5. Cheaper background/small-model workers
-6. Better inspector surfaces for prompt, context, cache, and canon changes
-
-## Why This Exists
-
-Long AI campaigns usually fail because the system loses track of truth. Mtherios exists to make truth queryable.
-
-The core belief:
-
-```text
-transcript = evidence
-backend database = canon
-markdown vault = readable projection
-search index = rebuildable helper
-browser storage = cache
-```
-
-## What To Avoid
-
-Avoid:
-
-- adding another independent generation path
-- letting the browser own backend-bound story truth
-- treating markdown or Qdrant as canon
-- expanding prompts before measuring context
-- writing canon from raw model output
-- adding background agents into the critical turn path without need
-
-## Success
-
-Success is a campaign that can run for months, where:
-
-- NPCs remember only what they learned
-- factions act from resources and pressure
-- secrets remain secret until revealed
-- the narrator stays grounded
-- the backend can explain every included context item
-- state changes are reviewable and source-linked
-
-Mtherios should feel like a persistent world with an engine under it.
+This overview was reviewed on 2026-09-12. Feature existence in source and behavior verified in a running release are separate claims.

@@ -1,4 +1,5 @@
-export const TERMINAL_WORLD_DATABASE_SCHEMA_VERSION = 3;
+import { TERMINAL_WORLD_DATABASE_SCHEMA_VERSION } from '$lib/contracts/worldDatabase';
+export { TERMINAL_WORLD_DATABASE_SCHEMA_VERSION } from '$lib/contracts/worldDatabase';
 
 export const TERMINAL_WORLD_DATABASE_TABLE_ORDER = [
 	'stories',
@@ -32,7 +33,7 @@ export const TERMINAL_WORLD_DATABASE_TABLE_ORDER = [
 
 export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 	schemaVersion: TERMINAL_WORLD_DATABASE_SCHEMA_VERSION,
-	name: 'Mtherios Terminal World Database',
+	name: 'MythEngine Terminal World Database',
 	singleCanonRule: 'There is one application engine: the terminal core server. Browser clients, MCP clients, and Codex all call that engine; none of them own a separate canon path.',
 	ownership: {
 		engine: 'The terminal core server is the only runtime that assembles prompts, calls providers, validates patches, writes canon, schedules jobs, and updates search projections.',
@@ -68,6 +69,8 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 			preserveIds: 'Keep story/table ids from the source bundle. Defaults to true.',
 			replaceExisting: 'Delete an existing story with the target id before import. Defaults to false.',
 			syncWiki: 'Queue terminal wiki regeneration after import. Defaults to true.',
+			sourceProjectId: 'Required with destinationProjectId for an explicit project merge; must match the bundle project.',
+			destinationProjectId: 'Selected existing project for an explicit merge. Omit to create a distinct project.',
 		},
 		bundleJsonSchema: {
 			type: 'object',
@@ -92,21 +95,23 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 		},
 	},
 	mcp: {
-		serverName: 'mtherios',
+		serverName: 'mythengine',
 		description: 'MCP exposes the same terminal engine APIs that the browser UI uses.',
 		command: 'node',
-		args: ['scripts/mtherios-mcp.mjs'],
+		args: ['scripts/mythengine-mcp.mjs'],
 		env: {
-			MTHERIOS_APP_URL: 'http://127.0.0.1:5173',
+			MYTHENGINE_APP_URL: 'http://127.0.0.1:5174',
 		},
 		codexConfigToml: [
-			'[mcp_servers.mtherios]',
+			'[mcp_servers.mythengine]',
 			"command = 'C:\\Program Files\\nodejs\\node.exe'",
-			"args = ['E:\\DEV\\Projects\\mtherios-factions\\scripts\\mtherios-mcp.mjs']",
+			"args = ['E:\\DEV\\Projects\\MythEngine\\scripts\\mythengine-mcp.mjs']",
 			'startup_timeout_sec = 120',
+			'tool_timeout_sec = 240',
+			'enabled = true',
 			'',
-			'[mcp_servers.mtherios.env]',
-			"MTHERIOS_APP_URL = 'http://127.0.0.1:5173'",
+			'[mcp_servers.mythengine.env]',
+			"MYTHENGINE_APP_URL = 'http://127.0.0.1:5174'",
 		].join('\n'),
 		tools: [
 			'mtherios_status',
@@ -118,14 +123,32 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 			'mtherios_list_records',
 			'mtherios_get_record',
 			'mtherios_patch_record',
+			'mtherios_get_player_capabilities',
+			'mtherios_update_player_capabilities',
 			'mtherios_search',
 			'mtherios_run_turn',
+			'mtherios_engine_command',
+			'mtherios_draft_character_update',
+			'mtherios_actor_brief',
+			'mtherios_affinity_read',
+			'mtherios_scene_check',
+			'mtherios_relationship_web',
+			'mtherios_thread_board',
+			'mtherios_draft_character_create',
+			'mtherios_orchestrator_run',
+			'mtherios_timeline_brief',
+			'mtherios_timeline_schedule',
+			'mtherios_inject_plot_direction',
+			'mtherios_timeline_advance',
+			'mtherios_read_campaign_page',
+			'mtherios_write_campaign_page',
 			'mtherios_llm_settings',
+			'mtherios_update_llm_settings',
 			'mtherios_api_call_logs',
 			'mtherios_jobs',
 			'mtherios_reindex_story',
 			'mtherios_sync_wiki',
-		],
+		].flatMap(name => [name.replace(/^mtherios_/, 'mythengine_'), name]),
 	},
 	services: {
 		createWorldDatabase: {
@@ -357,7 +380,7 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 		llmServiceSettings: {
 			purpose: 'Terminal-side LLM provider settings by service. Raw API keys are not stored; apiKeyRef resolves to env/config.',
 			primaryKey: 'serviceId',
-			fields: ['serviceId', 'providerType', 'baseUrl', 'model', 'temperature', 'maxTokens', 'topP', 'frequencyPenalty', 'presencePenalty', 'reasoningEffort', 'contextBudget', 'enabled', 'systemPromptOverride', 'apiKeyRef', 'metadata', 'createdAt', 'updatedAt'],
+			fields: ['serviceId', 'providerType', 'baseUrl', 'model', 'temperature', 'maxTokens', 'topP', 'frequencyPenalty', 'presencePenalty', 'reasoningEffort', 'contextBudget', 'contextWindowTokens', 'enabled', 'systemPromptOverride', 'apiKeyRef', 'metadata', 'createdAt', 'updatedAt'],
 		},
 		searchIndexRecords: {
 			purpose: 'Qdrant/embedding index bookkeeping for canonical records and generated wiki pages. Rebuildable, never canon.',

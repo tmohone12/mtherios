@@ -1,0 +1,111 @@
+{
+  "createdAt": "2026-09-07T10:22:24.396Z",
+  "mode": "db-memory-load",
+  "build": {
+    "identity": "mtherios@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "externalId": null,
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 488,
+    "dirtyStatusSha256": "46254a1b99b2e9755d0d3f284a1f994ef56c630e1eb5a822543f43b66ff2349f",
+    "sourceHashes": {
+      "scripts/bench-generation.mjs": "2c83a562c1f2d4d2d998d7db81a55d306c539efeeeecae53b0bfbd4281d08f06",
+      "scripts/bench-generation-core.mjs": "c09fed5007630df6d4141425b42f5c47abd6b4ab8138d53d4897dad0644f007f",
+      "src/lib/server/turn/orchestrator.ts": "cd347862810b2272bc18dc22854c981044572eb6e9fd3043111dd0137700efac",
+      "src/lib/server/turn/provider.ts": "d1b8fe0ac1802923ac2aecbb853f916c039511ee9493ed2a2b40a9cfd372839f",
+      "src/lib/server/memory/retrieval.ts": "e9270d7f0b67685f2c4468884948e439f2f3df3296a096cc9506684247d9839f"
+    }
+  },
+  "url": "http://127.0.0.1:5177",
+  "storyId": "bench_long_1788776538467_4f836f4a",
+  "turns": 5000,
+  "entries": 10000,
+  "samples": 8,
+  "concurrency": 4,
+  "seedDurationMs": 1059,
+  "durationMs": {
+    "p50": 2018,
+    "p95": 2851,
+    "max": 2851
+  },
+  "maxNodes": 0,
+  "responses": [
+    {
+      "nodeCount": 0,
+      "tokenEstimate": 1,
+      "degradedSources": [
+        "Transcript recall: timed out; other memory sources retained."
+      ]
+    },
+    {
+      "nodeCount": 0,
+      "tokenEstimate": 1,
+      "degradedSources": [
+        "Transcript recall: timed out; other memory sources retained."
+      ]
+    },
+    {
+      "nodeCount": 0,
+      "tokenEstimate": 1,
+      "degradedSources": [
+        "Transcript recall: timed out; other memory sources retained."
+      ]
+    },
+    {
+      "nodeCount": 0,
+      "tokenEstimate": 1,
+      "degradedSources": [
+        "Transcript recall: timed out; other memory sources retained."
+      ]
+    },
+    {
+      "nodeCount": 0,
+      "tokenEstimate": 1,
+      "degradedSources": [
+        "Transcript recall: timed out; other memory sources retained."
+      ]
+    },
+    {
+      "nodeCount": 0,
+      "tokenEstimate": 1,
+      "degradedSources": [
+        "Transcript recall: timed out; other memory sources retained."
+      ]
+    },
+    {
+      "nodeCount": 0,
+      "tokenEstimate": 1,
+      "degradedSources": [
+        "Transcript recall: timed out; other memory sources retained."
+      ]
+    },
+    {
+      "nodeCount": 0,
+      "tokenEstimate": 1,
+      "degradedSources": [
+        "Transcript recall: timed out; other memory sources retained."
+      ]
+    }
+  ],
+  "degradedSources": [
+    "Transcript recall: timed out; other memory sources retained.",
+    "Transcript recall: timed out; other memory sources retained.",
+    "Transcript recall: timed out; other memory sources retained.",
+    "Transcript recall: timed out; other memory sources retained.",
+    "Transcript recall: timed out; other memory sources retained.",
+    "Transcript recall: timed out; other memory sources retained.",
+    "Transcript recall: timed out; other memory sources retained.",
+    "Transcript recall: timed out; other memory sources retained."
+  ],
+  "providerCalls": 0,
+  "writes": true,
+  "writeScope": "disposable benchmark story only; cleaned up after verification",
+  "gate": {
+    "maxNodes": 32,
+    "degradedSources": 0,
+    "note": "Identical retrieval requests should share active work and retain an explicit receipt."
+  }
+}

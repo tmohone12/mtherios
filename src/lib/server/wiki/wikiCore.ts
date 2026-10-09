@@ -26,6 +26,7 @@ export interface WikiSearchInput {
 }
 
 export interface WikiContextInput extends WikiSearchInput {
+	seedLayer?: 'wiki';
 	pageLimit?: number;
 	pageChars?: number;
 	maxChars?: number;
@@ -34,13 +35,6 @@ export interface WikiContextInput extends WikiSearchInput {
 export interface WikiBriefInput extends WikiContextInput {
 	mode?: string | null;
 	inventoryLimit?: number;
-	thinChars?: number;
-	orphanLayer?: 'derived' | 'all';
-}
-
-export interface WikiLintInput {
-	storyId?: string | null;
-	vaultPath?: string | null;
 	thinChars?: number;
 	orphanLayer?: 'derived' | 'all';
 }
@@ -182,6 +176,7 @@ export async function contextWiki(input: WikiContextInput): Promise<unknown> {
 		'--collection',
 		target.collection,
 	];
+	if (input.seedLayer === 'wiki') args.push('--seed-layer', 'wiki');
 	if (input.exact) args.push('--exact');
 	if (input.provider) args.push('--provider', input.provider);
 	if (input.model) args.push('--model', input.model);
@@ -222,21 +217,6 @@ export async function briefWiki(input: WikiBriefInput): Promise<unknown> {
 	if (input.model) args.push('--model', input.model);
 
 	return runWithFreshStoryVault(target.storyId, config, () => runJsonScript('brief.mjs', args, config));
-}
-
-export async function lintWiki(input: WikiLintInput = {}): Promise<unknown> {
-	const config = getMtheriosAppConfig();
-	const target = resolveWikiTarget(input, config);
-	const args = [
-		target.vaultPath,
-		'--json',
-		'--thin-chars',
-		String(clampInt(input.thinChars, 40, 4000, 240)),
-		'--orphan-layer',
-		input.orphanLayer === 'all' ? 'all' : 'derived',
-	];
-
-	return runWithFreshStoryVault(target.storyId, config, () => runJsonScript('lint.mjs', args, config));
 }
 
 export async function followWiki(input: WikiFollowInput): Promise<unknown> {

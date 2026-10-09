@@ -6,16 +6,11 @@ import {
 } from './orchestrator';
 
 describe('engine AI orchestrator', () => {
-	it('defines the backend RPG agent roles from the target architecture', () => {
+	it('defines GameMaster and its bounded helpers', () => {
 		expect(ORCHESTRATOR_AGENT_ROLES.map((role) => role.id)).toEqual([
-			'dm_narrator',
-			'rules_referee',
-			'state_scribe',
-			'lorekeeper',
-			'lore_curator',
-			'faction_simulator',
-			'npc_memory',
-			'continuity_auditor',
+			'game_master',
+			'memory_context',
+			'player_guidance',
 		]);
 	});
 
@@ -35,34 +30,32 @@ describe('engine AI orchestrator', () => {
 		});
 
 		expect(plan.roles.map((role) => role.id)).toEqual([
-			'dm_narrator',
-			'rules_referee',
-			'state_scribe',
-			'lorekeeper',
-			'lore_curator',
-			'faction_simulator',
-			'npc_memory',
-			'continuity_auditor',
+			'game_master',
+			'memory_context',
+			'player_guidance',
+		]);
+			expect(plan.steps.map((step) => [step.id, step.toolCallIds.length])).toEqual([
+			['situation', 3],
+			['dialogue', 1],
+			['location', 1],
+			['plot', 2],
+			['narrate', 1],
 		]);
 		expect(plan.toolCalls.map((call) => [call.agentRole, call.command])).toEqual([
-			['lorekeeper', 'campaign.status'],
-			['rules_referee', 'campaign.page.read'],
-			['state_scribe', 'timeline.brief'],
-			['faction_simulator', 'timeline.brief'],
-			['npc_memory', 'memory.retrieve'],
-			['dm_narrator', 'turn.prepare'],
-			['continuity_auditor', 'campaign.cacheStatus'],
+			['memory_context', 'campaign.status'],
+			['game_master', 'campaign.page.read'],
+			['game_master', 'timeline.brief'],
+			['game_master', 'timeline.brief'],
+			['memory_context', 'memory.retrieve'],
+			['game_master', 'turn.prepare'],
+			['game_master', 'campaign.cacheStatus'],
+			['game_master', 'turn.submit'],
 		]);
 		expect(new Set(plan.toolCalls.map((call) => call.agentRole))).toEqual(new Set([
-			'dm_narrator',
-			'rules_referee',
-			'state_scribe',
-			'lorekeeper',
-			'faction_simulator',
-			'npc_memory',
-			'continuity_auditor',
+			'game_master',
+			'memory_context',
 		]));
-		expect(plan.toolCalls.find((call) => call.agentRole === 'rules_referee')?.args).toEqual({
+		expect(plan.toolCalls.find((call) => call.command === 'campaign.page.read')?.args).toEqual({
 			kind: 'rules_page',
 			path: 'rules/default.md',
 			missingOk: true,
@@ -92,13 +85,12 @@ describe('engine AI orchestrator', () => {
 			},
 		});
 
-		expect(plan.roles.map((role) => role.id)).toContain('lore_curator');
+		expect(plan.roles.map((role) => role.id)).toContain('memory_context');
 		expect(plan.toolCalls.map((call) => [call.agentRole, call.command])).toEqual([
-			['lore_curator', 'wiki.brief'],
-			['lore_curator', 'wiki.pages'],
-			['lore_curator', 'wiki.lint'],
-			['lorekeeper', 'campaign.status'],
-			['npc_memory', 'memory.retrieve'],
+			['memory_context', 'wiki.brief'],
+			['memory_context', 'wiki.pages'],
+			['memory_context', 'campaign.status'],
+			['memory_context', 'memory.retrieve'],
 		]);
 		expect(plan.toolCalls[0].args).toEqual(expect.objectContaining({
 			query: 'Connect the harbor marriage pact pages to House Balaerys and NPC memory.',
@@ -126,15 +118,17 @@ describe('engine AI orchestrator', () => {
 		});
 
 		expect(plan.toolCalls.map((call) => [call.agentRole, call.command])).toEqual([
-			['lorekeeper', 'timeline.brief'],
-			['faction_simulator', 'jobs.worldSim'],
-			['continuity_auditor', 'campaign.status'],
+			['memory_context', 'timeline.brief'],
+			['game_master', 'jobs.worldSim'],
+			['game_master', 'campaign.status'],
 		]);
 		expect(plan.toolCalls.some((call) => call.command === 'plotBrain.plan')).toBe(false);
 	});
 
 	it('executes planned tool calls through the supplied backend command runner', async () => {
 		const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+		let inFlight = 0;
+		let maxInFlight = 0;
 		const result = await runEngineOrchestrator({
 			storyId: 'story_alpha',
 			mode: 'turn',
@@ -145,6 +139,10 @@ describe('engine AI orchestrator', () => {
 		}, {
 			runTool: async (call) => {
 				calls.push({ command: call.command, args: call.args });
+				inFlight += 1;
+				maxInFlight = Math.max(maxInFlight, inFlight);
+				await Promise.resolve();
+				inFlight -= 1;
 				return {
 					commandId: `cmd_${call.id}`,
 					clientCommandId: null,
@@ -164,13 +162,47 @@ describe('engine AI orchestrator', () => {
 			'campaign.status',
 			'campaign.page.read',
 			'timeline.brief',
-			'timeline.brief',
 			'memory.retrieve',
 			'turn.prepare',
+			'timeline.brief',
 			'campaign.cacheStatus',
+			'turn.submit',
 		]);
+		expect(maxInFlight).toBe(3);
 		expect(result.executed).toBe(true);
-		expect(result.toolResults).toHaveLength(7);
+		expect(result.toolResults).toHaveLength(8);
 		expect(result.toolResults.every((toolResult) => toolResult.status === 'succeeded')).toBe(true);
+	});
+
+	it('reserves turn.submit when a legacy caller sets a low tool-call cap', async () => {
+		const calls: string[] = [];
+		const result = await runEngineOrchestrator({
+			storyId: 'story_alpha',
+			mode: 'turn',
+			goal: 'Continue the scene.',
+			playerText: 'I open the sealed letter.',
+			maxToolCalls: 1,
+			execute: true,
+		}, {
+			runTool: async (call) => {
+				calls.push(call.command);
+				return {
+					commandId: `cmd_${call.id}`,
+					clientCommandId: null,
+					storyId: 'story_alpha',
+					command: call.command,
+					status: 'succeeded',
+					result: { ok: true },
+					projectionChanges: {},
+					error: null,
+					createdAt: '2026-06-06T00:00:00.000Z',
+					updatedAt: '2026-06-06T00:00:00.000Z',
+				};
+			},
+		});
+
+		expect(calls).toEqual(['turn.submit']);
+		expect(result.steps.map((step) => step.id)).toEqual(['narrate']);
+		expect(result.executed).toBe(true);
 	});
 });

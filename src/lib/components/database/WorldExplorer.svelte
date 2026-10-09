@@ -1,7 +1,11 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { characterStateView, editCharacterState } from '$lib/utils/characterState';
+	import { NPC_AGENCY_FIELDS } from '$lib/contracts/npcAgency';
+	import { onMount, onDestroy } from 'svelte';
+	import LoreEntryPreview from './LoreEntryPreview.svelte';
+	import FactionProfileEditor from '$lib/components/content/FactionProfileEditor.svelte';
+	import LocationWorkspace from './LocationWorkspace.svelte';
 	import {
-		Database,
 		RefreshCw,
 		Save,
 		Search,
@@ -14,10 +18,44 @@
 		Check,
 		X,
 		Plus,
+		BookOpen,
+		Users,
+		MapPin,
+		Package,
+		Lightbulb,
+		Flag,
+		ChevronRight,
+		ArrowLeft,
+		Pencil,
+		Settings2,
 	} from 'lucide-svelte';
-	import { formatProposalDescription, formatProposalSummary } from '$lib/services/canonProposalDisplay';
+	import { formatProposalDescription, formatProposalSummary, proposalRecordView } from '$lib/services/canonProposalDisplay';
 
 	type JsonRecord = Record<string, unknown>;
+	function stableJson(value: unknown): string {
+		if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+		if (value && typeof value === 'object') {
+			return `{${Object.entries(value as JsonRecord)
+				.sort(([left], [right]) => left.localeCompare(right))
+				.map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`)
+				.join(',')}}`;
+		}
+		return JSON.stringify(value) ?? 'undefined';
+	}
+
+	// Sending the entire editor snapshot can re-apply stale fields from a detail
+	// view when the user only changed one control. The engine already accepts a
+	// partial record patch, so submit only the actual top-level changes.
+	function changedRecordUpdates(baseline: JsonRecord, next: JsonRecord): JsonRecord {
+		const updates: JsonRecord = {};
+		for (const key of new Set([...Object.keys(baseline), ...Object.keys(next)])) {
+			const before = baseline[key];
+			const after = next[key];
+			if (stableJson(before) !== stableJson(after)) updates[key] = key in next ? after : null;
+		}
+		return updates;
+	}
+
 	type SectionEntry = {
 		id: string;
 		label: string;
@@ -26,13 +64,15 @@
 	type StorySummary = {
 		id: string;
 		title?: string | null;
+		shelfId?: string | null;
 		serverVersion?: number | null;
 		updatedAt?: string | null;
 	};
 
-	let { storyId: fixedStoryId = null, title = 'World Database' } = $props<{
+	let { storyId: fixedStoryId = null, title = 'World Database', onDirtyChange } = $props<{
 		storyId?: string | null;
 		title?: string;
+		onDirtyChange?: (dirty: boolean) => void;
 	}>();
 
 	const sections: SectionEntry[] = [
@@ -40,6 +80,7 @@
 		{ id: 'characters', label: 'Characters' },
 		{ id: 'locations', label: 'Locations' },
 		{ id: 'items', label: 'Items' },
+		{ id: 'concepts', label: 'Concepts' },
 		{ id: 'entities', label: 'Entities' },
 		{ id: 'factions', label: 'Factions' },
 		{ id: 'factionGoals', label: 'Goals' },
@@ -62,12 +103,35 @@
 
 	let stories = $state<StorySummary[]>([]);
 	let selectedStoryId = $state('');
-	let activeSection = $state('entities');
+	let activeSection = $state('characters');
 	let query = $state('');
 	let records = $state<JsonRecord[]>([]);
 	let selectedRecord = $state<JsonRecord | null>(null);
 	let detail = $state<JsonRecord | null>(null);
 	let editorText = $state('');
+	let editorBaseline = $state('');
+	let isDetailLoading = $state(false);
+	let showMobileDetail = $state(false);
+	let editMode = $state(false);
+	let locationWorkspaceDirty = $state(false);
+	let factionProfileDirty = $state(false);
+	let factionProfileBusy = $state(false);
+	const hasUnsavedChanges = $derived(editorText !== editorBaseline || locationWorkspaceDirty || factionProfileDirty || factionProfileBusy);
+	let recordHistory = $state<Array<{ section: string; id: string; title: string }>>([]);
+	let focusedRecord = $state(false);
+	$effect(() => onDirtyChange?.(hasUnsavedChanges || saving));
+	onDestroy(() => onDirtyChange?.(false));
+	function protectDraft(event: BeforeUnloadEvent) {
+		if (!hasUnsavedChanges && !saving) return;
+		event.preventDefault();
+		event.returnValue = '';
+	}
+	let listRequest = 0;
+	let detailRequest = 0;
+	let searchRequest = 0;
+	let loadedStoryId = '';
+	let loadedSection = '';
+	let loadedQuery = '';
 	let status = $state('');
 	let loading = $state(false);
 	let saving = $state(false);
@@ -81,10 +145,40 @@
 	let newDatabaseTitle = $state('');
 	let creatingDatabase = $state(false);
 	let characterDraftInstructions = $state('Update this NPC from recent story context.');
+	let showGmToolkit = $state(false);
+	let gmTool = $state<'actor' | 'scene' | 'relationships' | 'threads'>('actor');
+	let gmTarget = $state('');
+	let gmActors = $state('');
+	let gmAvailableMinutes = $state('');
+	let gmToolResult = $state<JsonRecord | null>(null);
+	let gmToolBusy = $state(false);
+	let newCharacterName = $state('');
+	let newCharacterRole = $state('');
+	let newCharacterBackstory = $state('');
+	let newCharacterPurpose = $state('');
+	let newCharacterDesire = $state('');
+	let newCharacterFear = $state('');
+	let newCharacterFaction = $state('');
+	let newCharacterLocation = $state('');
+	let creatingCharacterDraft = $state(false);
+	let draftingCandidateId = $state('');
+	let findingCandidates = $state(false);
+	let jobStatusFilter = $state('failed');
+	let retryingJobId = $state('');
 
 	const visibleSections = $derived.by(() => {
 		return sections.filter((section) => !section.isAdvanced || showDiagnostics);
 	});
+	const sectionGroups = [
+		{ label: 'World', ids: ['characters', 'locations', 'items', 'concepts', 'entities'] },
+		{ label: 'Powers & alliances', ids: ['factions', 'factionGoals', 'factionResources', 'factionMemberships', 'agreements'] },
+		{ label: 'Chronicle', ids: ['threads', 'events', 'chapters', 'arcs', 'transcript', 'memoryNodes'] },
+		{ label: 'Review', ids: ['npcCandidates', 'patchProposals'] },
+		{ label: 'Diagnostics', ids: sections.filter((item) => item.isAdvanced).map((item) => item.id) },
+	];
+	const sectionIcons = { characters: Users, locations: MapPin, items: Package, concepts: Lightbulb, factions: Flag };
+	const activeSectionLabel = $derived(sections.find((item) => item.id === activeSection)?.label ?? activeSection);
+	let showTable = $state(false);
 
 	const selectedStory = $derived(stories.find((story) => story.id === selectedStoryId) ?? null);
 	const isStoryLocked = $derived(Boolean(fixedStoryId));
@@ -119,11 +213,43 @@
 			return null;
 		}
 	});
-	const characterState = $derived.by(() => asRecord(editorRecord?.state) ?? {});
+	const characterState = $derived.by(() => characterStateView(editorRecord?.state));
 	const characterRelationship = $derived.by(() => asRecord(characterState.relationship) ?? {});
+	const conceptState = $derived.by(() => asRecord(editorRecord?.state) ?? {});
+	const conceptRelatedIds = $derived.by(() => stringArrayValue(conceptState.relatedEntries));
+	const sourceLinks = $derived.by(() => {
+		const current = asRecord(detail);
+		return [
+			...asRecordArray(current?.sourceEntries).map((record) => ({ section: 'transcript', id: stringValue(record.id), label: stringValue(record.content || record.id) })),
+			...asRecordArray(current?.sourceEvents).map((record) => ({ section: 'events', id: stringValue(record.id), label: stringValue(record.title || record.id) })),
+			...asRecordArray(current?.sourcePatches).map((record) => ({ section: 'patches', id: stringValue(record.id), label: stringValue(record.reason || record.id) })),
+		].filter((link) => link.id);
+	});
 	const isReviewablePatch = $derived(isReviewSection()
 		&& Boolean(selectedRecord?.id)
 		&& ['pending', 'needs_review'].includes(String((editorRecord?.status ?? selectedRecord?.status) ?? '')));
+	const isCharacterCreationProposal = $derived.by(() => {
+		const proposal = proposalRecordView(editorRecord ?? selectedRecord ?? {});
+		return isReviewSection() && proposal.proposalType === 'character_reference_review';
+	});
+	const characterCreationPreview = $derived(isCharacterCreationProposal && editorRecord ? proposalOperationValue(editorRecord) : null);
+	const isSourceCharacterCandidate = $derived(isCharacterCreationProposal && proposalRecordView(editorRecord ?? selectedRecord ?? {}).proposedBy !== 'gm_character_draft');
+	const characterSourceFacts = $derived(asRecordArray(asRecord(asRecord(editorRecord?.metadata)?.sourceDraft)?.evidence));
+	const sourceCharacterBefore = $derived(asRecord(asRecord(asRecord(editorRecord?.metadata)?.sourceDraft)?.currentCharacter));
+	const sourceDraftReady = $derived(Boolean(asRecord(asRecord(editorRecord?.metadata)?.sourceDraft)?.sourceSnapshot) && characterSourceFacts.some((fact) => {
+		const value = fact.field === 'description' ? characterCreationPreview?.description : asRecord(characterCreationPreview?.state)?.[stringValue(fact.field)];
+		return typeof value === 'string' ? Boolean(value.trim()) : Array.isArray(value) && value.some((item) => typeof item === 'string' && item.trim());
+	}) && (Boolean(sourceCharacterBefore) || Boolean(stringValue(asRecord(characterCreationPreview?.state)?.bio).trim())
+		&& stringValue(asRecord(characterCreationPreview?.state)?.bio).trim().toLowerCase() !== stringValue(characterCreationPreview?.name).trim().toLowerCase()));
+	const candidateManuallyReady = $derived(asRecord(asRecord(editorRecord?.metadata)?.sourceDraft)?.mode === 'manual_review'
+		&& (Boolean(sourceCharacterBefore) || Boolean(stringValue(asRecord(characterCreationPreview?.state)?.bio).trim())
+			&& stringValue(asRecord(characterCreationPreview?.state)?.bio).trim().toLowerCase() !== stringValue(characterCreationPreview?.name).trim().toLowerCase()));
+	const candidateAlreadyPopulated = $derived(isSourceCharacterCandidate
+		&& !['evidence_only', 'manual_review'].includes(stringValue(asRecord(asRecord(editorRecord?.metadata)?.sourceDraft)?.mode))
+		&& (stringArrayValue(editorRecord?.sourceEntryIds ?? editorRecord?.source_entry_ids).length > 0 || stringArrayValue(editorRecord?.sourceEventIds ?? editorRecord?.source_event_ids).length > 0)
+		&& stringValue(characterCreationPreview?.description).trim().length >= 24
+		&& !/\bis important in this chapter checkpoint\.?$/i.test(stringValue(characterCreationPreview?.description).trim()));
+	const candidateReady = $derived(sourceDraftReady || candidateManuallyReady || candidateAlreadyPopulated);
 
 	function asRecord(value: unknown): JsonRecord | null {
 		return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : null;
@@ -153,6 +279,10 @@
 
 	function lineArray(value: string): string[] {
 		return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+	}
+
+	function commaArray(value: string): string[] {
+		return value.split(',').map((item) => item.trim()).filter(Boolean);
 	}
 
 	function nullableTextValue(value: string): string | null {
@@ -219,12 +349,14 @@
 
 	function npcCandidateName(row: JsonRecord | null): string {
 		if (!row) return '';
+		row = proposalRecordView(row);
 		const metadata = asRecord(row.metadata);
 		const value = proposalOperationValue(row);
 		return stringValue(metadata?.sourceName || value?.name || row.targetRecordId);
 	}
 
 	function npcCandidateSource(row: JsonRecord): string {
+		row = proposalRecordView(row);
 		const metadata = asRecord(row.metadata);
 		const chapterNumber = metadata?.chapterNumber;
 		if (typeof chapterNumber === 'number' || typeof chapterNumber === 'string') return `Chapter ${chapterNumber}`;
@@ -232,6 +364,7 @@
 	}
 
 	function isNpcCandidateProposal(row: JsonRecord): boolean {
+		row = proposalRecordView(row);
 		const status = String(row.status ?? '');
 		return row.proposalType === 'character_reference_review' && ['pending', 'needs_review'].includes(status);
 	}
@@ -244,19 +377,24 @@
 		if (isReviewSection()) {
 			if (column === 'summary') return formatProposalSummary(row);
 			if (column === 'reason') return formatProposalDescription(row);
+			return proposalRecordView(row)[column];
 		}
 		return row[column];
 	}
 
 	function recordSubtitle(row: JsonRecord): string {
+		if (activeSection === 'jobs') return `${stringValue(row.status)} · ${stringValue(row.attemptCount)}/${stringValue(row.maxAttempts)} attempts${row.lastError ? ` · ${stringValue(row.lastError)}` : ''}`;
 		if (isNpcCandidateSection()) return formatProposalDescription(row);
-		return isReviewSection() ? formatProposalDescription(row) : preview(row.id);
+		if (isReviewSection()) return formatProposalDescription(row);
+		const state = asRecord(row.state);
+		return preview(state?.bio || row.description || row.summary || row.content || row.reason || state?.rank || '');
 	}
 
 	function recordTitle(row: JsonRecord): string {
+		if (activeSection === 'jobs') return stringValue(row.type).replaceAll('_', ' ');
 		if (isNpcCandidateSection()) return npcCandidateName(row) || formatProposalSummary(row);
 		if (isReviewSection() || row.proposalType) return formatProposalSummary(row);
-		for (const key of ['title', 'name', 'goal', 'terms', 'description', 'type', 'id']) {
+		for (const key of ['title', 'name', 'goal', 'terms', 'summary', 'content', 'description', 'serviceId', 'type', 'id']) {
 			const value = row[key];
 			if (typeof value === 'string' && value.trim()) return value.trim();
 		}
@@ -271,10 +409,56 @@
 		editorText = JSON.stringify(record, null, 2);
 	}
 
+	function updateCandidateDetail(field: 'bio' | 'rank' | 'appearance' | 'description', value: string) {
+		updateEditor((record) => {
+			const operations = asRecordArray(record.operations).map((operation) => ({ ...operation }));
+			const index = operations.findIndex((operation) => operation.op === 'review' && operation.path === '/entities/character');
+			if (index < 0) return;
+			const payload = { ...asRecord(operations[index].value) };
+			if (field === 'description') payload.description = value;
+			else payload.state = { ...asRecord(payload.state), [field]: value };
+			operations[index].value = payload;
+			record.operations = operations;
+			const metadata = { ...asRecord(record.metadata) };
+			const sourceDraft = { ...asRecord(metadata.sourceDraft) };
+			if (sourceDraft.mode === 'evidence_only') sourceDraft.evidence = asRecordArray(sourceDraft.evidence).filter((fact) => fact.field !== field);
+			sourceDraft.mode = 'manual_review';
+			metadata.sourceDraft = sourceDraft;
+			record.metadata = metadata;
+		});
+	}
+
+	function setEditor(value: unknown) {
+		editorText = value == null ? '' : JSON.stringify(value, null, 2);
+		editorBaseline = editorText;
+	}
+
+	function resetEditor() {
+		if (saving) return;
+		editorText = editorBaseline;
+		if (activeSection === 'llmSettings') {
+			llmSettings = JSON.parse(editorBaseline || '[]') as JsonRecord[];
+			records = llmSettings;
+			selectedRecord = llmSettings.find((setting) => setting.serviceId === selectedRecord?.serviceId) ?? llmSettings[0] ?? null;
+			detail = selectedRecord;
+		}
+		editMode = false;
+	}
+
+	function clearSelection() {
+		detailRequest += 1;
+		selectedRecord = null;
+		detail = null;
+		setEditor(null);
+		isDetailLoading = false;
+		showMobileDetail = false;
+		editMode = false;
+	}
+
 	function updateCharacterState(key: string, value: unknown) {
 		updateEditor((record) => {
 			const state = asRecord(record.state) ?? {};
-			record.state = { ...state, [key]: value };
+			record.state = editCharacterState(state, key, value);
 		});
 	}
 
@@ -289,8 +473,22 @@
 		});
 	}
 
+	function updateConceptState(key: string, value: unknown) {
+		updateEditor((record) => {
+			const state = asRecord(record.state) ?? {};
+			record.state = { ...state, type: 'concept', [key]: value };
+		});
+	}
+
 	function setActiveSection(sectionId: string) {
+		if (hasUnsavedChanges || saving) return;
+		if (activeSection === sectionId) {
+			if (focusedRecord) void browseAllRecords();
+			return;
+		}
+		recordHistory = [];
 		activeSection = sectionId;
+		query = '';
 		searchResults = [];
 		loadSection();
 	}
@@ -347,114 +545,151 @@
 		}
 	}
 
-	async function loadSection(cursor: string | null = null) {
-		if (!selectedStoryId && activeSection !== 'llmSettings') return;
+	async function loadSection(cursor: string | null = null): Promise<boolean> {
+		const storyId = selectedStoryId;
+		const sectionId = activeSection;
+		const scopeChanged = storyId !== loadedStoryId || sectionId !== loadedSection;
+		if (!cursor && !scopeChanged && hasUnsavedChanges) return false;
+		if (storyId !== loadedStoryId) recordHistory = [];
+		if (!cursor) focusedRecord = false;
+		if (storyId !== loadedStoryId || sectionId === 'jobs') query = '';
+		const searchQuery = query;
+		const contextChanged = scopeChanged || searchQuery !== loadedQuery;
+		const requestedJobStatus = jobStatusFilter;
+		if (contextChanged) {
+			cursor = null;
+			records = [];
+			nextCursor = null;
+			clearSelection();
+		}
+		loadedStoryId = storyId;
+		loadedSection = sectionId;
+		loadedQuery = searchQuery;
+		searchResults = [];
+		searchRequest += 1;
+		const requestId = ++listRequest;
+		const isCurrent = () => requestId === listRequest && storyId === selectedStoryId && sectionId === activeSection && searchQuery === query
+			&& (sectionId !== 'jobs' || requestedJobStatus === jobStatusFilter);
+		if (!storyId && sectionId !== 'llmSettings') {
+			loading = false;
+			return false;
+		}
 		loading = true;
 		status = '';
 		try {
-			if (activeSection === 'jobs') {
-				const body = await runEngineCommand(selectedStoryId, 'jobs.status', { limit: 100 });
-				records = Array.isArray(body.jobs) ? body.jobs as JsonRecord[] : [];
-				selectedRecord = records[0] ?? null;
-				detail = selectedRecord;
-				editorText = selectedRecord ? JSON.stringify(selectedRecord, null, 2) : '';
-				nextCursor = null;
-			} else if (activeSection === 'llmSettings') {
-				const body = await runEngineCommand('__app__', 'settings.llm.list');
-				llmSettings = Array.isArray(body.settings) ? body.settings as JsonRecord[] : [];
-				records = llmSettings;
-				selectedRecord = records[0] ?? null;
-				detail = selectedRecord;
-				editorText = JSON.stringify(llmSettings, null, 2);
-				nextCursor = null;
-			} else if (activeSection === 'apiCallLogs') {
-				const body = await runEngineCommand(selectedStoryId, 'apiCallLogs.list', { limit: 60 });
-				records = Array.isArray(body.logs) ? body.logs as JsonRecord[] : [];
-				selectedRecord = records[0] ?? null;
-				detail = selectedRecord;
-				editorText = selectedRecord ? JSON.stringify(selectedRecord, null, 2) : '';
-				nextCursor = null;
-			} else if (activeSection === 'npcCandidates') {
-				const args: JsonRecord = {
-					type: 'patchProposals',
-					q: query,
-					limit: 100,
-				};
+			let body: JsonRecord;
+			if (sectionId === 'jobs') body = await runEngineCommand(storyId, 'jobs.status', { limit: 100, ...(requestedJobStatus ? { status: requestedJobStatus } : {}) });
+			else if (sectionId === 'llmSettings') body = await runEngineCommand('__app__', 'settings.llm.list');
+			else if (sectionId === 'apiCallLogs') body = await runEngineCommand(storyId, 'apiCallLogs.list', { limit: 60 });
+			else {
+				const args: JsonRecord = { type: recordCommandType(sectionId), q: searchQuery, limit: sectionId === 'npcCandidates' ? 100 : 60 };
 				if (cursor) args.cursor = cursor;
-				const body = await runEngineCommand(selectedStoryId, 'world.records', args);
-				const pageRecords = (Array.isArray(body.records) ? body.records as JsonRecord[] : []).filter(isNpcCandidateProposal);
-				records = cursor ? [...records, ...pageRecords] : pageRecords;
-				nextCursor = typeof body.nextCursor === 'string' ? body.nextCursor : null;
-				selectedRecord = records[0] ?? null;
-				if (selectedRecord) await selectRecord(selectedRecord);
-				else {
-					detail = null;
-					editorText = '';
-				}
-			} else {
-				const args: JsonRecord = {
-					type: recordCommandType(),
-					q: query,
-					limit: 60,
-				};
-				if (cursor) args.cursor = cursor;
-				const body = await runEngineCommand(selectedStoryId, 'world.records', args);
-				const pageRecords = Array.isArray(body.records) ? body.records as JsonRecord[] : [];
-				records = cursor ? [...records, ...pageRecords] : pageRecords;
-				nextCursor = typeof body.nextCursor === 'string' ? body.nextCursor : null;
-				selectedRecord = records[0] ?? null;
-				if (selectedRecord) await selectRecord(selectedRecord);
-				else {
-					detail = null;
-					editorText = '';
-				}
+				body = await runEngineCommand(storyId, 'world.records', args);
 			}
+			if (!isCurrent()) return false;
+			const rawRecords = body.jobs ?? body.settings ?? body.logs ?? body.records;
+			let pageRecords = Array.isArray(rawRecords) ? rawRecords as JsonRecord[] : [];
+			if (sectionId === 'npcCandidates') pageRecords = pageRecords.filter(isNpcCandidateProposal);
+			records = cursor ? [...records, ...pageRecords] : pageRecords;
+			nextCursor = typeof body.nextCursor === 'string' ? body.nextCursor : null;
+			if (sectionId === 'llmSettings') llmSettings = records;
+			// Paging must not replace the editor or discard an unfinished edit.
+			const currentRecord = records.find((record) => sectionId === 'llmSettings'
+				? record.serviceId === selectedRecord?.serviceId
+				: record.id === selectedRecord?.id);
+			if (currentRecord && (cursor || hasUnsavedChanges)) return true;
+			const nextRecord = currentRecord ?? records[0];
+			if (nextRecord) await selectRecord(nextRecord, false);
+			else clearSelection();
+			return isCurrent();
 		} catch (error) {
-			status = error instanceof Error ? error.message : String(error);
+			if (isCurrent()) status = error instanceof Error ? error.message : String(error);
+			return false;
 		} finally {
-			loading = false;
+			if (requestId === listRequest) loading = false;
 		}
 	}
 
-	async function selectRecord(row: JsonRecord) {
+	async function selectRecord(row: JsonRecord, openDetail = true) {
+		if (openDetail && (hasUnsavedChanges || saving)) return;
+		const storyId = selectedStoryId;
+		const sectionId = activeSection;
+		const requestId = ++detailRequest;
+		const isCurrent = () => requestId === detailRequest && storyId === selectedStoryId && sectionId === activeSection && selectedRecord?.id === row.id;
 		selectedRecord = row;
-		if (activeSection === 'llmSettings') {
+		detail = null;
+		setEditor(null);
+		editMode = false;
+		if (openDetail) showMobileDetail = true;
+		if (sectionId === 'llmSettings' || sectionId === 'jobs' || !row.id) {
 			detail = row;
-			editorText = JSON.stringify(llmSettings, null, 2);
+			setEditor(sectionId === 'llmSettings' ? llmSettings : row);
+			isDetailLoading = false;
 			return;
 		}
-		if (!isRecordSection || !row.id) {
-			detail = row;
-			editorText = JSON.stringify(row, null, 2);
-			return;
-		}
+		isDetailLoading = true;
 		try {
-			const body = await runEngineCommand(selectedStoryId || '__app__', 'world.record.get', {
-				type: recordCommandType(),
+			const body = await runEngineCommand(storyId || '__app__', 'world.record.get', {
+				type: recordCommandType(sectionId),
 				recordId: String(row.id),
 			});
+			if (!isCurrent()) return;
 			detail = body;
-			editorText = JSON.stringify(body.record ?? row, null, 2);
-		} catch {
-			detail = row;
-			editorText = JSON.stringify(row, null, 2);
+			setEditor(body.record ?? row);
+		} catch (error) {
+			if (isCurrent()) status = error instanceof Error ? error.message : String(error);
+		} finally {
+			if (isCurrent()) isDetailLoading = false;
 		}
 	}
 
-	async function openRecord(sectionId: string, recordId: string, fallback: JsonRecord = {}) {
-		activeSection = sectionId;
+	async function openRecord(sectionId: string, recordId: string, fallback: JsonRecord = {}, remember = true): Promise<boolean> {
+		if (hasUnsavedChanges || saving) return false;
+		const previous = selectedRecord?.id ? { section: activeSection, id: String(selectedRecord.id), title: recordTitle(selectedRecord) } : null;
+		const storyId = selectedStoryId;
+		const requestId = ++detailRequest;
+		listRequest += 1;
+		searchRequest += 1;
+		loading = false;
+		isDetailLoading = true;
+		status = '';
 		searchResults = [];
 		query = '';
-		const body = await runEngineCommand(selectedStoryId || '__app__', 'world.record.get', {
-			type: recordCommandType(sectionId),
-			recordId,
-		});
-		const record = asRecord(body.record) ?? { ...fallback, id: recordId };
-		records = [record];
-		selectedRecord = record;
-		detail = body;
-		editorText = JSON.stringify(record, null, 2);
-		nextCursor = null;
+		try {
+			const body = await runEngineCommand(storyId || '__app__', 'world.record.get', {
+				type: recordCommandType(sectionId),
+				recordId,
+			});
+			if (requestId !== detailRequest || storyId !== selectedStoryId) return false;
+			const record = asRecord(body.record) ?? { ...fallback, id: recordId };
+			if (remember && previous && (previous.section !== sectionId || previous.id !== recordId)) recordHistory = [...recordHistory.slice(-19), previous];
+			focusedRecord = true;
+			activeSection = sectionId === 'entities' && record.type === 'concept' ? 'concepts' : sectionId;
+			loadedStoryId = storyId;
+			loadedSection = activeSection;
+			loadedQuery = '';
+			records = [record];
+			selectedRecord = record;
+			detail = body;
+			setEditor(record);
+			editMode = false;
+			showMobileDetail = true;
+			nextCursor = null;
+			return true;
+		} catch (error) {
+			if (requestId === detailRequest && storyId === selectedStoryId) status = error instanceof Error ? error.message : String(error);
+			return false;
+		} finally {
+			if (requestId === detailRequest) isDetailLoading = false;
+		}
+	}
+
+	async function openEntityReference(recordId: string) {
+		try {
+			await openRecord('entities', recordId);
+		} catch (error) {
+			status = error instanceof Error ? error.message : String(error);
+		}
 	}
 
 	async function openSearchResult(result: JsonRecord) {
@@ -472,36 +707,55 @@
 	}
 
 	async function saveRecord() {
-		if (!selectedRecord?.id || !isRecordSection) return;
+		if (!selectedRecord?.id || !isRecordSection || isReadOnlySection || isDetailLoading || saving || editorRecord?.id !== selectedRecord.id) return;
+		const storyId = selectedStoryId;
+		const sectionId = activeSection;
+		const recordId = String(selectedRecord.id);
+		const submittedText = editorText;
 		saving = true;
 		status = '';
 		try {
-			const parsed = JSON.parse(editorText) as JsonRecord;
-			const body = await runEngineCommand(selectedStoryId || '__app__', 'world.record.patch', {
-				type: recordCommandType(),
-				recordId: String(selectedRecord.id),
-				updates: parsed,
+			const parsed = JSON.parse(submittedText) as JsonRecord;
+			const baseline = JSON.parse(editorBaseline) as JsonRecord;
+			const updates = changedRecordUpdates(baseline, parsed);
+			if (Object.keys(updates).length === 0) {
+				editorBaseline = submittedText;
+				status = 'No record fields changed.';
+				return;
+			}
+			await runEngineCommand(storyId || '__app__', 'world.record.patch', {
+				type: recordCommandType(sectionId),
+				recordId,
+				updates,
+				expectedVersion: typeof baseline.server_version === 'number' ? baseline.server_version : undefined,
+				expectedUpdatedAt: baseline.updated_at,
+				jsonMode: 'replace',
 				reason: 'Manual explorer edit.',
 			});
-			status = `Saved patch ${body.patchId ?? ''}`;
-			await loadSection();
+			if (storyId !== selectedStoryId || sectionId !== activeSection || selectedRecord?.id !== recordId) return;
+			editorBaseline = submittedText;
+			if (!hasUnsavedChanges) await loadSection();
+			if (storyId === selectedStoryId && sectionId === activeSection) status = 'Changes saved.';
 		} catch (error) {
-			status = error instanceof Error ? error.message : String(error);
+			if (storyId === selectedStoryId && sectionId === activeSection) status = error instanceof Error ? error.message : String(error);
 		} finally {
 			saving = false;
 		}
 	}
 
 	async function draftCharacterUpdate() {
-		if (!selectedStoryId || !selectedRecord?.id) return;
+		if (!selectedStoryId || !selectedRecord?.id || hasUnsavedChanges || saving || isDetailLoading || draftingCharacter) return;
+		const storyId = selectedStoryId;
+		const recordId = String(selectedRecord.id);
 		draftingCharacter = true;
 		status = '';
 		try {
-			const body = await runEngineCommand(selectedStoryId, 'world.character.draftUpdate', {
-				recordId: String(selectedRecord.id),
+			const body = await runEngineCommand(storyId, 'world.character.draftUpdate', {
+				recordId,
 				instructions: characterDraftInstructions,
 				recentLimit: 30,
 			});
+			if (storyId !== selectedStoryId || selectedRecord?.id !== recordId) return;
 			if (body.status === 'skipped') {
 				status = stringValue(body.reason) || 'No supported character changes found.';
 				return;
@@ -519,41 +773,240 @@
 		}
 	}
 
+	async function runGmTool() {
+		if (!selectedStoryId || gmToolBusy) return;
+		gmToolBusy = true;
+		gmToolResult = null;
+		status = '';
+		try {
+			const actorNames = commaArray(gmActors);
+			let command = 'world.actor.brief';
+			let args: JsonRecord = { name: gmTarget.trim() };
+			if (gmTool === 'scene') {
+				command = 'world.scene.check';
+				args = { locationName: gmTarget.trim(), actorNames };
+				const availableMinutes = Number(gmAvailableMinutes);
+				if (gmAvailableMinutes.trim() && Number.isFinite(availableMinutes) && availableMinutes >= 0) args.availableMinutes = Math.round(availableMinutes);
+			} else if (gmTool === 'relationships') {
+				command = 'world.relationship.web';
+				args = { actorNames: commaArray(gmTarget || gmActors), depth: 2 };
+			} else if (gmTool === 'threads') {
+				command = 'plot.thread.board';
+				args = { query: gmTarget.trim(), limit: 12 };
+			}
+			gmToolResult = await runEngineCommand(selectedStoryId, command, args);
+		} catch (error) {
+			status = error instanceof Error ? error.message : String(error);
+		} finally {
+			gmToolBusy = false;
+		}
+	}
+
+	async function createCharacterDraft() {
+		if (!selectedStoryId || creatingCharacterDraft || hasUnsavedChanges || saving) return;
+		if (![newCharacterName, newCharacterRole, newCharacterBackstory, newCharacterPurpose].every((value) => value.trim())) {
+			status = 'Add a name, role, backstory, and narrative purpose before preparing the character.';
+			return;
+		}
+		const storyId = selectedStoryId;
+		creatingCharacterDraft = true;
+		const characterName = newCharacterName.trim();
+		status = '';
+		try {
+			const body = await runEngineCommand(storyId, 'world.character.draftCreate', {
+				name: characterName,
+				role: newCharacterRole.trim(),
+				backstory: newCharacterBackstory.trim(),
+				narrativePurpose: newCharacterPurpose.trim(),
+				desire: newCharacterDesire.trim() || undefined,
+				fear: newCharacterFear.trim() || undefined,
+				faction: newCharacterFaction.trim() || undefined,
+				location: newCharacterLocation.trim() || undefined,
+			});
+			if (storyId !== selectedStoryId) return;
+			if (body.status === 'existing' && typeof body.recordId === 'string') {
+				if (!await openRecord('characters', body.recordId)) return;
+				showGmToolkit = false;
+				status = stringValue(body.reason) || `${characterName} already exists.`;
+				return;
+			}
+			const proposalId = typeof body.proposalId === 'string' ? body.proposalId : '';
+			if (!proposalId) throw new Error('The character draft did not return a review proposal.');
+			if (!await openRecord('patchProposals', proposalId)) return;
+			showGmToolkit = false;
+			if (storyId === selectedStoryId) status = `${characterName} is ready to preview. Choose Create character to add them to this story.`;
+		} catch (error) {
+			if (storyId === selectedStoryId) status = error instanceof Error ? error.message : String(error);
+		} finally {
+			creatingCharacterDraft = false;
+		}
+	}
+
+	async function createCharacterDirect() {
+		const storyId = selectedStoryId;
+		const projectId = selectedStory?.shelfId;
+		const name = newCharacterName.trim();
+		if (!storyId || !projectId || !name || creatingCharacterDraft) {
+			status = 'Select a story and enter a character name.';
+			return;
+		}
+		creatingCharacterDraft = true;
+		status = '';
+		try {
+			const state: JsonRecord = { type: 'character' };
+			if (newCharacterBackstory.trim()) state.bio = newCharacterBackstory.trim();
+			if (newCharacterRole.trim()) state.rank = newCharacterRole.trim();
+			if (newCharacterDesire.trim() || newCharacterFear.trim()) state.motivations = [newCharacterDesire.trim(), newCharacterFear.trim() && `Fear: ${newCharacterFear.trim()}`].filter(Boolean);
+			if (newCharacterFaction.trim()) state.factionTags = [newCharacterFaction.trim()];
+			if (newCharacterLocation.trim()) state.currentLocation = newCharacterLocation.trim();
+			const body = await runEngineCommand(storyId, 'content.canonical.create', {
+				projectId, gameId: storyId, kind: 'characters',
+				fields: { name, description: [newCharacterRole.trim(), newCharacterBackstory.trim()].filter(Boolean).join('. '), status: 'active', visibility: 'gm', state,
+					metadata: newCharacterPurpose.trim() ? { narrativePurpose: newCharacterPurpose.trim() } : {} },
+			});
+			if (storyId !== selectedStoryId) return;
+			const recordId = stringValue(asRecord(body.record)?.id);
+			if (!recordId || !await openRecord('characters', recordId)) throw new Error('Character was saved, but its entry could not be opened.');
+			showGmToolkit = false;
+			status = `${name} is now a character in this story.`;
+		} catch (error) {
+			if (storyId === selectedStoryId) status = error instanceof Error ? error.message : String(error);
+		} finally { creatingCharacterDraft = false; }
+	}
+
+	async function findCharacterCandidates() {
+		if (!selectedStoryId || activeSection !== 'npcCandidates' || findingCandidates || hasUnsavedChanges || saving || draftingCandidateId || reviewingProposal) return;
+		const storyId = selectedStoryId;
+		findingCandidates = true;
+		status = '';
+		try {
+			const body = await runEngineCommand(storyId, 'world.character.findCandidates', { chapterLimit: 8 });
+			if (storyId !== selectedStoryId || activeSection !== 'npcCandidates') return;
+			if (await loadSection()) status = stringValue(body.reason) || `Scanned ${stringValue(body.chaptersScanned)} chapters: ${stringValue(body.created)} new candidates, ${stringValue(body.updated)} refreshed. Review candidates before saving canon.`;
+		} catch (error) {
+			if (storyId === selectedStoryId && activeSection === 'npcCandidates') status = error instanceof Error ? error.message : String(error);
+		} finally { findingCandidates = false; }
+	}
+
+	async function goBackToRecord() {
+		const previous = recordHistory.at(-1);
+		if (!previous || isDetailLoading) return;
+		if (await openRecord(previous.section, previous.id, {}, false)) recordHistory = recordHistory.slice(0, -1);
+	}
+
+	async function browseAllRecords() {
+		if (hasUnsavedChanges || saving) return;
+		query = '';
+		searchResults = [];
+		if (await loadSection()) showMobileDetail = false;
+	}
+
+	async function draftCandidateFromSources() {
+		if (!selectedStoryId || !selectedRecord?.id || !isSourceCharacterCandidate || !isReviewablePatch || draftingCandidateId || hasUnsavedChanges || saving || isDetailLoading || reviewingProposal) return;
+		const storyId = selectedStoryId;
+		const sectionId = activeSection;
+		const proposalId = String(selectedRecord.id);
+		const expectedProposalVersion = editorRecord?.serverVersion ?? editorRecord?.server_version ?? selectedRecord.serverVersion ?? selectedRecord.server_version;
+		const isCurrent = () => storyId === selectedStoryId && selectedRecord?.id === proposalId && activeSection === sectionId;
+		draftingCandidateId = proposalId;
+		status = '';
+		try {
+			const body = await runEngineCommand(storyId, 'world.character.draftFromSources', {
+				proposalId,
+				...(typeof expectedProposalVersion === 'number' ? { expectedProposalVersion } : {}),
+			});
+			if (!isCurrent()) return;
+			if (body.status === 'skipped') { status = stringValue(body.reason) || 'No supported character details found.'; return; }
+			if (body.status === 'existing' && typeof body.recordId === 'string') {
+				if (await openRecord('characters', body.recordId)) status = stringValue(body.reason) || 'This character already exists.';
+				return;
+			}
+			if (body.status !== 'pending' || body.proposalId !== proposalId) throw new Error('The source draft did not return this review candidate.');
+			if (await openRecord(sectionId, proposalId) && await loadSection()) status = 'Extracted details are ready for review. Check each source quotation, its context and who it describes before saving the character.';
+		} catch (error) {
+			if (isCurrent()) status = error instanceof Error ? error.message : String(error);
+		} finally {
+			if (draftingCandidateId === proposalId) draftingCandidateId = '';
+		}
+	}
+
 	async function reviewPatchProposal(decision: 'approved' | 'rejected') {
-		if (!selectedStoryId || !selectedRecord?.id) return;
+		if (!selectedStoryId || !selectedRecord?.id || hasUnsavedChanges || saving || isDetailLoading || reviewingProposal || draftingCandidateId) return;
+		if (decision === 'approved' && isSourceCharacterCandidate && !candidateReady) { status = 'Add a real biography and save the candidate, or build details from story sources first.'; return; }
+		const storyId = selectedStoryId;
+		const proposalId = String(selectedRecord.id);
+		const creatingCharacter = isCharacterCreationProposal;
+		const updatingCharacter = Boolean(sourceCharacterBefore);
+		const characterName = stringValue(characterCreationPreview?.name) || 'Character';
+		const expectedProposalVersion = editorRecord?.serverVersion ?? editorRecord?.server_version ?? selectedRecord.serverVersion ?? selectedRecord.server_version;
 		reviewingProposal = true;
 		status = '';
 		try {
-			const body = await runEngineCommand(selectedStoryId, 'patchProposal.review', {
-				proposalId: String(selectedRecord.id),
+			const body = await runEngineCommand(storyId, 'patchProposal.review', {
+				proposalId,
 				decision,
 				reviewer: 'human',
+				...(typeof expectedProposalVersion === 'number' ? { expectedProposalVersion } : {}),
 			});
-			status = `Proposal ${decision}.`;
+			if (storyId !== selectedStoryId || selectedRecord?.id !== proposalId) return;
 			const application = asRecord(body.application);
 			const affectedEntityIds = Array.isArray(application?.affectedEntityIds) ? application.affectedEntityIds : [];
 			const firstEntityId = affectedEntityIds.find((value): value is string => typeof value === 'string' && value.trim().length > 0);
-			if (decision === 'approved' && firstEntityId) await openRecord('characters', firstEntityId);
-			else await loadSection();
+			const appliedCount = typeof application?.appliedCount === 'number' ? application.appliedCount : 0;
+			if (decision === 'approved' && (body.status === 'rejected' || (creatingCharacter && (body.status !== 'applied' || appliedCount < 1 || !firstEntityId)))) {
+				const reason = stringValue(asRecord(application?.metadata)?.rejectionReason || asRecord(asRecord(body.proposal)?.metadata)?.rejectionReason);
+				await openRecord('patchProposals', proposalId);
+				if (storyId === selectedStoryId) status = reason || (creatingCharacter ? 'Character was not created. The backend did not apply this draft.' : 'The backend rejected this proposal. No changes were applied.');
+				return;
+			}
+			if (decision === 'approved' && firstEntityId) {
+				if (!await openRecord('characters', firstEntityId)) return;
+				if (!await loadSection()) return;
+			} else if (!await loadSection()) return;
+			if (storyId === selectedStoryId) status = creatingCharacter
+				? decision === 'approved' ? updatingCharacter ? `${characterName} was updated in this story.` : `${characterName} is now a character in this story.` : 'Character draft discarded.'
+				: `Proposal ${stringValue(body.status) || decision}.`;
 		} catch (error) {
-			status = error instanceof Error ? error.message : String(error);
+			if (storyId === selectedStoryId && selectedRecord?.id === proposalId) status = error instanceof Error ? error.message : String(error);
 		} finally {
 			reviewingProposal = false;
 		}
 	}
 
+	async function retrySelectedJob() {
+		if (activeSection !== 'jobs' || !selectedStoryId || !selectedRecord?.id || selectedRecord.retryAllowed !== true || retryingJobId || loading) return;
+		const storyId = selectedStoryId;
+		const jobId = stringValue(selectedRecord.id);
+		const expectedUpdatedAt = stringValue(selectedRecord.updatedAt);
+		const isCurrent = () => storyId === selectedStoryId && activeSection === 'jobs' && selectedRecord?.id === jobId;
+		retryingJobId = jobId;
+		status = '';
+		try {
+			await runEngineCommand(storyId, 'jobs.retry', { jobId, expectedUpdatedAt });
+			if (!isCurrent()) return;
+			const refreshed = await loadSection();
+			if (refreshed && storyId === selectedStoryId && activeSection === 'jobs') status = 'Retry queued. The worker will resume this job.';
+		} catch (error) {
+			if (isCurrent()) status = error instanceof Error ? error.message : String(error);
+		} finally {
+			if (retryingJobId === jobId) retryingJobId = '';
+		}
+	}
+
 	async function saveLlmSettings() {
+		if (saving) return;
 		saving = true;
 		status = '';
 		try {
 			const parsed = JSON.parse(editorText);
-			const settings = Array.isArray(parsed) ? parsed : [];
+			if (!Array.isArray(parsed)) throw new Error('LLM settings must be a JSON array. No settings were saved.');
+			const settings = parsed;
 			const body = await runEngineCommand('__app__', 'settings.llm.save', { settings });
 			llmSettings = Array.isArray(body.settings) ? body.settings as JsonRecord[] : [];
 			records = llmSettings;
 			selectedRecord = llmSettings.find((setting) => setting.serviceId === selectedRecord?.serviceId) ?? llmSettings[0] ?? null;
 			detail = selectedRecord;
-			editorText = JSON.stringify(llmSettings, null, 2);
+			setEditor(llmSettings);
 			status = 'LLM settings saved.';
 		} catch (error) {
 			status = error instanceof Error ? error.message : String(error);
@@ -578,15 +1031,20 @@
 	}
 
 	async function searchStory() {
-		if (!selectedStoryId) return;
+		if (!selectedStoryId || hasUnsavedChanges || saving) return;
+		const storyId = selectedStoryId;
+		const sectionId = activeSection;
+		const searchQuery = query;
+		const requestId = ++searchRequest;
+		const isCurrent = () => requestId === searchRequest && storyId === selectedStoryId && sectionId === activeSection && searchQuery === query;
 		status = '';
 		try {
-			const args: JsonRecord = { q: query, limit: 12 };
-			if (isRecordSection && activeSection !== 'apiCallLogs') args.type = recordCommandType();
-			const body = await runEngineCommand(selectedStoryId, 'world.search', args);
-			searchResults = Array.isArray(body.results) ? body.results as JsonRecord[] : [];
+			const args: JsonRecord = { q: searchQuery, limit: 12 };
+			if (isRecordSection && sectionId !== 'apiCallLogs') args.type = recordCommandType(sectionId);
+			const body = await runEngineCommand(storyId, 'world.search', args);
+			if (isCurrent()) searchResults = Array.isArray(body.results) ? body.results as JsonRecord[] : [];
 		} catch (error) {
-			status = error instanceof Error ? error.message : String(error);
+			if (isCurrent()) status = error instanceof Error ? error.message : String(error);
 		}
 	}
 
@@ -599,12 +1057,21 @@
 		mediaQuery.addEventListener('change', syncViewport);
 
 		(async () => {
-			await loadStories();
-			ensureActiveSectionVisible();
-			await loadSection();
+			try {
+				await loadStories();
+				ensureActiveSectionVisible();
+				await loadSection();
+			} catch (error) {
+				status = error instanceof Error ? error.message : String(error);
+			}
 		})();
 
-		return () => mediaQuery.removeEventListener('change', syncViewport);
+		return () => {
+			listRequest += 1;
+			detailRequest += 1;
+			searchRequest += 1;
+			mediaQuery.removeEventListener('change', syncViewport);
+		};
 	});
 
 	$effect(() => {
@@ -614,214 +1081,327 @@
 	});
 </script>
 
-<div class="flex h-full min-h-0 flex-col bg-[var(--bg-primary)] text-[var(--text-primary)]">
-	<header class="flex flex-col gap-2 border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-3 sm:flex-row sm:items-center sm:gap-3">
-		<div class="flex min-w-0 items-center gap-2">
-			<Database class="h-5 w-5 text-[var(--text-accent)]" />
-			<div class="min-w-0">
-				<div class="font-display text-sm tracking-wide text-[var(--text-accent)]">{title}</div>
-				<div class="truncate text-xs text-[var(--text-muted)]">{selectedStory?.title ?? 'No story selected'}</div>
-			</div>
+<svelte:window onbeforeunload={protectDraft} />
+
+<style>
+	.lore-workspace { display: flex; flex-direction: column; container: lore / inline-size; height: 100%; min-height: 0; min-width: 0; background: var(--bg-primary); color: var(--text-primary); }
+	.lore-header { display: flex; flex-shrink: 0; align-items: center; flex-wrap: wrap; gap: 16px; padding: 25px 30px; border-bottom: 1px solid var(--border-primary); background: var(--bg-primary); }
+	.lore-brand { display: flex; gap: 12px; align-items: center; min-width: 0; }
+	.lore-brand-icon { display: grid; place-items: center; flex-shrink: 0; width: 46px; height: 52px; border: 1px solid color-mix(in srgb, var(--text-accent) 25%, transparent); border-radius: 24px 24px 7px 7px; color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 5%, transparent); }
+	.lore-kicker { display: block; margin-bottom: 5px; color: var(--text-accent); font-size: 9px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; }
+	.lore-brand h2 { margin: 0; font-family: var(--font-display); font-size: 27px; line-height: 1.2; font-weight: 400; letter-spacing: -.025em; }
+	.lore-brand p { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); }
+	.lore-header-actions { display: flex; gap: 8px; margin-left: auto; }
+	.lore-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex-shrink: 0; min-height: 39px; padding: 9px 12px; border: 1px solid var(--border-primary); border-radius: 7px; color: var(--text-secondary); font-size: 12px; line-height: 1.3; background: var(--bg-secondary); cursor: pointer; transition: background .15s, border-color .15s; }
+	.lore-button:hover { color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 5%, transparent); border-color: color-mix(in srgb, var(--text-accent) 30%, transparent); }
+	.lore-button.primary { background: var(--text-accent); border-color: var(--text-accent); color: var(--bg-primary); font-weight: 600; }
+	.lore-button.subtle { border-color: transparent; color: var(--text-muted); }
+	.lore-workspace :global(button:disabled) { cursor: default; opacity: .4; }
+	.lore-workspace :global(button:focus-visible), .lore-workspace :global(summary:focus-visible), .lore-workspace :global(input:focus-visible), .lore-workspace :global(select:focus-visible), .lore-workspace :global(textarea:focus-visible) { outline: 2px solid var(--text-accent); outline-offset: 3px; }
+	.story-select { max-width: 220px; min-width: 0; min-height: 39px; border: 1px solid var(--border-primary); border-radius: 7px; background: var(--bg-secondary); padding: 9px 11px; color: var(--text-secondary); font-size: 12px; }
+	.new-database { position: relative; font-size: 12px; color: var(--text-secondary); }
+	.new-database summary { display: flex; align-items: center; gap: 6px; min-height: 39px; cursor: pointer; list-style: none; }
+	.new-database summary::-webkit-details-marker { display: none; }
+	.new-database > div { position: absolute; z-index: 20; display: flex; gap: 8px; padding: 14px; margin-top: 12px; background: var(--bg-elevated); border: 1px solid var(--border-primary); border-radius: 10px; box-shadow: 0 18px 45px #0004; }
+	.new-database input { min-width: 0; width: 160px; border: 1px solid var(--border-primary); background: var(--bg-primary); border-radius: 5px; padding: 8px; }
+	.lore-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+	.lore-navigation { width: 172px; flex-shrink: 0; overflow-y: auto; padding: 25px 10px; border-right: 1px solid var(--border-primary); background: var(--bg-secondary); }
+	.nav-group + .nav-group { margin-top: 24px; }
+	.nav-group h3 { margin: 0 10px 9px; color: var(--text-muted); font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: .12em; }
+	.nav-group button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 38px; padding: 9px 10px; text-align: left; color: var(--text-secondary); font-size: 12px; border-radius: 6px; margin: 2px 0; cursor: pointer; }
+	.nav-group button :global(svg) { opacity: .6; flex-shrink: 0; }
+	.nav-group button:hover { background: var(--bg-tertiary); }
+	.nav-group button.active { background: color-mix(in srgb, var(--text-accent) 11%, transparent); color: var(--text-accent); }
+	.nav-group button.active :global(svg) { opacity: 1; }
+	.lore-content { display: flex; flex: 1; flex-direction: column; overflow: hidden; min-width: 0; }
+	.lore-search select { min-width: 0; width: 100%; border: 0; background: var(--bg-primary); color: var(--text-primary); font-size: 12px; padding: 8px; }
+	.lore-status { padding: 10px 20px; font-size: 12px; line-height: 1.5; color: var(--text-accent); border-bottom: 1px solid var(--border-primary); background: var(--bg-secondary); }
+	.lore-status.unsaved { background: color-mix(in srgb, var(--text-accent) 8%, transparent); }
+	.lore-panes { display: grid; grid-template-columns: minmax(260px, 32%) minmax(0, 1fr); flex: 1; min-height: 0; }
+	.lore-list-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--border-primary); }
+	.lore-list-header { padding: 24px 20px 20px; background: var(--bg-primary); border-bottom: 1px solid var(--border-secondary); }
+	.list-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+	.list-heading h3 { font-family: var(--font-display); font-size: 21px; font-weight: 400; letter-spacing: -.02em; margin: 0; }
+	.entry-count { font-size: 10px; color: var(--text-muted); border: 1px solid var(--border-primary); border-radius: 5px; padding: 1px 6px; font-variant-numeric: tabular-nums; }
+	.lore-icon-button { display: grid; place-items: center; margin-left: auto; width: 30px; height: 30px; border-radius: 6px; color: var(--text-muted); cursor: pointer; }
+	.lore-icon-button:hover { color: var(--text-accent); background: var(--bg-tertiary); }
+	.lore-search { display: flex; align-items: center; gap: 8px; min-height: 42px; border: 1px solid var(--border-primary); background: var(--bg-secondary); border-radius: 7px; padding: 7px 10px; color: var(--text-muted); }
+	.lore-search:focus-within { border-color: var(--text-accent); }
+	.lore-search > :global(svg) { flex-shrink: 0; }
+	.lore-search input { width: 100%; min-width: 0; height: 24px; background: transparent; color: var(--text-primary); font-size: 12px; outline: none; }
+	.lore-search button { flex-shrink: 0; padding: 4px; cursor: pointer; }
+	.lore-advanced-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+	.lore-advanced-actions button { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-muted); cursor: pointer; }
+	.lore-entry-list { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+	.lore-entry { display: flex; flex-direction: column; gap: 7px; width: 100%; min-width: 0; padding: 17px 14px; margin-bottom: 5px; border: 1px solid transparent; border-left: 2px solid transparent; border-radius: 8px; text-align: left; cursor: pointer; transition: background .15s; }
+	.lore-entry:hover { background: var(--bg-secondary); }
+	.lore-entry.selected { background: color-mix(in srgb, var(--text-accent) 7%, transparent); border-color: color-mix(in srgb, var(--text-accent) 15%, transparent); border-left-color: var(--text-accent); }
+	.entry-kind { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
+	.lore-entry strong { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-family: var(--font-display); font-size: 19px; line-height: 1.3; font-weight: 400; color: var(--text-primary); overflow-wrap: anywhere; }
+	.lore-entry.selected strong { color: var(--text-accent); }
+	.entry-excerpt { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--text-muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+	.current-location { color: var(--text-accent); font-size: 9px; }
+	.load-more { display: flex; justify-content: center; padding: 16px 0; }
+	.lore-detail { min-width: 0; min-height: 0; overflow-y: auto; background: var(--bg-secondary); }
+	.detail-toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 24px; border-bottom: 1px solid var(--border-secondary); background: var(--bg-secondary); }
+	.detail-breadcrumb { display: flex; align-items: center; gap: 8px; min-width: 0; margin-right: auto; color: var(--text-muted); font-size: 11px; }
+	.detail-breadcrumb span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.detail-breadcrumb :global(svg) { flex-shrink: 0; }
+	.detail-content { max-width: 920px; padding: 34px clamp(22px, 3vw, 46px) 64px; margin: 0 auto; }
+	.detail-title { margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid var(--border-primary); }
+	.detail-title h2 { font-family: var(--font-display); font-size: clamp(25px, 2.5vw, 36px); line-height: 1.25; font-weight: 400; margin: 10px 0 14px; overflow-wrap: anywhere; }
+	.entry-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+	.entry-meta span { font-size: 10px; color: var(--text-secondary); border: 1px solid var(--border-primary); border-radius: 4px; padding: 3px 8px; text-transform: capitalize; }
+	.lore-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 64px 16px; color: var(--text-muted); }
+	.lore-empty :global(svg) { color: var(--text-accent); opacity: .6; }
+	.lore-empty h4 { margin: 4px 0 0; color: var(--text-secondary); font-family: var(--font-display); font-size: 20px; font-weight: 400; }
+	.lore-empty p { max-width: 260px; font-size: 12px; line-height: 1.7; margin: 0 0 8px; }
+	.lore-editor { display: grid; gap: 20px; }
+	.lore-editor.entry-basics { margin-bottom: 24px; }
+	.new-character-action { width: 100%; margin-top: 12px; color: var(--text-accent); }
+	.creation-review { margin-bottom: 28px; padding: 20px; border: 1px solid color-mix(in srgb, var(--text-accent) 25%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--text-accent) 5%, transparent); }
+	.creation-review h3 { margin: 0 0 7px; font-family: var(--font-display); font-size: 21px; font-weight: 400; color: var(--text-primary); }
+	.creation-review p { margin: 0; font-size: 12px; line-height: 1.7; color: var(--text-secondary); }
+	.creation-review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+	.lore-editor :global(label) { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 11px; line-height: 1.4; letter-spacing: .02em; text-transform: none; color: var(--text-secondary); }
+	.lore-editor :global(input:not([type='checkbox'])), .lore-editor :global(textarea), .lore-editor :global(select) { width: 100%; min-width: 0; font-size: 13px; line-height: 1.7; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 10px 12px; }
+	.lore-editor :global(textarea) { resize: vertical; min-height: 96px; }
+	.lore-editor :global(.grid) { gap: 16px; }
+	.raw-record { margin-top: 28px; border: 1px solid var(--border-primary); border-radius: 8px; padding: 12px 14px; }
+	.raw-record summary { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; cursor: pointer; }
+	.raw-record summary span { margin-left: auto; font-family: var(--font-mono); font-size: 10px; }
+	.raw-record textarea { margin-top: 14px; font-size: 11px; }
+	.raw-hint { font-size: 11px; color: var(--text-muted); margin: 12px 0 0; }
+	.entry-sources { border-top: 1px solid var(--border-secondary); margin-top: 20px; padding-top: 18px; }
+	.entry-sources summary { cursor: pointer; font-size: 12px; color: var(--text-muted); }
+	.entry-sources summary span { margin-left: 8px; color: var(--text-accent); font-size: 10px; }
+	.source-list { display: grid; gap: 8px; margin-top: 12px; }
+	.source-list button { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border-primary); border-radius: 7px; padding: 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.6; text-align: left; cursor: pointer; }
+	.source-list button span { color: var(--text-accent); font-size: 10px; }
+	.source-list button :global(svg) { flex-shrink: 0; margin-left: auto; }
+	.lore-table { min-width: 760px; }
+	.table-head, .table-row { display: grid; width: 100%; text-align: left; border-bottom: 1px solid var(--border-secondary); }
+	.table-head { color: var(--text-muted); font-size: 10px; text-transform: uppercase; }
+	.table-row { color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+	.table-head span, .table-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 10px; }
+	.search-results { border-bottom: 1px solid var(--border-primary); margin-bottom: 12px; }
+	.search-results h4 { color: var(--text-muted); font-size: 10px; text-transform: uppercase; padding: 10px; }
+	.back-to-entries { display: none; }
+	@container lore (max-width: 840px) {
+		.lore-panes { grid-template-columns: minmax(0, 1fr); }
+		.lore-detail { display: none; }
+		.detail-open .lore-detail { display: block; }
+		.detail-open .lore-list-pane { display: none; }
+		.lore-list-pane { border-right: 0; }
+		.back-to-entries { display: inline-flex; }
+		.detail-breadcrumb { visibility: hidden; font-size: 0; }
+		.detail-breadcrumb :global(svg) { display: none; }
+		.detail-toolbar { padding: 12px 16px; }
+	}
+	@container lore (max-width: 640px) {
+		.lore-header { padding: 19px 20px; gap: 13px; }
+		.lore-brand-icon { display: none; }
+		.lore-brand h2 { font-size: 25px; }
+		.lore-header-actions { gap: 2px; }
+		.lore-header-actions .lore-button { padding: 8px; font-size: 11px; }
+		.lore-header-actions .subtle span { display: none; }
+		.lore-body { flex-direction: column; }
+		.lore-navigation { display: flex; width: 100%; padding: 8px 10px; gap: 8px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--border-primary); }
+		.nav-group { display: flex; gap: 3px; flex-shrink: 0; }
+		.nav-group + .nav-group { margin: 0; border-left: 1px solid var(--border-primary); padding-left: 8px; }
+		.nav-group h3 { display: none; }
+		.nav-group button { white-space: nowrap; gap: 6px; margin: 0; width: auto; min-height: 36px; }
+		.detail-content { padding: 24px 20px 40px; }
+		.lore-list-header { padding: 14px 16px; }
+		.lore-entry-list { padding: 8px 12px; }
+		.lore-entry { padding: 16px; }
+		.lore-entry strong { font-size: 20px; }
+		.lore-entry .entry-excerpt { font-size: 13px; }
+		.story-select { max-width: 160px; }
+		.new-database > div { left: auto; right: 0; }
+	}
+	@container lore (max-width: 420px) {
+		.lore-brand { width: 100%; }
+		.lore-header-actions { margin-left: 0; }
+		.detail-toolbar { flex-wrap: wrap; gap: 7px; }
+		.detail-breadcrumb { display: none; }
+		.detail-toolbar .back-to-entries { margin-right: auto; }
+		.new-database > div { position: fixed; left: 20px; right: 20px; }
+		.new-database input { width: 100%; }
+	}
+	@media (prefers-reduced-motion: reduce) { .lore-button, .lore-entry { transition: none; } }
+</style>
+
+<div class="lore-workspace">
+	<header class="lore-header">
+		<div class="lore-brand">
+			<div class="lore-brand-icon"><BookOpen size={22} strokeWidth={1.5} /></div>
+			<div><span class="lore-kicker">The world behind the story</span><h2>{title}</h2><p>{selectedStory?.title ?? 'Your world, collected'}</p></div>
 		</div>
-
 		{#if !isStoryLocked}
-			<select
-				bind:value={selectedStoryId}
-				onchange={() => {
-					ensureActiveSectionVisible();
-					loadSection();
-				}}
-				class="w-full min-w-0 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-xs text-[var(--text-primary)] sm:min-w-48 sm:w-auto"
-			>
-				{#each stories as item}
-					<option value={item.id}>{item.title ?? item.id}</option>
-				{/each}
+			<select class="story-select" aria-label="Choose story" bind:value={selectedStoryId} disabled={hasUnsavedChanges || saving} onchange={() => { ensureActiveSectionVisible(); loadSection(); }}>
+				{#each stories as item}<option value={item.id}>{item.title ?? item.id}</option>{/each}
 			</select>
-			<div class="flex w-full min-w-0 gap-2 sm:w-64">
-				<input
-					bind:value={newDatabaseTitle}
-					onkeydown={(event) => event.key === 'Enter' && createDatabase()}
-					disabled={creatingDatabase}
-					class="h-9 min-w-0 flex-1 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
-					placeholder="New database"
-				/>
-				<button
-					class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--border-primary)] text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-40"
-					onclick={createDatabase}
-					disabled={!newDatabaseTitle.trim() || creatingDatabase}
-					title="Create database"
-				>
-					<Plus class="h-4 w-4" />
-				</button>
-			</div>
+			<details class="new-database"><summary><Plus size={14} /> New database</summary><div>
+				<input bind:value={newDatabaseTitle} aria-label="New database name" onkeydown={(event) => event.key === 'Enter' && createDatabase()} disabled={creatingDatabase} placeholder="Database name" />
+				<button class="lore-button" onclick={createDatabase} disabled={!newDatabaseTitle.trim() || creatingDatabase || hasUnsavedChanges}>Create</button>
+			</div></details>
 		{/if}
-
-		<div class="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:flex-1 sm:items-center">
-			<div class="relative min-w-40 flex-1">
-				<Search class="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
-				<input
-					bind:value={query}
-					onkeydown={(event) => event.key === 'Enter' && loadSection()}
-					class="h-9 w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 pl-7 pr-2 text-xs text-[var(--text-primary)]"
-					placeholder="Search"
-				/>
-			</div>
-			<div class="grid flex-1 grid-cols-2 gap-2 sm:flex sm:flex-nowrap sm:gap-2">
-				<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={() => loadSection()} title="Refresh">
-					<RefreshCw class="h-4 w-4" />
-				</button>
-				<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={searchStory} title="Hybrid search">
-					<Search class="h-4 w-4" />
-				</button>
-				<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={() => reindexStory(false)} title="Queue reindex">
-					<History class="h-4 w-4" />
-				</button>
-				<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={() => reindexStory(true)} title="Run reindex now">
-					<Play class="h-4 w-4" />
-				</button>
-			</div>
-			<button
-				class="rounded-md border border-[var(--border-primary)] px-2 py-2 text-[9px] uppercase tracking-[0.14em] text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-accent)] sm:w-auto sm:px-3 sm:py-1.5"
-				onclick={() => {
-					showDiagnostics = !showDiagnostics;
-					ensureActiveSectionVisible();
-					loadSection();
-				}}
-			>
-				{showDiagnostics ? 'Core + Debug' : 'Show Debug'}
-			</button>
+		<div class="lore-header-actions">
+			<button class="lore-button" onclick={() => { showGmToolkit = true; gmToolResult = null; }} disabled={!selectedStoryId || hasUnsavedChanges || saving}><Sparkles size={15} /> GM Toolkit</button>
+			<button class="lore-button subtle" aria-label="Toggle advanced lore categories" aria-pressed={showDiagnostics} onclick={() => { showDiagnostics = !showDiagnostics; if (!visibleSections.some((item) => item.id === activeSection)) { ensureActiveSectionVisible(); loadSection(); } }} disabled={hasUnsavedChanges || saving}><Settings2 size={15} /><span>Advanced</span></button>
 		</div>
 	</header>
-
-	<nav class="border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-2 sm:hidden">
-		<div class="flex min-w-0 items-center gap-2 overflow-x-auto">
-			{#each visibleSections as item}
-				<button
-					class="shrink-0 rounded-md border border-[var(--border-primary)] px-2.5 py-1.5 text-xs transition-colors {activeSection === item.id ? 'bg-[rgba(212,168,83,0.14)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]'}"
-					onclick={() => setActiveSection(item.id)}
-				>
-					{item.label}
-				</button>
+	<div class="lore-body">
+		<nav class="lore-navigation" aria-label="Lore categories">
+			{#each sectionGroups as group}
+				{@const items = group.ids.map((id) => visibleSections.find((item) => item.id === id)).filter((item): item is SectionEntry => Boolean(item))}
+				{#if items.length}
+					<div class="nav-group"><h3>{group.label}</h3>
+						{#each items as item}
+							{@const Icon = sectionIcons[item.id as keyof typeof sectionIcons] ?? BookOpen}
+							<button class:active={activeSection === item.id} aria-current={activeSection === item.id ? 'page' : undefined} onclick={() => setActiveSection(item.id)} disabled={hasUnsavedChanges || saving}><Icon size={15} strokeWidth={1.6} /><span>{item.label}</span></button>
+						{/each}
+					</div>
+				{/if}
 			{/each}
-		</div>
-	</nav>
-
-	<div class="flex min-h-0 flex-1 overflow-hidden">
-		<aside class="hidden w-52 shrink-0 overflow-y-auto border-r border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 md:block">
-			{#each visibleSections as item}
-				<button
-					class="mb-1 flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs transition-colors {activeSection === item.id ? 'bg-[rgba(212,168,83,0.14)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-secondary)]'}"
-					onclick={() => setActiveSection(item.id)}
-				>
-					<span>{item.label}</span>
-				</button>
-			{/each}
-		</aside>
-
-		<section class="flex min-w-0 flex-1 flex-col overflow-hidden">
-			{#if status}
-				<div class="border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-2 text-xs text-[var(--text-accent)]">{status}</div>
-			{/if}
-
-			<div class="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1.1fr)_minmax(380px,0.9fr)]">
-				<div class="min-h-0 overflow-auto border-r border-[var(--border-primary)]">
-					<div class="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 py-2">
-						<div class="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-							<Rows3 class="h-4 w-4" />
-							<span>{records.length} rows</span>
-							{#if loading}<span>Loading</span>{/if}
+		</nav>
+		<section class="lore-content" aria-label={activeSectionLabel}>
+			{#if status}<div class="lore-status" role="status">{status}</div>{/if}
+			{#if hasUnsavedChanges}<div class="lore-status unsaved" role="status">Unsaved changes. Save or discard before opening another entry.</div>{/if}
+			<div class="lore-panes" class:detail-open={showMobileDetail}>
+				<div class="lore-list-pane">
+					<div class="lore-list-header">
+						<div class="list-heading"><h3>{activeSectionLabel}</h3><span class="entry-count">{records.length}{nextCursor ? '+' : ''}</span>
+							<button class="lore-icon-button" onclick={() => loadSection()} disabled={loading || hasUnsavedChanges || saving} title="Refresh entries" aria-label="Refresh entries"><RefreshCw size={15} class={loading ? 'animate-spin' : ''} /></button>
 						</div>
-						{#if nextCursor}
-							<button class="text-xs text-[var(--text-accent)]" onclick={() => loadSection(nextCursor)}>Load More</button>
+						{#if activeSection === 'jobs'}
+							<label class="lore-search"><span>Show</span><select aria-label="Job status" bind:value={jobStatusFilter} onchange={() => loadSection()}><option value="failed">Failed jobs</option><option value="">All jobs</option><option value="retry">Waiting to retry</option><option value="running">Running jobs</option></select></label>
+						{:else}
+						<form class="lore-search" onsubmit={(event) => { event.preventDefault(); loadSection(); }}>
+							<Search size={16} />
+							<input bind:value={query} aria-label={`Search ${activeSectionLabel.toLowerCase()}`} placeholder={`Search ${activeSectionLabel.toLowerCase()}…`} disabled={hasUnsavedChanges || saving} />
+							{#if query}<button type="button" aria-label="Clear search" disabled={hasUnsavedChanges || saving} onclick={() => { query = ''; searchResults = []; loadSection(); }}><X size={14} /></button>{/if}
+							<button type="submit" aria-label="Search entries" disabled={loading || hasUnsavedChanges || saving}><ChevronRight size={16} /></button>
+						</form>
+						{/if}
+						{#if activeSection === 'characters'}
+							<button class="lore-button new-character-action" onclick={() => { status = ''; showGmToolkit = true; gmToolResult = null; }} disabled={!selectedStoryId || hasUnsavedChanges || saving}><Plus size={15} /> New character</button>
+						{/if}
+						{#if activeSection === 'npcCandidates'}<button class="lore-button new-character-action" onclick={findCharacterCandidates} disabled={!selectedStoryId || findingCandidates || Boolean(draftingCandidateId) || reviewingProposal || hasUnsavedChanges || saving}><Search size={15} />{findingCandidates ? 'Reading chapters…' : 'Find from chapters'}</button>{/if}
+						{#if showDiagnostics && activeSection !== 'jobs'}
+							<div class="lore-advanced-actions">
+								<button onclick={() => { showTable = !showTable; }} aria-pressed={showTable}><Rows3 size={13} /> {showTable ? 'Cards' : 'Table'}</button>
+								<button onclick={searchStory} disabled={!query.trim() || hasUnsavedChanges || saving}><Search size={13} /> Hybrid search</button>
+								<button onclick={() => reindexStory(false)} title="Queue reindex"><History size={13} /> Reindex</button>
+								<button onclick={() => reindexStory(true)} title="Run reindex now"><Play size={13} /> Run now</button>
+							</div>
 						{/if}
 					</div>
-
-					{#if searchResults.length > 0}
-						<div class="border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
-							<div class="mb-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">Search Results</div>
-							<div class="space-y-1">
-								{#each searchResults as result}
-									<button
-										class="block w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] px-3 py-2 text-left text-xs hover:border-[var(--color-gold-600)]"
-										onclick={() => openSearchResult(result)}
-									>
-										<span class="text-[var(--text-accent)]">{result.title ?? result.recordId}</span>
-										<span class="ml-2 text-[var(--text-muted)]">{result.source} {Number(result.score ?? 0).toFixed(2)}</span>
-									</button>
-								{/each}
+					<div class="lore-entry-list" aria-busy={loading}>
+						{#if searchResults.length > 0}
+							<div class="search-results"><h4>Search results</h4>{#each searchResults as result}<button class="lore-entry" disabled={hasUnsavedChanges || saving} onclick={() => openSearchResult(result)}><strong>{result.title ?? result.recordId}</strong><span>{result.source}</span></button>{/each}</div>
+						{/if}
+						{#if loading && records.length === 0}
+							<div class="lore-empty"><RefreshCw size={22} class="animate-spin" /><h4>Opening the archive</h4><p>Loading {activeSectionLabel.toLowerCase()}…</p></div>
+						{:else if records.length === 0}
+							<div class="lore-empty"><BookOpen size={28} strokeWidth={1.3} /><h4>{query ? 'No matching entries' : 'Nothing here yet'}</h4><p>{query ? 'Try another name or clear your search.' : `Your story’s ${activeSectionLabel.toLowerCase()} will appear here.`}</p>{#if query}<button class="lore-button" onclick={() => { query = ''; loadSection(); }}>Clear search</button>{/if}</div>
+						{:else if showTable && showDiagnostics}
+							<div class="lore-table">
+								<div class="table-head" style={`grid-template-columns: repeat(${Math.max(visibleColumns.length, 1)}, minmax(120px, 1fr));`}>{#each visibleColumns as column}<span>{column}</span>{/each}</div>
+								{#each records as row}<button class="table-row" disabled={hasUnsavedChanges || saving} style={`grid-template-columns: repeat(${Math.max(visibleColumns.length, 1)}, minmax(120px, 1fr));`} onclick={() => selectRecord(row)}>{#each visibleColumns as column}<span title={preview(cellValue(row, column))}>{preview(cellValue(row, column))}</span>{/each}</button>{/each}
 							</div>
-						</div>
-					{/if}
-
-					{#if isMobile}
-						<div class="space-y-1.5 p-2">
-							{#if records.length === 0}
-								<div class="py-8 text-center text-xs text-[var(--text-muted)]">No records</div>
-							{:else}
-								{#each records as row}
-									<button
-										class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-tertiary)] p-2 text-left transition-colors {selectedRecord?.id === row.id ? 'border-[var(--color-gold-600)] bg-[rgba(212,168,83,0.08)]' : 'hover:bg-[rgba(212,168,83,0.06)]'}"
-										onclick={() => selectRecord(row)}
-									>
-										<div class="flex items-start justify-between gap-2">
-											<div class="min-w-0">
-												<div class="text-xs uppercase tracking-wide text-[var(--text-accent)]">{recordTitle(row)}</div>
-												<div class="mt-1 text-xs text-[var(--text-muted)]">{recordSubtitle(row)}</div>
-											</div>
-											<div class="font-mono text-[9px] uppercase tracking-wide text-[var(--text-muted)]">{preview(row.type)}</div>
-										</div>
-										<div class="mt-2 grid grid-cols-2 gap-2">
-											{#each visibleColumns as column}
-												<div class="text-[10px]">
-													<div class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">{column}</div>
-													<div class="truncate text-[var(--text-secondary)]">{preview(cellValue(row, column))}</div>
-												</div>
-											{/each}
-										</div>
-									</button>
-								{/each}
-							{/if}
-						</div>
-					{:else}
-						<div class="min-w-[760px]">
-							<div class="grid border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[10px] uppercase tracking-wide text-[var(--text-muted)]" style={`grid-template-columns: repeat(${Math.max(visibleColumns.length, 1)}, minmax(120px, 1fr));`}>
-								{#each visibleColumns as column}
-									<div class="px-3 py-2">{column}</div>
-								{/each}
-							</div>
+						{:else}
 							{#each records as row}
-								<button
-									class="grid w-full border-b border-[var(--border-secondary)] text-left text-xs hover:bg-[rgba(212,168,83,0.06)] {selectedRecord?.id === row.id ? 'bg-[rgba(212,168,83,0.1)]' : ''}"
-									style={`grid-template-columns: repeat(${Math.max(visibleColumns.length, 1)}, minmax(120px, 1fr));`}
-									onclick={() => selectRecord(row)}
-								>
-									{#each visibleColumns as column}
-										<div class="truncate px-3 py-2 text-[var(--text-secondary)]" title={preview(cellValue(row, column))}>{preview(cellValue(row, column))}</div>
-									{/each}
+								<button class="lore-entry" class:selected={selectedRecord === row || Boolean(row.id && selectedRecord?.id === row.id)} aria-pressed={selectedRecord === row || Boolean(row.id && selectedRecord?.id === row.id)} disabled={hasUnsavedChanges || saving} onclick={() => selectRecord(row)}>
+									<span class="entry-kind">{stringValue(row.type || row.status || activeSectionLabel).replaceAll('_', ' ')}{#if asRecord(row.state)?.current === true}<span class="current-location">Current</span>{/if}</span>
+									<strong>{recordTitle(row)}</strong>
+									{#if recordSubtitle(row)}<span class="entry-excerpt">{recordSubtitle(row)}</span>{/if}
 								</button>
 							{/each}
-						</div>
-					{/if}
+						{/if}
+						{#if nextCursor}<div class="load-more"><button class="lore-button" onclick={() => loadSection(nextCursor)} disabled={loading || saving}>{loading ? 'Loading…' : 'Load more entries'}</button></div>{/if}
+					</div>
 				</div>
-
-				<aside class="min-h-0 overflow-y-auto bg-[var(--bg-secondary)] {isMobile ? 'max-h-[48dvh]' : ''}">
-					<div class="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
-						<div class="min-w-0">
-							<div class="truncate text-sm text-[var(--text-primary)]">{selectedRecord ? recordTitle(selectedRecord) : 'No record'}</div>
-							<div class="truncate text-xs text-[var(--text-muted)]">{activeSection}</div>
-						</div>
+				<aside class="lore-detail" aria-label="Entry details" aria-busy={isDetailLoading}>
+					<div class="detail-toolbar">
+						{#if recordHistory.length > 0}<button class="lore-button" onclick={goBackToRecord} disabled={hasUnsavedChanges || saving || isDetailLoading} title={`Back to ${recordHistory.at(-1)?.title}`} aria-label={`Back to ${recordHistory.at(-1)?.title}`}><ArrowLeft size={15} /> Back</button>{/if}
+						{#if focusedRecord}<button class="lore-button" onclick={browseAllRecords} disabled={hasUnsavedChanges || saving || isDetailLoading}>All entries</button>{/if}
+						<button class="lore-button back-to-entries" disabled={hasUnsavedChanges || saving} onclick={() => { showMobileDetail = false; }}><ArrowLeft size={15} /> Entries</button>
+						<div class="detail-breadcrumb">{activeSectionLabel}<ChevronRight size={12} /><span>{selectedRecord ? recordTitle(selectedRecord) : 'Select an entry'}</span></div>
 						{#if activeSection === 'llmSettings'}
-							<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={saveLlmSettings} disabled={saving} title="Save LLM settings">
-								<ServerCog class="h-4 w-4" />
-							</button>
+							{#if hasUnsavedChanges}<button class="lore-button subtle" onclick={resetEditor} disabled={saving}>Discard</button>{/if}
+							<button class="lore-button primary" onclick={saveLlmSettings} disabled={saving || isDetailLoading}><ServerCog size={14} />{saving ? 'Saving…' : 'Save settings'}</button>
 						{:else if isRecordSection && selectedRecord && !isReadOnlySection}
-							<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={saveRecord} disabled={saving} title="Save record">
-								<Save class="h-4 w-4" />
-							</button>
+							{#if editMode}
+								<button class="lore-button subtle" onclick={() => { resetEditor(); editMode = false; }} disabled={saving}>Discard</button>
+								<button class="lore-button primary" onclick={saveRecord} disabled={saving || isDetailLoading || !hasUnsavedChanges || !editorRecord}><Save size={14} />{saving ? 'Saving…' : 'Save changes'}</button>
+							{:else}
+								<button class="lore-button" onclick={() => { editMode = true; }} disabled={isDetailLoading || !editorRecord || hasUnsavedChanges}><Pencil size={14} /> Edit entry</button>
+							{/if}
 						{/if}
 					</div>
-
-					<div class="space-y-4 p-4">
+					<div class="detail-content">
+						{#if isDetailLoading}
+							<div class="lore-empty"><RefreshCw size={22} class="animate-spin" /><h4>Loading entry…</h4></div>
+						{:else if !selectedRecord}
+							<div class="lore-empty"><BookOpen size={36} strokeWidth={1} /><h4>Your world, one entry at a time</h4><p>Choose an entry to explore its story and details.</p></div>
+						{:else}
+							<div class="detail-title"><div class="entry-kind">{stringValue(selectedRecord.type || activeSectionLabel).replaceAll('_', ' ')}</div><h2>{recordTitle(selectedRecord)}</h2><div class="entry-meta">{#if selectedRecord.status}<span>{stringValue(selectedRecord.status).replaceAll('_', ' ')}</span>{/if}{#if selectedRecord.visibility}<span>{stringValue(selectedRecord.visibility).replaceAll('_', ' ')}</span>{/if}</div></div>
+							{#if isReviewablePatch}
+								<section class="creation-review" aria-label="Review Proposal">
+									<div><h3>{isCharacterCreationProposal ? sourceCharacterBefore ? 'Review this character update' : 'Ready to create this character?' : 'Review Proposal'}</h3><p>{isSourceCharacterCandidate ? 'Add and save character details yourself, or build details from story evidence. Review the result before saving canon.' : isCharacterCreationProposal ? 'Review the biography and traits below. Create character saves this draft to your story’s characters.' : 'Review the proposed changes before applying them to this story.'}</p></div>
+									<div class="creation-review-actions">
+										{#if isSourceCharacterCandidate && !editMode}<button class="lore-button" onclick={() => { editMode = true; }} disabled={Boolean(draftingCandidateId) || reviewingProposal || saving}><Pencil size={15} /> Edit details</button>{/if}
+										{#if isSourceCharacterCandidate}<button class="lore-button" onclick={draftCandidateFromSources} disabled={Boolean(draftingCandidateId) || reviewingProposal || hasUnsavedChanges || saving || isDetailLoading}><Sparkles size={15} />{draftingCandidateId ? 'Reading sources…' : 'Build from story'}</button>{/if}
+										<button class="lore-button primary" onclick={() => reviewPatchProposal('approved')} disabled={(isSourceCharacterCandidate && !candidateReady) || Boolean(draftingCandidateId) || reviewingProposal || hasUnsavedChanges || saving || isDetailLoading}><Check size={15} />{reviewingProposal ? 'Applying…' : sourceCharacterBefore ? 'Update character' : isCharacterCreationProposal ? 'Create character' : 'Approve'}</button>
+										<button class="lore-button subtle" onclick={() => reviewPatchProposal('rejected')} disabled={Boolean(draftingCandidateId) || reviewingProposal || hasUnsavedChanges || saving || isDetailLoading}><X size={15} />{isCharacterCreationProposal ? 'Discard draft' : 'Reject'}</button>
+									</div>
+								</section>
+							{/if}
+							{#if isSourceCharacterCandidate && editMode && characterCreationPreview}
+								<section class="lore-editor entry-basics" aria-label="Character candidate details">
+									<label><span>Biography *</span><textarea rows="5" value={stringValue(asRecord(characterCreationPreview.state)?.bio)} oninput={(event) => updateCandidateDetail('bio', textValue(event))}></textarea></label>
+									<label><span>Role</span><input value={stringValue(asRecord(characterCreationPreview.state)?.rank)} oninput={(event) => updateCandidateDetail('rank', textValue(event))} /></label>
+									<label><span>Appearance</span><textarea rows="3" value={stringValue(asRecord(characterCreationPreview.state)?.appearance)} oninput={(event) => updateCandidateDetail('appearance', textValue(event))}></textarea></label>
+									<label><span>Description</span><textarea rows="3" value={stringValue(characterCreationPreview.description)} oninput={(event) => updateCandidateDetail('description', textValue(event))}></textarea></label>
+									<p>Save changes, then choose Create character. These details are authored by you; Build from story is optional.</p>
+								</section>
+							{/if}
+							{#if characterSourceFacts.length > 0}
+								<details class="source-disclosure"><summary>Source quotations · {characterSourceFacts.length} extracted details</summary><div class="source-list">
+									{#each characterSourceFacts as fact}<div><strong>{stringValue(fact.field)}</strong><p>{stringValue(fact.value)}</p><blockquote>{stringValue(fact.quote)}</blockquote><button class="lore-button subtle" onclick={() => openRecord(stringArrayValue(editorRecord?.sourceEventIds ?? editorRecord?.source_event_ids).includes(stringValue(fact.sourceId)) ? 'events' : 'transcript', stringValue(fact.sourceId))}>Open source</button></div>{/each}
+								</div></details>
+							{/if}
+							{#if sourceCharacterBefore}<details class="source-disclosure"><summary>Current character · compare before applying</summary><LoreEntryPreview record={sourceCharacterBefore} /></details>{/if}
+							{#if activeSection === 'jobs'}
+								<section class="creation-review" aria-label="Job recovery">
+									<div><h3>{stringValue(selectedRecord.type).replaceAll('_', ' ')}</h3><p>{stringValue(selectedRecord.attemptCount)} of {stringValue(selectedRecord.maxAttempts)} attempts used · {stringValue(selectedRecord.status)}</p>
+										{#if selectedRecord.lastError}<p role="alert">{stringValue(selectedRecord.lastError)}</p>{/if}
+										{#if asRecord(selectedRecord.metadata)?.lastFailure}<p>Failure: {stringValue(asRecord(asRecord(selectedRecord.metadata)?.lastFailure)?.kind).replaceAll('_', ' ')}</p>{/if}
+										{#if selectedRecord.retryAllowed === true}<p>Retry keeps completed progress and queues up to {stringValue(selectedRecord.maxAttempts)} new attempts.</p>{:else if selectedRecord.status === 'failed'}<p>{stringValue(selectedRecord.retryReason)}</p>{/if}
+									</div>
+									{#if selectedRecord.retryAllowed === true}<button class="lore-button primary" onclick={retrySelectedJob} disabled={Boolean(retryingJobId) || loading}><RefreshCw size={15} />{retryingJobId ? 'Queuing…' : 'Retry job'}</button>{/if}
+								</section>
+							{/if}
+							{#if editorRecord && !editMode && !['llmSettings', 'apiCallLogs', 'jobs'].includes(activeSection)}<LoreEntryPreview record={characterCreationPreview ?? editorRecord} />{/if}
+							{#if activeSection === 'factions' && selectedStoryId && selectedRecord?.id && !editMode}
+								{#key `${selectedStoryId}:${selectedRecord.id}`}
+									<FactionProfileEditor gameId={selectedStoryId} factionId={String(selectedRecord.id)} onDirtyChange={value => factionProfileDirty = value} onBusyChange={value => factionProfileBusy = value} onSaved={() => selectRecord(selectedRecord!, false)} />
+								{/key}
+							{/if}
+							{#if editorRecord?.type === 'location' && !editMode && selectedStoryId}
+								{#key `${selectedStoryId}:${editorRecord.id}`}
+									<LocationWorkspace locationId={String(editorRecord.id)} gameId={selectedStoryId} runCommand={(command, args) => runEngineCommand(selectedStoryId, command, args)} navigate={(id) => { void openRecord('locations', id); }} openSource={(type, id) => { void openRecord(type, id); }} onDirty={(dirty) => { locationWorkspaceDirty = dirty; }} />
+								{/key}
+							{/if}
+							{#if editMode && editorRecord && ['character', 'location', 'item', 'concept', 'faction'].includes(stringValue(editorRecord.type))}
+								<div class="lore-editor entry-basics">
+									<label><span>Name</span><input value={stringValue(editorRecord.name)} oninput={(event) => updateEditor((record) => { record.name = textValue(event); })} /></label>
+									{#if editorRecord.type !== 'character'}<label><span>Description</span><textarea rows="6" value={stringValue(editorRecord.description)} oninput={(event) => updateEditor((record) => { record.description = nullableTextValue(textValue(event)); })}></textarea></label>{/if}
+								</div>
+							{/if}
+							<div class="lore-editor">
 						{#if activeSection === 'apiCallLogs' && apiDebugSnapshot}
 							<div class="space-y-3 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
 								<div class="flex items-center justify-between gap-3">
@@ -1054,7 +1634,7 @@
 												</label>
 											</div>
 
-											<div class="grid gap-2 sm:grid-cols-4">
+							<div class="grid gap-2 sm:grid-cols-5">
 												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
 													<span>temperature</span>
 													<input type="number" min="0" max="2" step="0.1" value={Number(setting.temperature ?? 1)} oninput={(event) => updateLlmSetting(index, 'temperature', numberInputValue(event, Number(setting.temperature ?? 1), 0, 2))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
@@ -1067,10 +1647,14 @@
 													<span>topP</span>
 													<input type="number" min="0" max="1" step="0.05" value={stringValue(setting.topP)} oninput={(event) => updateLlmSetting(index, 'topP', nullableNumberInputValue(event, 0, 1))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
 												</label>
-												<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-													<span>contextBudget</span>
-													<input type="number" min="1" step="1024" value={stringValue(setting.contextBudget)} oninput={(event) => updateLlmSetting(index, 'contextBudget', nullableNumberInputValue(event, 1, 1_000_000, true))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
-												</label>
+								<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+									<span>contextBudget</span>
+									<input type="number" min="1" step="1024" value={stringValue(setting.contextBudget)} oninput={(event) => updateLlmSetting(index, 'contextBudget', nullableNumberInputValue(event, 1, 1_000_000, true))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+								</label>
+								<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]" title="Use this only when the model registry does not describe the provider's real context window.">
+									<span>contextWindowTokens</span>
+									<input type="number" min="1024" step="1024" value={stringValue(setting.contextWindowTokens)} oninput={(event) => updateLlmSetting(index, 'contextWindowTokens', nullableNumberInputValue(event, 1024, 10_000_000, true))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]" />
+								</label>
 											</div>
 
 											<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
@@ -1113,30 +1697,14 @@
 							</div>
 						{/if}
 
-						{#if isReviewablePatch}
-							<div class="space-y-3 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
-								<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Review Proposal</div>
-								<div class="flex gap-2">
-									<button class="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 hover:bg-emerald-500/15 disabled:opacity-50" onclick={() => reviewPatchProposal('approved')} disabled={reviewingProposal}>
-										<Check class="h-4 w-4" />
-										Approve
-									</button>
-									<button class="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200 hover:bg-rose-500/15 disabled:opacity-50" onclick={() => reviewPatchProposal('rejected')} disabled={reviewingProposal}>
-										<X class="h-4 w-4" />
-										Reject
-									</button>
-								</div>
-							</div>
-						{/if}
-
-						{#if editorRecord?.type === 'character' || selectedRecord?.type === 'character'}
+{#if editMode && editorRecord?.type === 'character'}
 							<div class="space-y-3 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
 								<div class="flex items-center justify-between gap-3">
 									<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Character State</div>
 									<button
 										class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-50"
 										onclick={draftCharacterUpdate}
-										disabled={draftingCharacter}
+										disabled={draftingCharacter || hasUnsavedChanges || saving}
 										title="AI refinement"
 									>
 										<Sparkles class="h-4 w-4" />
@@ -1149,12 +1717,20 @@
 										<textarea value={stringValue(characterState.bio)} oninput={(event) => updateCharacterState('bio', nullableTextValue(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
 									</label>
 									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
-										<span>Appearance</span>
+										<span>Appearance (stable features)</span>
 										<textarea value={stringValue(characterState.appearance)} oninput={(event) => updateCharacterState('appearance', nullableTextValue(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
 									</label>
 									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
 										<span>Personality</span>
 										<textarea value={stringValue(characterState.personality)} oninput={(event) => updateCharacterState('personality', nullableTextValue(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Current presentation (clothing / injuries)</span>
+										<textarea value={stringValue(characterState.presentation)} oninput={(event) => updateCharacterState('presentation', nullableTextValue(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Voice / speech style</span>
+										<textarea value={stringValue(characterState.speechStyle)} oninput={(event) => updateCharacterState('speechStyle', nullableTextValue(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
 									</label>
 									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
 										<span>Known Facts</span>
@@ -1188,6 +1764,19 @@
 									</label>
 								</div>
 
+								<div class="space-y-2">
+									<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Intent and initiative</div>
+									<p class="text-xs text-[var(--text-muted)]">Private NPC context. Keep plans separate from completed moves; leave unknown details blank.</p>
+									<div class="grid gap-2 sm:grid-cols-2">
+										{#each NPC_AGENCY_FIELDS as field}
+											<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+												<span>{field.label}</span>
+												<textarea maxlength="600" value={stringValue(characterState[field.key])} oninput={(event) => updateCharacterState(field.key, nullableTextValue(textValue(event)))} class="h-20 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+											</label>
+										{/each}
+									</div>
+								</div>
+
 								<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
 									<span>AI Refinement</span>
 									<textarea bind:value={characterDraftInstructions} class="h-16 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
@@ -1195,26 +1784,61 @@
 							</div>
 						{/if}
 
-						<div class="flex items-center gap-2 text-xs uppercase tracking-wide text-[var(--text-muted)]">
-							<Braces class="h-4 w-4" />
-							<span>JSON</span>
-						</div>
+						{#if editMode && editorRecord?.type === 'concept'}
+							<div class="space-y-3 rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
+								<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Concept State</div>
+								<div class="grid gap-2 sm:grid-cols-2">
+									<label class="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+										<input type="checkbox" checked={conceptState.revealed === true} onchange={(event) => updateConceptState('revealed', (event.currentTarget as HTMLInputElement).checked)} />
+										Revealed to player
+									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Comprehension</span>
+										<select value={stringValue(conceptState.comprehensionLevel || 'unknown')} onchange={(event) => updateConceptState('comprehensionLevel', textValue(event))} class="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]">
+											<option value="unknown">Unknown</option>
+											<option value="basic">Basic</option>
+											<option value="intermediate">Intermediate</option>
+											<option value="advanced">Advanced</option>
+										</select>
+									</label>
+								</div>
+								<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+									<span>Related Entry IDs — one per line</span>
+									<textarea value={linesValue(conceptState.relatedEntries)} oninput={(event) => updateConceptState('relatedEntries', lineArray(textValue(event)))} class="h-20 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+								</label>
+								{#if conceptRelatedIds.length > 0}
+									<div class="flex flex-wrap gap-1.5">
+										{#each conceptRelatedIds as entryId}
+											<button class="rounded-full border border-[var(--color-gold-600)]/50 bg-[var(--text-accent)]/8 px-2 py-1 text-[11px] text-[var(--text-accent)] hover:bg-[var(--text-accent)]/16" onclick={() => openEntityReference(entryId)} title="Open linked lore entry">↗ {entryId}</button>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/if}
+
+						<details class="raw-record" open={isReviewSection()}>
+							<summary><Braces size={15} />{isReviewSection() ? 'Proposed changes & record' : 'Raw record'}<span>JSON</span></summary>
+							{#if editMode}<p class="raw-hint">Advanced editing. Changes here are saved with this entry.</p>{/if}
 						<textarea
+							aria-label="Raw record JSON"
 							bind:value={editorText}
 							spellcheck="false"
-							readonly={isReadOnlySection}
+							readonly={isReadOnlySection || (!editMode && activeSection !== 'llmSettings')}
 							class="h-[34vh] w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3 font-mono text-xs leading-relaxed text-[var(--text-secondary)] outline-none focus:border-[var(--color-gold-600)] sm:h-[44vh]"
 						></textarea>
+						</details>
+						</div>
 
-						{#if detail && typeof detail === 'object' && !Array.isArray(detail) && (detail.sourceEntries || detail.sourceEvents || detail.sourcePatches)}
-							<div class="space-y-2">
-								<div class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Sources</div>
-								<pre class="max-h-72 overflow-auto rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3 text-xs text-[var(--text-secondary)]">{JSON.stringify({
-									entries: detail.sourceEntries ?? [],
-									events: detail.sourceEvents ?? [],
-									patches: detail.sourcePatches ?? [],
-								}, null, 2)}</pre>
-							</div>
+						{#if sourceLinks.length > 0}
+							<details class="entry-sources">
+								<summary>Sources <span>{sourceLinks.length}</span></summary>
+								<div class="source-list">
+									{#each sourceLinks as link}
+										<button disabled={hasUnsavedChanges || saving} onclick={() => openRecord(link.section, link.id).catch((error) => { status = error instanceof Error ? error.message : String(error); })} title="Open source record"><span>{link.section}</span>{preview(link.label)}<ChevronRight size={14} /></button>
+									{/each}
+								</div>
+							</details>
+						{/if}
 						{/if}
 					</div>
 				</aside>
@@ -1222,3 +1846,104 @@
 		</section>
 	</div>
 </div>
+
+{#if showGmToolkit}
+	<div class="fixed inset-0 z-[80] flex items-end justify-center p-0 sm:items-center sm:p-5" role="dialog" aria-modal="true" aria-label="GM Toolkit">
+		<button class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick={() => { showGmToolkit = false; }} aria-label="Close GM Toolkit"></button>
+		<div class="relative z-10 flex max-h-[92dvh] w-full max-w-4xl flex-col overflow-hidden rounded-t-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] shadow-2xl sm:rounded-2xl">
+			<div class="flex items-start justify-between gap-3 border-b border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
+				<div>
+					<div class="font-display text-sm tracking-wide text-[var(--text-accent)]">GM Toolkit</div>
+					<div class="mt-0.5 text-xs text-[var(--text-muted)]">The AI GM registers named characters and supported factions after each turn. Inspect canon or prepare an extra character here.</div>
+				</div>
+				<button class="rounded-md border border-[var(--border-primary)] p-2 text-[var(--text-muted)] hover:text-[var(--text-primary)]" onclick={() => { showGmToolkit = false; }} aria-label="Close GM Toolkit">
+					<X class="h-4 w-4" />
+				</button>
+			</div>
+
+			<div class="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-2">
+				<section class="min-w-0 space-y-3 border-b border-[var(--border-primary)] p-4 lg:border-b-0 lg:border-r">
+					<div>
+						<div class="text-xs uppercase tracking-[0.14em] text-[var(--text-accent)]">Explore the world</div>
+						<div class="mt-1 text-xs leading-relaxed text-[var(--text-muted)]">Every result includes source IDs, warnings, and unresolved facts. These tools never write canon.</div>
+					</div>
+
+					<label class="block space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+						<span>Tool</span>
+						<select bind:value={gmTool} onchange={() => { gmToolResult = null; }} class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]">
+							<option value="actor">Actor Brief</option>
+							<option value="scene">Scene Check</option>
+							<option value="relationships">Relationship Web</option>
+							<option value="threads">Thread Board</option>
+						</select>
+					</label>
+
+					<label class="block space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+						<span>{gmTool === 'actor' ? 'Actor name' : gmTool === 'scene' ? 'Scene location' : gmTool === 'relationships' ? 'Actor names, comma separated' : 'Thread search (optional)'}</span>
+						<input bind:value={gmTarget} onkeydown={(event) => event.key === 'Enter' && runGmTool()} class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" placeholder={gmTool === 'actor' ? 'Mira' : gmTool === 'scene' ? 'Harbor Court' : gmTool === 'relationships' ? 'Mira, Harbor Lord' : 'marriage, missing ledger'} />
+					</label>
+
+					{#if gmTool === 'scene'}
+						<div class="grid gap-2 sm:grid-cols-2">
+							<label class="block space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+								<span>Actors, comma separated</span>
+								<input bind:value={gmActors} class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" placeholder="Mira, Harbor Lord" />
+							</label>
+							<label class="block space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+								<span>Available minutes</span>
+								<input bind:value={gmAvailableMinutes} type="number" min="0" step="1" class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" placeholder="30" />
+							</label>
+						</div>
+					{/if}
+
+					<button
+						class="inline-flex w-full items-center justify-center gap-2 rounded-md border border-[var(--color-gold-600)] bg-[var(--text-accent)]/12 px-3 py-2 text-xs text-[var(--text-accent)] hover:bg-[var(--text-accent)]/20 disabled:opacity-40"
+						onclick={runGmTool}
+						disabled={gmToolBusy || (gmTool === 'actor' && !gmTarget.trim()) || (gmTool === 'relationships' && !gmTarget.trim() && !gmActors.trim())}
+					>
+						{#if gmToolBusy}<RefreshCw class="h-4 w-4 animate-spin" />{:else}<Search class="h-4 w-4" />{/if}
+						{gmToolBusy ? 'Inspecting canon' : 'Run tool'}
+					</button>
+
+					{#if gmToolResult}
+						<div class="rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3">
+							<div class="mb-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Evidence receipt</div>
+							<pre class="max-h-72 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-[var(--text-secondary)]">{JSON.stringify(gmToolResult, null, 2)}</pre>
+						</div>
+					{/if}
+				</section>
+
+				<section class="min-w-0 space-y-3 p-4">
+					<div>
+					<div class="text-xs uppercase tracking-[0.14em] text-[var(--text-accent)]">Create a character</div>
+						<div class="mt-1 text-xs text-[var(--text-secondary)]">Enter a name and create directly, or ask for an optional story-based preview.</div>
+						<div class="mt-1 text-xs leading-relaxed text-[var(--text-muted)]">Direct creation saves the details you enter without a model call. Preview character uses story context to suggest more details for your review.</div>
+					</div>
+
+					<div class="grid gap-2 sm:grid-cols-2">
+						<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]"><span>Name *</span><input bind:value={newCharacterName} class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" placeholder="Tala Venn" /></label>
+						<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]"><span>Role (preview required)</span><input bind:value={newCharacterRole} class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" placeholder="Harbor courier" /></label>
+					</div>
+					<label class="block space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]"><span>Backstory seed (preview required)</span><textarea bind:value={newCharacterBackstory} class="h-20 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" placeholder="What shaped them before this story?"></textarea></label>
+					<label class="block space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]"><span>Narrative purpose (preview required)</span><textarea bind:value={newCharacterPurpose} class="h-20 w-full resize-y rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" placeholder="What pressure, choice, or connection should they bring into this campaign?"></textarea></label>
+					<div class="grid gap-2 sm:grid-cols-2">
+						<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]"><span>Desire</span><input bind:value={newCharacterDesire} class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" /></label>
+						<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]"><span>Fear</span><input bind:value={newCharacterFear} class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" /></label>
+						<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]"><span>Faction hint</span><input bind:value={newCharacterFaction} class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" /></label>
+						<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]"><span>Location hint</span><input bind:value={newCharacterLocation} class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2 text-xs normal-case tracking-normal text-[var(--text-primary)]" /></label>
+					</div>
+					<button class="inline-flex w-full items-center justify-center gap-2 rounded-md border border-emerald-500/50 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 hover:bg-emerald-500/15 disabled:opacity-40" onclick={createCharacterDirect} disabled={creatingCharacterDraft || !newCharacterName.trim() || !selectedStory?.shelfId}><Plus class="h-4 w-4" />{creatingCharacterDraft ? 'Saving character…' : 'Create character'}</button>
+					<button
+						class="inline-flex w-full items-center justify-center gap-2 rounded-md border border-emerald-500/50 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 hover:bg-emerald-500/15 disabled:opacity-40"
+						onclick={createCharacterDraft}
+						disabled={creatingCharacterDraft || !newCharacterName.trim() || !newCharacterRole.trim() || !newCharacterBackstory.trim() || !newCharacterPurpose.trim()}
+					>
+						{#if creatingCharacterDraft}<RefreshCw class="h-4 w-4 animate-spin" />{:else}<Plus class="h-4 w-4" />{/if}
+						{creatingCharacterDraft ? 'Preparing character preview…' : 'Preview character'}
+					</button>
+					{#if status}<p class="rounded-md border border-[var(--border-primary)] bg-[var(--bg-primary)] p-3 text-xs leading-relaxed text-[var(--text-accent)]" role="status">{status}</p>{/if}
+				</section>
+			</div>
+		</div>
+	</div>
+{/if}

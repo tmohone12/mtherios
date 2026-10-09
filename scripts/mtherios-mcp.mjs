@@ -1,20 +1,21 @@
 #!/usr/bin/env node
 // @ts-nocheck
 
+import { resolveAppUrl } from './runtime-config.mjs';
+
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
-const DEFAULT_PORT = process.env.PORT || '5173';
-const DEFAULT_URL = process.env.MTHERIOS_APP_URL || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`;
+const DEFAULT_URL = resolveAppUrl();
 const APP_URL = DEFAULT_URL.replace(/\/$/, '');
-const SERVER_VERSION = '0.1.0';
+const SERVER_VERSION = '0.2.1';
+const MAX_SEARCH_RESULT_CHARS = 24_000;
 
-export const tools = [
+const legacyTools = [
 	{
 		name: 'mtherios_status',
-		description: 'Read the running Mtherios terminal process status.',
+		description: 'Read the running MythEngine terminal process status.',
 		inputSchema: {
 			type: 'object',
 			properties: {},
@@ -115,17 +116,47 @@ export const tools = [
 	},
 	{
 		name: 'mtherios_patch_record',
-		description: 'Safely edit one canonical record through the terminal patch/audit path.',
+		description: 'Edit a canonical record using the revision from get_record. Stale writes fail. Objects merge unless jsonMode is replace; arrays replace.',
 		inputSchema: {
 			type: 'object',
 			required: ['type', 'id', 'updates'],
+			anyOf: [{ required: ['expectedVersion'] }, { required: ['expectedUpdatedAt'] }],
 			properties: {
 				type: { type: 'string' },
 				id: { type: 'string' },
 				updates: { type: 'object' },
+				expectedVersion: { type: 'integer', minimum: 0 },
+				expectedUpdatedAt: { type: 'string' },
+				jsonMode: { type: 'string', enum: ['merge', 'replace'] },
 				reason: { type: 'string', default: 'Manual MCP edit.' },
 			},
 			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_get_player_capabilities',
+		description: 'Read saved player buffs and abilities from the same canonical data shown in the Character tab. Use the exact player character ID.',
+		annotations: { readOnlyHint: true },
+		inputSchema: {
+			type: 'object', required: ['storyId', 'characterId'], additionalProperties: false,
+			properties: { storyId: { type: 'string', minLength: 1 }, characterId: { type: 'string', minLength: 1 } },
+		},
+	},
+	{
+		name: 'mtherios_update_player_capabilities',
+		description: 'Save established player ability and active-buff notes. Each supplied list replaces that list; [] clears it; omitted lists are preserved. Keeps numeric stats and other character data intact. Buff durations are notes, not automatic timers or numeric roll bonuses.',
+		annotations: { readOnlyHint: false, destructiveHint: false },
+		inputSchema: {
+			type: 'object', additionalProperties: false,
+			anyOf: [{ required: ['abilities'] }, { required: ['buffs'] }],
+			required: ['storyId', 'characterId', 'expectedVersion'],
+			properties: {
+				storyId: { type: 'string', minLength: 1 }, characterId: { type: 'string', minLength: 1 },
+				expectedVersion: { type: 'integer', minimum: 0 },
+				abilities: { type: 'array', maxItems: 12, items: { type: 'string', minLength: 1, maxLength: 300 } },
+				buffs: { type: 'array', maxItems: 12, items: { type: 'string', minLength: 1, maxLength: 300 } },
+				reason: { type: 'string' }, clientCommandId: { type: 'string', minLength: 1 },
+			},
 		},
 	},
 	{
@@ -163,6 +194,12 @@ export const tools = [
 						presentNpcIds: { type: 'array', items: { type: 'string' } },
 						threadIds: { type: 'array', items: { type: 'string' } },
 						currentFactionId: { type: ['string', 'null'] },
+						memoryTokenBudget: { type: 'integer', minimum: 160, maximum: 2400 },
+						contextBudget: { type: 'integer', minimum: 0, maximum: 200000 },
+						chapterThreshold: { type: 'integer', minimum: 5, maximum: 200 },
+						postChapterBuffer: { type: 'integer', minimum: 0, maximum: 100 },
+						chaptersPerArc: { type: 'integer', minimum: 2, maximum: 50 },
+						deferStateExtraction: { type: 'boolean' },
 					},
 					additionalProperties: false,
 				},
@@ -202,28 +239,169 @@ export const tools = [
 		},
 	},
 	{
+		name: 'mtherios_actor_brief',
+		description: 'Read an evidence-linked GM brief for one actor, including current state, beliefs, relationships, faction pressure, and recent events.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId'],
+			anyOf: [
+				{ required: ['actorId'] },
+				{ required: ['name'] },
+			],
+			properties: {
+				storyId: { type: 'string', minLength: 1 },
+				actorId: { type: 'string', minLength: 1 },
+				name: { type: 'string', minLength: 1 },
+				eventLimit: { type: 'integer', minimum: 1, maximum: 30, default: 8 },
+				clientCommandId: { type: 'string', minLength: 1 },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_affinity_read',
+		description: 'Read established NPC-to-player affinity, disposition, and recent evidence. Missing affinity is returned as null, never guessed as neutral.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId'],
+			anyOf: [
+				{ required: ['actorIds'] },
+				{ required: ['actorNames'] },
+			],
+			properties: {
+				storyId: { type: 'string', minLength: 1 },
+				actorIds: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1 } },
+				actorNames: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string', minLength: 1 } },
+				historyLimit: { type: 'integer', minimum: 0, maximum: 12, default: 5 },
+				clientCommandId: { type: 'string', minLength: 1 },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_scene_check',
+		description: 'Check whether actors, locations, travel, and timing make a proposed scene possible without inventing missing facts.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId'],
+			properties: {
+				storyId: { type: 'string', minLength: 1 },
+				actorIds: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1 } },
+				actorNames: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1 } },
+				locationId: { type: 'string', minLength: 1 },
+				locationName: { type: 'string', minLength: 1 },
+				proposedTime: { type: 'string', minLength: 1 },
+				proposedAction: { type: 'string', maxLength: 1200 },
+				availableMinutes: { type: 'integer', minimum: 0 },
+				clientCommandId: { type: 'string', minLength: 1 },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_relationship_web',
+		description: 'Read a bounded evidence-linked relationship graph for selected actors and their faction memberships.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId'],
+			anyOf: [
+				{ required: ['actorIds'] },
+				{ required: ['actorNames'] },
+			],
+			properties: {
+				storyId: { type: 'string', minLength: 1 },
+				actorIds: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', minLength: 1 } },
+				actorNames: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', minLength: 1 } },
+				depth: { type: 'integer', minimum: 1, maximum: 2, default: 1 },
+				clientCommandId: { type: 'string', minLength: 1 },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_thread_board',
+		description: 'Read the developing plot board: active threads, faction projects, recent movement, Plot Director pressure, and likely collisions.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId'],
+			properties: {
+				storyId: { type: 'string', minLength: 1 },
+				query: { type: 'string', maxLength: 600 },
+				actorIds: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1 } },
+				factionIds: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1 } },
+				locationId: { type: 'string', minLength: 1 },
+				limit: { type: 'integer', minimum: 1, maximum: 20, default: 12 },
+				clientCommandId: { type: 'string', minLength: 1 },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
+		name: 'mtherios_draft_character_create',
+		description: 'Draft a story-conditioned NPC for review. It does not enter canon until an existing proposal approval action accepts it.',
+		inputSchema: {
+			type: 'object',
+			required: ['storyId', 'name', 'role', 'backstory', 'narrativePurpose'],
+			properties: {
+				storyId: { type: 'string', minLength: 1 },
+				name: { type: 'string', minLength: 1, maxLength: 120 },
+				role: { type: 'string', minLength: 1, maxLength: 300 },
+				backstory: { type: 'string', minLength: 1, maxLength: 1600 },
+				narrativePurpose: { type: 'string', minLength: 1, maxLength: 800 },
+				desire: { type: 'string', maxLength: 500 },
+				fear: { type: 'string', maxLength: 500 },
+				faction: { type: 'string', maxLength: 240 },
+				location: { type: 'string', maxLength: 240 },
+				clientCommandId: { type: 'string', minLength: 1 },
+			},
+			additionalProperties: false,
+		},
+	},
+	{
 		name: 'mtherios_orchestrator_run',
-		description: 'Run the terminal-owned AI orchestrator planner. It coordinates RPG agent roles and can execute existing backend services as engine tool calls.',
+		description: 'Run the terminal-owned staged GM planner. Turn runs use situation, dialogue, location, and plot steps; independent tools within a step execute in parallel.',
 		inputSchema: {
 			type: 'object',
 			required: ['storyId', 'goal'],
 			properties: {
-				storyId: { type: 'string' },
-				mode: { type: 'string', enum: ['turn', 'world_tick', 'audit', 'memory', 'custom'], default: 'turn' },
-				goal: { type: 'string' },
-				playerText: { type: 'string' },
-				clientTurnId: { type: 'string' },
-				context: { type: 'object' },
+				storyId: { type: 'string', minLength: 1 },
+				mode: { type: 'string', enum: ['turn', 'world_tick', 'audit', 'memory', 'lore_curation', 'custom'], default: 'turn' },
+				goal: { type: 'string', minLength: 1 },
+				playerText: { type: 'string', minLength: 1 },
+				clientTurnId: { type: 'string', minLength: 1 },
+				context: {
+					type: 'object',
+					properties: {
+						locationId: { type: ['string', 'null'] },
+						sceneEntityIds: { type: 'array', items: { type: 'string' } },
+						presentNpcIds: { type: 'array', items: { type: 'string' } },
+						threadIds: { type: 'array', items: { type: 'string' } },
+						currentFactionId: { type: ['string', 'null'] },
+						memoryTokenBudget: { type: 'integer', minimum: 0, maximum: 100000 },
+						contextBudget: { type: 'integer', minimum: 1, maximum: 1000000 },
+						includeSecret: { type: 'boolean', default: false },
+						currentTurn: { type: 'integer', minimum: 0 },
+						currentWorldTime: { type: ['string', 'null'] },
+						entryLimit: { type: 'integer', minimum: 1, maximum: 200 },
+					},
+					additionalProperties: false,
+					default: {
+						sceneEntityIds: [],
+						presentNpcIds: [],
+						threadIds: [],
+						includeSecret: false,
+					},
+				},
 				roles: {
 					type: 'array',
 					items: {
 						type: 'string',
-						enum: ['dm_narrator', 'rules_referee', 'state_scribe', 'lorekeeper', 'faction_simulator', 'npc_memory', 'continuity_auditor'],
+						enum: ['dm_narrator', 'rules_referee', 'state_scribe', 'lorekeeper', 'lore_curator', 'faction_simulator', 'npc_memory', 'continuity_auditor'],
 					},
 				},
 				execute: { type: 'boolean', default: false },
-				maxToolCalls: { type: 'integer', minimum: 1, maximum: 20 },
-				clientCommandId: { type: 'string' },
+				maxToolCalls: { type: 'integer', minimum: 1, maximum: 20, default: 8 },
+				clientCommandId: { type: 'string', minLength: 1 },
 			},
 			additionalProperties: false,
 		},
@@ -257,10 +435,32 @@ export const tools = [
 			type: 'object',
 			required: ['storyId', 'type', 'title', 'body'],
 			properties: {
-				storyId: { type: 'string' },
-				type: { type: 'string' },
-				title: { type: 'string' },
-				body: { type: 'string' },
+				storyId: { type: 'string', minLength: 1 },
+				type: {
+					type: 'string',
+					enum: [
+						'promise',
+						'betrayal',
+						'reveal',
+						'faction_move',
+						'faction_signal',
+						'injury',
+						'death',
+						'relationship_shift',
+						'agreement',
+						'scene_transition',
+						'clue_discovery',
+						'correction',
+						'imported_memory',
+						'world_tick',
+						'scheme',
+						'rumor',
+						'marriage',
+						'alliance',
+					],
+				},
+				title: { type: 'string', minLength: 1 },
+				body: { type: 'string', minLength: 1 },
 				delayTurns: { type: 'integer', minimum: 0, default: 0 },
 				currentTurn: { type: 'integer', minimum: 0 },
 				currentWorldTime: { type: ['string', 'null'] },
@@ -273,7 +473,7 @@ export const tools = [
 				locationIds: { type: 'array', items: { type: 'string' } },
 				factionIds: { type: 'array', items: { type: 'string' } },
 				threadIds: { type: 'array', items: { type: 'string' } },
-				visibility: { type: 'string' },
+				visibility: { type: 'string', enum: ['public', 'player_known', 'secret'], default: 'player_known' },
 				memoryImpact: { type: 'object' },
 				sourceEntryIds: { type: 'array', items: { type: 'string' } },
 				sourcePatchIds: { type: 'array', items: { type: 'string' } },
@@ -402,17 +602,17 @@ export const tools = [
 						type: 'object',
 						required: ['serviceId'],
 						properties: {
-							serviceId: { type: 'string' },
-							providerType: { type: 'string' },
+							serviceId: { type: 'string', minLength: 1 },
+							providerType: { type: 'string', minLength: 1 },
 							baseUrl: { type: ['string', 'null'] },
 							model: { type: ['string', 'null'] },
-							temperature: { type: 'number' },
-							maxTokens: { type: 'integer' },
-							topP: { type: ['number', 'null'] },
-							frequencyPenalty: { type: ['number', 'null'] },
-							presencePenalty: { type: ['number', 'null'] },
+							temperature: { type: 'number', minimum: 0, maximum: 2 },
+							maxTokens: { type: 'integer', minimum: 128, maximum: 65536 },
+							topP: { type: ['number', 'null'], minimum: 0, maximum: 1 },
+							frequencyPenalty: { type: ['number', 'null'], minimum: -2, maximum: 2 },
+							presencePenalty: { type: ['number', 'null'], minimum: -2, maximum: 2 },
 							reasoningEffort: { type: ['string', 'null'] },
-							contextBudget: { type: ['integer', 'null'] },
+							contextBudget: { type: ['integer', 'null'], minimum: 1 },
 							enabled: { type: 'boolean' },
 							systemPromptOverride: { type: ['string', 'null'] },
 							apiKeyRef: { type: ['string', 'null'] },
@@ -427,8 +627,8 @@ export const tools = [
 						type: 'object',
 						required: ['ref', 'value'],
 						properties: {
-							ref: { type: 'string' },
-							value: { type: 'string' },
+							ref: { type: 'string', minLength: 1 },
+							value: { type: 'string', minLength: 1 },
 						},
 						additionalProperties: false,
 					},
@@ -497,6 +697,8 @@ export const tools = [
 	},
 ];
 
+export const tools = legacyTools.flatMap(tool => [{ ...tool, name: tool.name.replace(/^mtherios_/, 'mythengine_') }, tool]);
+
 async function defaultRequestJson(requestPath, options = {}) {
 	const response = await fetch(`${APP_URL}${requestPath}`, {
 		...options,
@@ -524,6 +726,7 @@ function queryPath(requestPath, params = {}) {
 }
 
 export async function callTool(name, args = {}, options = {}) {
+	name = name.replace(/^mythengine_/, 'mtherios_');
 	const requestJson = options.requestJson ?? defaultRequestJson;
 	if (name === 'mtherios_status') return requestJson('/api/app/status', { timeoutMs: 15_000 });
 	if (name === 'mtherios_database_schema') return requestJson('/api/database/schema', { timeoutMs: 15_000 });
@@ -589,20 +792,50 @@ export async function callTool(name, args = {}, options = {}) {
 				method: 'PATCH',
 				body: JSON.stringify({
 					updates: requiredRecord(args.updates, 'updates'),
+					expectedVersion: args.expectedVersion,
+					expectedUpdatedAt: args.expectedUpdatedAt,
+					jsonMode: args.jsonMode,
 					reason: optionalString(args.reason) || 'Manual MCP edit.',
 				}),
 				timeoutMs: 60_000,
 			},
 		);
 	}
+	if (name === 'mtherios_get_player_capabilities' || name === 'mtherios_update_player_capabilities') {
+		if (args.storyId === '__app__') throw new Error('A concrete story ID is required for player capabilities.');
+		const update = name === 'mtherios_update_player_capabilities';
+		const changes = {};
+		for (const field of ['abilities', 'buffs']) {
+			if (Object.hasOwn(args, field)) changes[field] = args[field];
+		}
+		if (update && Object.keys(changes).length === 0) throw new Error('Supply abilities or buffs; [] clears that list.');
+		const response = asRecord(await requestJson('/api/engine/command', {
+			method: 'POST', timeoutMs: 60_000,
+			body: JSON.stringify(engineCommandPayload(args, update ? 'world.record.patch' : 'world.record.get', {
+				type: 'characters', recordId: requiredString(args.characterId, 'characterId'),
+				...(update ? { expectedVersion: args.expectedVersion, updates: { playerCapabilities: changes }, reason: optionalString(args.reason) || 'MCP player buffs and abilities update.' } : {}),
+			})),
+		}));
+		if (response.status !== 'succeeded') throw new Error(response.error || 'Player capability request failed.');
+		const result = asRecord(response.result);
+		const record = asRecord(result.record);
+		if (record.type !== 'character') throw new Error('The requested record is not a character.');
+		const metadata = { ...asRecord(asRecord(record.metadata).originalMetadata), ...asRecord(record.metadata) };
+		const capabilities = asRecord(asRecord(record.state).playerCapabilities ?? metadata.playerCapabilities);
+		return { storyId: args.storyId, characterId: record.id, name: record.name,
+			playerCapabilities: { abilities: capabilities.abilities ?? [], buffs: capabilities.buffs ?? [] },
+			serverVersion: result.serverVersion ?? record.server_version ?? record.serverVersion,
+			...(result.patchId ? { patchId: result.patchId } : {}),
+		};
+	}
 	if (name === 'mtherios_search') {
 		const storyId = requiredString(args.storyId, 'storyId');
-		return requestJson(queryPath(`/api/stories/${encodeURIComponent(storyId)}/search`, {
+		return boundSearchPayload(await requestJson(queryPath(`/api/stories/${encodeURIComponent(storyId)}/search`, {
 			q: requiredString(args.q, 'q'),
 			type: optionalString(args.type),
 			limit: optionalInteger(args.limit, 12),
 			semantic: args.includeSemantic === false ? 'false' : undefined,
-		}), { timeoutMs: 60_000 });
+		}), { timeoutMs: 60_000 }));
 	}
 	if (name === 'mtherios_run_turn') {
 		const storyId = requiredString(args.storyId, 'storyId');
@@ -626,16 +859,18 @@ export async function callTool(name, args = {}, options = {}) {
 		});
 	}
 	if (name === 'mtherios_engine_command') {
-		return requestJson('/api/engine/command', {
+		const command = requiredString(args.command, 'command');
+		const response = await requestJson('/api/engine/command', {
 			method: 'POST',
 			body: JSON.stringify({
 				storyId: requiredString(args.storyId, 'storyId'),
-				command: requiredString(args.command, 'command'),
+				command,
 				clientCommandId: optionalString(args.clientCommandId),
 				args: asRecord(args.args),
 			}),
 			timeoutMs: 180_000,
 		});
+		return command === 'world.search' ? boundSearchPayload(response) : response;
 	}
 	if (name === 'mtherios_draft_character_update') {
 		return requestJson('/api/engine/command', {
@@ -644,6 +879,92 @@ export async function callTool(name, args = {}, options = {}) {
 				recordId: requiredString(args.recordId, 'recordId'),
 				instructions: optionalString(args.instructions) || 'Update this NPC from recent story context.',
 				recentLimit: optionalInteger(args.recentLimit, 30),
+			})),
+			timeoutMs: 180_000,
+		});
+	}
+	if (name === 'mtherios_actor_brief') {
+		const actorId = optionalString(args.actorId);
+		const actorName = optionalString(args.name);
+		if (!actorId && !actorName) throw new Error('actorId or name is required.');
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'world.actor.brief', {
+				actorId,
+				name: actorName,
+				eventLimit: optionalPositiveInteger(args.eventLimit),
+			})),
+			timeoutMs: 60_000,
+		});
+	}
+	if (name === 'mtherios_affinity_read') {
+		const actorIds = stringArray(args.actorIds);
+		const actorNames = stringArray(args.actorNames);
+		if (actorIds.length === 0 && actorNames.length === 0) throw new Error('At least one actor is required.');
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'world.affinity.read', {
+				actorIds,
+				actorNames,
+				historyLimit: optionalNonnegativeInteger(args.historyLimit),
+			})),
+			timeoutMs: 60_000,
+		});
+	}
+	if (name === 'mtherios_scene_check') {
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'world.scene.check', {
+				actorIds: stringArray(args.actorIds),
+				actorNames: stringArray(args.actorNames),
+				locationId: optionalString(args.locationId),
+				locationName: optionalString(args.locationName),
+				proposedTime: optionalString(args.proposedTime),
+				proposedAction: optionalString(args.proposedAction),
+				availableMinutes: optionalNonnegativeInteger(args.availableMinutes),
+			})),
+			timeoutMs: 60_000,
+		});
+	}
+	if (name === 'mtherios_relationship_web') {
+		const actorIds = stringArray(args.actorIds);
+		const actorNames = stringArray(args.actorNames);
+		if (actorIds.length === 0 && actorNames.length === 0) throw new Error('At least one actor is required.');
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'world.relationship.web', {
+				actorIds,
+				actorNames,
+				depth: optionalPositiveInteger(args.depth),
+			})),
+			timeoutMs: 60_000,
+		});
+	}
+	if (name === 'mtherios_thread_board') {
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'plot.thread.board', {
+				query: optionalString(args.query),
+				actorIds: stringArray(args.actorIds),
+				factionIds: stringArray(args.factionIds),
+				locationId: optionalString(args.locationId),
+				limit: optionalPositiveInteger(args.limit),
+			})),
+			timeoutMs: 60_000,
+		});
+	}
+	if (name === 'mtherios_draft_character_create') {
+		return requestJson('/api/engine/command', {
+			method: 'POST',
+			body: JSON.stringify(engineCommandPayload(args, 'world.character.draftCreate', {
+				name: requiredString(args.name, 'name'),
+				role: requiredString(args.role, 'role'),
+				backstory: requiredString(args.backstory, 'backstory'),
+				narrativePurpose: requiredString(args.narrativePurpose, 'narrativePurpose'),
+				desire: optionalString(args.desire),
+				fear: optionalString(args.fear),
+				faction: optionalString(args.faction),
+				location: optionalString(args.location),
 			})),
 			timeoutMs: 180_000,
 		});
@@ -931,6 +1252,68 @@ function compactRecord(record) {
 	return output;
 }
 
+function clippedText(value, maxChars) {
+	if (typeof value !== 'string') return undefined;
+	const clean = value.replace(/\s+/g, ' ').trim();
+	if (!clean) return undefined;
+	return clean.length <= maxChars ? clean : `${clean.slice(0, maxChars - 3).trimEnd()}...`;
+}
+
+function boundSearchPage(value, maxChars = MAX_SEARCH_RESULT_CHARS) {
+	const page = asRecord(value);
+	const rows = Array.isArray(page.results) ? page.results : [];
+	const resultCount = typeof page.resultCount === 'number' ? page.resultCount : rows.length;
+	const output = {
+		storyId: clippedText(page.storyId, 240),
+		query: clippedText(page.query, 500),
+		warnings: Array.isArray(page.warnings)
+			? page.warnings.map((warning) => clippedText(warning, 500)).filter(Boolean).slice(0, 10)
+			: [],
+		resultCount,
+		returnedResultCount: 0,
+		omittedResultCount: resultCount,
+		truncated: false,
+		results: [],
+	};
+	for (const value of rows) {
+		const row = asRecord(value);
+		const detail = Object.keys(asRecord(row.payload)).length > 0 ? asRecord(row.payload) : asRecord(row.record);
+		const snippet = clippedText(
+			detail.text ?? detail.content ?? detail.body ?? detail.summary ?? detail.description ?? row.snippet,
+			1200,
+		);
+		const summary = compactRecord({
+			source: optionalString(row.source),
+			score: typeof row.score === 'number' ? row.score : undefined,
+			recordType: optionalString(row.recordType ?? detail.recordType ?? detail.type),
+			recordId: optionalString(row.recordId ?? detail.recordId ?? detail.id),
+			title: clippedText(row.title ?? detail.title ?? detail.name, 300),
+			status: optionalString(detail.status),
+			visibility: optionalString(detail.visibility),
+			snippet,
+		});
+		output.results.push(summary);
+		output.returnedResultCount = output.results.length;
+		output.omittedResultCount = Math.max(0, resultCount - output.returnedResultCount);
+		if (JSON.stringify(output).length > maxChars) {
+			output.results.pop();
+			output.returnedResultCount = output.results.length;
+			output.omittedResultCount = Math.max(0, resultCount - output.returnedResultCount);
+			output.truncated = true;
+			break;
+		}
+	}
+	output.truncated ||= output.omittedResultCount > 0;
+	return output;
+}
+
+function boundSearchPayload(value) {
+	const envelope = asRecord(value);
+	if (Array.isArray(envelope.results)) return boundSearchPage(envelope);
+	const result = asRecord(envelope.result);
+	return Array.isArray(result.results) ? { ...envelope, result: boundSearchPage(result) } : value;
+}
+
 function engineCommandPayload(args, command, commandArgs) {
 	return compactRecord({
 		storyId: requiredString(args.storyId, 'storyId'),
@@ -964,7 +1347,7 @@ async function handleRequest(message) {
 					protocolVersion: params?.protocolVersion ?? '2025-06-18',
 					capabilities: { tools: {} },
 					serverInfo: {
-						name: 'mtherios-terminal-database',
+						name: 'mythengine-terminal-database',
 						version: SERVER_VERSION,
 					},
 				},
@@ -1007,7 +1390,7 @@ function writeMessage(message) {
 	process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
-function startStdioServer() {
+export function startStdioServer() {
 	let buffer = '';
 	process.stdin.setEncoding('utf8');
 	process.stdin.on('data', (chunk) => {

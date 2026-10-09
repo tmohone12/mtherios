@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import fs from 'node:fs';
 import path from 'node:path';
 import { env } from '$env/dynamic/private';
+import { resolveRuntimeOptions } from '../../../../scripts/runtime-config.mjs';
 import { getDb } from '$lib/server/db/client';
 import { llmServiceSettings } from '$lib/server/db/schema';
 import {
@@ -28,7 +29,7 @@ function nowIso(): string {
 }
 
 function configPath(): string {
-	return path.resolve(env.MTHERIOS_CONFIG || process.env.MTHERIOS_CONFIG || 'mtherios.config.json');
+	return resolveRuntimeOptions([], { env }).configPath;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -161,7 +162,7 @@ function defaultApiKeyRef(providerType: ProviderType, explicit?: string | null):
 }
 
 export function serviceDefaultKey(serviceId: string): keyof ProviderServices {
-	if (serviceId === 'classifier' || serviceId === 'characterUpdate' || serviceId === 'worldSimulation' || serviceId === 'smallBrain') return 'classification';
+	if (serviceId === 'classifier' || serviceId === 'characterUpdate' || serviceId === 'worldSimulation' || serviceId === 'smallBrain' || serviceId === 'activeRecall' || serviceId === 'actorDecision' || serviceId === 'continuityReview') return 'classification';
 	return 'narrative';
 }
 
@@ -171,7 +172,7 @@ function providerServiceDefaults(providerType: ProviderType, serviceId: string) 
 }
 
 function fallbackTemperature(serviceId: string): number {
-	return serviceId === 'classifier' || serviceId === 'characterUpdate' || serviceId === 'smallBrain' ? 0.2 : 1;
+	return serviceId === 'classifier' || serviceId === 'characterUpdate' || serviceId === 'smallBrain' || serviceId === 'activeRecall' || serviceId === 'actorDecision' || serviceId === 'continuityReview' ? 0.2 : 1;
 }
 
 function serviceConfigFromFile(serviceId: string): {
@@ -188,6 +189,7 @@ function serviceConfigFromFile(serviceId: string): {
 }
 
 function defaultServiceSetting(serviceId: string): LlmServiceSetting | null {
+	if (['assistant', 'batchAuthoring', 'dialogue', 'activeRecall', 'worldSimulation'].includes(serviceId)) return null; // Optional or retired services require an explicitly saved profile.
 	const prefix = serviceEnvPrefix(serviceId);
 	const { global, service } = serviceConfigFromFile(serviceId);
 	const inferred = inferProviderFromEnvKey();
@@ -258,6 +260,14 @@ function defaultServiceSetting(serviceId: string): LlmServiceSetting | null {
 		presencePenalty: configNumber(service.presencePenalty, service.presence_penalty, global.presencePenalty, global.presence_penalty),
 		reasoningEffort: configString(service.reasoningEffort, service.reasoning_effort, global.reasoningEffort, global.reasoning_effort, defaults?.reasoningEffort),
 		contextBudget: configNumber(service.contextBudget, service.context_budget, global.contextBudget, global.context_budget),
+		contextWindowTokens: configNumber(
+			service.contextWindowTokens,
+			service.context_window_tokens,
+			envFirst(`MTHERIOS_${prefix}_LLM_CONTEXT_WINDOW`, `MTHERIOS_${prefix}_CONTEXT_WINDOW`),
+			global.contextWindowTokens,
+			global.context_window_tokens,
+			envFirst('MTHERIOS_LLM_CONTEXT_WINDOW'),
+		),
 		enabled: service.enabled !== false,
 		systemPromptOverride: configString(service.systemPromptOverride, service.system_prompt_override),
 		apiKeyRef: defaultApiKeyRef(providerType, explicitApiKeyRef),
@@ -287,6 +297,7 @@ function baseSettingFromProvider(patch: LlmServiceSettingPatch): LlmServiceSetti
 		presencePenalty: null,
 		reasoningEffort: defaults?.reasoningEffort ?? null,
 		contextBudget: null,
+		contextWindowTokens: null,
 		enabled: true,
 		systemPromptOverride: null,
 		apiKeyRef: defaultApiKeyRef(providerType, null),
@@ -354,6 +365,7 @@ export async function upsertLlmServiceSettings(settings: LlmServiceSettingPatch[
 			presencePenalty: setting.presencePenalty,
 			reasoningEffort: setting.reasoningEffort,
 			contextBudget: setting.contextBudget,
+			contextWindowTokens: setting.contextWindowTokens,
 			enabled: setting.enabled,
 			systemPromptOverride: setting.systemPromptOverride,
 			apiKeyRef: setting.apiKeyRef,
@@ -372,6 +384,7 @@ export async function upsertLlmServiceSettings(settings: LlmServiceSettingPatch[
 				presencePenalty: setting.presencePenalty,
 				reasoningEffort: setting.reasoningEffort,
 				contextBudget: setting.contextBudget,
+				contextWindowTokens: setting.contextWindowTokens,
 				enabled: setting.enabled,
 				systemPromptOverride: setting.systemPromptOverride,
 				apiKeyRef: setting.apiKeyRef,
@@ -438,6 +451,7 @@ export async function resolveServiceGeneration(serviceId: string): Promise<{
 			providerType: setting.providerType,
 			baseUrl: setting.baseUrl ?? undefined,
 			apiKey,
+			contextWindowTokens: setting.contextWindowTokens ?? undefined,
 			customModels: setting.model ? [setting.model] : [],
 			fetchedModels: [],
 			reasoningModels: [],

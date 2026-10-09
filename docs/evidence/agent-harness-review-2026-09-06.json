@@ -1,0 +1,74 @@
+{
+  "recordedAt": "2026-09-06T18:25:27.326Z",
+  "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+  "kind": "read-only debug endpoint samples; not provider-bound requests or a latency benchmark",
+  "samples": [
+    {
+      "requestedSceneMemoryBudget": 8000,
+      "resolution": {
+        "narrativeOverrideApplied": false,
+        "contextBudget": 8000,
+        "contextBudgetSource": "request",
+        "contextTruncated": false
+      },
+      "durationMs": 874,
+      "systemTokens": 2812,
+      "sceneMemoryTokens": 6567,
+      "dialogueTokens": 4237,
+      "dialogueMessages": 16,
+      "dialogueHash": "a0c19a5b3699c25394b559d7d8c377830e7b70fcddbd07bff76628e9b27b3d8a",
+      "firstRole": "assistant",
+      "retrievedNodes": 5,
+      "retrievalTokens": 1193
+    },
+    {
+      "requestedSceneMemoryBudget": 48000,
+      "resolution": {
+        "narrativeOverrideApplied": false,
+        "contextBudget": 48000,
+        "contextBudgetSource": "request",
+        "contextTruncated": false
+      },
+      "durationMs": 867,
+      "systemTokens": 2812,
+      "sceneMemoryTokens": 6567,
+      "dialogueTokens": 4237,
+      "dialogueMessages": 16,
+      "dialogueHash": "a0c19a5b3699c25394b559d7d8c377830e7b70fcddbd07bff76628e9b27b3d8a",
+      "firstRole": "assistant",
+      "retrievedNodes": 5,
+      "retrievalTokens": 1193
+    },
+    {
+      "requestedSceneMemoryBudget": 200000,
+      "resolution": {
+        "narrativeOverrideApplied": false,
+        "contextBudget": 200000,
+        "contextBudgetSource": "request",
+        "contextTruncated": false
+      },
+      "durationMs": 894,
+      "systemTokens": 2812,
+      "sceneMemoryTokens": 6567,
+      "dialogueTokens": 4237,
+      "dialogueMessages": 16,
+      "dialogueHash": "a0c19a5b3699c25394b559d7d8c377830e7b70fcddbd07bff76628e9b27b3d8a",
+      "firstRole": "assistant",
+      "retrievedNodes": 5,
+      "retrievalTokens": 1193
+    }
+  ],
+  "jobs": {
+    "failed": 50,
+    "failedByType": {
+      "extract_turn_state": 50
+    },
+    "ready": 0,
+    "running": 0
+  },
+  "tests": {
+    "command": "npm test -- src/lib/server/turn/promptHarness.test.ts src/lib/server/memory/retrieval.test.ts src/lib/server/turn/promptReceipt.test.ts",
+    "filesPassed": 3,
+    "testsPassed": 71
+  }
+}

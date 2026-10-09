@@ -1,0 +1,14 @@
+{
+  "recordedAt": "2026-09-22T19:06:37.952Z",
+  "command": "npm test",
+  "passed": 1552,
+  "failed": 3,
+  "filesPassed": 157,
+  "filesFailed": 1,
+  "failures": [
+    "retains all nine full chapters while they await the next arc",
+    "omits an arc that cannot fit whole and reports the missing history",
+    "budgets rendered arc memory while retaining the newest covered chapter"
+  ],
+  "baseline": "Same three inherited promptHarness failures reported at Phase 2"
+}

@@ -8,6 +8,13 @@
 
 const DEFAULT_MODEL_CONTEXT = 128000;
 
+export type ModelContextWindowSource = 'explicit-override' | 'model-window-registry-or-default';
+
+export interface ModelContextWindowInfo {
+	tokens: number;
+	source: ModelContextWindowSource;
+}
+
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 	// OpenAI
 	'gpt-4o': 128000,
@@ -63,19 +70,26 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 	'moonshot-v1-8k': 8192,
 };
 
-export function getModelContextWindow(model: string): number {
-	if (MODEL_CONTEXT_WINDOWS[model]) return MODEL_CONTEXT_WINDOWS[model];
+export function getModelContextWindowInfo(model: string, explicitOverride?: number | null): ModelContextWindowInfo {
+	if (Number.isFinite(explicitOverride) && Number(explicitOverride) > 0) {
+		return { tokens: Math.trunc(Number(explicitOverride)), source: 'explicit-override' };
+	}
+	if (MODEL_CONTEXT_WINDOWS[model]) return { tokens: MODEL_CONTEXT_WINDOWS[model], source: 'model-window-registry-or-default' };
 
 	for (const [key, value] of Object.entries(MODEL_CONTEXT_WINDOWS)) {
-		if (model.startsWith(key)) return value;
+		if (model.startsWith(key)) return { tokens: value, source: 'model-window-registry-or-default' };
 	}
 
-	if (model.includes('gemini')) return 1048576;
-	if (model.includes('claude')) return 200000;
-	if (model.includes('gpt-4o')) return 128000;
-	if (model.includes('grok')) return 131072;
-	if (model.includes('kimi-for-coding')) return 262144;
-	if (model.includes('kimi') || model.includes('moonshot')) return 131072;
+	if (model.includes('gemini')) return { tokens: 1048576, source: 'model-window-registry-or-default' };
+	if (model.includes('claude')) return { tokens: 200000, source: 'model-window-registry-or-default' };
+	if (model.includes('gpt-4o')) return { tokens: 128000, source: 'model-window-registry-or-default' };
+	if (model.includes('grok')) return { tokens: 131072, source: 'model-window-registry-or-default' };
+	if (model.includes('kimi-for-coding')) return { tokens: 262144, source: 'model-window-registry-or-default' };
+	if (model.includes('kimi') || model.includes('moonshot')) return { tokens: 131072, source: 'model-window-registry-or-default' };
 
-	return DEFAULT_MODEL_CONTEXT;
+	return { tokens: DEFAULT_MODEL_CONTEXT, source: 'model-window-registry-or-default' };
+}
+
+export function getModelContextWindow(model: string, explicitOverride?: number | null): number {
+	return getModelContextWindowInfo(model, explicitOverride).tokens;
 }

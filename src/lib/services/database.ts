@@ -369,7 +369,7 @@ export async function getAllStories(): Promise<Story[]> {
 }
 
 export async function updateStory(id: string, updates: Partial<Story>): Promise<void> {
-	await updateRecord(db.stories, id, { ...updates, updatedAt: Date.now() });
+	await updateRecord(db.stories, id, { ...updates, updatedAt: updates.updatedAt ?? Date.now() });
 }
 
 export async function deleteStory(id: string): Promise<void> {

@@ -1,185 +1,27 @@
-# Mtherios Architecture
+# Architecture task map
 
-Mtherios is a SvelteKit app served by a terminal Node process. The terminal process owns backend canon, model routing, jobs, generated markdown vaults, and local service integrations. The browser renders and controls the system.
+Use this index when choosing where to investigate. [Root AGENTS.md](../AGENTS.md) contains the working agreement; [ARCHITECTURE.md](../ARCHITECTURE.md) contains the maintained system reference. This file routes to those owners instead of maintaining a second source map.
 
-## Runtime Shape
+## Find the relevant boundary
 
-```text
-Browser UI
-  -> SvelteKit API routes
-  -> terminal Node runtime
-  -> Postgres backend canon
-  -> generated markdown vaults
-  -> Qdrant / pgvector indexes
-  -> frontend projection
-```
+| Task or symptom | Read next | Establish before changing behavior |
+| --- | --- | --- |
+| Startup, wrong process, wrong data directory | [Runtime and entrypoints](../ARCHITECTURE.md#runtime-and-entrypoints) | Selected checkout, actual URL/data root, dependency health |
+| Narration, context size, model/reasoning settings | [Server turn and prompt flow](../ARCHITECTURE.md#server-turn-and-prompt-flow) | Saved example, effective override/pack/provider, prepared versus sent request |
+| Missing recall, stuck processing, summaries | [Memory and durable processing](../ARCHITECTURE.md#memory-retrieval-and-durable-processing) | Source coverage, retained records, stage/version of any gap |
+| Character edits, player abilities, MCP consistency | [Canonical world editing](../ARCHITECTURE.md#canonical-world-editing) | Canonical ID, accepted update contract, persistence and projection |
+| Containing places, city rules, inherited context | [Locations and inherited lore](../ARCHITECTURE.md#locations-and-inherited-lore) | Containment edges, scoped facts, campaign turn, revision |
+| Repeated/ignored plot pressure, faction decisions | [Director and factions](../ARCHITECTURE.md#plot-director-and-autonomous-factions) | Pending/applied frame, lifecycle, source events, eligible actors |
+| Wiki search, portable saves, historical imports | [Vaults and portability](../ARCHITECTURE.md#vaults-imports-and-portability) | Canon versus projection, embedding configuration, bundle identity mapping |
+| UI cache, offline/PWA, mobile keyboard | [Browser boundaries](../ARCHITECTURE.md#browser-and-offline-boundaries) | Server value, client projection, rendered behavior/device evidence |
+| Benchmarks, qualification, activation | [Evaluation and release](../ARCHITECTURE.md#development-evaluation-and-release-evidence) | Mode side effects, tested artifact, actual acceptance gates |
 
-The browser should not duplicate the engine. It sends commands, receives streams/projections, and exposes controls.
+## Read documentation according to its role
 
-## Main Layers
+- [PROJECT_ABOUT.md](PROJECT_ABOUT.md): what the product does and who it serves.
+- [VISION.md](VISION.md): desired outcomes and tradeoffs; it is not an implementation queue.
+- [Location authoring](../docs/location-lore-authoring.md): the specific authoring contract and examples.
+- [Dated harness plan](../docs/agent-harness-implementation-plan-2026-09-06.md): historical planning scope.
+- [Dated release evidence](../docs/agent-harness-release-path-2026-09-07.md): what a particular qualification run established.
 
-### Frontend Control Surface
-
-Main paths:
-
-- `src/lib/components/`
-- `src/lib/stores/`
-- `src/routes/`
-
-Responsibilities:
-
-- story library and play UI
-- settings and model controls
-- projection display
-- diagnostics and repair surfaces
-- local cache/offline compatibility
-
-Do not make the frontend the source of canon for backend-bound stories.
-
-### API And Engine Routes
-
-Important routes:
-
-- `/api/turn`
-- `/api/engine/command`
-- `/api/engine/stream`
-- `/api/stories/*`
-- `/api/wiki/*`
-- `/api/jobs/*`
-- `/api/small-brain/run`
-
-Routes should be thin: validate input, call server service, return JSON.
-
-### Backend Canon
-
-Main schema:
-
-- `src/lib/server/db/schema.ts`
-
-Important tables:
-
-- `stories`
-- `story_entries`
-- `entities`
-- `relationships`
-- `factions`
-- `facts`
-- `story_events`
-- `memory_nodes`
-- `patch_proposals`
-- `source_refs`
-- `continuity_warnings`
-- `backend_jobs`
-
-Canonical writes need source IDs and validation. Generated markdown and indexes can be rebuilt from these rows.
-
-### AI Runtime
-
-Important paths:
-
-- `src/lib/server/turn/provider.ts`
-- `src/lib/server/turn/orchestrator.ts`
-- `src/lib/server/turn/promptPacket.ts`
-- `src/lib/server/engine/llmSettings.ts`
-- `src/lib/services/ai/sdk/`
-
-Current direction:
-
-- server-owned generation path for backend-bound stories
-- strict schemas for structured output
-- provider capability detection
-- prompt caching telemetry
-- replay evaluation harness
-
-### Small Brain Service
-
-Path:
-
-- `src/lib/server/engine/smallBrain.ts`
-- `src/routes/api/small-brain/run/+server.ts`
-
-Role:
-
-- cheap context gathering
-- canon proposal drafting
-- world intent drafts
-
-It is proposal-only. It never writes canon directly.
-
-### Jobs And Projections
-
-Important paths:
-
-- `src/lib/server/jobs/`
-- `scripts/wiki-core/`
-- `scripts/app-*.mjs`
-
-Jobs handle work that should not block the player turn:
-
-- story vault sync
-- memory node projection
-- chapter/arc/saga rollups
-- wiki indexing
-- optional embeddings
-- faction/world updates
-
-## Storage Model
-
-```text
-Postgres = authority
-Markdown vault = readable projection
-Qdrant / pgvector = rebuildable search index
-IndexedDB = browser cache and compatibility
-```
-
-This distinction is non-negotiable for long campaigns.
-
-## Prompt Architecture Direction
-
-The current prompt layer should evolve into a section compiler:
-
-```text
-engine static
-genre static
-story static
-turn dynamic
-```
-
-Each section should carry:
-
-- ID
-- lane
-- priority
-- token budget
-- content hash
-- source IDs
-- inclusion/skipping reason
-
-Stable sections go first. Dynamic player action and recent scene data go last.
-
-## Evaluation Direction
-
-Keep unit prompt tests, but add replay evaluation:
-
-- continuity scenarios
-- NPC knowledge leakage tests
-- retrieval recall checks
-- state patch precision checks
-- prompt injection cases
-- cost/latency/cache metrics
-
-Evaluation belongs under server/test scripts, not in the frontend.
-
-## Change Guidance
-
-When adding a new engine feature:
-
-1. Add or reuse a strict contract.
-2. Keep the route thin.
-3. Put logic in a server service.
-4. Source-link durable outputs.
-5. Return proposals/warnings before canon writes.
-6. Add focused tests.
-7. Expose settings if runtime behavior depends on them.
-
-When in doubt, make the backend explain what it used and why.
+Follow only the links relevant to the task. Verify a dated claim against current source/runtime before relying on it.

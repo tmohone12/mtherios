@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Activity, RefreshCw, Server, HardDrive } from 'lucide-svelte';
+	import { Activity, RefreshCw, HardDrive } from 'lucide-svelte';
 	import { fetchEngineCacheStatus } from '$lib/services/serverStories';
 	import type { EngineCacheStatus } from '$lib/contracts/engine';
 
@@ -33,14 +33,15 @@
 		: 0);
 </script>
 
-<div class="flex h-full flex-col overflow-y-auto p-6">
-	<div class="mb-6 flex items-center justify-between">
-		<div class="flex items-center gap-3">
-			<Server class="h-5 w-5 text-[var(--text-accent)]" />
-			<h2 class="font-display text-lg tracking-wide text-[var(--text-primary)]">Engine Core</h2>
+<div class="workspace-page diagnostic-page flex h-full flex-col overflow-y-auto">
+	<div class="workspace-page-heading">
+		<div>
+			<p class="workspace-eyebrow">Behind the story</p>
+			<h2>Engine core.</h2>
+			<p class="workspace-subtitle">A clear view of your story engine and its working memory.</p>
 		</div>
-		<button onclick={load} disabled={loading} class="rounded-lg p-2 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-accent)] disabled:opacity-40">
-			<RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
+		<button onclick={load} disabled={loading} class="workspace-refresh">
+			<RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />{loading ? 'Refreshing' : 'Refresh status'}
 		</button>
 	</div>
 
@@ -60,7 +61,7 @@
 			<div class="grid grid-cols-2 gap-3 text-sm">
 				<div>
 					<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Status</div>
-					<div class="text-[var(--text-primary)]">{String(health.status ?? 'unknown')}</div>
+					<div class="text-[var(--text-primary)]">{health.ok === true ? 'Healthy' : 'Needs attention'}</div>
 				</div>
 				<div>
 					<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Configured</div>

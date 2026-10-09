@@ -260,9 +260,6 @@ vi.mock('$lib/server/wiki/wikiCore', () => ({
 	briefWiki: vi.fn(() => {
 		throw new Error('legacy wiki brief path should not run');
 	}),
-	lintWiki: vi.fn(() => {
-		throw new Error('legacy wiki lint path should not run');
-	}),
 	followWiki: vi.fn(() => {
 		throw new Error('legacy wiki follow path should not run');
 	}),
@@ -970,8 +967,6 @@ describe('legacy API route gateway compatibility', () => {
 				workerId: 'manual_wiki',
 				runNow: false,
 				index: true,
-				lint: true,
-				thinChars: 12000,
 				provider: 'ollama',
 				model: 'nomic-embed-text',
 			}),
@@ -999,8 +994,6 @@ describe('legacy API route gateway compatibility', () => {
 					workerId: 'manual_wiki',
 					runNow: false,
 					index: true,
-					lint: true,
-					thinChars: 12000,
 					provider: 'ollama',
 					model: 'nomic-embed-text',
 					allStories: false,
@@ -1323,7 +1316,7 @@ describe('legacy API route gateway compatibility', () => {
 
 		const response = await promptPacket.GET({
 			params: { storyId: 'story_alpha' },
-			url: new URL('http://localhost/api/debug/prompt-packet/story_alpha?q=marriage&tokenBudget=777'),
+			url: new URL('http://localhost/api/debug/prompt-packet/story_alpha?q=marriage&tokenBudget=777&contextBudget=0'),
 		} as Parameters<typeof promptPacket.GET>[0]);
 
 		expect(response.status).toBe(200);
@@ -1334,6 +1327,7 @@ describe('legacy API route gateway compatibility', () => {
 			args: {
 				query: 'marriage',
 				tokenBudget: 777,
+				contextBudget: 0,
 			},
 		}]);
 	});

@@ -1,0 +1,88 @@
+{
+  "recordedAt": "2026-09-22T11:10:25.715Z",
+  "baseline": "MythEngine clone after folder-copy milestone",
+  "changes": [
+    {
+      "path": "drizzle/0027_folder_archives.sql",
+      "beforeSha256": null,
+      "afterSha256": "b7e4b442f1c242774563aa3e6681398616c184816be7d221125cdc46340cb934"
+    },
+    {
+      "path": "src/lib/components/content/ContentWorkspace.svelte",
+      "beforeSha256": "88e90e002b6dc8a37440e94825258c736cbb8752e1aaa2a4569db551e2936663",
+      "afterSha256": "a3c88fa7cc0653416550b78740a7a1892bad8ac74c746d1c369c98ac71e4bfe0"
+    },
+    {
+      "path": "src/lib/contracts/contentFolders.ts",
+      "beforeSha256": "e8a510a868618bf5d2cdaba2a74ff252aefd11081f88998f5745d591030fa0b0",
+      "afterSha256": "018064b41989380367daf76d96ef5e6178aa327c66242bd6540da9d8f1fa40f0"
+    },
+    {
+      "path": "src/lib/server/db/schema.ts",
+      "beforeSha256": "d95b588c2949655a3bc9f1a356bf7068e4442adebba7367205c5cf6b21a7c8dc",
+      "afterSha256": "7f7d53f7c667b0928de316b22fc7aa6525987839f761acaaaacf0eecc1b589ce"
+    },
+    {
+      "path": "src/lib/server/engine/canonicalContent.ts",
+      "beforeSha256": "bd762aee843b8086fc0f8c43eb5fd13c6f1001bebff1aecdbdfe91dbca9b7833",
+      "afterSha256": "85b9da01913dad70948482e96bed592a73b0bdc9e5845961fb49a709dea533e7"
+    },
+    {
+      "path": "src/lib/server/engine/command.ts",
+      "beforeSha256": "3d7688710aeaad9643362efb1437bdd53b436b086acf45211540a178e4cc4fa9",
+      "afterSha256": "3bd517a0949a5afd02d51f88aeb826b9df6fee5df2c0bf516be6082c7f4b6b29"
+    },
+    {
+      "path": "src/lib/server/engine/content.ts",
+      "beforeSha256": "fb6337f2f2385f5d2ec00ec31d1cb81b7d9a7fda5aa482c09abc044d78615b37",
+      "afterSha256": "b0cfce0f54d399b9e6246786ef1fa9a274ad87075035c49344f54e4b36a35dfc"
+    },
+    {
+      "path": "src/lib/components/content/FolderManager.svelte",
+      "beforeSha256": "15d1448d6fc023440250261949eb2cf26a0ffbe3c7ad885d07ab46fc92b2a85d",
+      "afterSha256": "4799f81ccb1e0704d0a4441b0dc706ac612c9e66663001bfee426b098887ff88"
+    },
+    {
+      "path": "src/lib/server/engine/contentFolderArchive.test.ts",
+      "beforeSha256": null,
+      "afterSha256": "bdd6e4bcc4dbba3f182456ab8ae641927fe0bba1478fb867ab51ed05cdad0216"
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "beforeSha256": "48cbd3d49e60072122daa0b5074dc128936a01395afb568e2a6f47329e114c67",
+      "afterSha256": "e314d87d13d4da5d269e61ad61350c46028b6a14384b09414908eb602cf299ef"
+    },
+    {
+      "path": "docs/evidence/mythengine-overhaul/phase2g-browser-fixture.mjs",
+      "beforeSha256": null,
+      "afterSha256": "3993476622ac64d750518da388ec35ec281110af9420e4879828f63c5f76a212"
+    },
+    {
+      "path": "docs/evidence/mythengine-overhaul/phase2g-verify-live.mjs",
+      "beforeSha256": null,
+      "afterSha256": "be3a66f36697cad12f1ff80ab4b146e90ec4fc5b178b2807a702d9a4e55d435b"
+    },
+    {
+      "path": "docs/mythengine-overhaul-plan-2026-09-21.md",
+      "beforeSha256": "6e8e1fc2bdf862352c4d2df4268f68895f772aae5cca0bb8a26f62752eca8647",
+      "afterSha256": "b5a6d5f30854487e0c39df1af249e09e01c99eb3f28421bac5944e7c8362c7b6"
+    },
+    {
+      "path": "docs/mythengine-phase2-folder-archive-2026-09-22.md",
+      "beforeSha256": null,
+      "afterSha256": "65076d4bc1f3c9d1e7c5cdcb207c37fee230a18de1850bf1f0415c11e4f4bc67"
+    },
+    {
+      "path": "README.md",
+      "beforeSha256": "b493798b123d4fefcaa69d55f1f2e7181e177255f362f4b5f36bd27c6722efc1",
+      "afterSha256": "1681d8a7e5c7bc61e7352d8fb4ca3b4fbf6fe17065ebc02b1d8621cd8c917755"
+    }
+  ],
+  "checks": {
+    "phaseScopedDiff": "passed",
+    "documentationLinks": "passed",
+    "originalFilesChecked": 760,
+    "originalNotWrittenByThisMilestone": true,
+    "preExistingOriginalDifferences": 5
+  }
+}

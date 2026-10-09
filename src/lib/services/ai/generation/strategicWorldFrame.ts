@@ -4,6 +4,10 @@ import { uuid } from '$lib/utils/uuid';
 import { frameChapterRange } from '../context/strategicWorldBrainInput';
 import { describesForcedPlayerAction } from '../context/plotMomentumAgency';
 
+type ThreadBoundPlotCard = StrategicWorldFrame['plotCards'][number] & {
+	storyThreadId?: string | null;
+};
+
 function compactCard(value: string, fallback: string): string {
 	const text = (value || fallback).replace(/\s+\n/g, '\n').trim();
 	return text.length <= 4200 ? text : `${text.slice(0, 4197).trimEnd()}...`;
@@ -50,12 +54,18 @@ function addRefs(refs: Map<string, string>, values: string[], id: string): void 
 	}
 }
 
+function referencedStoryThreadId(card: ThreadBoundPlotCard): string | null {
+	const explicit = card.storyThreadId?.trim();
+	if (explicit) return explicit;
+	return card.sourceRefs.find(ref => ref.sourceType === 'thread' && ref.sourceId?.trim())?.sourceId?.trim() ?? null;
+}
+
 function evidenceFilter(input: StrategicWorldBrainInput): (refs: StrategicEvidenceRef[]) => StrategicEvidenceRef[] {
 	const byType = new Map<StrategicEvidenceRef['sourceType'], Set<string>>([
 		['arc', new Set([...(input.currentArc ? [input.currentArc] : []), ...(input.recentArcs ?? []), ...(input.relevantOlderArcs ?? [])].map(row => row.id))],
 		['chapter', new Set([...(input.currentArcChapters ?? []), ...(input.recentChapters ?? [])].map(row => row.id))],
 		['scheme', new Set([...(input.activeSchemes ?? []), ...(input.recentlyResolvedSchemes ?? [])].map(row => row.id))],
-		['thread', new Set(input.knownThreadIds ?? (input.storyThreads ?? []).map(row => row.id))],
+		['thread', new Set(input.knownThreadIds ?? [])],
 		['world_event', new Set((input.worldEvents ?? []).map(row => row.id))],
 		['faction', new Set(input.knownFactionIds ?? (input.factions ?? []).map(row => row.id))],
 		['rumor', new Set((input.rumors ?? []).map(row => row.id))],
@@ -75,10 +85,24 @@ export function finalizeStrategicWorldFrame(
 	const previousSeedIds = new Map((previous?.tensionSeeds ?? []).map(seed => [refKey(seed.title), seed.id]));
 	const previousCandidateIds = new Map((previous?.antagonistCandidates ?? []).map(candidate => [refKey(candidate.name), candidate.id]));
 	const previousCardIds = new Map((previous?.plotCards ?? []).map(card => [refKey(card.title), card.id]));
+	const previousCardThreadById = new Map((previous?.plotCards ?? [])
+		.map(card => [card.id.trim(), referencedStoryThreadId(card as ThreadBoundPlotCard)] as const)
+		.filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])));
+	const previousTitleCounts = new Map<string, number>();
+	for (const card of previous?.plotCards ?? []) {
+		const title = refKey(card.title);
+		if (title) previousTitleCounts.set(title, (previousTitleCounts.get(title) ?? 0) + 1);
+	}
+	const previousCardThreadByTitle = new Map((previous?.plotCards ?? [])
+		.map(card => [refKey(card.title), referencedStoryThreadId(card as ThreadBoundPlotCard)] as const)
+		.filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1] && previousTitleCounts.get(entry[0]) === 1)));
+	const previousCardIdsByThread = new Map((previous?.plotCards ?? [])
+		.map(card => [referencedStoryThreadId(card as ThreadBoundPlotCard), card.id] as const)
+		.filter((entry): entry is readonly [string, string] => Boolean(entry[0])));
 	const filterEvidence = evidenceFilter(input);
 	const validEntityIds = new Set(input.knownEntityIds ?? (input.characters ?? []).map(row => row.id));
 	const validFactionIds = new Set(input.knownFactionIds ?? (input.factions ?? []).map(row => row.id));
-	const validThreadIds = new Set(input.knownThreadIds ?? (input.storyThreads ?? []).map(row => row.id));
+	const validThreadIds = new Set(input.knownThreadIds ?? []);
 	const validEntities = (values: string[]) => unique(values).filter(id => validEntityIds.has(id));
 	const validFactions = (values: string[]) => unique(values).filter(id => validFactionIds.has(id));
 
@@ -113,8 +137,11 @@ export function finalizeStrategicWorldFrame(
 			evidenceRefs: filterEvidence(candidate.evidenceRefs),
 		};
 	});
+	const viableAntagonistIds = new Set(antagonistCandidates
+		.filter(candidate => (candidate.actorEntityId || candidate.actorFactionId) && candidate.evidenceRefs.length > 0)
+		.map(candidate => candidate.id));
 	const fallbackAntagonistId = antagonistCandidates
-		.filter(candidate => candidate.actorEntityId || candidate.actorFactionId)
+		.filter(candidate => viableAntagonistIds.has(candidate.id))
 		.sort((a, b) =>
 			(b.plausibilityScore + b.dramaticScore - b.agencyRisk)
 			- (a.plausibilityScore + a.dramaticScore - a.agencyRisk)
@@ -123,24 +150,48 @@ export function finalizeStrategicWorldFrame(
 	const plotLinesByTitle = new Map([...result.mainPlots, ...result.subplots].map(line => [refKey(line.title), line]));
 	const cardRefs = new Map<string, string>();
 	const usedCardIds = new Set<string>();
-	const plotCards = result.plotCards.slice(0, 6).map((card, index) => {
-		const preferred = card.id.trim() || previousCardIds.get(refKey(card.title)) || generatedId('plot', input, card.title, index);
-		const id = usedCardIds.has(preferred) ? generatedId('plot', input, card.title, index) : preferred;
-		usedCardIds.add(id);
-		addRefs(cardRefs, [card.id, card.title, id], id);
+	const unsupportedAntagonistCardIds = new Set<string>();
+	const plotCards = result.plotCards.slice(0, 6).map((rawCard, index) => {
+		const card = rawCard as ThreadBoundPlotCard;
 		const validSourceRefs = filterEvidence(card.sourceRefs);
 		const matchingLine = plotLinesByTitle.get(refKey(card.title));
-		const recoveredSourceRefs = validSourceRefs.length > 0 ? validSourceRefs : (matchingLine?.linkedThreadIds ?? [])
+		const storyThreadId = unique([
+			card.storyThreadId ?? '',
+			...validSourceRefs.filter(ref => ref.sourceType === 'thread').map(ref => ref.sourceId ?? ''),
+			...(matchingLine?.linkedThreadIds ?? []),
+			previousCardThreadById.get(card.id.trim()) ?? '',
+			previousCardThreadByTitle.get(refKey(card.title)) ?? '',
+		]).find(threadId => validThreadIds.has(threadId)) ?? null;
+		const preferred = card.id.trim()
+			|| (storyThreadId ? previousCardIdsByThread.get(storyThreadId) : undefined)
+			|| previousCardIds.get(refKey(card.title))
+			|| generatedId('plot', input, card.title, index);
+		const id = usedCardIds.has(preferred) ? generatedId('plot', input, card.title, index) : preferred;
+		usedCardIds.add(id);
+		addRefs(cardRefs, [card.id, card.title, id, storyThreadId ?? ''], id);
+		const actorEntityIds = validEntities(card.actorEntityIds);
+		const targetEntityIds = validEntities(card.targetEntityIds);
+		const actorFactionIds = validFactions(card.actorFactionIds);
+		const targetFactionIds = validFactions(card.targetFactionIds);
+		const threadSourceRefs = unique([storyThreadId ?? '', ...(matchingLine?.linkedThreadIds ?? [])])
 			.filter(threadId => validThreadIds.has(threadId))
 			.map(threadId => ({ sourceType: 'thread' as const, sourceId: threadId, label: matchingLine?.title ?? card.title }));
-		const antagonistCandidateIds = resolvedRefs(card.antagonistCandidateIds, candidateRefs);
+		const recoveredSourceRefs = validSourceRefs.length > 0
+			? validSourceRefs
+			: threadSourceRefs;
+		const requestedAntagonistCandidateIds = resolvedRefs(card.antagonistCandidateIds, candidateRefs);
+		const antagonistCandidateIds = requestedAntagonistCandidateIds.filter(candidateId => viableAntagonistIds.has(candidateId));
+		if (requestedAntagonistCandidateIds.length > 0 && antagonistCandidateIds.length === 0) {
+			unsupportedAntagonistCardIds.add(id);
+		}
 		return {
 			...card,
 			id,
-			actorEntityIds: validEntities(card.actorEntityIds),
-			targetEntityIds: validEntities(card.targetEntityIds),
-			actorFactionIds: validFactions(card.actorFactionIds),
-			targetFactionIds: validFactions(card.targetFactionIds),
+			storyThreadId,
+			actorEntityIds,
+			targetEntityIds,
+			actorFactionIds,
+			targetFactionIds,
 			antagonistCandidateIds: antagonistCandidateIds.length > 0 || card.kind !== 'main_plot' || !fallbackAntagonistId
 				? antagonistCandidateIds
 				: [fallbackAntagonistId],
@@ -157,40 +208,85 @@ export function finalizeStrategicWorldFrame(
 		};
 	});
 	const cardById = new Map(plotCards.map(card => [card.id, card]));
+	const validationNotes = plotCards.flatMap(card => {
+		const reasons = [
+			unsupportedAntagonistCardIds.has(card.id) ? 'antagonist lacks a canonical actor or valid evidence' : '',
+			card.sourceRefs.length === 0 ? 'no valid source evidence' : '',
+		].filter(Boolean);
+		return reasons.length ? [`${card.title}: blocked — ${reasons.join('; ')}.`] : [];
+	});
+	const storyThreadUpdates = result.plotBrainWritePlan.storyThreadUpdates
+		.filter(update => validThreadIds.has(update.threadId))
+		.slice(0, 6);
+	const terminalThreadIds = new Set(storyThreadUpdates
+		.filter(update => update.status === 'closed' || update.status === 'abandoned')
+		.map(update => update.threadId));
+	const retireOrMerge = unique([
+		...resolvedRefs(result.activationPlan.retireOrMerge, cardRefs),
+		...plotCards
+			.filter(card => card.lifecycleStage === 'resolved'
+				|| Boolean(referencedStoryThreadId(card as ThreadBoundPlotCard)
+					&& terminalThreadIds.has(referencedStoryThreadId(card as ThreadBoundPlotCard)!)))
+			.map(card => card.id),
+	]);
+	const retiredIds = new Set(retireOrMerge);
+	const requestedDormant = unique([
+		...resolvedRefs(result.activationPlan.keepDormant, cardRefs),
+		...plotCards.filter(card => card.lifecycleStage === 'dormant').map(card => card.id),
+	]);
+	const requestedDormantIds = new Set(requestedDormant);
 	const activateNow: string[] = [];
 	let immediate = 0;
 	let mainPlots = 0;
 	for (const id of resolvedRefs(result.activationPlan.activateNow, cardRefs)) {
 		const card = cardById.get(id);
-		if (!card || card.sourceRefs.length === 0 || activateNow.length >= 3) continue;
+		if (!card
+			|| card.lifecycleStage === 'resolved'
+			|| card.lifecycleStage === 'dormant'
+			|| retiredIds.has(id)
+			|| unsupportedAntagonistCardIds.has(id)
+			|| card.sourceRefs.length === 0
+			|| activateNow.length >= 3) continue;
 		if (card.urgency === 'immediate' && immediate >= 1) continue;
 		if (card.kind === 'main_plot' && mainPlots >= 1) continue;
 		activateNow.push(id);
 		if (card.urgency === 'immediate') immediate += 1;
 		if (card.kind === 'main_plot') mainPlots += 1;
 	}
-	if (activateNow.length === 0) {
+	if (activateNow.length === 0 && result.activationPlan.activateNow.length > 0) {
 		const fallback = [...plotCards]
-			.filter(card => card.sourceRefs.length > 0 && card.lifecycleStage !== 'resolved' && card.lifecycleStage !== 'dormant')
+			.filter(card => card.sourceRefs.length > 0
+				&& !unsupportedAntagonistCardIds.has(card.id)
+				&& card.lifecycleStage !== 'resolved'
+				&& card.lifecycleStage !== 'dormant'
+				&& !retiredIds.has(card.id)
+				&& !requestedDormantIds.has(card.id))
 			.sort((a, b) => Number(b.kind === 'main_plot') - Number(a.kind === 'main_plot') || b.pressure - a.pressure || a.id.localeCompare(b.id))[0];
 		if (fallback) activateNow.push(fallback.id);
 	}
+	const activeIds = new Set(activateNow);
+	const keepDormant = requestedDormant.filter(id => !retiredIds.has(id) && !activeIds.has(id));
 
 	const shaped = {
 		...result,
+		continuityAssessment: {
+			...result.continuityAssessment,
+			unresolvedContinuityRisks: unique([...result.continuityAssessment.unresolvedContinuityRisks, ...validationNotes]),
+		},
 		tensionSeeds,
 		antagonistCandidates,
 		plotCards,
 		activationPlan: {
 			...result.activationPlan,
+			rationale: [result.activationPlan.rationale, ...validationNotes].filter(Boolean).join('\n'),
 			activateNow,
-			keepDormant: resolvedRefs(result.activationPlan.keepDormant, cardRefs),
-			retireOrMerge: resolvedRefs(result.activationPlan.retireOrMerge, cardRefs),
+			keepDormant,
+			retireOrMerge,
 		},
 		plotBrainWritePlan: {
 			...result.plotBrainWritePlan,
 			storyThreadCreates: [],
-			storyThreadUpdates: result.plotBrainWritePlan.storyThreadUpdates.filter(update => validThreadIds.has(update.threadId)).slice(0, 6),
+			storyThreadUpdates,
 			timelineEvents: [],
 			patchProposals: result.plotBrainWritePlan.patchProposals.slice(0, 8).map(proposal => ({
 				...proposal,

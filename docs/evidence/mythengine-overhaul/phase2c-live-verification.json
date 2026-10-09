@@ -1,0 +1,175 @@
+{
+  "recordedAt": "2026-09-22T00:49:28.484Z",
+  "checks": [
+    "All four kinds create through the shared owner with canonical reads, attributed history, audit and outbox",
+    "Explicit same-name creation stays distinct and non-Latin names satisfy alias constraints",
+    "All four copy adapters preserve payload and valid same-game references, allocate new identities, and leave source/linked rows unchanged",
+    "Stale, cross-project and cross-game-target requests fail without mutations",
+    "Invalid fields, invalid references, empty names and duplicate paths roll back record, history, audit, alias, version and outbox",
+    "Player copies are rejected without creating a competing protagonist",
+    "Late history failure rolls back the whole create transaction",
+    "Concurrent same-path creation commits exactly one complete record",
+    "Campaign export includes every created and copied canonical record with workspace metadata"
+  ],
+  "fixturesRemoved": true,
+  "runtime": {
+    "ok": true,
+    "mode": "terminal-process",
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "45d496796b88994cb5859897243895e1fee85c1eb90ffd3ef54e03d62758c7ab",
+      "externalId": "b3b36dbeb41fdd18589d15c6ea82cdb69d8cdd36dff3bcda1082d3b5478eb1c3"
+    },
+    "scope": {
+      "storyId": null
+    },
+    "runtime": {
+      "pid": 60368,
+      "uptimeSeconds": 6,
+      "timestamp": "2026-09-22T00:49:30.170Z"
+    },
+    "config": {
+      "dataRoot": "E:\\DEV\\Projects\\MythEngine\\data",
+      "vaultRoot": "E:\\DEV\\Projects\\MythEngine\\data\\vaults",
+      "defaultVault": "E:\\DEV\\Projects\\MythEngine\\data\\vaults\\default",
+      "allowExternalVaults": false,
+      "qdrantUrl": "http://127.0.0.1:6335",
+      "qdrantCollection": "mythengine_wiki",
+      "ollamaUrl": "http://127.0.0.1:11434",
+      "wikiEmbedProvider": "openrouter",
+      "wikiEmbedModel": "openai/text-embedding-3-small",
+      "wikiAutoIndexStoryVaults": false,
+      "wikiAutoLintStoryVaults": false,
+      "jobWorkerEnabled": false,
+      "jobIntervalMs": 5000,
+      "chapterThreshold": 20,
+      "postChapterBuffer": 0,
+      "chaptersPerArc": 10,
+      "memoryEmbeddingsConfigured": false,
+      "memoryEmbeddingProvider": null,
+      "memoryEmbeddingModel": null,
+      "memoryEmbeddingDimensions": 1536,
+      "memoryEmbeddingBatchSize": 8,
+      "databaseConfigured": true
+    },
+    "services": {
+      "qdrant": {
+        "ok": true,
+        "status": 200,
+        "collections": [],
+        "totalCollections": 0,
+        "totalPoints": 0,
+        "orphanedStoryCollections": 0,
+        "legacyStoryCollections": 0
+      },
+      "ollama": {
+        "ok": false,
+        "error": "fetch failed"
+      }
+    },
+    "jobs": {
+      "total": 2,
+      "memoryProcessing": {
+        "complete": 0,
+        "failed": 0,
+        "waiting": 0,
+        "running": 0
+      },
+      "memoryStageFreshness": {
+        "checkpoint": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        },
+        "consolidation": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        },
+        "optionalIndex": {
+          "status": "unknown",
+          "jobCount": 0,
+          "completedCount": 0,
+          "activeCount": 0,
+          "failedCount": 0,
+          "latestUpdatedAt": null,
+          "latestSourceVersion": null
+        }
+      },
+      "queued": 0,
+      "retry": 0,
+      "running": 0,
+      "complete": 2,
+      "failed": 0,
+      "ready": 0,
+      "delayed": 0,
+      "storyCount": 0,
+      "byStatus": {
+        "complete": 2
+      },
+      "byType": {
+        "validate_agent_settings": 2
+      },
+      "readyByType": {},
+      "failedByType": {},
+      "failureClasses": [],
+      "oldestReadyAt": null,
+      "nextRunAfter": null,
+      "recentFailures": [],
+      "runningJobs": []
+    },
+    "wiki": {
+      "totalStories": 0,
+      "vaultFresh": 0,
+      "vaultStale": 0,
+      "vaultMissing": 0,
+      "indexFresh": 0,
+      "indexStale": 0,
+      "indexMissing": 0,
+      "lintFresh": 0,
+      "lintStale": 0,
+      "lintMissing": 0,
+      "attention": []
+    }
+  },
+  "originalPid": 39068,
+  "browser": {
+    "canonicalCreate": true,
+    "copyPathConflictShown": true,
+    "copyFormPreservedAfterFailure": true,
+    "independentCopyEdit": true,
+    "sourceUnchanged": true,
+    "unsavedScopeDisabled": true,
+    "busyCloseDisabled": true,
+    "copyHistory": 4,
+    "sourceId": "entity_4c276b84-2230-4c9a-84cf-50c044c75196",
+    "copyId": "entity_e6f8bcd0-239a-4d0e-a1da-132696355498",
+    "fixtureRemoved": true
+  },
+  "originalProtection": {
+    "filesChecked": 760,
+    "changed": [],
+    "pid": 39068
+  },
+  "finalRuntime": {
+    "pid": 60368,
+    "build": {
+      "identity": "mythengine@0.0.1",
+      "version": "0.0.1",
+      "source": "local-checkout",
+      "artifact": "45d496796b88994cb5859897243895e1fee85c1eb90ffd3ef54e03d62758c7ab",
+      "externalId": "b3b36dbeb41fdd18589d15c6ea82cdb69d8cdd36dff3bcda1082d3b5478eb1c3"
+    },
+    "storyCount": 0
+  }
+}

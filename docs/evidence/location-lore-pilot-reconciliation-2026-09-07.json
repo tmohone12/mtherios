@@ -1,0 +1,2974 @@
+{
+  "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+  "keeper": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6",
+  "merged": [
+    "entity_be37a565-5c5e-43ab-bdda-eca172efe747",
+    "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86",
+    "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e",
+    "entity_7a562fb2-eee5-442d-a1da-5ef58eafc558",
+    "entity_30ea81b3-45ea-40cb-829c-b498eaa1ebb7",
+    "entity_ee41a8ec-539a-4b88-a9b8-0eb672130b45",
+    "entity_c820d506-eddf-40fe-846a-2d28b8ba5f7f",
+    "entity_f259b279-dbc3-4c56-acc8-d12745cdee00",
+    "entity_272f8a4c-9619-481d-8a96-400348353aba",
+    "entity_65bc9669-f786-4a04-a770-9343b24ecea4",
+    "entity_1d2ecbea-2642-4ba0-903e-47f39a7064af",
+    "entity_a2be2f8a-6a0c-4a26-a2df-d1187dac5c86",
+    "entity_6e8e9f11-0f08-47a6-ad8b-c621bca0dbbf",
+    "entity_2b2dc2a0-e98f-4c08-ad70-87857119a652",
+    "entity_a38f050c-accc-4cce-aa07-11e67ba175b8",
+    "entity_2dfbdcdd-7e1d-4042-aed4-5051968906b3",
+    "entity_1b8bc27d-8cca-48f7-8b32-9af68b5d894f",
+    "entity_218963e7-2dc5-41c7-a2ab-579d5646932b",
+    "entity_ba18dece-4921-43bc-87b7-60d1cd872ab1",
+    "entity_c376153c-2864-4282-8efd-fe4a3573918a",
+    "entity_0a9817f9-cf8d-4812-a0a6-e86770dd5258",
+    "entity_bdd2dee7-76d1-461a-b0ae-7ab7f5f66091",
+    "entity_8115083c-e065-4d39-8b4f-ed41cf6a1741",
+    "entity_3e7f8bb8-ba6a-465f-8bf8-3df64da6d7d3",
+    "entity_f0df9bc3-9585-4742-8309-fad09204ec28",
+    "entity_e3ba1adb-bd21-43be-b6fd-834fa1ca3660",
+    "entity_92e4e54f-492a-4c53-abf5-9da1f9a5892c",
+    "entity_4b9a4c06-dc9b-42bc-9f3d-6b4f14da9bc6",
+    "entity_ac5dabc0-ed3d-4d13-96e5-32d4528c20ae",
+    "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+  ],
+  "sourceCaveat": "The curly-apostrophe duplicate and one keeper source ID have missing transcript sources. Identity is also supported by exact compound/room names and retained resolver metadata; missing evidence is not counted as a verified narration.",
+  "before": {
+    "entities": [
+      {
+        "id": "entity_be37a565-5c5e-43ab-bdda-eca172efe747",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion’s Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Strong resolver match for Volantis — Belaerys Manse, Aurion’s Chambers.",
+            "decision": "update",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion’s Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type",
+                  "evidence:entry"
+                ],
+                "entityId": "entity_be37a565-5c5e-43ab-bdda-eca172efe747"
+              }
+            ],
+            "confidence": 1,
+            "matchedEntityId": "entity_be37a565-5c5e-43ab-bdda-eca172efe747"
+          }
+        },
+        "source_entry_ids": [
+          "narration_a41fff0f-d049-4a67-af84-fb5d3d17786a"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_a35b86ae-879b-4415-a41d-fb21d94e69bf"
+        ],
+        "server_version": 2801,
+        "created_at": "2026-09-06T11:57:17.260Z",
+        "updated_at": "2026-09-06T12:16:42.194Z"
+      },
+      {
+        "id": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": "Chambers with half-open shutters onto the west loggia; rain on the tiles, close air scented with cedar oil and the river at dusk; a brazier burning.",
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "region": "Volantis",
+          "current": false,
+          "connections": [
+            {
+              "direction": "adjacent",
+              "targetName": "West Loggia",
+              "travelTimeMinutes": 1
+            }
+          ]
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Strong resolver match for Volantis — Belaerys Manse, Aurion's Chambers.",
+            "decision": "update",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type",
+                  "evidence:entry"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_7a562fb2-eee5-442d-a1da-5ef58eafc558"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_30ea81b3-45ea-40cb-829c-b498eaa1ebb7"
+              }
+            ],
+            "confidence": 1,
+            "matchedEntityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+          }
+        },
+        "source_entry_ids": [
+          "narration_c74cedcb-feca-4515-9305-3a5f08af82f2",
+          "narration_2c4d939a-c15c-4f98-a4c8-2ab102a8590e",
+          "narration_9cba5d45-0676-436a-b8b6-3b61adaef790",
+          "narration_3e7537fe-07c7-46db-ac05-c19822809d60",
+          "narration_37958f7e-c286-4686-8345-91413e535f5e",
+          "narration_a7234ebc-2654-4533-9fa0-cc739c671234",
+          "narration_e0092468-41b1-4e5e-81d0-fc6429e1a7eb"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_709ac0a0-0163-4db2-a164-e60da2e4d20b",
+          "patch_bd588066-e9c3-4b82-8bbc-db203ba27e25",
+          "patch_91ca859d-4c5c-4a76-8869-c0dd1a5abffc",
+          "patch_f2dc6def-ee3c-4a38-b81f-636b1adb9301"
+        ],
+        "server_version": 2959,
+        "created_at": "2026-09-04T22:51:00.495Z",
+        "updated_at": "2026-09-06T19:17:04.627Z"
+      },
+      {
+        "id": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Belaerys Manse",
+                "type": "location",
+                "score": 0.94,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_cd230b5e-9c11-4c86-aa0c-064e9088b850"
+              },
+              {
+                "name": "Volantis — Belaerys manse",
+                "type": "location",
+                "score": 0.94,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9fd24f10-545c-4f64-958e-b7d1f02b842b"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_9ebcda70-1fc4-4fe6-a13f-9900af1b63c1"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2117,
+        "created_at": "2026-09-04T22:53:50.127Z",
+        "updated_at": "2026-09-04T22:54:00.314Z"
+      },
+      {
+        "id": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type",
+                  "evidence:entry"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Belaerys Manse",
+                "type": "location",
+                "score": 0.94,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_cd230b5e-9c11-4c86-aa0c-064e9088b850"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_9ebcda70-1fc4-4fe6-a13f-9900af1b63c1"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_3b61f50b-b8c0-4099-a654-d8655865c92a"
+        ],
+        "server_version": 2118,
+        "created_at": "2026-09-04T22:54:00.314Z",
+        "updated_at": "2026-09-04T22:59:06.966Z"
+      },
+      {
+        "id": "entity_7a562fb2-eee5-442d-a1da-5ef58eafc558",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_716d5947-f8c8-422d-9e27-963e096ef1b4"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2241,
+        "created_at": "2026-09-05T02:16:55.983Z",
+        "updated_at": "2026-09-05T02:17:08.585Z"
+      },
+      {
+        "id": "entity_30ea81b3-45ea-40cb-829c-b498eaa1ebb7",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_86944bd6-6ad5-4a37-8211-7d5bea9a0bdd"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_ad2625f7-702a-4175-acda-fdefb71cd1f1"
+        ],
+        "server_version": 2260,
+        "created_at": "2026-09-05T02:29:26.542Z",
+        "updated_at": "2026-09-05T02:29:46.198Z"
+      },
+      {
+        "id": "entity_ee41a8ec-539a-4b88-a9b8-0eb672130b45",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_716d5947-f8c8-422d-9e27-963e096ef1b4"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_2fb559b6-c099-46cd-a3a4-2fad8dd670a3"
+        ],
+        "server_version": 2242,
+        "created_at": "2026-09-05T02:17:08.585Z",
+        "updated_at": "2026-09-05T02:17:30.858Z"
+      },
+      {
+        "id": "entity_c820d506-eddf-40fe-846a-2d28b8ba5f7f",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_0c264ee4-aa25-40af-af7b-699be1fa789c"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_f55ad0b6-9071-4b90-afab-35ded697a82e"
+        ],
+        "server_version": 2254,
+        "created_at": "2026-09-05T02:25:14.130Z",
+        "updated_at": "2026-09-05T02:27:26.531Z"
+      },
+      {
+        "id": "entity_f259b279-dbc3-4c56-acc8-d12745cdee00",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_f2fa26c5-e932-4d99-84e9-a0d8512d9f6d"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2243,
+        "created_at": "2026-09-05T02:17:30.858Z",
+        "updated_at": "2026-09-05T02:18:07.024Z"
+      },
+      {
+        "id": "entity_272f8a4c-9619-481d-8a96-400348353aba",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_016eeeda-cf5f-4fed-b535-febb333d7dbd"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_28a92d14-ee4d-49f9-a717-2be7246cd174"
+        ],
+        "server_version": 2251,
+        "created_at": "2026-09-05T02:23:53.082Z",
+        "updated_at": "2026-09-05T02:24:33.943Z"
+      },
+      {
+        "id": "entity_65bc9669-f786-4a04-a770-9343b24ecea4",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_f2fa26c5-e932-4d99-84e9-a0d8512d9f6d"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_a514d640-b1ee-4ee5-99df-5aa0ed04dffb"
+        ],
+        "server_version": 2244,
+        "created_at": "2026-09-05T02:18:07.024Z",
+        "updated_at": "2026-09-05T02:19:14.075Z"
+      },
+      {
+        "id": "entity_1d2ecbea-2642-4ba0-903e-47f39a7064af",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_0540e196-59cb-4301-9eee-508b01be1496"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2245,
+        "created_at": "2026-09-05T02:19:14.075Z",
+        "updated_at": "2026-09-05T02:19:21.181Z"
+      },
+      {
+        "id": "entity_a2be2f8a-6a0c-4a26-a2df-d1187dac5c86",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_0540e196-59cb-4301-9eee-508b01be1496"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_ccecd64a-e937-47f4-8392-d2fc82069dc6"
+        ],
+        "server_version": 2246,
+        "created_at": "2026-09-05T02:19:21.181Z",
+        "updated_at": "2026-09-05T02:20:42.654Z"
+      },
+      {
+        "id": "entity_6e8e9f11-0f08-47a6-ad8b-c621bca0dbbf",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_44b64fcf-f4ca-4c7f-9134-52c5ddca9eb0"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2247,
+        "created_at": "2026-09-05T02:20:42.654Z",
+        "updated_at": "2026-09-05T02:21:15.174Z"
+      },
+      {
+        "id": "entity_2b2dc2a0-e98f-4c08-ad70-87857119a652",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_44b64fcf-f4ca-4c7f-9134-52c5ddca9eb0"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_6909e7f3-7607-4276-88c1-48a57f09e051"
+        ],
+        "server_version": 2248,
+        "created_at": "2026-09-05T02:21:15.174Z",
+        "updated_at": "2026-09-05T02:23:40.153Z"
+      },
+      {
+        "id": "entity_a38f050c-accc-4cce-aa07-11e67ba175b8",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_016eeeda-cf5f-4fed-b535-febb333d7dbd"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2249,
+        "created_at": "2026-09-05T02:23:40.153Z",
+        "updated_at": "2026-09-05T02:23:53.082Z"
+      },
+      {
+        "id": "entity_2dfbdcdd-7e1d-4042-aed4-5051968906b3",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_06126c85-a6af-4452-b751-c402a4714f3a"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_8f0fd590-e1fb-4d7d-a3aa-a7d4a8a31ddc"
+        ],
+        "server_version": 2258,
+        "created_at": "2026-09-05T02:29:09.698Z",
+        "updated_at": "2026-09-05T02:29:16.466Z"
+      },
+      {
+        "id": "entity_1b8bc27d-8cca-48f7-8b32-9af68b5d894f",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_7426ce2e-36a4-460a-8b49-f02c0cee0f97"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_296f0aae-b948-44df-b80e-1b0e105e2566"
+        ],
+        "server_version": 2270,
+        "created_at": "2026-09-05T02:31:27.756Z",
+        "updated_at": "2026-09-05T02:42:24.521Z"
+      },
+      {
+        "id": "entity_218963e7-2dc5-41c7-a2ab-579d5646932b",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_0c264ee4-aa25-40af-af7b-699be1fa789c"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2252,
+        "created_at": "2026-09-05T02:24:33.943Z",
+        "updated_at": "2026-09-05T02:25:14.130Z"
+      },
+      {
+        "id": "entity_ba18dece-4921-43bc-87b7-60d1cd872ab1",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_6148b6a5-0a9e-460c-ac53-6e5cbe157df0"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2255,
+        "created_at": "2026-09-05T02:27:26.531Z",
+        "updated_at": "2026-09-05T02:27:53.179Z"
+      },
+      {
+        "id": "entity_c376153c-2864-4282-8efd-fe4a3573918a",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_06126c85-a6af-4452-b751-c402a4714f3a"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2257,
+        "created_at": "2026-09-05T02:28:39.278Z",
+        "updated_at": "2026-09-05T02:29:09.698Z"
+      },
+      {
+        "id": "entity_0a9817f9-cf8d-4812-a0a6-e86770dd5258",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_6148b6a5-0a9e-460c-ac53-6e5cbe157df0"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_57071a71-96e7-4c2b-8e44-d81c299dcc6e"
+        ],
+        "server_version": 2256,
+        "created_at": "2026-09-05T02:27:53.179Z",
+        "updated_at": "2026-09-05T02:28:39.278Z"
+      },
+      {
+        "id": "entity_bdd2dee7-76d1-461a-b0ae-7ab7f5f66091",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_c22bd7d8-14f0-46f7-9b5e-4cbdfc16b90a"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_f3652a31-fc6b-424c-beab-b1804cadb3e7"
+        ],
+        "server_version": 2263,
+        "created_at": "2026-09-05T02:30:01.274Z",
+        "updated_at": "2026-09-05T02:30:41.961Z"
+      },
+      {
+        "id": "entity_8115083c-e065-4d39-8b4f-ed41cf6a1741",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_c22bd7d8-14f0-46f7-9b5e-4cbdfc16b90a"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2261,
+        "created_at": "2026-09-05T02:29:46.198Z",
+        "updated_at": "2026-09-05T02:30:01.274Z"
+      },
+      {
+        "id": "entity_3e7f8bb8-ba6a-465f-8bf8-3df64da6d7d3",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_86944bd6-6ad5-4a37-8211-7d5bea9a0bdd"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2259,
+        "created_at": "2026-09-05T02:29:16.466Z",
+        "updated_at": "2026-09-05T02:29:26.542Z"
+      },
+      {
+        "id": "entity_f0df9bc3-9585-4742-8309-fad09204ec28",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_3d969851-e740-4c5c-b1d8-6cecbab4d305"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2264,
+        "created_at": "2026-09-05T02:30:41.961Z",
+        "updated_at": "2026-09-05T02:31:19.821Z"
+      },
+      {
+        "id": "entity_e3ba1adb-bd21-43be-b6fd-834fa1ca3660",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_7426ce2e-36a4-460a-8b49-f02c0cee0f97"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2265,
+        "created_at": "2026-09-05T02:31:19.821Z",
+        "updated_at": "2026-09-05T02:31:27.756Z"
+      },
+      {
+        "id": "entity_92e4e54f-492a-4c53-abf5-9da1f9a5892c",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_ee093653-d85c-45e7-bc11-40a9bd57f036"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [
+          "patch_25be144a-c0b0-4356-b710-33ff94f8de57"
+        ],
+        "server_version": 2272,
+        "created_at": "2026-09-05T02:42:32.531Z",
+        "updated_at": "2026-09-05T02:44:07.489Z"
+      },
+      {
+        "id": "entity_4b9a4c06-dc9b-42bc-9f3d-6b4f14da9bc6",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_ee093653-d85c-45e7-bc11-40a9bd57f036"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2271,
+        "created_at": "2026-09-05T02:42:24.521Z",
+        "updated_at": "2026-09-05T02:42:32.531Z"
+      },
+      {
+        "id": "entity_ac5dabc0-ed3d-4d13-96e5-32d4528c20ae",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Location names must match a canonical name or explicit id; parent-place and alias containment are not identity.",
+            "decision": "create",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's chamber",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "fuzzy:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9304007e-1db1-4e0f-9124-5a1f1b129ca9"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              }
+            ],
+            "confidence": 0,
+            "matchedEntityId": null
+          }
+        },
+        "source_entry_ids": [
+          "narration_138dbd86-f2fb-4723-a6a9-db7f542d88f5"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2279,
+        "created_at": "2026-09-05T03:21:45.844Z",
+        "updated_at": "2026-09-05T04:26:07.062Z"
+      },
+      {
+        "id": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "type": "location",
+        "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "description": null,
+        "status": "active",
+        "visibility": "player_known",
+        "state": {
+          "current": false
+        },
+        "metadata": {
+          "entityResolver": {
+            "reason": "Strong resolver match for Volantis — Belaerys Manse, Aurion's Chambers.",
+            "decision": "update",
+            "candidates": [
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e"
+              },
+              {
+                "name": "Volantis — Belaerys Manse, Aurion's Chambers",
+                "type": "location",
+                "score": 1,
+                "signals": [
+                  "exact:name",
+                  "same:type"
+                ],
+                "entityId": "entity_7a562fb2-eee5-442d-a1da-5ef58eafc558"
+              }
+            ],
+            "confidence": 1,
+            "matchedEntityId": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4"
+          }
+        },
+        "source_entry_ids": [
+          "narration_c74cedcb-feca-4515-9305-3a5f08af82f2",
+          "narration_12482448-265b-4e4e-8425-4925017a405b",
+          "narration_72ee99a3-06d2-46c8-a19f-e3e835349c24"
+        ],
+        "source_event_ids": [],
+        "source_patch_ids": [],
+        "server_version": 2281,
+        "created_at": "2026-09-04T22:50:52.515Z",
+        "updated_at": "2026-09-05T04:28:03.261Z"
+      }
+    ],
+    "aliases": [
+      {
+        "id": "alias_401e59e0-9084-4008-b0e6-87a9b86a3c67",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_2c4d939a-c15c-4f98-a4c8-2ab102a8590e"
+        ],
+        "server_version": 2959,
+        "created_at": "2026-09-06T19:17:04.627Z",
+        "updated_at": "2026-09-06T19:17:04.627Z"
+      },
+      {
+        "id": "alias_de5aafb8-6500-4aea-966c-4f68758eb672",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_be37a565-5c5e-43ab-bdda-eca172efe747",
+        "alias": "Volantis — Belaerys Manse, Aurion’s Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_a41fff0f-d049-4a67-af84-fb5d3d17786a"
+        ],
+        "server_version": 2795,
+        "created_at": "2026-09-06T11:57:55.353Z",
+        "updated_at": "2026-09-06T11:57:55.353Z"
+      },
+      {
+        "id": "alias_8d7a8589-21dd-47ff-b497-4fbfb2928479",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_3afc6234-f0aa-4c9d-9803-befa09a31c86",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_9ebcda70-1fc4-4fe6-a13f-9900af1b63c1"
+        ],
+        "server_version": 2116,
+        "created_at": "2026-09-04T22:53:50.127Z",
+        "updated_at": "2026-09-04T22:53:50.127Z"
+      },
+      {
+        "id": "alias_8bb5da09-a6dc-4b33-be65-47a49a0252bb",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_f70bb805-6faa-4635-a4be-1fb7ae5de98e",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_9ebcda70-1fc4-4fe6-a13f-9900af1b63c1"
+        ],
+        "server_version": 2117,
+        "created_at": "2026-09-04T22:54:00.314Z",
+        "updated_at": "2026-09-04T22:54:00.314Z"
+      },
+      {
+        "id": "alias_9ca4d2a6-1b2f-48cd-b2e8-4a35ef01ad49",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_7a562fb2-eee5-442d-a1da-5ef58eafc558",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_716d5947-f8c8-422d-9e27-963e096ef1b4"
+        ],
+        "server_version": 2240,
+        "created_at": "2026-09-05T02:16:55.983Z",
+        "updated_at": "2026-09-05T02:16:55.983Z"
+      },
+      {
+        "id": "alias_b68533ac-8dea-40a3-9072-5a9ed0ecf36c",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_8115083c-e065-4d39-8b4f-ed41cf6a1741",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_c22bd7d8-14f0-46f7-9b5e-4cbdfc16b90a"
+        ],
+        "server_version": 2260,
+        "created_at": "2026-09-05T02:29:46.198Z",
+        "updated_at": "2026-09-05T02:29:46.198Z"
+      },
+      {
+        "id": "alias_68c394f9-cd8d-4a6b-8bc9-d38184175054",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_4b9a4c06-dc9b-42bc-9f3d-6b4f14da9bc6",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_ee093653-d85c-45e7-bc11-40a9bd57f036"
+        ],
+        "server_version": 2270,
+        "created_at": "2026-09-05T02:42:24.521Z",
+        "updated_at": "2026-09-05T02:42:24.521Z"
+      },
+      {
+        "id": "alias_f92ac10c-5dbe-4b90-b2bd-7c86fc84c993",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_ee41a8ec-539a-4b88-a9b8-0eb672130b45",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_716d5947-f8c8-422d-9e27-963e096ef1b4"
+        ],
+        "server_version": 2241,
+        "created_at": "2026-09-05T02:17:08.585Z",
+        "updated_at": "2026-09-05T02:17:08.585Z"
+      },
+      {
+        "id": "alias_0f6ebea1-45f1-4a4f-9464-c050429b9669",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_c820d506-eddf-40fe-846a-2d28b8ba5f7f",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_0c264ee4-aa25-40af-af7b-699be1fa789c"
+        ],
+        "server_version": 2252,
+        "created_at": "2026-09-05T02:25:14.130Z",
+        "updated_at": "2026-09-05T02:25:14.130Z"
+      },
+      {
+        "id": "alias_8a26423c-3853-4ce8-a812-3bda585e4247",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_30ea81b3-45ea-40cb-829c-b498eaa1ebb7",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_86944bd6-6ad5-4a37-8211-7d5bea9a0bdd"
+        ],
+        "server_version": 2259,
+        "created_at": "2026-09-05T02:29:26.542Z",
+        "updated_at": "2026-09-05T02:29:26.542Z"
+      },
+      {
+        "id": "alias_df673da6-e7ae-4e24-b343-faf58005c1df",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_f259b279-dbc3-4c56-acc8-d12745cdee00",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_f2fa26c5-e932-4d99-84e9-a0d8512d9f6d"
+        ],
+        "server_version": 2242,
+        "created_at": "2026-09-05T02:17:30.858Z",
+        "updated_at": "2026-09-05T02:17:30.858Z"
+      },
+      {
+        "id": "alias_84cde5ab-d87a-4ebb-8e6a-9f315435d910",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_272f8a4c-9619-481d-8a96-400348353aba",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_016eeeda-cf5f-4fed-b535-febb333d7dbd"
+        ],
+        "server_version": 2249,
+        "created_at": "2026-09-05T02:23:53.082Z",
+        "updated_at": "2026-09-05T02:23:53.082Z"
+      },
+      {
+        "id": "alias_41a8c26c-41ce-41d0-9bf1-b382d6e252e9",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_ba18dece-4921-43bc-87b7-60d1cd872ab1",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_6148b6a5-0a9e-460c-ac53-6e5cbe157df0"
+        ],
+        "server_version": 2254,
+        "created_at": "2026-09-05T02:27:26.531Z",
+        "updated_at": "2026-09-05T02:27:26.531Z"
+      },
+      {
+        "id": "alias_6091ec3e-820f-448d-a03e-c35b009cc320",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_2dfbdcdd-7e1d-4042-aed4-5051968906b3",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_06126c85-a6af-4452-b751-c402a4714f3a"
+        ],
+        "server_version": 2257,
+        "created_at": "2026-09-05T02:29:09.698Z",
+        "updated_at": "2026-09-05T02:29:09.698Z"
+      },
+      {
+        "id": "alias_75de402a-e8b5-4635-8b2e-dd2756ad3517",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_65bc9669-f786-4a04-a770-9343b24ecea4",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_f2fa26c5-e932-4d99-84e9-a0d8512d9f6d"
+        ],
+        "server_version": 2243,
+        "created_at": "2026-09-05T02:18:07.024Z",
+        "updated_at": "2026-09-05T02:18:07.024Z"
+      },
+      {
+        "id": "alias_516cd65c-76da-45da-b7bf-5b8bef3734f2",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_1d2ecbea-2642-4ba0-903e-47f39a7064af",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_0540e196-59cb-4301-9eee-508b01be1496"
+        ],
+        "server_version": 2244,
+        "created_at": "2026-09-05T02:19:14.075Z",
+        "updated_at": "2026-09-05T02:19:14.075Z"
+      },
+      {
+        "id": "alias_5de34bf0-9a0c-4002-a3a0-6ddcf954fb92",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_a38f050c-accc-4cce-aa07-11e67ba175b8",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_016eeeda-cf5f-4fed-b535-febb333d7dbd"
+        ],
+        "server_version": 2248,
+        "created_at": "2026-09-05T02:23:40.153Z",
+        "updated_at": "2026-09-05T02:23:40.153Z"
+      },
+      {
+        "id": "alias_e4fa412f-fdb5-4204-8d9a-4f64a0678dbe",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_3e7f8bb8-ba6a-465f-8bf8-3df64da6d7d3",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_86944bd6-6ad5-4a37-8211-7d5bea9a0bdd"
+        ],
+        "server_version": 2258,
+        "created_at": "2026-09-05T02:29:16.466Z",
+        "updated_at": "2026-09-05T02:29:16.466Z"
+      },
+      {
+        "id": "alias_06d0fa53-f066-4e7b-9edf-0496b80f5686",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_a2be2f8a-6a0c-4a26-a2df-d1187dac5c86",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_0540e196-59cb-4301-9eee-508b01be1496"
+        ],
+        "server_version": 2245,
+        "created_at": "2026-09-05T02:19:21.181Z",
+        "updated_at": "2026-09-05T02:19:21.181Z"
+      },
+      {
+        "id": "alias_03b847cb-9c61-4488-ad92-4f75004e23c7",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_6e8e9f11-0f08-47a6-ad8b-c621bca0dbbf",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_44b64fcf-f4ca-4c7f-9134-52c5ddca9eb0"
+        ],
+        "server_version": 2246,
+        "created_at": "2026-09-05T02:20:42.654Z",
+        "updated_at": "2026-09-05T02:20:42.654Z"
+      },
+      {
+        "id": "alias_c3b815c6-ea5e-4e4d-a946-b332368c71cc",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_2b2dc2a0-e98f-4c08-ad70-87857119a652",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_44b64fcf-f4ca-4c7f-9134-52c5ddca9eb0"
+        ],
+        "server_version": 2247,
+        "created_at": "2026-09-05T02:21:15.174Z",
+        "updated_at": "2026-09-05T02:21:15.174Z"
+      },
+      {
+        "id": "alias_e6a965cd-d1d1-4c83-acdf-f0dfc374c3fa",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_c376153c-2864-4282-8efd-fe4a3573918a",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_06126c85-a6af-4452-b751-c402a4714f3a"
+        ],
+        "server_version": 2256,
+        "created_at": "2026-09-05T02:28:39.278Z",
+        "updated_at": "2026-09-05T02:28:39.278Z"
+      },
+      {
+        "id": "alias_08683d89-10c8-407c-8b4f-f1d9d2d71252",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_218963e7-2dc5-41c7-a2ab-579d5646932b",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_0c264ee4-aa25-40af-af7b-699be1fa789c"
+        ],
+        "server_version": 2251,
+        "created_at": "2026-09-05T02:24:33.943Z",
+        "updated_at": "2026-09-05T02:24:33.943Z"
+      },
+      {
+        "id": "alias_a0ea0d12-3170-40b4-9b85-eaa66f24c315",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_0a9817f9-cf8d-4812-a0a6-e86770dd5258",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_6148b6a5-0a9e-460c-ac53-6e5cbe157df0"
+        ],
+        "server_version": 2255,
+        "created_at": "2026-09-05T02:27:53.179Z",
+        "updated_at": "2026-09-05T02:27:53.179Z"
+      },
+      {
+        "id": "alias_973415fe-ff1b-414f-b9c0-e80136be9a11",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_bdd2dee7-76d1-461a-b0ae-7ab7f5f66091",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_c22bd7d8-14f0-46f7-9b5e-4cbdfc16b90a"
+        ],
+        "server_version": 2261,
+        "created_at": "2026-09-05T02:30:01.274Z",
+        "updated_at": "2026-09-05T02:30:01.274Z"
+      },
+      {
+        "id": "alias_0a9f3f06-b48a-47a2-93d5-18fb68f726cc",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_f0df9bc3-9585-4742-8309-fad09204ec28",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_3d969851-e740-4c5c-b1d8-6cecbab4d305"
+        ],
+        "server_version": 2263,
+        "created_at": "2026-09-05T02:30:41.961Z",
+        "updated_at": "2026-09-05T02:30:41.961Z"
+      },
+      {
+        "id": "alias_cebdfcfb-c4e5-4fe0-9685-9001e7dfdef7",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_e3ba1adb-bd21-43be-b6fd-834fa1ca3660",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_7426ce2e-36a4-460a-8b49-f02c0cee0f97"
+        ],
+        "server_version": 2264,
+        "created_at": "2026-09-05T02:31:19.821Z",
+        "updated_at": "2026-09-05T02:31:19.821Z"
+      },
+      {
+        "id": "alias_a88d3c25-c0f0-4a97-a632-9d3367f10a85",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_1b8bc27d-8cca-48f7-8b32-9af68b5d894f",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_7426ce2e-36a4-460a-8b49-f02c0cee0f97"
+        ],
+        "server_version": 2265,
+        "created_at": "2026-09-05T02:31:27.756Z",
+        "updated_at": "2026-09-05T02:31:27.756Z"
+      },
+      {
+        "id": "alias_640a3b4f-a686-49df-be37-122a0b846507",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_92e4e54f-492a-4c53-abf5-9da1f9a5892c",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_ee093653-d85c-45e7-bc11-40a9bd57f036"
+        ],
+        "server_version": 2271,
+        "created_at": "2026-09-05T02:42:32.531Z",
+        "updated_at": "2026-09-05T02:42:32.531Z"
+      },
+      {
+        "id": "alias_b7a40a2d-315d-488a-a6eb-9d8bec230f1a",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_ac5dabc0-ed3d-4d13-96e5-32d4528c20ae",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_138dbd86-f2fb-4723-a6a9-db7f542d88f5"
+        ],
+        "server_version": 2278,
+        "created_at": "2026-09-05T03:21:45.844Z",
+        "updated_at": "2026-09-05T03:21:45.844Z"
+      },
+      {
+        "id": "alias_a732b794-d8fb-4410-8ae3-da85304a74fb",
+        "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "entity_id": "entity_9d223086-9a8a-431c-baf9-39c9c67d08c4",
+        "alias": "Volantis — Belaerys Manse, Aurion's Chambers",
+        "normalized_alias": "volantis belaerys manse aurion s chambers",
+        "source_entry_ids": [
+          "narration_72ee99a3-06d2-46c8-a19f-e3e835349c24"
+        ],
+        "server_version": 2280,
+        "created_at": "2026-09-05T04:27:21.694Z",
+        "updated_at": "2026-09-05T04:27:21.694Z"
+      }
+    ],
+    "sourceRefs": []
+  },
+  "parentApplied": {
+    "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+    "locationId": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6",
+    "serverVersion": 3339,
+    "patchId": "location_patch_62fb7850-8a40-4e34-853a-f22c3dcc78e7"
+  },
+  "primaryRepair": {
+    "patchId": "location_pov_repair_3f371ded-ea12-4fb5-9262-ca0b762da46e",
+    "version": 3340,
+    "beforeLocation": "entity_f879c54b-a838-4114-852b-0b4634fc9722",
+    "locationId": "entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587",
+    "currentWorldTime": "Day Twenty-Seventh, Moon 6, 299 AC | 09:33",
+    "flagsUpdated": [
+      "entity_f879c54b-a838-4114-852b-0b4634fc9722",
+      "entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587",
+      "veil_entity_leng_yi_harbor"
+    ],
+    "transcriptUnchanged": true
+  },
+  "finalVersion": 3341,
+  "chain": [
+    {
+      "id": "veil_scratch_asoiaf_entity_asoiaf_volantis_0189",
+      "name": "Volantis"
+    },
+    {
+      "id": "entity_cd230b5e-9c11-4c86-aa0c-064e9088b850",
+      "name": "Belaerys Manse"
+    },
+    {
+      "id": "entity_f484d248-0ac5-4283-b77b-12bb8b9bbda6",
+      "name": "Volantis — Belaerys Manse, Aurion's Chambers"
+    }
+  ],
+  "inheritedLoreCount": 12
+}

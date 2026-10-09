@@ -1,0 +1,336 @@
+{
+  "recordedAt": "2026-09-21T22:48:12.550Z",
+  "baseline": "Cloned dirty working tree, not committed HEAD",
+  "changes": [
+    {
+      "path": "scripts/runtime-config.mjs",
+      "beforeSha256": null,
+      "afterSha256": "7681f6d65878055767537c1c30aa7f787bd68f0c8d646faa6d81ca7569e1613b"
+    },
+    {
+      "path": "scripts/mtheriosd.mjs",
+      "beforeSha256": "0360da8cd14c9dc64a5e93c9f938c885dd87392e03a6e6aea28d756906d39db8",
+      "afterSha256": "d50783a61946df6d4df0dd6df9af6482d6cb3d5c0ca9ae0d9eba26c9e682ae85"
+    },
+    {
+      "path": "scripts/mythengined.mjs",
+      "beforeSha256": null,
+      "afterSha256": "89ae0266af368e03b1888b6540b98458743b2b0ec6fc081e3047652c19a25b8f"
+    },
+    {
+      "path": "server.js",
+      "beforeSha256": "aaf3f38bbf5b6185bc540d5b031794b707aaf7ec5bf1c996ab08cfb6e670db9d",
+      "afterSha256": "932d1655afd20b7b0bac4ed76bdc2e5ab24dbd31d0df74be98aea77472aee495"
+    },
+    {
+      "path": "scripts/app-agent.mjs",
+      "beforeSha256": "6b325ab12b3d48a81fa23c84232cb69cb6a9e7fea3e976cf3d52f32a76927d3d",
+      "afterSha256": "c7586cf8625c30424ef10415766405d9a677a0f45b8c0d7284af2f123e781a1a"
+    },
+    {
+      "path": "scripts/app-database.mjs",
+      "beforeSha256": "2e66519d03e2a37fd59ebdf435176d6047be61d102e5de33edffa6af4cf5f532",
+      "afterSha256": "bef62a50bce4ae8172ed03082676c2e3bb3d4fd138a0705f46adb58a80b3ca39"
+    },
+    {
+      "path": "scripts/app-engine.mjs",
+      "beforeSha256": "e9b488f2d7d412685eae1bc4a1a90fd8fcf25f0ea194aa2e826e8b886a357415",
+      "afterSha256": "9d86d151a4480eeb08a3b0155c3292edfaf06e8562b114e5d9ca155cccc69a74"
+    },
+    {
+      "path": "scripts/app-jobs.mjs",
+      "beforeSha256": "67e81b4c2c5f37c52909c2722bbf37d55e0b20657443ee312900679ed52a6af0",
+      "afterSha256": "d3ac2329f5b6c3bca34aa7bc29440d63400cc2d39093538e2110da60a5c281a4"
+    },
+    {
+      "path": "scripts/app-status.mjs",
+      "beforeSha256": "dc013fec00046580126ca706ee470fb4c8a0eba6df565cec2fdad8ae34d50c03",
+      "afterSha256": "3737847a68f739f60b3a7b3a6ebcd2275eb16c412975d9ced4e7b61cd5e81982"
+    },
+    {
+      "path": "scripts/app-story.mjs",
+      "beforeSha256": "2646f2e4a9380ae75f4bf52b3acabe4c830e381d55e47a904d407b353a4b2a93",
+      "afterSha256": "5bd43b4b72bf33cb57eeff86b3f7d56b9a935ff0d2cbbf43a008dd07dc65e2a7"
+    },
+    {
+      "path": "scripts/app-wiki.mjs",
+      "beforeSha256": "15eebb718c3073ad2c4c4ea4eecdd2ae5af6cfc9151fc8cfae104fbf66b6972f",
+      "afterSha256": "7b8f362dcb116afc545731ed645043218d0412007e65fd43c66b947e34994543"
+    },
+    {
+      "path": "scripts/mtherios-mcp.mjs",
+      "beforeSha256": "b7ba836fc97d30f3cdf7c364097a4c8c5cf1a1c49217cb5f811711e2c8b0eaa6",
+      "afterSha256": "37ff996685fb2d3d93982e991cd50d404e1691dbc7e3567c15b38da94c96605d"
+    },
+    {
+      "path": "scripts/db-env.mjs",
+      "beforeSha256": "4f4486e9ae9150a226f852af7a6b7e0a21cf7e384ff55f2f244f2bb5da0497bc",
+      "afterSha256": "d21ecae7d2473a7ac17f8a8b2b8e0b618e208dbd1ab973ce94185ad252d4275e"
+    },
+    {
+      "path": "drizzle.config.ts",
+      "beforeSha256": "51c2311bd47e07a211d503d2b518117eec53be5cc1176a432365cdde1feaad66",
+      "afterSha256": "f1f37dbe97bbaa9df508b7432fd5ebc3e9ef272e4ccf31d2c9dbc321d8f8958c"
+    },
+    {
+      "path": "vite.config.ts",
+      "beforeSha256": "f1ccde6eac54df9033a5b41e53abd6221117a67b576d7ae534cbb778142d5fa9",
+      "afterSha256": "b752cbac8e6e1ec1d4188e5aedc9426020a8ad1f1b07404e70e5f02d1ef7f1e4"
+    },
+    {
+      "path": "src/lib/server/app/config.ts",
+      "beforeSha256": "77b2f5b5609b68787e28610395ed7a19b64e734e94e9e3741823019851b5ab6b",
+      "afterSha256": "55854981e586d7a62b7f5f8c39d414c748c47aeb2549f66294b71c60904c53d2"
+    },
+    {
+      "path": "src/lib/server/env.ts",
+      "beforeSha256": "bd986a5ece51ef07b7a9ad78eaeb580aba3702f3e8d186875d01882e318ed995",
+      "afterSha256": "9fd4e8a496464bc5257bde6ea00884d03ad10d4942c3af424933cc1b70f61cb3"
+    },
+    {
+      "path": "src/lib/server/engine/llmSettings.ts",
+      "beforeSha256": "04c48ff24d5255db07c7a74e6cf4c5c28fcaabc6cd34d1c304aca86c7928c307",
+      "afterSha256": "ad73a826543b14ae3c54879bc78a5c0822552e5628f648418c91d82a9bcd2f6b"
+    },
+    {
+      "path": "src/lib/server/engine/appStatus.ts",
+      "beforeSha256": "0b2d1bdf01a4a8d0be94a2bea823325d9013c432401a2262ac8c983d67039b01",
+      "afterSha256": "f8bf16941f9a586ae27b5056b7312959854a6938ef5a74bccd71eceaafde85fc"
+    },
+    {
+      "path": "scripts/wiki-core/lib/qdrant.mjs",
+      "beforeSha256": "d61b871dad9a9ce89075e91d82ff760b9b14762ad07c4d24309d93a143e20db8",
+      "afterSha256": "e9aa8db4915261797db51fad9242938e6d8f23428324643ffa1e23377ebf61f3"
+    },
+    {
+      "path": "scripts/wiki-core/lib/cli.mjs",
+      "beforeSha256": "5f9715c94bba6f8716f0dd8e3a2ac4522074d5d1e716ce471484de618b88ee13",
+      "afterSha256": "f9a75f071e655f4afbedb015b8512efbf982d97fcbd983573d28072b6550d65a"
+    },
+    {
+      "path": "scripts/wiki-core/index.mjs",
+      "beforeSha256": "fc145979ecf08273f58e41c252276dba536e0a0f33e61edcdadd1c94eea9ce87",
+      "afterSha256": "3c7a72198b6c9a0817eb7ab37ef46af6cf69fe25b69c4c8c721c5fb67ccfc625"
+    },
+    {
+      "path": "src/lib/server/db/worldDatabaseSchema.ts",
+      "beforeSha256": "ed79cc57f22f2ca2d1d7ca4a260000f0303fba73dea20acbbc070a4a23466d4d",
+      "afterSha256": "c5982e0ae9586728e52e667e4cc209939d5fbf012c16241ac5497ed2ad27276b"
+    },
+    {
+      "path": "src/lib/server/engine/appEngineCli.test.ts",
+      "beforeSha256": "ad27e25bd45c25286fc195161b32d6806f1705403dd21af5f6fbd11dad6c9545",
+      "afterSha256": "ee61b543852aba803fc14d2b0936f38a3637a7272ced076b33f3577680194c30"
+    },
+    {
+      "path": "src/lib/server/engine/mcpTools.test.ts",
+      "beforeSha256": "d5c253fb63aa69168eb9e54307e9fe2eeaa2d0301f586bbb2fe5804c0dab46d9",
+      "afterSha256": "f9e7522e70c926e16c2ac5050fe53a1c5e6a3fc42e996ebc3d62c54ba74ee3c3"
+    },
+    {
+      "path": "src/app.html",
+      "beforeSha256": "da8bf56e3a16719a2d73a20d10b21df9c246d162836e2aaa07c6596d755c9e6e",
+      "afterSha256": "9d79782d35dc13d4411dc4aa13c52b934f23f838e9ea53ee17562ee85863754a"
+    },
+    {
+      "path": "src/lib/assets/favicon.svg",
+      "beforeSha256": "0f78f8edb9ca46e7c0f9bdde058fd6d83acc261e126bb0a24aef3dedec555db2",
+      "afterSha256": "661012c8c6ace150b98ee77f42c9a675d8aa737b8ad1e9142f841a49374e0c4a"
+    },
+    {
+      "path": "src/lib/components/layout/AppShell.svelte",
+      "beforeSha256": "a77824bbe755cd83a2932c54291bb13e7cf11f313d4a8c92a85ef8d65c905876",
+      "afterSha256": "9ce522ae7b8e944af80aa120e3911b18e3b61920ea97147c61e4b46c233d5224"
+    },
+    {
+      "path": "src/lib/components/library/LibraryPanel.svelte",
+      "beforeSha256": "c8b606e1e0a6e570309a20dd89dfa930ba22dad4c5ca27e37bd8e74c180dd4e7",
+      "afterSha256": "f77ee7208a66382cac6b41c65d0114bfa73ffc1933ea8d531096611bc659c77a"
+    },
+    {
+      "path": "src/lib/components/pwa/PwaLifecycle.svelte",
+      "beforeSha256": "fdff9e7c03c44593195e7f67171393cc1c78471b92be4f75a3386abbfe6e7c39",
+      "afterSha256": "5cdb9baf8852035546ae44967fb41ef946646e53467a30a1084ef087263907a5"
+    },
+    {
+      "path": "src/lib/components/wizard/OnboardingWizard.svelte",
+      "beforeSha256": "296add830e76d6d335ebc4f9f798f2a1f5bee0a139a662cff92f10084ae99901",
+      "afterSha256": "b1797f88324b92f41d3ee08b47944c6c64064db72552983f59afb8262d63ce08"
+    },
+    {
+      "path": "static/manifest.webmanifest",
+      "beforeSha256": "9aeb8c8a6d85c3c951d98325d766685a91a4370a84733f922cf50d740a432f29",
+      "afterSha256": "828ee53016e3d97955316e2eb053edf9d58fd0e4586ac872f953bcb80288a447"
+    },
+    {
+      "path": "static/icons/mythengine-192.png",
+      "beforeSha256": null,
+      "afterSha256": "c5dfdebf00e5e462372fadb49c03161b5ad7b5b7740f066badacd81cdb8945a2"
+    },
+    {
+      "path": "static/icons/mythengine-512.png",
+      "beforeSha256": null,
+      "afterSha256": "0f5420b658bbfe54bd4f26d66b911c5484bea3b78ce1c46992cc94c2109eca7b"
+    },
+    {
+      "path": "static/icons/mythengine-maskable-512.png",
+      "beforeSha256": null,
+      "afterSha256": "0f5420b658bbfe54bd4f26d66b911c5484bea3b78ce1c46992cc94c2109eca7b"
+    },
+    {
+      "path": "static/icons/mythengine-sigil.svg",
+      "beforeSha256": null,
+      "afterSha256": "a28f86b902b73e5c828fc253ac9e6fd4e03b243b8f3cae029208f01689b88c74"
+    },
+    {
+      "path": "src/service-worker.ts",
+      "beforeSha256": "af53322909a3d182b2190d224e9bdbf40e15567da56ad9f4bb8d89de3f380164",
+      "afterSha256": "692af90d63761f3115e93c063cc995a000aacb9d07c15d380335bf2869f35df9"
+    },
+    {
+      "path": "src/lib/services/wikiExport.ts",
+      "beforeSha256": "01b7935d717a9130bcd019a86c200825c88d54b1eadaf3060f1d1aaf59f33c9d",
+      "afterSha256": "851b2d3a0d8f1c76cda5c1c3175fcfd1b9b63d69af5d9d0bb071de266daa809e"
+    },
+    {
+      "path": "package.json",
+      "beforeSha256": "f5a951bf2d1407e6a4c70186312097c3ca8f7317f7b713b747ae6dffa4c6828e",
+      "afterSha256": "cba49e5c1938bde6495f536d726b0ec8d786b391b9e9c1040dc1a25f62230752"
+    },
+    {
+      "path": "package-lock.json",
+      "beforeSha256": "ec7b5e680dd7a9402f9c27ea44883d3741207e0ce3ed5f2b050991ed67a3d26a",
+      "afterSha256": "6a5a927e28fc1a63caa2f014ae41aa78080b6a71cb38dba60c33ac169c12f920"
+    },
+    {
+      "path": ".gitignore",
+      "beforeSha256": "3c735b85304208959fe02942b26c40e46c5d0ff0d0b47b42ada140de6f3c818e",
+      "afterSha256": "fea0c0cc67db4b5f1ba01967b20d3e5c67c5f0407e6198a5bc9c433dd708d707"
+    },
+    {
+      "path": ".env.example",
+      "beforeSha256": "9b66d6174084c21af490b89c7ba0b1e571b636cf2707bdea8ec79017f53f12d0",
+      "afterSha256": "4bb3d51253d838ff2e09ce093642ae79239528935aca48c0cf1126818456c11f"
+    },
+    {
+      "path": "mythengine.config.example.json",
+      "beforeSha256": null,
+      "afterSha256": "375ab97c454154cfb7ba4acf28e618a737c2861cf81c41346930acce5f655b31"
+    },
+    {
+      "path": "docker-compose.yml",
+      "beforeSha256": "11bc8e1263c9dad87a90427ef170682203e2176a98c4136a92386253e26c0af2",
+      "afterSha256": "0cd1c45d41d26b5413bdd45c59476d067764334128ac542fec6438ae5ab4b2ba"
+    },
+    {
+      "path": "scripts/backend.mjs",
+      "beforeSha256": null,
+      "afterSha256": "75b17e0cf29c427b00deeb0fc6f97fb3bcc44113f7859d5a6cb53628fa22d940"
+    },
+    {
+      "path": "scripts/bench-generation.mjs",
+      "beforeSha256": "16a5ad17983343701ff074c122b3c262501fed750a920ebb04bb0cea79de4981",
+      "afterSha256": "63e8864bde459b37cff8f4cb63c48a9f53099f472cfd923f21a8069768159fde"
+    },
+    {
+      "path": "scripts/eval-turns.mjs",
+      "beforeSha256": "b9f599d5e114762ef3bd9f7719556b2149a6c6643c3a62cf5e6eba7182296151",
+      "afterSha256": "ef17cd876c1ee6ec0842a1d4c3b233eb0e7efa5b0f987414aa4ee9876ec907af"
+    },
+    {
+      "path": "scripts/harness-build-id.mjs",
+      "beforeSha256": "e6b951ac9253b80de4646740a6048f02261b2dde939cbb8a86541475ab3c3b5c",
+      "afterSha256": "06e2fa6392c038b601c9fd41221b7bfd660f94445cf70d7a78fd4839382bce88"
+    },
+    {
+      "path": "scripts/mythengine-mcp.mjs",
+      "beforeSha256": null,
+      "afterSha256": "782a5730679a3f8ee4a598d664a99550d21ffdc0b70c60b12220338f4907edb7"
+    },
+    {
+      "path": "scripts/runtime-config.test.mjs",
+      "beforeSha256": null,
+      "afterSha256": "aebd8dfc4a011fd4b8815bdb1a4ebe04fba7b81c39d3cb8e414eb35496e28980"
+    },
+    {
+      "path": "scripts/seed-veil-campaign-state.mjs",
+      "beforeSha256": "d29a44a55cc5348d92befa8d52d36af61ec36f393e590343074c382c1b964a5c",
+      "afterSha256": "f5dc2f212c335742e379583877193ca426ecad9456f51170fd996dcf564d6397"
+    },
+    {
+      "path": "scripts/verify-golden-boy-chronology.mjs",
+      "beforeSha256": "d32ff8ab58c29997f3e802916cc9496162323e806ee1843a029392c2223dbaa1",
+      "afterSha256": "33e173289ff3ec05ad21ae541dc6da3f5f229e01fcddbaf69f749662b7b94894"
+    },
+    {
+      "path": "scripts/verify-plot-editor.mjs",
+      "beforeSha256": "f7ae478fb2cf7e5be2bc7a0a2d0a62566045f918672415d909839287f099ff52",
+      "afterSha256": "301aea7b9d522b574ea052b8bf03de67ea764eada5b3668b6fa1a5aa6aa206e9"
+    },
+    {
+      "path": "scripts/build.mjs",
+      "beforeSha256": null,
+      "afterSha256": "7475d94a2be39fe8900b4a31c9be38362f7e487cee50492f175a520135c60ccf"
+    },
+    {
+      "path": "drizzle/0020_mythengine_default_shelf.sql",
+      "beforeSha256": null,
+      "afterSha256": "1160cefffd0db55077538230a89b7ac096d99ebc72fcd883e715cce7a6a60c26"
+    },
+    {
+      "path": "src/lib/server/app/config.test.ts",
+      "beforeSha256": null,
+      "afterSha256": "3ddbcb32e625835848c2d3e643d7309afba0246852a9203802fbe4abdb8e1cc4"
+    },
+    {
+      "path": "src/lib/server/memory/canonical.ts",
+      "beforeSha256": "a3be053549401bcb9db5feb323a63c349333024e347e00c3bea56523f0a7c999",
+      "afterSha256": "42def34ce2de2ee1c2bf5c1d2d6f2a7227b5ff534f0afd56d379002b84a3939a"
+    },
+    {
+      "path": "src/lib/services/storySync.ts",
+      "beforeSha256": "2226d6ec4c86fbdf4f8b81df6bc10511df05d8e0c7701d0a60e84d5b0375cc67",
+      "afterSha256": "c1241cdd871ecde4cbc8bc4373e70765003aee81b6027bbb2c17224f13b5c706"
+    },
+    {
+      "path": "src/lib/services/storySync.test.ts",
+      "beforeSha256": "a54fe85e76644fbd08442eddd39d391d3f1267312b0f7369e539f2f8b7abbc17",
+      "afterSha256": "82a74db96b1424fec3d7de30b53bdfa396d8f70b4d8f6687e587d3300eddd2c6"
+    },
+    {
+      "path": "AGENTS.md",
+      "beforeSha256": "5056fb4164721d477d6d997195dde7a396c23e182380e27496231a7a1906d11d",
+      "afterSha256": "44f518caac0653276813491b0793e4fc2c58dab556cfbdda5808ce3bfd1c1cda"
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "beforeSha256": "86ccd4068004092d32ca1fe88ce42226983c8f9612347ff24d0c8e7f56b2e7e7",
+      "afterSha256": "90e0ef88dc76c2886bc5c91f31398e6c4f507760ca5df8260e231238edbb0de3"
+    },
+    {
+      "path": "docs/evidence/mythengine-overhaul/phase0-verification.json",
+      "beforeSha256": null,
+      "afterSha256": "3799247dcff3dc85d96f517c207682dc6b3aed31fd9363be8a75f1afb6fd05ad"
+    },
+    {
+      "path": "docs/mythengine-overhaul-plan-2026-09-21.md",
+      "beforeSha256": "b427b86a963ee30476e477b46926cc991d56ef1f3e76274a2b7a2388d6ef77fc",
+      "afterSha256": "8fd353fcd71273dd78a7647f06988905956426a33fcf39b20fa6c14030de6e19"
+    },
+    {
+      "path": "docs/mythengine-phase0-2026-09-21.md",
+      "beforeSha256": null,
+      "afterSha256": "fb9c4b7b0e03c16619f0f8c885cbaf3eaf698b7ce7e748f1813e3c1b019314fb"
+    },
+    {
+      "path": "README.md",
+      "beforeSha256": "e15d969a03a470d12b35e8a632b2222eb090bcd59b0fb09d364367c2f416f6ab",
+      "afterSha256": "f534fa0eb60220689e75554b2b979a40a8759876aba7287bab71d11113ac8836"
+    }
+  ],
+  "verification": {
+    "phaseOnlyDiffCheck": "passed",
+    "localDocumentationLinks": "passed",
+    "packageIdentity": "matched"
+  }
+}

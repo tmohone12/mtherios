@@ -22,18 +22,21 @@ describe('GM tool schemas', () => {
 		expect((tool?.function.parameters as any).required).toContain('dc');
 	});
 
-	it('tells world-state extraction not to create character canon', () => {
+	it('routes automatic NPC creation through evidence validation', () => {
 		const parameters = updateWorldStateParameters();
 
-		expect(parameters.properties.characters.description ?? '').toContain('Update only established canonical characters');
-		expect(parameters.properties.lorebook_entries.description ?? '').toContain('Do not create character entries from narration extraction');
+		expect(parameters.properties.characters.description ?? '').toContain('creation_evidence');
+		expect(parameters.properties.lorebook_entries.description ?? '').toContain('Register new NPCs through characters');
 		expect(parameters.properties.lorebook_entries.items?.properties?.type.description ?? '').toContain('character is review-only unless the character already exists');
 	});
 
 	it('exposes rich character state fields to normal state extraction', () => {
 		const characterProperties = updateWorldStateParameters().properties.characters.items?.properties ?? {};
 
-		expect(characterProperties.appearance.description ?? '').toContain('visual portrayal');
+		expect(characterProperties.appearance.description ?? '').toContain('Stable physical features');
+		expect(characterProperties.presentation.description ?? '').toContain('Current clothing');
+		expect(characterProperties.entityId.description ?? '').toContain('Exact canonical');
+		expect(characterProperties.personality.description ?? '').toContain('enduring personality');
 		expect(characterProperties.background.description ?? '').toContain('backstory');
 		expect(characterProperties.goals.description ?? '').toContain('Current concrete goals');
 		expect(characterProperties.speechStyle.description ?? '').toContain('voice');

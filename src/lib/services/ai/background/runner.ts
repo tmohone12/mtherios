@@ -4,17 +4,17 @@
  * Replaces GenerationPipeline Phase 2 (background jobs).
  * Runs after every world-state update, checks thresholds, fires infrequent jobs.
  *
- * - Chapter creation: every ~20 entries outside a chapter
- * - Arc condensation: every 5 uncovered chapters
+ * - Chapter creation: every 20 completed story turns
+ * - Arc condensation: every 10 consecutive chapters
  * - Lore management: every LORE_MGMT_CHAPTER_INTERVAL chapters
  *
- * World simulation is triggered by time progression in the executor,
- * so it does NOT need a separate entry point here.
+	 * Canonical faction and NPC movement is owned by backend jobs.
  */
 
 import { ai } from '$lib/services/ai';
 import { story } from '$lib/stores/story.svelte';
 import { settings } from '$lib/stores/settings.svelte';
+import { CHAPTERS_PER_ARC, selectNextChapterWindow } from '$lib/services/chapterCadence';
 import { uuid } from '$lib/utils/uuid';
 import {
 	getChapters, getArcs,
@@ -26,17 +26,14 @@ import {
 	patchCanonicalLorebookEntry,
 	saveCanonicalArc,
 	saveCanonicalChapter,
-	saveCanonicalFactionActions,
 	saveCanonicalSaga,
 	saveCanonicalLorebookEntry,
-	saveCanonicalRumors,
-	saveCanonicalWorldEvent,
 } from '$lib/services/canonicalWrites';
 import { findMatchingLoreEntry, makeLoreEntry } from '$lib/services/ai/tools/helpers';
 import { LORE_MGMT_CHAPTER_INTERVAL } from '$lib/services/ai/lorebook/LoreManagementService';
 import type {
-	Chapter, Arc, Entry, Saga, StoryEntry, WorldEvent,
-	CharacterEntryState, FactionEntryState, FactionActionRecord, RumorRecord,
+	Chapter, Arc, Entry, Saga, StoryEntry,
+	CharacterEntryState, FactionEntryState,
 	FactionGoal, FactionResources,
 } from '$lib/types';
 
@@ -63,108 +60,6 @@ function applyCurrentStoryServerVersion(serverVersion: number | null): void {
 function getBeatSignificance(beat: { significance?: string | null; metadata?: Record<string, unknown> | null }): string {
 	const metadataSignificance = beat.metadata?.significance;
 	return beat.significance ?? (typeof metadataSignificance === 'string' ? metadataSignificance : undefined) ?? 'minor';
-}
-
-function normalizeWorldSimUrgency(value: string | null | undefined): FactionActionRecord['urgency'] {
-	if (value === 'critical') return 'critical';
-	if (value === 'emerging') return 'high';
-	if (value === 'simmering') return 'medium';
-	if (value === 'background') return 'low';
-	if (value === 'high' || value === 'medium' || value === 'low') return value;
-	return 'medium';
-}
-
-async function runChapterWorldSimulation(chapter: Chapter, chapterEntries: StoryEntry[]): Promise<void> {
-	if (!story.currentStory) return;
-	const wsConfig = settings.getServiceConfig('worldSimulation');
-	if (!wsConfig.enabled) return;
-	const storyId = story.currentStory.id;
-	const factionEntries = story.lorebookEntries.filter(entry => entry.type === 'faction');
-
-	try {
-		const result = await ai.worldSim.simulateForNewChapter({
-			storyId,
-			latestChapter: chapter,
-			recentEntries: chapterEntries,
-			factionEntries,
-			mode: story.storyMode,
-			pov: story.pov,
-			tense: story.tense,
-		});
-		if (!story.currentStory || story.currentStory.id !== storyId) return;
-		story.lastWorldSimResult = result;
-
-		const now = Date.now();
-		if (result.worldNarrative.trim()) {
-			const event: WorldEvent = {
-				id: uuid(),
-				storyId,
-				name: `Chapter ${chapter.number} world update`,
-				description: result.worldNarrative,
-				triggerEntryId: chapter.endEntryId,
-				triggerPosition: chapterEntries[chapterEntries.length - 1]?.position ?? 0,
-				sourceEntityId: null,
-				type: 'custom',
-				severity: result.worldTension >= 7 ? 'major' : result.worldTension >= 4 ? 'moderate' : 'minor',
-				consequences: result.plotSeeds.slice(0, 4).map((seed) => ({
-					id: uuid(),
-					description: seed,
-					status: 'pending',
-					targetEntityId: null,
-					targetEntityName: 'world',
-					effectType: 'custom',
-					effectPayload: { source: 'chapter_world_sim' },
-					delay: 0,
-					appliedAt: null,
-				})),
-				appliedAt: null,
-				createdAt: now,
-			};
-			applyCurrentStoryServerVersion(await saveCanonicalWorldEvent(event));
-			story.worldEvents = [...story.worldEvents, event];
-		}
-
-		if (result.factionActions.length > 0) {
-			const rows: FactionActionRecord[] = result.factionActions.map((action) => ({
-				id: uuid(),
-				storyId,
-				factionName: action.factionName,
-				action: action.action,
-				actionType: action.actionType,
-				target: action.target,
-				motivation: action.motivation,
-				consequences: action.consequences,
-				urgency: normalizeWorldSimUrgency(action.urgency),
-				affectedRegions: action.affectedRegions,
-				chapterNumber: chapter.number,
-				status: 'active',
-				createdAt: now,
-			}));
-			applyCurrentStoryServerVersion(await saveCanonicalFactionActions(rows));
-			story.factionActions = [...story.factionActions, ...rows];
-		}
-
-		if (result.rumors.length > 0) {
-			const rows: RumorRecord[] = result.rumors.map((rumor) => ({
-				id: uuid(),
-				storyId,
-				content: rumor.content,
-				truthfulness: rumor.truthfulness,
-				originRegion: rumor.originRegion,
-				spreadRadius: rumor.spreadRadius,
-				sourceType: rumor.sourceType,
-				relatedFaction: rumor.relatedFaction,
-				chapterNumber: chapter.number,
-				staleAfterChapters: rumor.staleAfterChapters,
-				status: 'spreading',
-				createdAt: now,
-			}));
-			applyCurrentStoryServerVersion(await saveCanonicalRumors(rows));
-			story.rumors = [...story.rumors, ...rows];
-		}
-	} catch (error) {
-		console.error('[Background] Chapter world simulation failed:', error);
-	}
 }
 
 /**
@@ -215,45 +110,26 @@ async function runChapterCheck(): Promise<void> {
 		lastChapterEndPosition = endEntry.position;
 	}
 
-	const chapterThreshold = settings.uiSettings.chapterThreshold || 20;
-	const postChapterBuffer = Math.max(0, settings.uiSettings.postChapterBuffer ?? 10);
-	const queryLimit = Math.max(chapterThreshold, 50) + postChapterBuffer;
-	const entriesOutsideChapter = await getStoryEntriesAfterPosition(
-		story.currentStory.id,
-		lastChapterEndPosition,
-		queryLimit,
-		branchId,
-	);
-	const eligibleEntries = postChapterBuffer > 0
-		? entriesOutsideChapter.slice(0, -postChapterBuffer)
-		: entriesOutsideChapter;
-	console.log('[Background] Chapter check:', {
-		loadedEntries: story.entries.length,
-		totalEntries: story.entryCount,
-		lastChapterEndPosition,
-		entriesOutside: entriesOutsideChapter.length,
-		eligibleEntries: eligibleEntries.length,
-		buffer: postChapterBuffer,
-		threshold: chapterThreshold,
-	});
-	if (eligibleEntries.length < chapterThreshold) return;
-
-	// Analyze first 50 entries for boundary detection
-	const analysisWindow = eligibleEntries.slice(0, 50);
-	const tokensOutsideBuffer = eligibleEntries.reduce((sum, e) => sum + Math.ceil(e.content.length / 4), 0);
-	const analysis = await ai.memory.analyzeForChapter(
-		analysisWindow, lastChapterEndPosition + 1, tokensOutsideBuffer,
-		story.storyMode, story.pov, story.tense,
-	);
-
-	if (!analysis.shouldCreateChapter) return;
-
-	// Clamp optimalEndIndex
-	const maxIndex = analysisWindow.length - 1;
-	const clampedIndex = Math.max(0, Math.min(analysis.optimalEndIndex, maxIndex));
-
-	const chapterEntries = eligibleEntries.slice(0, clampedIndex + 1);
-	if (chapterEntries.length === 0) return;
+	const entriesOutsideChapter: StoryEntry[] = [];
+	const coveredSourceIds = new Set(chapters.flatMap(chapter => chapter.sourceEntryIds ?? []));
+	let cursor = lastChapterEndPosition;
+	let window = selectNextChapterWindow(entriesOutsideChapter, branchId);
+	while (!window) {
+		const page = await getStoryEntriesAfterPosition(story.currentStory.id, cursor, 100, branchId);
+		if (!page.length) return;
+		entriesOutsideChapter.push(...page);
+		const loadedIds = new Set(entriesOutsideChapter.map(entry => entry.id));
+		const missingParentIds = [...new Set(page.filter(entry => entry.type === 'narration' && entry.parentId && !loadedIds.has(entry.parentId))
+			.map(entry => entry.parentId!))];
+		const missingParents = await Promise.all(missingParentIds.map(id => getStoryEntry(id)));
+		entriesOutsideChapter.push(...missingParents.filter((entry): entry is StoryEntry => Boolean(entry) && !coveredSourceIds.has(entry!.id)));
+		window = selectNextChapterWindow(entriesOutsideChapter, branchId);
+		const nextCursor = page.at(-1)!.position;
+		if (window || page.length < 100 || nextCursor <= cursor) break;
+		cursor = nextCursor;
+	}
+	if (!window) return;
+	const chapterEntries = window.entries;
 
 	// Gather story beats for enrichment
 	const allBeats = await getStoryBeats(story.currentStory.id);
@@ -284,6 +160,7 @@ async function runChapterCheck(): Promise<void> {
 		number: chapters.length + 1, title: summaryResult.title,
 		startEntryId: chapterEntries[0].id, endEntryId: chapterEntries[chapterEntries.length - 1].id,
 		entryCount: chapterEntries.length, summary: summaryResult.summary,
+		sourceEntryIds: chapterEntries.map(entry => entry.id),
 		startTime: null, endTime: null,
 		keywords: summaryResult.keywords, characters: summaryResult.keyCharacters,
 		locations: summaryResult.keyLocations,
@@ -296,7 +173,6 @@ async function runChapterCheck(): Promise<void> {
 	};
 	applyCurrentStoryServerVersion(await saveCanonicalChapter(chapter, 'create'));
 	console.log(`[Background] Chapter ${chapter.number} created: "${chapter.title}"`);
-	await runChapterWorldSimulation(chapter, chapterEntries);
 
 	// Embed chapter summary (background)
 	ai.embeddings.embed(`${chapter.title ?? 'Chapter ' + chapter.number}: ${chapter.summary}`, chapter.id, 'chapter')
@@ -329,11 +205,11 @@ async function runAutoArcCondensation(chapters: Chapter[]): Promise<void> {
 	const arcs = await getArcs(story.currentStory.id);
 	const coveredChapterIds = new Set(arcs.flatMap(a => a.chapterIds));
 	const uncoveredChapters = chapters
-		.filter(c => !coveredChapterIds.has(c.id) && !c.pinned)
+		.filter(c => !coveredChapterIds.has(c.id))
 		.sort((a, b) => a.number - b.number);
-	const chaptersPerArc = settings.uiSettings.chaptersPerArc || 5;
-	if (uncoveredChapters.length < chaptersPerArc) return;
-	const arcChapters = uncoveredChapters.slice(0, chaptersPerArc);
+	if (uncoveredChapters.length < CHAPTERS_PER_ARC) return;
+	const arcChapters = uncoveredChapters.slice(0, CHAPTERS_PER_ARC);
+	if (arcChapters.some((chapter, index) => chapter.number !== arcChapters[0].number + index)) return;
 
 	const arcNumber = arcs.length + 1;
 	const result = await ai.arcCondensation.condense(

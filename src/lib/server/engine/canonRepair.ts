@@ -1,4 +1,6 @@
-import { and, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
 import {
 	continuityWarnings,
@@ -8,6 +10,7 @@ import {
 	factions,
 	factionMemberships,
 	factionProjects,
+	factionResources,
 	memoryNodes,
 	npcBeliefs,
 	npcEventLinks,
@@ -15,12 +18,16 @@ import {
 	relationships,
 	sourceRefs,
 	stories,
+	storyEntries,
 	storyEvents,
 	storyThreads,
 } from '$lib/server/db/schema';
 import { enqueueBackendJob, enqueueStoryVaultSyncJob } from '$lib/server/jobs/outbox';
 import { auditDueFactionProjects } from '$lib/server/factions/projects';
 import { isCharacterTitleOnlyName, resolveEntityIdentity, entityResolutionSummary, type EntityIdentityCandidate } from '$lib/server/memory/entityResolver';
+import { characterDraftSourceSnapshot } from './characterDrafts';
+import { validateLocationParent } from './locationRecords';
+import { isEffectiveContainment } from '$lib/server/memory/locationLore';
 
 type JsonRecord = Record<string, unknown>;
 type Db = ReturnType<typeof getDb>;
@@ -48,9 +55,18 @@ function normalizeAlias(value: string): string {
 	return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+function normalizeIdentityName(value: string): string {
+	return value
+		.normalize('NFKD')
+		.replace(/\p{M}+/gu, '')
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, ' ')
+		.trim();
+}
+
 function containedNameMatch(left: string, right: string): boolean {
-	const a = normalizeAlias(left);
-	const b = normalizeAlias(right);
+	const a = normalizeIdentityName(left);
+	const b = normalizeIdentityName(right);
 	if (!a || !b || a === b) return false;
 	if (isCharacterTitleOnlyName(a) || isCharacterTitleOnlyName(b)) return false;
 	if (a.length < 5 || b.length < 5) return false;
@@ -86,6 +102,17 @@ export function mergeCharacterReferenceState(existing: JsonRecord, patch: JsonRe
 		if (Array.isArray(value)) {
 			if (value.length === 0) continue;
 			merged[key] = mergeArrayValues(merged[key], value);
+			continue;
+		}
+		if (key === 'relationship' && typeof value === 'object') {
+			const current = typeof merged[key] === 'string' ? { status: merged[key] } : asRecord(merged[key]);
+			const patchRelationship = asRecord(value);
+			merged[key] = {
+				...current,
+				...patchRelationship,
+				...(Array.isArray(patchRelationship.history)
+					? { history: mergeArrayValues(current.history, patchRelationship.history) } : {}),
+			};
 			continue;
 		}
 		if (key === 'eventMemory' && typeof value === 'object' && !Array.isArray(value)) {
@@ -173,7 +200,10 @@ function asInteger(value: unknown, fallback: number): number {
 }
 
 function stableIdSegment(value: string): string {
-	return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 96) || 'record';
+	const ascii = value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 96);
+	if (ascii && !/[^\x00-\x7f]/.test(value)) return ascii;
+	const hash = createHash('sha256').update(value.normalize('NFKC')).digest('hex').slice(0, 12);
+	return `${(ascii || 'record').slice(0, 83)}_${hash}`;
 }
 
 function emptyProposalApplication(): ProposalApplication {
@@ -308,8 +338,14 @@ async function applyCharacterContextUpdateProposal(tx: Tx, input: {
 	serverVersion: number;
 	now: string;
 }): Promise<ProposalApplication> {
-	const proposedState = characterContextUpdateState(input.proposal);
+	let proposedState = characterContextUpdateState(input.proposal);
 	if (!proposedState) return emptyProposalApplication();
+	if (input.proposal.proposedBy === 'chapter_scribe') {
+		// Older pending chapter proposals contain full snapshots. Never replay their transient state or stats.
+		const continuityKeys = new Set(['bio', 'appearance', 'presentation', 'speechStyle', 'personality', 'rank', 'currentDisposition', 'relationship', 'motivations', 'factionTags', 'knownFacts', 'eventMemory']);
+		proposedState = Object.fromEntries(Object.entries(proposedState).filter(([key]) => continuityKeys.has(key)));
+		if (!Object.keys(proposedState).length) return emptyProposalApplication();
+	}
 
 	const [entity] = await tx.select().from(entities).where(and(
 		eq(entities.storyId, input.storyId),
@@ -324,6 +360,7 @@ async function applyCharacterContextUpdateProposal(tx: Tx, input: {
 	const sourcePatchIds = unique([...(entity.sourcePatchIds ?? []), ...(input.proposal.sourcePatchIds ?? []), input.proposal.id]);
 	await tx.update(entities).set({
 		state,
+		...(typeof proposedState.bio === 'string' && proposedState.bio.trim() ? { description: proposedState.bio.trim() } : {}),
 		metadata: {
 			...asRecord(entity.metadata),
 			updatedFromProposal: input.proposal.id,
@@ -380,10 +417,22 @@ function characterReferencePayload(proposal: typeof patchProposals.$inferSelect)
 } | null {
 	if (proposal.proposalType !== 'character_reference_review') return null;
 	const metadata = asRecord(proposal.metadata);
-	const operationValue = (Array.isArray(proposal.operations) ? proposal.operations : [])
-		.map((operation) => asRecord(asRecord(operation).value))
-		.find((value) => typeof value.name === 'string' && value.name.trim().length > 0);
-	const name = asString(metadata.sourceName, asString(operationValue?.name));
+	const operations = (Array.isArray(proposal.operations) ? proposal.operations : []).map(asRecord);
+	const isGmDraft = proposal.proposedBy === 'gm_character_draft' || ['evidence_only', 'manual_review'].includes(asString(asRecord(metadata.sourceDraft).mode));
+	const operation = operations.find((value) => {
+		const operationValue = asRecord(value.value);
+		if (typeof operationValue.name !== 'string' || !operationValue.name.trim()) return false;
+		return !isGmDraft || (asString(value.op) === 'review' && asString(value.path) === '/entities/character');
+	});
+	const operationValue = operation ? asRecord(operation.value) : null;
+	if (isGmDraft) {
+		if (!operationValue || proposal.targetTable !== 'entities') return null;
+		if (asString(operationValue.storyId) !== proposal.storyId || asString(operationValue.type) !== 'character') return null;
+		if (!operationValue.state || typeof operationValue.state !== 'object' || Array.isArray(operationValue.state)) return null;
+	}
+	const name = isGmDraft
+		? asString(operationValue?.name)
+		: asString(metadata.sourceName, asString(operationValue?.name));
 	if (!name) return null;
 	return {
 		name,
@@ -395,6 +444,14 @@ function characterReferencePayload(proposal: typeof patchProposals.$inferSelect)
 	};
 }
 
+function hasPopulatedCharacterCandidate(proposal: typeof patchProposals.$inferSelect): boolean {
+	if (proposal.proposedBy === 'gm_character_draft' || proposal.targetTable !== 'entities' || !(proposal.sourceEntryIds?.length || proposal.sourceEventIds?.length)) return false;
+	const operation = (proposal.operations ?? []).map(asRecord).find((item) => item.op === 'review' && item.path === '/entities/character');
+	const payload = characterReferencePayload(proposal);
+	const description = payload?.description?.trim() ?? '';
+	return Boolean(operation && payload && description.length >= 24 && !/\bis important in this chapter checkpoint\.?$/i.test(description));
+}
+
 async function applyCharacterReferenceProposal(tx: Tx, input: {
 	storyId: string;
 	proposal: typeof patchProposals.$inferSelect;
@@ -402,7 +459,20 @@ async function applyCharacterReferenceProposal(tx: Tx, input: {
 	now: string;
 }): Promise<ProposalApplication> {
 	const payload = characterReferencePayload(input.proposal);
-	if (!payload) return emptyProposalApplication();
+	if (!payload) {
+		if (input.proposal.proposedBy === 'gm_character_draft' || asRecord(asRecord(input.proposal.metadata).sourceDraft).mode === 'evidence_only') {
+			return {
+				appliedCount: 0,
+				appliedOperations: [],
+				affectedEntityIds: [],
+				metadata: {
+					forceStatus: 'rejected',
+					rejectionReason: 'Malformed GM character draft payload cannot become canon.',
+				},
+			};
+		}
+		return emptyProposalApplication();
+	}
 	if (isCharacterTitleOnlyName(payload.name)) {
 		return {
 			appliedCount: 0,
@@ -415,17 +485,28 @@ async function applyCharacterReferenceProposal(tx: Tx, input: {
 		};
 	}
 
-	const candidateEntityId = `entity_${stableIdSegment(payload.name)}`;
+	const candidateIdentity = input.proposal.proposedBy === 'gm_character_draft'
+		? `${input.storyId}_${input.proposal.id}`
+		: `${input.storyId}_${payload.name}`;
+	const candidateEntityId = `entity_${stableIdSegment(candidateIdentity)}`;
 	const existingRows = await tx.select().from(entities)
-		.where(and(eq(entities.storyId, input.storyId), eq(entities.type, 'character')))
-		.limit(240);
+		.where(and(eq(entities.storyId, input.storyId), eq(entities.type, 'character')));
 	const existingAliasMap = await loadEntityAliases(tx, input.storyId, existingRows.map((row) => row.id));
-	const normalizedPayloadName = normalizeAlias(payload.name);
-	const exactExisting = existingRows.find((row) => {
-		if (normalizeAlias(row.name) === normalizedPayloadName) return true;
-		return (existingAliasMap.get(row.id) ?? []).some((alias) => normalizeAlias(alias) === normalizedPayloadName);
-	});
-	const containedMatches = exactExisting ? [] : existingRows.filter((row) => {
+	const normalizedPayloadName = normalizeIdentityName(payload.name);
+	const exactMatches = normalizedPayloadName ? existingRows.filter((row) => {
+		if (normalizeIdentityName(row.name) === normalizedPayloadName) return true;
+		return (existingAliasMap.get(row.id) ?? []).some((alias) => normalizeIdentityName(alias) === normalizedPayloadName);
+	}) : [];
+	if (exactMatches.length > 1) return { ...emptyProposalApplication(), metadata: { forceStatus: 'rejected', rejectionReason: `Multiple canonical characters match "${payload.name}". Resolve the identity before applying this candidate.` } };
+	const exactExisting = exactMatches[0];
+	const sourceDraft = asRecord(asRecord(input.proposal.metadata).sourceDraft);
+	const sourceOnly = sourceDraft.mode === 'evidence_only' || sourceDraft.mode === 'manual_review';
+	if (sourceOnly && sourceDraft.targetEntityId) {
+		if (exactExisting?.id !== sourceDraft.targetEntityId || exactExisting.serverVersion !== sourceDraft.targetServerVersion) throw new Error('The exact character target changed. Rebuild this source draft before approving it.');
+	} else if (sourceOnly && exactExisting) {
+		throw new Error('A matching character now exists. Rebuild this source draft to review an update to that exact character.');
+	}
+	const containedMatches = exactExisting || sourceOnly ? [] : existingRows.filter((row) => {
 		if (containedNameMatch(row.name, payload.name)) return true;
 		return (existingAliasMap.get(row.id) ?? []).some((alias) => containedNameMatch(alias, payload.name));
 	});
@@ -434,7 +515,10 @@ async function applyCharacterReferenceProposal(tx: Tx, input: {
 	const sourceEntryIds = unique([...(existing?.sourceEntryIds ?? []), ...(input.proposal.sourceEntryIds ?? [])]);
 	const sourceEventIds = unique([...(existing?.sourceEventIds ?? []), ...(input.proposal.sourceEventIds ?? [])]);
 	const sourcePatchIds = unique([...(existing?.sourcePatchIds ?? []), ...(input.proposal.sourcePatchIds ?? []), input.proposal.id]);
-	const state = existing ? mergeCharacterReferenceState(asRecord(existing.state), payload.state) : payload.state;
+	const chapterState = hasPopulatedCharacterCandidate(input.proposal) && !asString(payload.state.bio).trim()
+		? { ...payload.state, bio: payload.description ?? '' }
+		: payload.state;
+	const state = existing ? mergeCharacterReferenceState(asRecord(existing.state), chapterState) : chapterState;
 	const metadata = {
 		...asRecord(existing?.metadata),
 		createdFrom: existing ? asRecord(existing?.metadata).createdFrom : 'character_reference_review',
@@ -444,7 +528,7 @@ async function applyCharacterReferenceProposal(tx: Tx, input: {
 
 	if (existing) {
 		await tx.update(entities).set({
-			description: existing.description ?? payload.description,
+			description: sourceOnly ? payload.description ?? existing.description : existing.description ?? payload.description,
 			status: existing.status === 'inactive' ? 'active' : existing.status,
 			visibility: existing.visibility,
 			state,
@@ -479,7 +563,7 @@ async function applyCharacterReferenceProposal(tx: Tx, input: {
 		await saveCanonicalAliases(tx, {
 			storyId: input.storyId,
 			entityId,
-			aliases: [payload.name, ...payload.aliases],
+			aliases: [...(existingAliasMap.get(entityId) ?? []), payload.name, ...payload.aliases],
 			sourceEntryIds,
 			serverVersion: input.serverVersion,
 			now: input.now,
@@ -672,20 +756,48 @@ export async function addEntityAlias(input: {
 	};
 }
 
+/** Rewrite typed location pointers only; names, prose and source history remain intact. */
+export function remapLocationState(state: JsonRecord, from: string, to: string): JsonRecord {
+	const next = { ...state };
+	for (const key of ['currentLocationId', 'locationId']) if (next[key] === from) next[key] = to;
+	if (Array.isArray(next.connections)) next.connections = next.connections.map(value => {
+		const connection = asRecord(value);
+		return connection.targetLocationId === from ? { ...connection, targetLocationId: to } : value;
+	});
+	return next;
+}
+
 export async function mergeEntities(input: {
 	storyId: string;
 	keepEntityId: string;
 	mergeEntityId: string;
+	expectedVersion?: number;
 	reason?: string | null;
 }): Promise<JsonRecord> {
 	if (input.keepEntityId === input.mergeEntityId) throw new Error('Cannot merge an entity into itself.');
 	const db = getDb();
 	const now = nowIso();
 	const result = await db.transaction(async (tx) => {
+		const [story] = await tx.select().from(stories).where(eq(stories.id, input.storyId)).for('update').limit(1);
+		if (!story) throw new Error('Story not found.');
+		if (input.expectedVersion !== undefined && story.serverVersion !== input.expectedVersion) throw new Error('The story changed before this merge. Reload and review the records.');
 		const [keep] = await tx.select().from(entities).where(and(eq(entities.storyId, input.storyId), eq(entities.id, input.keepEntityId))).limit(1);
 		const [source] = await tx.select().from(entities).where(and(eq(entities.storyId, input.storyId), eq(entities.id, input.mergeEntityId))).limit(1);
 		if (!keep) throw new Error(`Keep entity not found: ${input.keepEntityId}`);
 		if (!source) throw new Error(`Merge entity not found: ${input.mergeEntityId}`);
+		if (keep.type !== source.type) throw new Error('Only entities of the same type can be merged.');
+		if (asRecord(source.metadata).mergedInto === keep.id) return { serverVersion: story.serverVersion, keepEntityId: keep.id, mergeEntityId: source.id, alreadyMerged: true };
+		if (keep.status !== 'active' || source.status !== 'active') throw new Error('Merge targets must be active canonical entities.');
+		if (keep.type === 'location') {
+			const places = await tx.select().from(entities).where(and(eq(entities.storyId, input.storyId), eq(entities.type, 'location')));
+			const edges = (await tx.select().from(relationships).where(and(eq(relationships.storyId, input.storyId), eq(relationships.type, 'part-of'))))
+				.filter(edge => isEffectiveContainment(edge, story.currentTurn))
+				.map(edge => ({ ...edge, sourceEntityId: edge.sourceEntityId === source.id ? keep.id : edge.sourceEntityId, targetEntityId: edge.targetEntityId === source.id ? keep.id : edge.targetEntityId }));
+			for (const edge of edges.filter(edge => edge.sourceEntityId === keep.id || edge.targetEntityId === keep.id)) {
+				if (edges.filter(parent => parent.sourceEntityId === edge.sourceEntityId).length > 1) throw new Error('Reconcile the location parents before merging these records.');
+				validateLocationParent({ storyId: input.storyId, childId: edge.sourceEntityId, parentId: edge.targetEntityId, turn: story.currentTurn, places: places.filter(place => place.id !== source.id), relationships: edges });
+			}
+		}
 
 		const serverVersion = await bumpStoryVersionTx(tx, input.storyId);
 		const aliasMap = await loadEntityAliases(tx, input.storyId, [keep.id, source.id]);
@@ -725,7 +837,7 @@ export async function mergeEntities(input: {
 			updatedAt: now,
 		}).where(and(eq(entities.storyId, input.storyId), eq(entities.id, keep.id)));
 		await tx.update(entities).set({
-			status: source.status === 'inactive' ? source.status : 'inactive',
+			status: 'inactive',
 			metadata: mergeRecords(asRecord(source.metadata), {
 				...asRecord(source.metadata),
 				mergedInto: keep.id,
@@ -744,6 +856,17 @@ export async function mergeEntities(input: {
 			serverVersion,
 			now,
 		});
+		if (keep.type === 'location') {
+			if (story.currentLocationId === source.id) await tx.update(stories).set({ currentLocationId: keep.id }).where(eq(stories.id, input.storyId));
+			const locatedEntities = await tx.select().from(entities).where(eq(entities.storyId, input.storyId));
+			for (const row of locatedEntities) {
+				if (row.id === source.id) continue; // Retain the retired record as historical evidence.
+				const state = row.id === keep.id ? mergedState : asRecord(row.state);
+				const remapped = remapLocationState(state, source.id, keep.id);
+				if (!isDeepStrictEqual(state, remapped)) await tx.update(entities).set({ state: remapped, serverVersion, updatedAt: now }).where(eq(entities.id, row.id));
+			}
+			await tx.update(factionResources).set({ locationId: keep.id, serverVersion, updatedAt: now }).where(and(eq(factionResources.storyId, input.storyId), eq(factionResources.locationId, source.id)));
+		}
 
 		const directEntityUpdates = [
 			{
@@ -770,10 +893,12 @@ export async function mergeEntities(input: {
 				rows: await tx.select().from(factions).where(eq(factions.storyId, input.storyId)),
 				apply: async (row: typeof factions.$inferSelect) => {
 					const nextMembers = replaceInArray(row.memberEntityIds, source.id, keep.id);
-					if (row.entityId !== source.id && !arrayChanged(row.memberEntityIds, nextMembers)) return;
+					const nextTerritories = replaceInArray(row.territoryIds, source.id, keep.id);
+					if (row.entityId !== source.id && !arrayChanged(row.memberEntityIds, nextMembers) && !arrayChanged(row.territoryIds, nextTerritories)) return;
 					await tx.update(factions).set({
 						entityId: row.entityId === source.id ? keep.id : row.entityId,
 						memberEntityIds: nextMembers,
+						territoryIds: nextTerritories,
 						serverVersion,
 						updatedAt: now,
 					}).where(eq(factions.id, row.id));
@@ -825,10 +950,14 @@ export async function mergeEntities(input: {
 				apply: async (row: typeof storyEvents.$inferSelect) => {
 					const nextActors = replaceInArray(row.actorEntityIds, source.id, keep.id);
 					const nextTargets = replaceInArray(row.targetEntityIds, source.id, keep.id);
-					if (!arrayChanged(row.actorEntityIds, nextActors) && !arrayChanged(row.targetEntityIds, nextTargets)) return;
+					const nextLocations = replaceInArray(row.locationIds, source.id, keep.id);
+					const nextLocation = row.locationId === source.id ? keep.id : row.locationId;
+					if (!arrayChanged(row.actorEntityIds, nextActors) && !arrayChanged(row.targetEntityIds, nextTargets) && !arrayChanged(row.locationIds, nextLocations) && nextLocation === row.locationId) return;
 					await tx.update(storyEvents).set({
 						actorEntityIds: nextActors,
 						targetEntityIds: nextTargets,
+						locationId: nextLocation,
+						locationIds: nextLocations,
 						serverVersion,
 						updatedAt: now,
 					}).where(eq(storyEvents.id, row.id));
@@ -866,9 +995,11 @@ export async function mergeEntities(input: {
 				rows: await tx.select().from(memoryNodes).where(eq(memoryNodes.storyId, input.storyId)),
 				apply: async (row: typeof memoryNodes.$inferSelect) => {
 					const nextEntities = replaceInArray(row.entityIds, source.id, keep.id);
-					if (!arrayChanged(row.entityIds, nextEntities)) return;
+					const nextLocation = row.locationId === source.id ? keep.id : row.locationId;
+					if (!arrayChanged(row.entityIds, nextEntities) && nextLocation === row.locationId) return;
 					await tx.update(memoryNodes).set({
 						entityIds: nextEntities,
+						locationId: nextLocation,
 						serverVersion,
 						updatedAt: now,
 					}).where(eq(memoryNodes.id, row.id));
@@ -941,7 +1072,7 @@ export async function mergeEntities(input: {
 			},
 			sourceEntity: {
 				...source,
-				status: source.status === 'inactive' ? source.status : 'inactive',
+				status: 'inactive',
 				metadata: mergeRecords(asRecord(source.metadata), {
 					mergedInto: keep.id,
 					mergedAt: now,
@@ -959,18 +1090,55 @@ export async function mergeEntities(input: {
 	};
 }
 
+async function lockCharacterDraftSources(tx: Tx, proposal: typeof patchProposals.$inferSelect): Promise<void> {
+	const sourceDraft = asRecord(asRecord(proposal.metadata).sourceDraft);
+	if (proposal.proposedBy !== 'gm_character_draft' && sourceDraft.mode !== 'evidence_only' && sourceDraft.mode !== 'manual_review' && !hasPopulatedCharacterCandidate(proposal)) throw new Error('Add a biography or build this character from story sources before approving it. The candidate is only a placeholder.');
+	if (proposal.proposedBy !== 'gm_character_draft' && sourceDraft.mode === 'manual_review') {
+		const payload = characterReferencePayload(proposal);
+		if (!payload || (!sourceDraft.targetEntityId && (!asString(payload.state.bio).trim() || asString(payload.state.bio).trim().toLowerCase() === payload.name.trim().toLowerCase()))) throw new Error('A manually reviewed candidate needs a substantive biography before it can become canon.');
+	}
+	if (sourceDraft.mode !== 'evidence_only') return;
+	const payload = characterReferencePayload(proposal);
+	const quotedFields = Array.isArray(sourceDraft.evidence) ? sourceDraft.evidence.map(asRecord) : [];
+	if (proposal.proposedBy !== 'gm_character_draft' && !sourceDraft.targetEntityId && (!payload || !asString(payload.state.bio).trim() || asString(payload.state.bio).trim().toLowerCase() === payload.name.trim().toLowerCase())) {
+		throw new Error('This source draft needs a substantive biography before creating a character. Edit and save one, or rebuild from story sources.');
+	}
+	if (!payload || !quotedFields.some((fact) => {
+		const value = fact.field === 'description' ? payload.description : payload.state[asString(fact.field)];
+		return typeof value === 'string' ? Boolean(value.trim()) : Array.isArray(value) && value.some((item) => typeof item === 'string' && item.trim());
+	})) throw new Error('This source candidate has no extracted character details. Build it from story sources before approving.');
+	const snapshot = asRecord(sourceDraft.sourceSnapshot);
+	if (!Array.isArray(snapshot.entries) || !Array.isArray(snapshot.events)) throw new Error('This source draft has no current evidence snapshot. Rebuild it before approving.');
+	const entryIds = snapshot.entries.map((row) => asString(asRecord(row).id)).filter(Boolean);
+	const eventIds = snapshot.events.map((row) => asString(asRecord(row).id)).filter(Boolean);
+	const entryRows = entryIds.length ? await tx.select().from(storyEntries).where(and(eq(storyEntries.storyId, proposal.storyId), inArray(storyEntries.id, entryIds))).orderBy(asc(storyEntries.id)).for('share') : [];
+	const eventRows = eventIds.length ? await tx.select().from(storyEvents).where(and(eq(storyEvents.storyId, proposal.storyId), inArray(storyEvents.id, eventIds))).orderBy(asc(storyEvents.id)).for('share') : [];
+	if (!isDeepStrictEqual(snapshot, characterDraftSourceSnapshot(entryRows, eventRows))) throw new Error('The quoted story sources changed. Rebuild this draft before approving it.');
+	if (typeof sourceDraft.targetEntityId === 'string') {
+		const [target] = await tx.select().from(entities).where(and(eq(entities.storyId, proposal.storyId), eq(entities.id, sourceDraft.targetEntityId))).for('share');
+		if (!target || target.serverVersion !== sourceDraft.targetServerVersion) throw new Error('The exact character target changed. Rebuild this source draft before approving it.');
+	}
+}
+
 export async function reviewPatchProposal(input: {
 	storyId: string;
 	proposalId: string;
 	decision: 'approved' | 'rejected';
 	reviewer?: string | null;
 	notes?: string | null;
+	expectedProposalVersion?: number;
 }): Promise<JsonRecord> {
 	const db = getDb();
 	const now = nowIso();
 	const result = await db.transaction(async (tx) => {
-		const [proposal] = await tx.select().from(patchProposals).where(and(eq(patchProposals.storyId, input.storyId), eq(patchProposals.id, input.proposalId))).limit(1);
-		if (!proposal) throw new Error(`Patch proposal not found: ${input.proposalId}`);
+		const [proposal] = await tx.select().from(patchProposals).where(and(
+			eq(patchProposals.storyId, input.storyId),
+			eq(patchProposals.id, input.proposalId),
+			inArray(patchProposals.status, ['pending', 'needs_review']),
+		)).for('update');
+		if (!proposal) throw new Error(`Patch proposal is missing or no longer pending: ${input.proposalId}`);
+		if (input.expectedProposalVersion !== undefined && proposal.serverVersion !== input.expectedProposalVersion) throw new Error('This proposal changed. Reload it before reviewing.');
+		if (input.decision === 'approved' && proposal.proposalType === 'character_reference_review') await lockCharacterDraftSources(tx, proposal);
 		const serverVersion = await bumpStoryVersionTx(tx, input.storyId);
 		let application = emptyProposalApplication();
 		if (input.decision === 'approved' && isDueFactionProjectProposal(proposal)) {
@@ -1102,7 +1270,22 @@ export async function applyChapterScribeCharacterContextProposals(input: {
 		const applications: JsonRecord[] = [];
 		const affectedEntityIds: string[] = [];
 		let appliedCount = 0;
-		for (const proposal of proposals) {
+		// Prefer the newest chapter when recovery has multiple drafts for an actor.
+		for (const proposal of proposals.sort((a, b) => Number(asRecord(b.metadata).chapterNumber ?? 0) - Number(asRecord(a.metadata).chapterNumber ?? 0))) {
+			const baseVersion = asRecord(proposal.metadata).characterUpdateBaseVersion;
+			if (typeof baseVersion === 'number') {
+				const [current] = await tx.select({ serverVersion: entities.serverVersion }).from(entities)
+					.where(and(eq(entities.storyId, input.storyId), eq(entities.id, proposal.targetRecordId))).for('update');
+				if (!current || current.serverVersion !== baseVersion) {
+					await tx.update(patchProposals).set({
+						status: 'needs_review',
+						metadata: { ...asRecord(proposal.metadata), staleReason: 'Character changed after refresh preparation; regenerate from current state.' },
+						updatedAt: now,
+					}).where(and(eq(patchProposals.storyId, input.storyId), eq(patchProposals.id, proposal.id)));
+					applications.push({ proposalId: proposal.id, status: 'needs_review', reason: 'stale_character_snapshot' });
+					continue;
+				}
+			}
 			const application = await applyCharacterContextUpdateProposal(tx, {
 				storyId: input.storyId,
 				proposal,

@@ -3,12 +3,16 @@ import {
 	retrievedMemoryPacketSchema,
 	syncPullResponseSchema,
 	syncPushResponseSchema,
+	storyEntriesAroundResponseSchema,
+	turnPreviewResponseSchema,
 	turnResponseSchema,
 	type MemoryRetrieveRequest,
 	type RetrievedMemoryPacket,
 	type SyncChange,
 	type SyncOperation,
+	type StoryEntriesAroundResponse,
 	type TurnRequest,
+	type TurnPreviewResponse,
 	type TurnResponse,
 } from '$lib/contracts/memory';
 import { engineCommandResponseSchema } from '$lib/contracts/engine';
@@ -59,7 +63,7 @@ async function postJson(url: string, payload: unknown): Promise<unknown> {
 	return response.json();
 }
 
-async function postEngineCommand(
+export async function postEngineCommand(
 	storyId: string,
 	command: string,
 	args: Record<string, unknown>,
@@ -95,13 +99,100 @@ export async function retrieveBackendMemory(
 	}
 }
 
-export async function processBackendTurn(request: TurnRequest): Promise<TurnResponse> {
-	return turnResponseSchema.parse(await postEngineCommand(
-		request.storyId,
-		'turn.submit',
-		request,
-		request.clientTurnId,
-	));
+export interface ProcessBackendTurnOptions {
+	signal?: AbortSignal;
+	onNarrationChunk?: (chunk: string) => void | Promise<void>;
+}
+
+export async function processBackendTurn(
+	request: TurnRequest,
+	options: ProcessBackendTurnOptions = {},
+): Promise<TurnResponse> {
+	const response = await fetch('/api/turn/stream', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(request),
+		signal: options.signal,
+	});
+	if (!response.ok) {
+		const body = await response.json().catch(() => ({})) as { error?: unknown; code?: unknown };
+		throw new TerminalRequestError(
+			typeof body.error === 'string' ? body.error : `Terminal request failed: ${response.status}`,
+			response.status,
+			typeof body.code === 'string' ? body.code : null,
+		);
+	}
+	if (!response.headers.get('content-type')?.includes('text/event-stream')) {
+		const raw = await response.json();
+		const commandResponse = engineCommandResponseSchema.safeParse(raw);
+		if (commandResponse.success) {
+			if (commandResponse.data.status !== 'succeeded') {
+				throw new TerminalRequestError(
+					commandResponse.data.error ?? `Engine command failed: ${commandResponse.data.command}`,
+					502,
+					'ENGINE_COMMAND_FAILED',
+				);
+			}
+			return turnResponseSchema.parse(commandResponse.data.result);
+		}
+		return turnResponseSchema.parse(raw);
+	}
+	if (!response.body) throw new TerminalRequestError('Terminal turn stream returned no response body.', 502, 'EMPTY_TURN_STREAM');
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = '';
+	let completed: TurnResponse | null = null;
+	const handleFrame = async (frame: string) => {
+		let event = 'message';
+		const data: string[] = [];
+		for (const line of frame.split('\n')) {
+			if (line.startsWith('event:')) event = line.slice(6).trim();
+			else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+		}
+		if (data.length === 0) return;
+		const payload = JSON.parse(data.join('\n')) as Record<string, unknown>;
+		if (event === 'narration.chunk' && typeof payload.text === 'string') {
+			await options.onNarrationChunk?.(payload.text);
+		} else if (event === 'done') {
+			completed = turnResponseSchema.parse(payload);
+		} else if (event === 'error') {
+			throw new TerminalRequestError(
+				typeof payload.error === 'string' ? payload.error : 'Terminal turn stream failed.',
+				502,
+				'TURN_STREAM_FAILED',
+			);
+		}
+	};
+
+	while (true) {
+		const { value, done } = await reader.read();
+		buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
+		let boundary = buffer.indexOf('\n\n');
+		while (boundary >= 0) {
+			const frame = buffer.slice(0, boundary).trim();
+			buffer = buffer.slice(boundary + 2);
+			if (frame) await handleFrame(frame);
+			boundary = buffer.indexOf('\n\n');
+		}
+		if (done) break;
+	}
+	if (buffer.trim()) await handleFrame(buffer.trim());
+	if (!completed) throw new TerminalRequestError('Terminal turn stream ended before a final response.', 502, 'INCOMPLETE_TURN_STREAM');
+	return completed;
+}
+
+export async function previewBackendTurn(request: TurnRequest): Promise<TurnPreviewResponse> {
+	const raw = await postEngineCommand(request.storyId, 'turn.preview', request as unknown as Record<string, unknown>, request.clientTurnId);
+	return turnPreviewResponseSchema.parse(raw);
+}
+
+export async function fetchBackendEntriesAround(storyId: string, position: number, radius = 2): Promise<StoryEntriesAroundResponse> {
+	const raw = await postEngineCommand(storyId, 'campaign.entriesAround', {
+		position: Math.trunc(position),
+		radius: Math.max(0, Math.min(100, Math.trunc(radius))),
+	});
+	return storyEntriesAroundResponseSchema.parse(raw);
 }
 
 export async function runBackendWorldSimTick(story: Story): Promise<Record<string, unknown> | null> {
@@ -110,6 +201,21 @@ export async function runBackendWorldSimTick(story: Story): Promise<Record<strin
 		localVersion: story.serverVersion ?? 0,
 		force: true,
 	}) as Promise<Record<string, unknown>>;
+}
+
+export async function saveBackendPlotEdit(story: Story, edit: import('$lib/contracts/plotEditing').PlotEdit) {
+	if (!story.serverStoryId) throw new Error('This action requires a backend story.');
+	return postEngineCommand(story.serverStoryId, 'plot.edit', edit as unknown as Record<string, unknown>);
+}
+
+export async function fetchBackendCommitments(story: Story) {
+	if (!story.serverStoryId) throw new Error('This editor requires a backend story.');
+	return postEngineCommand(story.serverStoryId, 'plot.commitments', {}) as Promise<{ serverVersion: number; agreements: (import('$lib/types').Agreement & { deleted: boolean })[]; schemes: (import('$lib/types').Scheme & { deleted: boolean })[] }>;
+}
+
+export async function retireBackendPlot(story: Story, serverVersion: number) {
+	if (!story.serverStoryId) throw new Error('This action requires a backend story.');
+	return postEngineCommand(story.serverStoryId, 'plotBrain.retire', { serverVersion, reason: 'Retired from the Plot Director editor.', quietTurns: 5 });
 }
 
 export async function runBackendPlotBrainPlan(
@@ -121,6 +227,7 @@ export async function runBackendPlotBrainPlan(
 		currentWorldTime?: string | null;
 		includeSecret?: boolean;
 		frameId?: string;
+		replacePendingFrameId?: string;
 	} = {},
 ): Promise<Record<string, unknown> | null> {
 	if (!story.serverStoryId) return null;
@@ -131,6 +238,7 @@ export async function runBackendPlotBrainPlan(
 		currentWorldTime: options.currentWorldTime ?? null,
 		includeSecret: options.includeSecret ?? true,
 		...(options.frameId ? { frameId: options.frameId } : {}),
+		...(options.replacePendingFrameId ? { replacePendingFrameId: options.replacePendingFrameId } : {}),
 	}) as Promise<Record<string, unknown>>;
 }
 

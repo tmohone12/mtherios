@@ -23,6 +23,7 @@ vi.mock('$lib/server/db/client', () => ({
 }));
 
 vi.mock('$lib/server/jobs/outbox', () => ({
+	enqueueBackendJob: vi.fn().mockResolvedValue('job_scene'),
 	enqueueImportProjectionJobs: vi.fn(),
 	enqueueStoryVaultSyncJob: dbMocks.enqueueStoryVaultSyncJob,
 	enqueueTurnProjectionJobs: vi.fn(),
@@ -40,7 +41,7 @@ vi.mock('$lib/server/engine/canonicalSearch', () => ({
 	searchCanonicalWorld: vi.fn().mockResolvedValue({ results: [] }),
 }));
 
-import { assertSyncOpReplayMatches, normalizeBootstrapOptions, revertToContextCheckpoint, updateBackendShelf, upsertBackendChapterFromLocal, upsertBackendEntityFromEntry } from './canonical';
+import { assertSyncOpReplayMatches, listBackendShelves, listBackendStories, normalizeBootstrapOptions, restoreBackendStory, revertToContextCheckpoint, updateBackendShelf, upsertBackendChapterFromLocal, upsertBackendEntityFromEntry } from './canonical';
 
 type PatchProposalRow = typeof patchProposals.$inferSelect;
 
@@ -103,12 +104,14 @@ function createDbMock(options: {
 	entityRows?: Array<Record<string, unknown>>;
 	chapterRows?: Array<Record<string, unknown>>;
 	shelfRows?: Array<Record<string, unknown>>;
+	storyRows?: Array<Record<string, unknown>>;
+	storyUpdateReturning?: Array<Record<string, unknown>>;
 } = {}) {
 	const insertCalls: Array<{ table: unknown; value: Record<string, unknown> }> = [];
 	const updateCalls: Array<{ table: unknown; value: Record<string, unknown> }> = [];
 
 	function rowsFor(table: unknown): unknown[] {
-		if (table === stories) return [{ id: 'story_1', serverVersion: 1 }];
+		if (table === stories) return options.storyRows ?? [{ id: 'story_1', serverVersion: 1 }];
 		if (table === entities) return options.entityRows ?? [];
 		if (table === chapters) return options.chapterRows ?? [];
 		if (table === entityAliases) return [];
@@ -150,7 +153,7 @@ function createDbMock(options: {
 					updateCalls.push({ table, value });
 					return {
 						returning: vi.fn().mockResolvedValue(table === stories
-							? [{ serverVersion: 2 }]
+							? options.storyUpdateReturning ?? [{ serverVersion: 2 }]
 							: [value]),
 					};
 				}),
@@ -228,7 +231,7 @@ describe('backend bootstrap projection limits', () => {
 	it('defaults to bounded control-surface slices instead of broad history/world loads', () => {
 		expect(normalizeBootstrapOptions()).toEqual({
 			entryLimit: 80,
-			entityLimit: 120,
+			entityLimit: 200,
 			relationshipLimit: 200,
 			factionLimit: 80,
 			factionMembershipLimit: 160,
@@ -292,6 +295,21 @@ describe('backend shelf updates', () => {
 });
 
 describe('backend canonical entity writes', () => {
+	it('validates capability notes before making any database writes', async () => {
+		const { db, insertCalls, updateCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		await expect(upsertBackendEntityFromEntry('story_1', { id: 'player', type: 'character', name: 'Mira', state: { playerCapabilities: { abilities: ['x'.repeat(301)], buffs: [] } } })).rejects.toThrow();
+		expect(insertCalls).toEqual([]);
+		expect(updateCalls).toEqual([]);
+	});
+
+	it.each([{ abilities: ['Keen senses'], buffs: ['Cold ward until dawn'] }, { abilities: [], buffs: [] }])('persists capability lists including explicit clears %#', async playerCapabilities => {
+		const { db, insertCalls } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		await upsertBackendEntityFromEntry('story_1', { id: 'player', type: 'character', name: 'Mira', state: { playerCapabilities } });
+		expect(insertCalls.find(call => call.table === entities)?.value).toMatchObject({ state: { playerCapabilities } });
+	});
+
 	it('rejects title-only character names from local canon writes', async () => {
 		const { db } = createDbMock();
 		dbMocks.getDb.mockReturnValue(db);
@@ -607,5 +625,89 @@ describe('context checkpoint restore', () => {
 			serverVersion: 42,
 			reason: 'context-checkpoint-revert',
 		}));
+	});
+});
+
+describe('backend story archive lifecycle', () => {
+	it('excludes archived stories from shelf counts and canon totals', async () => {
+		const shelf = {
+			id: 'shelf_default',
+			name: 'Default Shelf',
+			slug: 'default_shelf',
+			description: null,
+			genre: null,
+			coverImageUrl: null,
+			settings: {},
+			metadata: {},
+			serverVersion: 1,
+			createdAt: '2026-08-01T00:00:00.000Z',
+			updatedAt: '2026-08-01T00:00:00.000Z',
+		};
+		const results = [
+			[shelf],
+			[shelf],
+			[
+				{ id: 'story_live', metadata: {} },
+				{ id: 'story_archived', metadata: { archived: true } },
+			],
+			[{ count: 7 }],
+			[{ count: 2 }],
+		];
+		let selectIndex = 0;
+		const db = {
+			select: vi.fn(() => {
+				const rows = results[selectIndex++] ?? [];
+				const chain: Record<string, unknown> = {};
+				chain.from = vi.fn(() => chain);
+				chain.where = vi.fn(() => chain);
+				chain.orderBy = vi.fn(() => chain);
+				chain.limit = vi.fn(() => Promise.resolve(rows));
+				chain.then = (resolve: (value: unknown) => unknown) => Promise.resolve(rows).then(resolve);
+				return chain;
+			}),
+		};
+		dbMocks.getDb.mockReturnValue(db);
+
+		const [summary] = await listBackendShelves();
+
+		expect(summary).toMatchObject({ storyCount: 1, canonRecordCount: 7, sourceCount: 2 });
+	});
+
+	it('listBackendStories excludes archived stories by default and includes them when asked', async () => {
+		const { db } = createDbMock({
+			storyRows: [
+				{ id: 'story_live', title: 'Live Campaign', metadata: {}, serverVersion: 3 },
+				{ id: 'story_archived', title: 'Old Campaign', metadata: { archived: true, archivedAt: '2026-08-01T00:00:00.000Z' }, serverVersion: 2 },
+			],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		const active = await listBackendStories();
+		expect(active.map((story) => story.id)).toEqual(['story_live']);
+
+		const withArchived = await listBackendStories({ includeArchived: true });
+		expect(withArchived.map((story) => story.id)).toEqual(['story_live', 'story_archived']);
+	});
+
+	it('restoreBackendStory clears archive metadata and bumps the server version', async () => {
+		const { db, updateCalls } = createDbMock({
+			storyUpdateReturning: [{ id: 'story_archived', serverVersion: 3 }],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		const result = await restoreBackendStory('story_archived');
+
+		expect(result).toEqual({ ok: true, storyId: 'story_archived', serverVersion: 3 });
+		const call = updateCalls.find((entry) => entry.table === stories);
+		expect(call).toBeDefined();
+	});
+
+	it('restoreBackendStory throws for an unknown story', async () => {
+		const { db } = createDbMock({
+			storyUpdateReturning: [],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		await expect(restoreBackendStory('story_missing')).rejects.toThrow('Story not found: story_missing');
 	});
 });

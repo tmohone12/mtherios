@@ -37,28 +37,42 @@ export interface RollCheckResult extends DiceResult {
  * Parse dice notation string into structured form.
  * Supports: 1d20, 2d6+3, 1d20-2, 1d20 advantage, 1d20+5 dis
  */
+function validateDice(dice: DiceNotation): DiceNotation {
+	if (!Number.isSafeInteger(dice.count) || dice.count < 1 || dice.count > 1000
+		|| !Number.isSafeInteger(dice.sides) || dice.sides < 1
+		|| !Number.isSafeInteger(dice.modifier)
+		|| !Number.isSafeInteger(dice.count * dice.sides + Math.abs(dice.modifier))) {
+		throw new Error('Invalid dice notation: use 1–1000 dice with positive sides and safe integer totals.');
+	}
+	const advantage = Boolean(dice.advantage && !dice.disadvantage);
+	const disadvantage = Boolean(dice.disadvantage && !dice.advantage);
+	if ((advantage || disadvantage) && dice.count !== 1) throw new Error('Advantage and disadvantage require a single die.');
+	return { ...dice, advantage, disadvantage };
+}
+
 export function parseDice(notation: string): DiceNotation {
 	const cleaned = notation.trim().toLowerCase();
-	const advMatch = cleaned.match(/\b(advantage|adv|disadvantage|dis)\b/);
-	const diceStr = cleaned.replace(/\b(advantage|adv|disadvantage|dis)\b/, '').trim();
+	const advantage = /\b(advantage|adv)\b/.test(cleaned);
+	const disadvantage = /\b(disadvantage|dis)\b/.test(cleaned);
+	const diceStr = cleaned.replace(/\b(advantage|adv|disadvantage|dis)\b/g, '').trim();
 
 	const match = diceStr.match(/^(\d+)?d(\d+)([+-]\d+)?$/);
 	if (!match) throw new Error(`Invalid dice notation: ${notation}`);
 
-	return {
+	return validateDice({
 		count: parseInt(match[1] || '1'),
 		sides: parseInt(match[2]),
 		modifier: parseInt(match[3] || '0'),
-		advantage: advMatch?.[1] === 'advantage' || advMatch?.[1] === 'adv',
-		disadvantage: advMatch?.[1] === 'disadvantage' || advMatch?.[1] === 'dis',
-	};
+		advantage,
+		disadvantage,
+	});
 }
 
 /**
  * Roll dice and return the result.
  */
 export function rollDice(notation: string | DiceNotation): DiceResult {
-	const dice = typeof notation === 'string' ? parseDice(notation) : notation;
+	const dice = typeof notation === 'string' ? parseDice(notation) : validateDice(notation);
 	const notationStr = typeof notation === 'string'
 		? notation.trim()
 		: `${dice.count}d${dice.sides}${dice.modifier ? (dice.modifier > 0 ? '+' : '') + dice.modifier : ''}`;
@@ -103,8 +117,9 @@ export function rollDice(notation: string | DiceNotation): DiceResult {
  * Roll a check against a DC.
  */
 export function rollCheck(notation: string, dc: number, ability = '', description = ''): RollCheckResult {
+	if (!Number.isSafeInteger(dc) || dc < 0) throw new Error('Invalid check difficulty: use a nonnegative integer.');
 	const result = rollDice(notation);
-	const critical = result.sides === 20
+	const critical = result.sides === 20 && (result.rolls.length === 1 || result.advantage || result.disadvantage)
 		? (result.natural === 20 ? 'success' : result.natural === 1 ? 'failure' : null)
 		: null;
 
@@ -150,7 +165,7 @@ export function parseRollMarker(text: string): {
 	marker: { notation: string; dc: number; ability: string; description: string } | null;
 	postText: string;
 } {
-	const match = text.match(/\{\{roll:([^:]+):(\d+):([^:]*):([^}]*)\}\}/);
+	const match = text.match(/\{\{roll:([^:]+):\s*(?:DC\s*)?(\d+)\s*:([^:]*):([^}]*)\}\}/i);
 	if (!match) return { preText: text, marker: null, postText: '' };
 
 	const idx = match.index!;

@@ -149,6 +149,7 @@ function makeChunk(page, content, chunkIndex, chunkCount) {
 		id: hashToUuid(`${page.relPath}:${chunkIndex}`),
 		content,
 		payload: {
+			kind: 'wiki_chunk',
 			path: page.relPath,
 			title: page.title,
 			layer: page.layer,
@@ -190,20 +191,21 @@ export async function loadVault(rootDir) {
 	const files = await walkMarkdownFiles(root);
 	const pages = [];
 
-	for (const absPath of files) {
+	// Bound filesystem pressure while retaining the sorted order used for links.
+	for (let offset = 0; offset < files.length; offset += 16) {
+		const batch = await Promise.all(files.slice(offset, offset + 16).map(async absPath => {
 		let raw;
 		let info;
 		try {
-			raw = await readFile(absPath, 'utf8');
-			info = await stat(absPath);
+			[raw, info] = await Promise.all([readFile(absPath, 'utf8'), stat(absPath)]);
 		} catch (error) {
-			if (error?.code === 'ENOENT') continue;
+			if (error?.code === 'ENOENT') return null;
 			throw error;
 		}
 		const relPath = toSlashPath(path.relative(root, absPath));
 		const { frontmatter, body } = parseFrontmatter(raw);
 		const title = titleFromMarkdown(relPath, body, frontmatter);
-		pages.push({
+		return {
 			absPath,
 			relPath,
 			raw,
@@ -216,7 +218,9 @@ export async function loadVault(rootDir) {
 			links: extractWikilinks(body),
 			backlinks: [],
 			updatedAt: info.mtime.toISOString(),
-		});
+		};
+		}));
+		pages.push(...batch.filter(Boolean));
 	}
 
 	const titleToPath = new Map();

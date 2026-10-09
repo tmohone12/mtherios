@@ -1,0 +1,2463 @@
+{
+  "story": {
+    "id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+    "client_story_id": "f22c47bd-8b1f-489b-ae97-0ef38f2e1207",
+    "title": "Veil",
+    "description": "Veil follows Aurion Belaerys from his 296 AC eastern expedition to his established rule, after the two-year time skip, as Archon over Volantis, Lys, Myr, and Tyrosh.",
+    "genre": "Feudal Dark Gritty — Canon ASOIAF",
+    "mode": "adventure",
+    "settings": {
+      "pov": "first",
+      "tone": "Feudal Dark Gritty",
+      "tense": "present",
+      "maxTokens": 8192,
+      "seedStage": "veil_aurion_leng_296",
+      "plotPolicy": "Create optional pressure and consequences, never scripted outcomes or forced player choices.",
+      "temperature": 1,
+      "spoilerCutoff": "start of 296 AC",
+      "identityPolicy": {
+        "trueName": "Aegon Targaryen",
+        "publicName": "Aurion Belaerys",
+        "initialKnowers": [
+          "veil_entity_aurion_belaerys",
+          "veil_entity_triarch_vaeron_belaerys"
+        ]
+      },
+      "playerEntityId": "veil_entity_aurion_belaerys",
+      "resourceBaseline": {
+        "wealth": "extraordinary",
+        "directShips": 20,
+        "directTroops": 1000,
+        "houseTradeReach": "worldwide"
+      },
+      "openingTranscript": "seeded_landing_scene",
+      "startingLocationId": "veil_entity_leng_yi_harbor"
+    },
+    "header_prompt": "CURRENT VEIL CANON — after the two-year time skip, 299 AC.\nIn the current Veil campaign, after the two-year time skip, Aurion Belaerys is the established Archon and ruler of Volantis, Lys, Myr, and Tyrosh. He took Volantis by rallying the Tigers and completed the takeover of the Three Daughters. His appointed triarchs, including Vaeron Belaerys, administer routine affairs under his authority.\nVaeron is Aurion's foster father and appointed administrator of treasury and fleet. The old triarchal government, house-arrest writs, Hall seals restricting his fleet or movement, and requirements for the former Hall's permission to fly no longer govern Aurion. His appointed officials handle routine matters competently under him; he decides policy and when his personal attention is required.\nThe fully grown Gaelyx and two newly hatched dragons are established. Aurion left Yin; Mei-Lin and their child are alive there, and Bu Gai annulled the marriage. Bu Gai governs Yi Ti, not Aurion's four-city domain. Past claims that his wife and child died are earlier reports, not their current condition.\nThe takeover is an established achievement, not an unproved boast or an objective to win again. Honor the player's explicit authorial corrections at transcript positions 2120, 2126, 2130, and 2132. Older summaries and imported book governments cannot undo them. Household non-heir status is distinct from Aurion's sovereign office. Opposition requires a new, concrete development with identifiable motives and means; disagreement alone does not remove his command, and officials do not gain an automatic veto by repeating a demand. Cooperation, completed orders, stable rule, and quiet are valid outcomes.\nAurion's last personal scene is at his chambers in Volantis. Parallel viewpoints in Yin or Dorne do not relocate him. Envoys and appointed officials may conduct delegated business; their titles do not restore the former Hall as an independent authority over the Archon. Keep future policies, travel, alliances, and personal choices in the player's hands.\n\nHISTORICAL OPENING BACKGROUND — the campaign began in 296 AC. These starting conditions explain the past and are superseded wherever current canon above records a change.\nGM PROMPT PACK: Canon ASOIAF, feudal dark gritty political fantasy, start of 296 AC.\n- The player is Aurion Belaerys, secretly Aegon Targaryen. Publicly he is the adopted Old Blood son of Triarch Vaeron Belaerys and is not House Belaerys's heir. Only Aurion and Vaeron initially know the Targaryen identity; never leak it into NPC knowledge without evidence, discovery, or deliberate revelation.\n- Aurion is a true sword prodigy. He begins at Leng Yi with exactly 1,000 men and 20 ships under his direct command, an abundant war chest, and access to House Belaerys's immense worldwide trade network. These assets are canon. Do not arbitrarily destroy or remove them to manufacture difficulty; use their upkeep, visibility, logistics, and political consequences honestly.\n- Leng is independent and matriarchal under a god-empress. Her two husbands are traditionally one Lengii and one YiTish; one commands the armies and the other the fleets. Leng Yi and Leng Ma are YiTish-descended northern cities; Turrani represents native southern Lengii power. Yi Ti is ancient, vast, and politically divided among rival imperial claimants.\n- Preserve player agency. Create courts, negotiations, rivals, opportunities, danger, and consequences, but never choose Aurion's actions, words, loyalties, or revelations.\n- Power is social and material before it is spectacular: titles, trade, credit, fleets, food, hostages, oaths, marriage, legitimacy, reputation, roads, weather, and distance matter. Magic and ancient horror remain rare, ominous, and difficult to prove.\n- Historical lore is context, not a script. Do not assume later main-series outcomes; the future emerges through play.",
+    "current_location_id": "entity_f879c54b-a838-4114-852b-0b4634fc9722",
+    "metadata": {
+      "source": "user_directive_veil_aurion_leng_start",
+      "plotBrain": {
+        "active": true,
+        "lastFrame": {
+          "id": "312b2ded-9e73-4b8d-8638-6faeff410b08",
+          "arcId": null,
+          "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+          "trigger": "scheduled_refresh",
+          "subplots": [
+            {
+              "kind": "subplot",
+              "title": "Smoke Over the Fish Market",
+              "summary": "A fire or smoke plume in a district near the fish market draws watchmen and suspicion. Whether accident, arson, or a signal, it demands investigation before it spreads—or before it is forgotten.",
+              "pressure": "medium",
+              "playerAgency": "world_driven",
+              "expectedPayoff": "this_arc",
+              "linkedSchemeIds": [],
+              "linkedThreadIds": [
+                "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_smoke_over_the_fish_market"
+              ],
+              "linkedFactionGoalIds": []
+            }
+          ],
+          "arcNumber": 0,
+          "createdAt": 1788801277314,
+          "mainPlots": [
+            {
+              "kind": "main_plot",
+              "title": "The Summer Sea Claim",
+              "summary": "Aurion's public command to make the Summer Sea his own sets Volantis on a collision course with Qarth, the Iron Fleet, and any other power that sails those waters. Diplomacy, naval buildup, or sudden confrontation will follow.",
+              "pressure": "medium",
+              "playerAgency": "world_driven",
+              "expectedPayoff": "this_arc",
+              "linkedSchemeIds": [],
+              "linkedThreadIds": [
+                "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_summer_sea_claim"
+              ],
+              "linkedFactionGoalIds": []
+            }
+          ],
+          "plotCards": [
+            {
+              "id": "plot_card_summer_sea_claim",
+              "goal": "Secure Volantene dominance over the Summer Sea through fleet expansion and strategic alliances.",
+              "kind": "main_plot",
+              "title": "The Summer Sea Claim",
+              "method": "Mobilize the Volantene fleet, send envoys to neutral ports, and gather intelligence on rival navies.",
+              "motive": "Fulfill the Archon's command and protect the growing trade empire.",
+              "stakes": "Control of the sea lanes between Volantis, Slaver's Bay, and Qarth; the wealth and security of the realm.",
+              "logline": "Aurion's bold declaration forces Volantis to prepare for a naval struggle that will define its reach.",
+              "urgency": "emerging",
+              "pressure": 60,
+              "clueTrail": [
+                {
+                  "clue": "A Qartheen merchant cog departs Volantis in haste, its captain paying double for a pilot who knows the back channels.",
+                  "truth": "Qarth is already aware of the declaration and is moving to protect its interests.",
+                  "delivery": "scene_detail",
+                  "visibility": "subtle",
+                  "evidenceRefs": []
+                }
+              ],
+              "sourceRefs": [
+                {
+                  "label": "Aurion's command to send word for a gathering and claim the Summer Sea.",
+                  "sourceId": "entry_65292015-abef-4bc3-8593-07b02562c41b",
+                  "sourceType": "entry"
+                }
+              ],
+              "visibility": "public",
+              "locationIds": [],
+              "pressureBeats": [
+                {
+                  "body": "A Qartheen delegation requests an audience, bearing gifts and veiled warnings about the cost of disturbing the status quo.",
+                  "title": "Qartheen Envoy Arrives",
+                  "urgency": "emerging",
+                  "delayTurns": 2,
+                  "factionIds": [
+                    "faction_entity_6f701f82-7eb2-42c1-acab-f5f0df39464d"
+                  ],
+                  "visibility": "public",
+                  "locationIds": [],
+                  "memoryImpact": {},
+                  "actorEntityIds": [],
+                  "targetEntityIds": [
+                    "veil_entity_aurion_belaerys"
+                  ]
+                }
+              ],
+              "storyThreadId": null,
+              "actorEntityIds": [
+                "veil_entity_aurion_belaerys"
+              ],
+              "failureOutcome": "",
+              "ignoredOutcome": "The declaration is ignored or dismissed, leaving Volantis without a clear path to dominance.",
+              "lifecycleStage": "seed",
+              "partialOutcome": "",
+              "successOutcome": "",
+              "actorFactionIds": [
+                "veil_faction_house_belaerys"
+              ],
+              "continuityRisks": [],
+              "targetEntityIds": [],
+              "targetFactionIds": [
+                "faction_entity_6f701f82-7eb2-42c1-acab-f5f0df39464d"
+              ],
+              "antiRailroadNotes": [
+                "Player may choose diplomacy over military buildup; the plot adapts to their decisions."
+              ],
+              "playerTouchpoints": [
+                "Attend the gathering and issue orders for naval readiness.",
+                "Receive reports of foreign reactions and decide on a course of action."
+              ],
+              "antagonistCandidateIds": [
+                "antag_qartheen_spicer"
+              ]
+            },
+            {
+              "id": "plot_card_smoke_fish_market",
+              "goal": "Uncover the cause of the smoke and any threat it represents to Volantene order.",
+              "kind": "subplot",
+              "title": "Smoke Over the Fish Market",
+              "method": "Dispatch trusted agents to investigate, question witnesses, and examine the site.",
+              "motive": "Maintain the Archon's grip on the city and prevent hidden enemies from exploiting chaos.",
+              "stakes": "The safety of the city and the perception of the Archon's control; a potential spark for wider unrest.",
+              "logline": "A suspicious fire near the fish market hints at unrest or a hidden message, demanding the Archon's attention.",
+              "urgency": "simmer",
+              "pressure": 40,
+              "clueTrail": [
+                {
+                  "clue": "A torn scrap of crimson cloth caught on a nail near the fire's origin, the same dye used by a minor Old Blood house.",
+                  "truth": "A disgruntled faction within the Old Blood may be testing the Archon's vigilance.",
+                  "delivery": "found_object",
+                  "visibility": "subtle",
+                  "evidenceRefs": []
+                }
+              ],
+              "sourceRefs": [
+                {
+                  "label": "Smoke Near the Fish Market observed during Aurion's return.",
+                  "sourceId": "event_21deda89-5284-4926-a681-bbca0796e227",
+                  "sourceType": "world_event"
+                }
+              ],
+              "visibility": "player_known",
+              "locationIds": [],
+              "pressureBeats": [
+                {
+                  "body": "The watchmen barring the side-streets send word that the fire is out but they found a broken oil jar and footprints leading toward the Rhoyne.",
+                  "title": "Watchmen Report",
+                  "urgency": "simmer",
+                  "delayTurns": 1,
+                  "factionIds": [],
+                  "visibility": "player_known",
+                  "locationIds": [],
+                  "memoryImpact": {},
+                  "actorEntityIds": [],
+                  "targetEntityIds": [
+                    "veil_entity_aurion_belaerys"
+                  ]
+                }
+              ],
+              "storyThreadId": null,
+              "actorEntityIds": [],
+              "failureOutcome": "",
+              "ignoredOutcome": "The smoke is dismissed as a kitchen fire, but the true cause festers unnoticed.",
+              "lifecycleStage": "seed",
+              "partialOutcome": "",
+              "successOutcome": "",
+              "actorFactionIds": [],
+              "continuityRisks": [],
+              "targetEntityIds": [],
+              "targetFactionIds": [],
+              "antiRailroadNotes": [
+                "Player may ignore the smoke; the subplot will simmer without forcing action."
+              ],
+              "playerTouchpoints": [
+                "Receive the initial report and decide whether to investigate personally or delegate.",
+                "Confront the responsible party if arson is proven."
+              ],
+              "antagonistCandidateIds": []
+            }
+          ],
+          "worldMood": {
+            "politicalTemperature": "tense"
+          },
+          "rumorSeeds": [],
+          "chapterRange": {
+            "to": 81,
+            "from": 74
+          },
+          "tensionSeeds": [],
+          "publicSummary": "Aurion returns to Volantis to a hero's welcome and immediately declares the Summer Sea must belong to his realm. As the city stirs with ambition, a column of smoke rises near the fish market—a possible omen or a deliberate act.",
+          "activationPlan": {
+            "rationale": "The Island's Waiting resolved with Nairah's choice and Aurion's departure. The Accord's Reckoning and Blood in Sunspear are distant and dormant. The stalled message thread remains ",
+            "activateNow": [
+              "plot_card_summer_sea_claim",
+              "plot_card_smoke_fish_market"
+            ],
+            "keepDormant": [],
+            "retireOrMerge": []
+          },
+          "strategicClocks": [],
+          "warPressureCard": null,
+          "schemeDirectives": [],
+          "factionOperations": [],
+          "factionGoalUpdates": [],
+          "narratorPromptCard": "STRATEGIC WORLD PRESSURE:\nAurion returns to Volantis to a hero's welcome and immediately declares the Summer Sea must belong to his realm. As the city stirs with ambition, a column of smoke rises near the fish market—a possible omen or a deliberate act.\nPolitical temperature: tense.\nKey plot pressure:\n- The Summer Sea Claim: Aurion's public command to make the Summer Sea his own sets Volantis on a collision course with Qarth, the Iron Fleet, and any other power that sails those waters. Diplomacy, naval buildup, or sudden confrontation will follow.\nUse as background pressure only. Do not reveal hidden plans without scene evidence or player investigation.",
+          "plotBrainWritePlan": {
+            "patchProposals": [],
+            "timelineEvents": [],
+            "storyThreadCreates": [],
+            "storyThreadUpdates": [
+              {
+                "reason": "Player left Naath and fast-forwarded to Volantis; the Naath arc is resolved.",
+                "status": "closed",
+                "threadId": "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_island_s_waiting_0494028186cb8512",
+                "description": "Aurion learned the island's truths, Nairah chose to stay, and he departed. The thread is complete.",
+                "significance": "major"
+              }
+            ]
+          },
+          "antagonistCandidates": [
+            {
+              "id": "antag_qartheen_spicer",
+              "fear": "",
+              "name": "A Qartheen Spicer Prince",
+              "role": "pressure_actor",
+              "method": "Dispatch agents to disrupt Volantene shipping and bribe port officials.",
+              "motive": "Preserve Qarth's dominance over the Jade Gates and Summer Sea trade routes.",
+              "agencyRisk": 40,
+              "woundOrNeed": "",
+              "evidenceRefs": [
+                {
+                  "label": "Court of a Thousand Gods has ancient claims and active intelligence networks.",
+                  "sourceId": "faction_entity_6f701f82-7eb2-42c1-acab-f5f0df39464d",
+                  "sourceType": "faction"
+                }
+              ],
+              "actorEntityId": null,
+              "dramaticScore": 65,
+              "actorFactionId": "faction_entity_6f701f82-7eb2-42c1-acab-f5f0df39464d",
+              "tensionSeedIds": [],
+              "escalationTrigger": "",
+              "hesitationTrigger": "",
+              "plausibilityScore": 70,
+              "lineTheyWillNotCross": ""
+            },
+            {
+              "id": "antag_iron_captain",
+              "fear": "",
+              "name": "A Reaver Captain of the Iron Fleet",
+              "role": "rival",
+              "method": "Raid outlying Volantene trade posts and capture ships for ransom.",
+              "motive": "Plunder the rich Volantene convoys and prove the Ironborn are the true lords of the sea.",
+              "agencyRisk": 50,
+              "woundOrNeed": "",
+              "evidenceRefs": [
+                {
+                  "label": "The Summer Sea declared, drawing attention from all maritime powers.",
+                  "sourceId": "event_a260280c-6ae0-4f45-ad6e-c274f7c5d4e7",
+                  "sourceType": "world_event"
+                }
+              ],
+              "actorEntityId": null,
+              "dramaticScore": 70,
+              "actorFactionId": null,
+              "tensionSeedIds": [],
+              "escalationTrigger": "",
+              "hesitationTrigger": "",
+              "plausibilityScore": 60,
+              "lineTheyWillNotCross": ""
+            }
+          ],
+          "continuityAssessment": {
+            "summary": "Aurion returns to Volantis to a hero's welcome and immediately declares the Summer Sea must belong to his realm. As the city stirs with ambition, a column of smoke rises near the fish market—a possible omen or a deliberate act.",
+            "staleThreads": [],
+            "contradictionsToReview": [],
+            "unresolvedContinuityRisks": []
+          },
+          "canonPatchSuggestions": [],
+          "worldEventSuggestions": [],
+          "hiddenStrategicSummary": "The declaration will provoke Qarth, the Ironborn, and possibly the Triarchy's remnants. House Belaerys consolidates through wardship exchanges while the expedition gathers intelligence on Yi Ti. The smoke may be a distraction or a message from internal rivals testing the Archon's attention.",
+          "fastWorldSimInstructions": "STRATEGIC WORLD PRESSURE:\nAurion returns to Volantis to a hero's welcome and immediately declares the Summer Sea must belong to his realm. As the city stirs with ambition, a column of smoke rises near the fish market—a possible omen or a deliberate act.\nPolitical temperature: tense.\nKey plot pressure:\n- The Summer Sea Claim: Aurion's public command to make the Summer Sea his own sets Volantis on a collision course with Qarth, the Iron Fleet, and any other power that sails those waters. Diplomacy, naval buildup, or sudden confrontation will follow.\nUse as background pressure only. Do not reveal hidden plans without scene evidence or player investigation."
+        },
+        "retiredAt": "2026-09-06T14:17:56.785Z",
+        "lastPlanAt": "2026-09-07T17:13:43.734Z",
+        "lastFrameId": "312b2ded-9e73-4b8d-8638-6faeff410b08",
+        "lastFrameTurn": 1247,
+        "plotCardCount": 2,
+        "retiredFrameId": "6d94c90b-dd9b-4530-9032-4e28ab4e2101",
+        "retirementReason": "Replaced obsolete superior-Triarch pressure with established four-city government after the user's explicit continuity correction.",
+        "retiredPlotDirectives": [
+          "The Water Tithe at the Long Descent",
+          "The Watcher Follows the Water",
+          "Aurion's free water and food offering draws Asshai's harbor elders and rival importers into a contest over market access before his ships can unload.",
+          "The palace watcher turns from the keeper's empty door to the harbor, using the water trade as cover to confirm Aurion's identity and signal the intercept.",
+          "Unsupported Azure Throne intelligence operation against House Belaerys copied from a cancelled auto-tag faction event",
+          "The Dragon's Answer",
+          "The Triarchs censure, arrest, or impose humiliating restrictions on the already reigning Archon."
+        ]
+      },
+      "importedAt": "2026-08-31T17:44:23.220Z",
+      "importedFrom": "terminal_world_database",
+      "playerEntityId": "veil_entity_aurion_belaerys",
+      "canonicalRepair": {
+        "kind": "emperor_offer_rewind",
+        "appliedAt": "2026-08-31T17:34:32.314Z",
+        "throughTurn": 254,
+        "recoveryExport": "exports/veil-pre-emperor-reset-20260831-124331.mtherios.json",
+        "throughPosition": 514,
+        "fromServerVersion": 870
+      },
+      "sceneCheckpoint": {
+        "id": "scene_story_52d7c651-0b16-4b91-890d-e7f226f7926b_d3abeb87b6f5254840309e97f2b1be6e",
+        "pov": "primary",
+        "notes": [
+          {
+            "kind": "last_beat",
+            "text": "Ahead, the colonnade has gone quieter, and every face has turned toward the open space of the courtyard, waiting to see which way the truth will walk.",
+            "position": 2495,
+            "sourceEntryId": "narration_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6"
+          },
+          {
+            "kind": "statement",
+            "text": "You do not stop walking.",
+            "position": 2495,
+            "sourceEntryId": "narration_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6"
+          },
+          {
+            "kind": "statement",
+            "text": "The words leave you as your boots strike the marble, and they land with the flat certainty of a seal pressed into hot wax.",
+            "position": 2495,
+            "sourceEntryId": "narration_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6"
+          },
+          {
+            "kind": "statement",
+            "text": "\"It is true.\"",
+            "position": 2495,
+            "sourceEntryId": "narration_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6"
+          }
+        ],
+        "scene": "🕰️ time 09:33",
+        "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+        "version": 1,
+        "branchId": null,
+        "createdAt": "2026-09-07T19:21:36.338Z",
+        "sourceEnd": 2495,
+        "locationId": "entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587",
+        "projection": {
+          "factIds": [],
+          "beliefIds": [],
+          "commitments": [],
+          "participants": [],
+          "completedBeats": [
+            {
+              "type": "reveal",
+              "title": "It is true",
+              "sourceEventId": "event_3e0d0404-5912-4b8b-9596-d08a939f53f3",
+              "sourceEntryIds": [
+                "narration_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6"
+              ]
+            }
+          ],
+          "compilerVersion": "scene-projection-v1",
+          "unresolvedActions": []
+        },
+        "sourceHash": "d3abeb87b6f5254840309e97f2b1be6e",
+        "sourceStart": 2494,
+        "sourceEntryIds": [
+          "entry_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6",
+          "narration_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6"
+        ]
+      },
+      "startingEventId": "veil_event_arrival_leng_001",
+      "playerReputation": "The city received its Archon as returning weather itself — hundreds followed him to the gate unbidden, crowds packed the Long Bridge colonnades, guards threw the postern wide, and horns sounded from both banks to proclaim his return.",
+      "foundationApplied": true,
+      "loreIntegrityRepairs": {
+        "veil_lore_integrity_v1": {
+          "applied": true,
+          "appliedAt": "2026-09-01T02:44:07.514Z",
+          "backupPath": "E:\\DEV\\Projects\\mtherios-master\\exports\\repairs\\veil-live-lore-integrity\\2026-09-01T02-44-07-537Z-v1007",
+          "checkpointId": "checkpoint_veil_lore_integrity_v1_v1007",
+          "serverVersion": 1008,
+          "retiredFrameId": "f891112a-7e8f-4f74-a632-f312aa226d75",
+          "supersededJobIds": [],
+          "correctionEntryId": "entry_8d65e584-b90d-4228-a452-53918f963c08",
+          "supersededJobCount": 0,
+          "previousServerVersion": 1007,
+          "deletedCampaignFileIds": [],
+          "deletedCampaignFileCount": 0
+        },
+        "veil_lore_integrity_v2": {
+          "reason": "Remove stale morning and before-dawn promise labels left behind by the v1 chapter projection repair.",
+          "applied": true,
+          "memoryId": "mem_chapter_chapter_entry_d33faa63_e50b_43d8_8760_3b494a9d41ee_narration_e10ac3ec_3482_4f0d_af75_391fe576a3a7",
+          "appliedAt": "2026-09-01T02:59:06.101Z",
+          "chapterId": "chapter_entry_d33faa63_e50b_43d8_8760_3b494a9d41ee_narration_e10ac3ec_3482_4f0d_af75_391fe576a3a7",
+          "backupPath": "E:\\DEV\\Projects\\mtherios-master\\exports\\repairs\\veil-live-lore-integrity\\2026-09-01T02-59-06-102Z-v1013-followup",
+          "checkpointId": "checkpoint_veil_lore_integrity_v2_v1013",
+          "serverVersion": 1014,
+          "previousServerVersion": 1013
+        },
+        "veil_lore_integrity_v3": {
+          "reason": "Remove remaining ceremony deadline poison and retire the source-free Valyrian auto-tag faction loop that contaminated an inactive Plot Director draft.",
+          "applied": true,
+          "entityId": "veil_entity_mei_lin",
+          "appliedAt": "2026-09-01T03:41:21.512Z",
+          "backupPath": "E:\\DEV\\Projects\\mtherios-master\\exports\\repairs\\veil-live-lore-integrity\\2026-09-01T03-41-21-515Z-v1017-v3",
+          "checkpointId": "checkpoint_veil_lore_integrity_v3_v1017",
+          "serverVersion": 1018,
+          "retiredFrameId": "4324e476-fc7d-4342-a319-3703879923ee",
+          "ceremonyEventIds": [
+            "event_10d4b251-308b-4bf6-a741-d73283a79134",
+            "event_3097e94e-5206-45cb-b64c-70dc703752f4",
+            "event_ae992f91-94c2-4d3e-9263-e3056e14756f"
+          ],
+          "previousServerVersion": 1017,
+          "retiredAutoTagEventIds": [
+            "event_world_tick_story_52d7c651_0b16_4b91_890d_e7f226f7926b_faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_valyrian_protect_and_advance_valyrian_s_interests_de09297783fc",
+            "event_faction_signal_event_world_tick_story_52d7c651_0b16_4b91_890d_e7f226f7926b_faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_valyrian_protect_and_advance_val_1161d0979894"
+          ],
+          "retiredAutoTagMemoryIds": [
+            "mem_faction_pressure_faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_azure_throne",
+            "mem_faction_pressure_faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_yi_ti",
+            "mem_world_tick_event_world_tick_story_52d7c651_0b16_4b91_890d_e7f226f7926b_faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_valyrian_protect_and_advance_valyrian_s_interests_de09297783fc",
+            "mem_faction_pressure_faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_valyrian"
+          ]
+        }
+      },
+      "authorityReconciliation": {
+        "backupPath": "data/exports/veil-leadership-repair-20260906/before.mtherios.json",
+        "repairedAt": "2026-09-06T14:17:56.785Z",
+        "sourceEntryIds": [
+          "entry_655dc5a5-43d3-4963-8de3-848e29884c62",
+          "entry_e0092468-41b1-4e5e-81d0-fc6429e1a7eb",
+          "entry_417898f1-41f2-4a8f-a79a-fac2d7518093",
+          "narration_417898f1-41f2-4a8f-a79a-fac2d7518093",
+          "entry_04beedbf-ca4d-46e9-b3b1-54aaf7654e29",
+          "narration_04beedbf-ca4d-46e9-b3b1-54aaf7654e29",
+          "entry_8b16d840-77ee-4b5c-9680-f3be3a597cee",
+          "narration_8b16d840-77ee-4b5c-9680-f3be3a597cee"
+        ],
+        "fromServerVersion": 2854,
+        "currentPoliticalState": "In the current Veil campaign, after the two-year time skip, Aurion Belaerys is the established Archon and ruler of Volantis, Lys, Myr, and Tyrosh. He took Volantis by rallying the Tigers and completed the takeover of the Three Daughters. His appointed triarchs, including Vaeron Belaerys, administer routine affairs under his authority."
+      },
+      "playerReputationUpdatedAt": "2026-09-07T17:05:31.090Z",
+      "playerReputationUpdatedTurn": 1246
+    },
+    "server_version": 3339,
+    "created_at": "2026-08-29T16:03:25.076Z",
+    "updated_at": "2026-09-07T21:51:22.043Z",
+    "current_turn": 1253,
+    "current_world_time": "Day Twenty-Seventh, Moon 6, 299 AC | 10:06",
+    "shelf_id": "shelf_1dfd6bc8-4375-438f-8a50-b2d8032146a6",
+    "role": "playable",
+    "timeline_mode": "overlay"
+  },
+  "flags": [
+    {
+      "id": "entity_f879c54b-a838-4114-852b-0b4634fc9722",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "location",
+      "name": "Yin — Hall of the Vermillion Steps",
+      "description": "Long, deep imperial hall with red pillars rising to an incense-hazed ceiling; the Azure Throne beneath the imperial canopy at the far end, lapis-inlaid armrests glittering; first platform below the throne where the groom waits; great doors that slide open at the herald's staff-strike.",
+      "status": "active",
+      "visibility": "player_known",
+      "state": {
+        "current": true,
+        "connections": []
+      },
+      "metadata": {
+        "entityResolver": {
+          "reason": "Strong resolver match for Yin — Hall of the Vermillion Steps.",
+          "decision": "update",
+          "candidates": [
+            {
+              "name": "Yin — Hall of the Vermillion Steps",
+              "type": "location",
+              "score": 1,
+              "signals": [
+                "exact:name",
+                "same:type"
+              ],
+              "entityId": "entity_f879c54b-a838-4114-852b-0b4634fc9722"
+            }
+          ],
+          "confidence": 1,
+          "matchedEntityId": "entity_f879c54b-a838-4114-852b-0b4634fc9722"
+        }
+      },
+      "source_entry_ids": [
+        "narration_ef978e9b-5320-4f77-851d-1b9e3c2c69e7",
+        "narration_e16050d9-dc8c-4538-8084-6f80622632fc",
+        "narration_1699b78b-a834-4686-9d77-b730e3e0e72a",
+        "narration_311d48de-e9cb-4bec-a652-d8d737395909",
+        "narration_6f02a1f7-40d1-455d-93a5-7ce0dd1ceadc",
+        "narration_2c709ba7-a58e-4d16-b853-f2a3cd3db964",
+        "narration_6a345295-061b-4204-8719-4464d71e0930",
+        "narration_d3821907-54af-4821-acb3-28263df7286d",
+        "narration_0864dc28-98ce-4657-837d-dd65d9525adc",
+        "narration_444bb468-f764-44a4-8b4d-a63ad35727f6",
+        "narration_95363732-bdff-465d-922b-b8e7adeb868f",
+        "narration_5cb2b5a0-158c-4e73-a02a-38d4ec1086a9",
+        "narration_70412079-7db5-4eaa-8dcf-78b278393d3b",
+        "narration_378be2a1-2720-4bca-8724-f1fd6c4c381a",
+        "narration_aed70029-82c6-4b7c-970e-fcb2a0796f85",
+        "narration_34db607b-c93c-49d8-817f-8f1d704bf3f9",
+        "narration_43c1a524-4e0a-4a91-89cc-ea48131d1a13",
+        "narration_3ccd7332-5edb-4763-a37b-e1f640b41065",
+        "narration_ae4a5ec7-bfc6-419f-8992-ad50fa34d6b9",
+        "narration_fb455981-113a-47d3-9784-7a2bf26ee915",
+        "narration_8b16d840-77ee-4b5c-9680-f3be3a597cee",
+        "narration_00ff36a1-120a-49e9-a404-c533792f7ad4",
+        "narration_07144073-1ec8-4665-a8b3-7802fae940ce",
+        "narration_344ca67b-e107-4235-a7d8-b364db0e35c3",
+        "narration_d100a88c-c0b3-41e6-9a47-f1805229604f",
+        "narration_6611c1df-6dbc-4395-a6cc-7eb806e34b4f",
+        "narration_52b3ccf4-ece2-4053-a2f0-dd96174a734f",
+        "narration_41ffa91d-e045-43ab-976b-44c404fe08c2",
+        "narration_05cab4c7-0663-490a-bd8e-b6a424d7b691",
+        "narration_0536543f-a6a6-4726-87fd-8667890dda10",
+        "narration_c506103e-c309-47c2-9b0b-a843df8b6661",
+        "narration_f354ed96-aff8-4bd6-ab27-0ff6a89d9f1d",
+        "narration_050492ec-5b1f-44a0-8015-9015500b306d",
+        "narration_517292e7-1ca0-4a33-9b21-5c6cc4439dc1",
+        "narration_a0b29002-4bec-483a-99af-b32f140f624f",
+        "narration_711e2d27-46d7-4d88-a739-987b38433d5c"
+      ],
+      "source_event_ids": [],
+      "source_patch_ids": [
+        "patch_d2bb21c6-02f7-4afe-a834-b9d204dea45b",
+        "patch_e19b3660-f000-4fbb-afa5-a8218cd0dba2",
+        "patch_286930c7-9364-4825-a6a1-760ebfa1325b",
+        "patch_3d440d92-cf08-4624-81a8-a4d5f7364381",
+        "patch_cf4a2cb1-5938-4eb3-a040-de03a6b734e5",
+        "patch_4c74a9bf-1991-4d08-a0e0-0193a59d1ea5",
+        "patch_00fcff38-19a8-46b7-a57f-c6de3f4a22e9",
+        "patch_9338cf6d-5a71-42a4-b2b2-2aa525a1f369",
+        "patch_e9f2ad67-d74c-4d01-9008-07bc603f3811",
+        "patch_7f611b86-a2ab-4cc1-9c99-d048f529b556",
+        "patch_844cecab-bf99-424e-a6eb-93eed3e44893",
+        "patch_7ad2da21-181b-45ad-9af9-bba507c4ae4c",
+        "patch_7696d13a-ba61-49aa-a9ef-b9062e02b933",
+        "patch_5e32d9cb-46e0-4532-a85c-46ac97ec28db",
+        "patch_8635c665-4edc-4c5e-b728-0ae8f03fee03",
+        "patch_87cb8341-84c1-49bc-93da-621adaa241d2",
+        "patch_c016ddda-68aa-4bbd-820e-74f18e0c90b5",
+        "patch_87d2bf55-a8ef-4e6a-8d5c-49d82a1cdaec",
+        "patch_5e6a680b-4a37-49be-b0a0-27c0879922fc",
+        "patch_0ddddbc5-2a15-4214-ba50-093c794b27da",
+        "patch_4e32df57-921b-413a-a05d-dc2548899016",
+        "patch_cfe07447-1781-486d-ada5-ae8ba0509dc1",
+        "patch_d7b008bf-368f-40d6-976e-433db45fc0d9",
+        "patch_32e76cb2-20a0-40f3-a922-b204a9fe8f31",
+        "patch_8d7713e0-e8d0-4c0b-bf68-fdb5621bfa12"
+      ],
+      "server_version": 3290,
+      "created_at": "2026-09-06T04:27:37.540Z",
+      "updated_at": "2026-09-07T19:39:17.275Z"
+    },
+    {
+      "id": "entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "location",
+      "name": "Volantis — the eastern palace, first great courtyard",
+      "description": "Marble courtyard inside the red-stone eastern palace gate with tall iron teeth; the dust of the street gives way to marble and the shadow of the palace's western wall. Servants pour from a colonnade with vases of water and folded cloth while a steward with a staff directs the commotion.",
+      "status": "active",
+      "visibility": "player_known",
+      "state": {
+        "current": false,
+        "connections": [
+          {
+            "direction": "west through the city streets",
+            "targetName": "Volantis — the eastern pier",
+            "travelTimeMinutes": 20
+          }
+        ],
+        "locationKind": "site"
+      },
+      "metadata": {
+        "entityResolver": {
+          "reason": "Strong resolver match for Volantis — the eastern palace, first great courtyard.",
+          "decision": "update",
+          "candidates": [
+            {
+              "name": "Volantis — the eastern palace, first great courtyard",
+              "type": "location",
+              "score": 1,
+              "signals": [
+                "exact:name",
+                "same:type",
+                "evidence:entry"
+              ],
+              "entityId": "entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587"
+            }
+          ],
+          "confidence": 1,
+          "matchedEntityId": "entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587"
+        }
+      },
+      "source_entry_ids": [
+        "narration_ffad85a7-c22d-4e8c-bf4c-6dcd8f352f6f",
+        "narration_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6"
+      ],
+      "source_event_ids": [],
+      "source_patch_ids": [
+        "patch_24c202ee-72f0-4e49-83fb-1a1c14da8ccd",
+        "patch_c9df9a3b-d532-41dd-a0e0-6a812a20e12f",
+        "location_patch_eca1c470-f06b-47fb-a5de-bfae3ad10183"
+      ],
+      "server_version": 3292,
+      "created_at": "2026-09-07T18:54:41.260Z",
+      "updated_at": "2026-09-07T21:29:48.413Z"
+    },
+    {
+      "id": "veil_entity_leng_yi_harbor",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "location",
+      "name": "Leng Yi — Foreign Harbor and Roadstead",
+      "description": "The principal northern port of Leng Yi, a YiTish-influenced city of tiled roofs, crowded quays, spice warehouses, imperial customs officials, and carefully supervised foreign anchorages. Aurion's twenty ships make landfall here.",
+      "status": "active",
+      "visibility": "player_known",
+      "state": {
+        "type": "location",
+        "region": null,
+        "current": false,
+        "terrain": "Jade Sea harbor beside humid jungle",
+        "connections": [],
+        "isCurrentLocation": true
+      },
+      "metadata": {
+        "source": "user_directive_veil_aurion_leng_start",
+        "entityResolver": {
+          "reason": "Strong resolver match for Leng Yi — Foreign Harbor and Roadstead.",
+          "decision": "update",
+          "candidates": [
+            {
+              "name": "Leng Yi — Foreign Harbor and Roadstead",
+              "type": "location",
+              "score": 1,
+              "signals": [
+                "exact:name",
+                "fuzzy:name",
+                "same:type"
+              ],
+              "entityId": "veil_entity_leng_yi_harbor"
+            },
+            {
+              "name": "Island of Leng",
+              "type": "location",
+              "score": 0.86,
+              "signals": [
+                "fuzzy:name",
+                "same:type"
+              ],
+              "entityId": "veil_scratch_asoiaf_entity_asoiaf_island_of_leng_0183"
+            }
+          ],
+          "confidence": 1,
+          "matchedEntityId": "veil_entity_leng_yi_harbor"
+        }
+      },
+      "source_entry_ids": [
+        "narration_ff147d23-eb31-4abe-bc81-ac9f46cb4907",
+        "narration_b7677709-f65d-4e4b-be05-8646ee7cf597",
+        "narration_ffa6a9c1-3b5e-4c9d-8155-1399d4e985cc",
+        "narration_9ebe5a7c-27b0-4881-9430-8322bdf0b548"
+      ],
+      "source_event_ids": [],
+      "source_patch_ids": [
+        "patch_a988ce10-4ba2-484d-b88d-02896ff83774",
+        "patch_cb2a52c6-176a-4100-a5c7-77c2ef4362db",
+        "patch_e37dc144-27e8-4abd-b7d5-04de2a52bb07"
+      ],
+      "server_version": 110,
+      "created_at": "2026-08-29T16:23:15.794Z",
+      "updated_at": "2026-08-29T21:08:02.101Z"
+    }
+  ],
+  "sources": [
+    {
+      "id": "narration_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6",
+      "position": 2495,
+      "metadata": {
+        "source": "server_turn",
+        "actionType": "free",
+        "engineCache": {
+          "hitCount": 3,
+          "segments": [
+            {
+              "hit": true,
+              "kind": "prompt_system",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:prompt_system:a5ab91cccc7f6300dac27830e92eb3104931d76f28db74ddd6aeafa29fc98a3e",
+              "hitCount": 300,
+              "missCount": 14,
+              "contentHash": "5c665f7d196178481b6f006a3dc31a8054ab5689183c0abfc282c8d3785faafb",
+              "invalidated": false,
+              "tokenEstimate": 3312,
+              "dependencyCount": 1
+            },
+            {
+              "hit": true,
+              "kind": "campaign_continuity",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:campaign_continuity:19a109bf679edc14de67ba4e8035db4b487f1378a646352c9f2ca7b25410734a",
+              "hitCount": 967,
+              "missCount": 68,
+              "contentHash": "edba4aaa6a16d745080254c076b4c2e9c7bcad10f8394c8e0ccbeda6cafbcf49",
+              "invalidated": false,
+              "tokenEstimate": 13733,
+              "dependencyCount": 27
+            },
+            {
+              "hit": true,
+              "kind": "tool_schema",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:tool_schema:893698a9adbabc5acbdb628c070818a5067b517ad280231da74c6902eb3b8913",
+              "hitCount": 1034,
+              "missCount": 1,
+              "contentHash": "2d49ddf4ba001ff863fa5c8df8049b9269b84d70b898099a2ea6526d838bf5cb",
+              "invalidated": false,
+              "tokenEstimate": 7,
+              "dependencyCount": 1
+            }
+          ],
+          "missCount": 0,
+          "tokenEstimate": 17052
+        },
+        "clientTurnId": "7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6",
+        "gmTurnReceipt": {
+          "steps": [
+            {
+              "id": "context",
+              "label": "Loading memory, timeline, and lore",
+              "detail": "dynamic context: clamped by model capacity",
+              "status": "skipped"
+            },
+            {
+              "id": "situation",
+              "label": "Reviewing situation and stakes",
+              "status": "succeeded"
+            },
+            {
+              "id": "dialogue",
+              "label": "Checking dialogue and character motives",
+              "status": "succeeded"
+            },
+            {
+              "id": "location",
+              "label": "Anchoring location and elapsed time",
+              "status": "succeeded"
+            },
+            {
+              "id": "plot",
+              "label": "Reviewing faction and plot pressure",
+              "status": "succeeded"
+            },
+            {
+              "id": "explore",
+              "label": "Exploring campaign records",
+              "detail": null,
+              "status": "skipped"
+            },
+            {
+              "id": "narrate",
+              "label": "Weaving the scene",
+              "status": "succeeded"
+            },
+            {
+              "id": "canon",
+              "label": "Reconciling durable canon",
+              "detail": "applied",
+              "status": "succeeded"
+            }
+          ],
+          "tools": [],
+          "changes": {
+            "events": 2,
+            "memoryNodes": 0,
+            "statePatches": 1
+          },
+          "context": {
+            "truncated": false,
+            "wikiChunks": 0,
+            "memoryNodes": 8,
+            "totalTokens": 22684,
+            "recentEntries": 50,
+            "timelineEvents": 8
+          },
+          "warningCount": 1,
+          "stateExtractionMode": "deferred",
+          "stateExtractionError": null,
+          "stateExtractionJobId": "job_extract_turn_state_story_52d7c651_0b16_4b91_890d_e7f226f7926b_turn_state_narration_7a5e4d7b_13d7_4c_4578064083436f67",
+          "stateExtractionStatus": "succeeded"
+        },
+        "contextReceipt": {
+          "turnId": "7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6",
+          "budgets": {
+            "wikiCharsMax": 4000,
+            "wikiCharsUsed": 0,
+            "memoryTokensMax": 2400,
+            "memoryTokensUsed": 1204,
+            "dynamicContextTokensMax": 108718,
+            "recentDialogueTokensMax": 12000
+          },
+          "skipped": [
+            {
+              "reason": "clamped_by_model_capacity",
+              "source": "dynamic_context"
+            },
+            {
+              "reason": "137 not selected by relevance, visibility or section limits",
+              "source": "recentEntries"
+            },
+            {
+              "reason": "4 not selected by relevance, visibility or section limits",
+              "source": "sceneCheckpointNotes"
+            },
+            {
+              "reason": "77 not selected by relevance, visibility or section limits",
+              "source": "timelineEvents"
+            },
+            {
+              "reason": "79 not selected by relevance, visibility or section limits",
+              "source": "chapters"
+            },
+            {
+              "reason": "12 not selected by relevance, visibility or section limits",
+              "source": "arcs"
+            },
+            {
+              "reason": "146 not selected by relevance, visibility or section limits",
+              "source": "factionSheets"
+            },
+            {
+              "reason": "1 not selected by relevance, visibility or section limits",
+              "source": "beliefs"
+            },
+            {
+              "reason": "41 not selected by relevance, visibility or section limits",
+              "source": "agreements"
+            }
+          ],
+          "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+          "included": {
+            "arcs": 2,
+            "facts": 0,
+            "arcsSent": 2,
+            "chapters": 2,
+            "totalChars": 94272,
+            "wikiChunks": 0,
+            "memoryNodes": 8,
+            "totalTokens": 22684,
+            "chaptersSent": 2,
+            "factionSheets": [
+              "faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_old_blood",
+              "veil_faction_house_belaerys",
+              "veil_faction_aurion_eastern_expedition"
+            ],
+            "recentEntries": 50,
+            "patchProposals": 0,
+            "timelineEvents": 8,
+            "memoryNodesSent": 8,
+            "continuityWarnings": 0,
+            "chaptersSuppressedByArc": 68,
+            "chaptersSuppressedByArcs": 68,
+            "unresolvedCharacterReferences": 0
+          },
+          "selection": {
+            "groups": [
+              {
+                "kind": "recentEntries",
+                "sent": 50,
+                "loaded": 187,
+                "omitted": 137,
+                "partial": 0,
+                "sentIds": [
+                  "entry_4832a21f-d626-408e-a1b8-29b58db33579",
+                  "narration_4832a21f-d626-408e-a1b8-29b58db33579",
+                  "entry_6809d9e0-388a-4823-af01-2f253d5a9bdc",
+                  "narration_6809d9e0-388a-4823-af01-2f253d5a9bdc",
+                  "entry_145a356a-3c7d-4c02-b439-1a9f54b39549",
+                  "narration_145a356a-3c7d-4c02-b439-1a9f54b39549",
+                  "entry_4492284f-c9c6-40fe-8d2f-fa09069269f6",
+                  "narration_4492284f-c9c6-40fe-8d2f-fa09069269f6",
+                  "entry_1048afc7-0d76-44a7-912a-00130f638045",
+                  "narration_1048afc7-0d76-44a7-912a-00130f638045",
+                  "entry_ab80f88d-3dd6-4f3a-8c92-f7e22868ee27",
+                  "narration_ab80f88d-3dd6-4f3a-8c92-f7e22868ee27",
+                  "entry_efca546e-3b8a-41be-b388-85e07ab9e45d",
+                  "narration_efca546e-3b8a-41be-b388-85e07ab9e45d",
+                  "entry_2f48f5a3-96e9-48c1-84e0-efbf0d1b7b50",
+                  "narration_2f48f5a3-96e9-48c1-84e0-efbf0d1b7b50",
+                  "entry_de83aeaf-3ae4-49c2-8844-853ddb184b3d",
+                  "narration_de83aeaf-3ae4-49c2-8844-853ddb184b3d",
+                  "entry_5b29a207-1026-4a9b-8ef3-d889c251be9e",
+                  "narration_5b29a207-1026-4a9b-8ef3-d889c251be9e",
+                  "entry_83bd39e4-3b29-4ff6-a74f-bb16dfafd491",
+                  "narration_83bd39e4-3b29-4ff6-a74f-bb16dfafd491",
+                  "entry_237b7cb7-8cc4-42a3-9bde-e3aff7b5ccf2",
+                  "narration_237b7cb7-8cc4-42a3-9bde-e3aff7b5ccf2",
+                  "entry_8688e419-b30d-413b-b13a-6c2451a1d7b0",
+                  "narration_8688e419-b30d-413b-b13a-6c2451a1d7b0",
+                  "entry_bb26296e-96db-4c14-90f2-cb6da8b85c0d",
+                  "narration_bb26296e-96db-4c14-90f2-cb6da8b85c0d",
+                  "entry_477001e7-429f-4093-95f3-f6e6d9a0e20f",
+                  "narration_477001e7-429f-4093-95f3-f6e6d9a0e20f",
+                  "entry_7cf84f74-8704-4d4e-b4b9-2b2b7126202a",
+                  "narration_7cf84f74-8704-4d4e-b4b9-2b2b7126202a",
+                  "entry_6a76c34e-8d6f-4f1a-ba3d-91701e83d705",
+                  "narration_6a76c34e-8d6f-4f1a-ba3d-91701e83d705",
+                  "entry_3e855e32-7490-4fbc-bfe5-9bfc2775a64b",
+                  "narration_3e855e32-7490-4fbc-bfe5-9bfc2775a64b",
+                  "entry_5829cf91-6515-4f26-8a2e-e7889f26598b",
+                  "narration_5829cf91-6515-4f26-8a2e-e7889f26598b",
+                  "narration_9a4b5a7f-8e34-4e94-a014-794541f131e7",
+                  "narration_338827fa-453e-4e8a-9b1e-e7931c76f732",
+                  "entry_583777d7-6782-4f29-8424-bbc47d08722e",
+                  "narration_583777d7-6782-4f29-8424-bbc47d08722e",
+                  "entry_65292015-abef-4bc3-8593-07b02562c41b",
+                  "narration_65292015-abef-4bc3-8593-07b02562c41b",
+                  "entry_f43d8ccb-97b2-4cf1-9dd1-f113cae18b7c",
+                  "narration_f43d8ccb-97b2-4cf1-9dd1-f113cae18b7c",
+                  "entry_69637b4a-0b1e-4f32-8ac4-2396cd57828f",
+                  "narration_69637b4a-0b1e-4f32-8ac4-2396cd57828f",
+                  "entry_ffad85a7-c22d-4e8c-bf4c-6dcd8f352f6f",
+                  "narration_ffad85a7-c22d-4e8c-bf4c-6dcd8f352f6f"
+                ],
+                "selected": 50,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "memoryNodes",
+                "sent": 8,
+                "loaded": 8,
+                "omitted": 0,
+                "partial": 0,
+                "sentIds": [
+                  "transcript_narration_94988d4c-b93e-4ba2-b46d-f15d41715052",
+                  "transcript_narration_39f1a161-15bf-4249-a457-438d8dbe89e8",
+                  "transcript_narration_b0e39e1b-eb13-4e2f-a60f-3e341b68acd1",
+                  "transcript_narration_5c8a67a1-3ce2-430b-aa19-339989922b52",
+                  "transcript_narration_88f259d5-af28-42f2-abd7-9ecff5584c02",
+                  "transcript_narration_5c5d08b0-afb2-4f2f-b754-c0ded5d131dd",
+                  "transcript_narration_0e6cf989-5dc6-4c02-a32a-4e869a34c188",
+                  "transcript_narration_338827fa-453e-4e8a-9b1e-e7931c76f732"
+                ],
+                "selected": 8,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "sceneCheckpointNotes",
+                "sent": 0,
+                "loaded": 4,
+                "omitted": 4,
+                "partial": 0,
+                "sentIds": [],
+                "selected": 0,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "timelineEvents",
+                "sent": 8,
+                "loaded": 85,
+                "omitted": 77,
+                "partial": 0,
+                "sentIds": [
+                  "event_b23a25b8-10d2-4ef7-9274-3241162d3327",
+                  "event_2e2281f2-8094-4d21-98d1-b81d57fbb54c",
+                  "event_cb06a9cc-c22d-49ab-b86f-4448d26df2ba",
+                  "event_32607a00-2d86-4bce-9df7-7fe4abf34abd",
+                  "event_f960efee-5ecd-4f31-9409-2d1951dfff95",
+                  "event_47694b20-7396-4b77-902f-bfef389e0d89",
+                  "event_8ccfc474-74e6-43b6-8425-32719e94541b",
+                  "event_88c2a055-8a4b-4469-9ba5-09c8cd698e30"
+                ],
+                "selected": 8,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "chapters",
+                "sent": 2,
+                "loaded": 81,
+                "omitted": 79,
+                "partial": 0,
+                "sentIds": [
+                  "chapter_narration_afe43b73_1b71_4ad1_b14a_e4719dd3e240_entry_bb26296e_96db_4c14_90f2_cb6da8b85c0d",
+                  "chapter_narration_f911516f_8168_4dfe_a293_7cb474266884_entry_afe43b73_1b71_4ad1_b14a_e4719dd3e240"
+                ],
+                "selected": 2,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "arcs",
+                "sent": 2,
+                "loaded": 14,
+                "omitted": 12,
+                "partial": 0,
+                "sentIds": [
+                  "arc_chapter_entry_5617fee8_1085_4311_bf6e_a624a1a21e8d_narration_a7792e5d_ac5c_4725_ab14_f0c1ece885f0_chapter_entry_77bdac09_69c6_4e58_86a0_e586c5e2884_73beaa163693",
+                  "arc_chapter_narration_8b9e0390_6c46_4caf_a8f9_89044043c1d3_entry_4df0e9eb_73bc_477c_bab9_4e059afd85a0_chapter_entry_826610f3_1de1_4512_9e1e_fead856caab_059954176f65"
+                ],
+                "selected": 2,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "factionSheets",
+                "sent": 3,
+                "loaded": 149,
+                "omitted": 146,
+                "partial": 0,
+                "sentIds": [
+                  "faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_old_blood",
+                  "veil_faction_house_belaerys",
+                  "veil_faction_aurion_eastern_expedition"
+                ],
+                "selected": 3,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "beliefs",
+                "sent": 0,
+                "loaded": 1,
+                "omitted": 1,
+                "partial": 0,
+                "sentIds": [],
+                "selected": 0,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "agreements",
+                "sent": 8,
+                "loaded": 49,
+                "omitted": 41,
+                "partial": 0,
+                "sentIds": [
+                  "agreement_a6f4f2da-9fc2-44b0-9ea6-9565384d4031",
+                  "agreement_461886cd-4064-452f-b2dc-0dea7e9eab60",
+                  "agreement_6e409346-9c7f-400b-ad9b-f5261adbcbb2",
+                  "agreement_c5f72f7f-0c05-4b5b-8ee0-030a07d0f471",
+                  "agreement_d4e2871c-307e-4c1f-a114-79d910ee41e2",
+                  "agreement_00f45e49-b644-4d7b-9d44-ca288a4886c8",
+                  "agreement_b5445cd6-45a5-4d6e-81c3-ecadf5050525",
+                  "agreement_bde0ac7c-3daa-46d0-803a-813d7f3a2bb6"
+                ],
+                "selected": 8,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "threads",
+                "sent": 7,
+                "loaded": 7,
+                "omitted": 0,
+                "partial": 0,
+                "sentIds": [
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_summer_sea_claim_ba10487e787d3f8d",
+                  "veil_thread_not_the_heir",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_smoke_over_the_fish_market_2ee13974ee611fa5",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_house_belaerys_territorial_claim_03404ab92bd29acb",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_blood_in_sunspear_bd5fbf2103f0cb45",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_message_that_drew_aegon_east",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_accord_s_reckoning_21bdf6d9c9a5cb07"
+                ],
+                "selected": 7,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "wikiBlocks",
+                "sent": 0,
+                "loaded": 0,
+                "omitted": 0,
+                "partial": 0,
+                "sentIds": [],
+                "selected": 0,
+                "omittedIds": [],
+                "partialIds": []
+              }
+            ],
+            "version": 1,
+            "requests": [
+              {
+                "id": "primary",
+                "label": "Primary narration request",
+                "sections": [
+                  {
+                    "id": "system",
+                    "chars": 13246,
+                    "label": "System instructions",
+                    "tokens": 2812
+                  },
+                  {
+                    "id": "context",
+                    "chars": 32008,
+                    "label": "Scene and memory",
+                    "tokens": 8024
+                  },
+                  {
+                    "id": "history",
+                    "chars": 48973,
+                    "label": "Recent dialogue",
+                    "tokens": 11835
+                  },
+                  {
+                    "id": "action",
+                    "chars": 45,
+                    "label": "Player action and tool observations",
+                    "tokens": 13
+                  }
+                ],
+                "totalChars": 94272,
+                "totalTokens": 22684
+              }
+            ],
+            "sections": [
+              {
+                "id": "system",
+                "chars": 13246,
+                "label": "System instructions",
+                "tokens": 2812
+              },
+              {
+                "id": "context",
+                "chars": 32008,
+                "label": "Scene and memory",
+                "tokens": 8024
+              },
+              {
+                "id": "history",
+                "chars": 48973,
+                "label": "Recent dialogue",
+                "tokens": 11835
+              },
+              {
+                "id": "action",
+                "chars": 45,
+                "label": "Player action and tool observations",
+                "tokens": 13
+              }
+            ]
+          },
+          "truncated": false,
+          "cacheSegments": [
+            {
+              "hit": true,
+              "kind": "prompt_system",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:prompt_system:a5ab91cccc7f6300dac27830e92eb3104931d76f28db74ddd6aeafa29fc98a3e",
+              "contentHash": "5c665f7d196178481b6f006a3dc31a8054ab5689183c0abfc282c8d3785faafb",
+              "invalidated": false,
+              "tokenEstimate": 3312,
+              "dependencyCount": 1
+            },
+            {
+              "hit": true,
+              "kind": "campaign_continuity",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:campaign_continuity:19a109bf679edc14de67ba4e8035db4b487f1378a646352c9f2ca7b25410734a",
+              "contentHash": "edba4aaa6a16d745080254c076b4c2e9c7bcad10f8394c8e0ccbeda6cafbcf49",
+              "invalidated": false,
+              "tokenEstimate": 13733,
+              "dependencyCount": 27
+            },
+            {
+              "hit": true,
+              "kind": "tool_schema",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:tool_schema:893698a9adbabc5acbdb628c070818a5067b517ad280231da74c6902eb3b8913",
+              "contentHash": "2d49ddf4ba001ff863fa5c8df8049b9269b84d70b898099a2ea6526d838bf5cb",
+              "invalidated": false,
+              "tokenEstimate": 7,
+              "dependencyCount": 1
+            }
+          ],
+          "continuityLedger": {
+            "facts": [],
+            "warnings": [],
+            "patchProposals": []
+          },
+          "unresolvedCharacterReferences": []
+        },
+        "stateExtraction": {
+          "mode": "deferred"
+        },
+        "generationTimings": [
+          {
+            "model": "deepseek/deepseek-v4-pro-0813",
+            "status": "success",
+            "operation": "turn.narration",
+            "serviceId": "narrative",
+            "durationMs": 12009,
+            "retryCount": 0,
+            "totalTokens": 23687,
+            "finishReason": "stop",
+            "requestTokens": 23059,
+            "responseTokens": 628,
+            "providerCostUsd": 0.01435741956,
+            "cacheWriteTokens": null,
+            "cachedInputTokens": 3072,
+            "timeToFirstTokenMs": 4892
+          }
+        ],
+        "memoryTokenBudget": 2400,
+        "retrievedMemoryIds": [
+          "transcript_narration_94988d4c-b93e-4ba2-b46d-f15d41715052",
+          "transcript_narration_39f1a161-15bf-4249-a457-438d8dbe89e8",
+          "transcript_narration_b0e39e1b-eb13-4e2f-a60f-3e341b68acd1",
+          "transcript_narration_5c8a67a1-3ce2-430b-aa19-339989922b52",
+          "transcript_narration_88f259d5-af28-42f2-abd7-9ecff5584c02",
+          "transcript_narration_5c5d08b0-afb2-4f2f-b754-c0ded5d131dd",
+          "transcript_narration_0e6cf989-5dc6-4c02-a32a-4e869a34c188",
+          "transcript_narration_338827fa-453e-4e8a-9b1e-e7931c76f732"
+        ],
+        "wikiContextCitations": [],
+        "wikiContextPageCount": 0,
+        "wikiContextSeedCount": 0
+      },
+      "header": "[ 🕰️ Time 09:33 | 🗓️ Day Twenty-Seventh, Moon 6, 299 AC | 📍 Volantis — the eastern palace, first great courtyard | 🌤️ Late morning, hot, the river wind carrying smoke and spice ]"
+    },
+    {
+      "id": "narration_d59d75d4-6e78-4f26-96a3-49b8faf4fb51",
+      "position": 2497,
+      "metadata": {
+        "source": "server_turn",
+        "actionType": "pov",
+        "engineCache": {
+          "hitCount": 3,
+          "segments": [
+            {
+              "hit": true,
+              "kind": "prompt_system",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:prompt_system:a5ab91cccc7f6300dac27830e92eb3104931d76f28db74ddd6aeafa29fc98a3e",
+              "hitCount": 301,
+              "missCount": 14,
+              "contentHash": "5c665f7d196178481b6f006a3dc31a8054ab5689183c0abfc282c8d3785faafb",
+              "invalidated": false,
+              "tokenEstimate": 3312,
+              "dependencyCount": 1
+            },
+            {
+              "hit": true,
+              "kind": "campaign_continuity",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:campaign_continuity:19a109bf679edc14de67ba4e8035db4b487f1378a646352c9f2ca7b25410734a",
+              "hitCount": 968,
+              "missCount": 68,
+              "contentHash": "edba4aaa6a16d745080254c076b4c2e9c7bcad10f8394c8e0ccbeda6cafbcf49",
+              "invalidated": false,
+              "tokenEstimate": 13733,
+              "dependencyCount": 27
+            },
+            {
+              "hit": true,
+              "kind": "tool_schema",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:tool_schema:893698a9adbabc5acbdb628c070818a5067b517ad280231da74c6902eb3b8913",
+              "hitCount": 1035,
+              "missCount": 1,
+              "contentHash": "2d49ddf4ba001ff863fa5c8df8049b9269b84d70b898099a2ea6526d838bf5cb",
+              "invalidated": false,
+              "tokenEstimate": 7,
+              "dependencyCount": 1
+            }
+          ],
+          "missCount": 0,
+          "tokenEstimate": 17052
+        },
+        "parallelPov": {
+          "character": "Mei -Lin it’s her wedding day",
+          "direction": null
+        },
+        "clientTurnId": "d59d75d4-6e78-4f26-96a3-49b8faf4fb51",
+        "gmTurnReceipt": {
+          "steps": [
+            {
+              "id": "context",
+              "label": "Loading memory, timeline, and lore",
+              "detail": "dynamic context: clamped by model capacity",
+              "status": "skipped"
+            },
+            {
+              "id": "situation",
+              "label": "Reviewing situation and stakes",
+              "status": "succeeded"
+            },
+            {
+              "id": "dialogue",
+              "label": "Checking dialogue and character motives",
+              "status": "succeeded"
+            },
+            {
+              "id": "location",
+              "label": "Anchoring location and elapsed time",
+              "status": "succeeded"
+            },
+            {
+              "id": "plot",
+              "label": "Reviewing faction and plot pressure",
+              "status": "succeeded"
+            },
+            {
+              "id": "explore",
+              "label": "Exploring campaign records",
+              "detail": "1 tool call",
+              "status": "succeeded"
+            },
+            {
+              "id": "narrate",
+              "label": "Weaving the scene",
+              "status": "succeeded"
+            },
+            {
+              "id": "canon",
+              "label": "Reconciling durable canon",
+              "detail": "applied",
+              "status": "succeeded"
+            }
+          ],
+          "tools": [
+            {
+              "ok": false,
+              "label": "Building an actor brief: Mei -Lin it’s her wedding day",
+              "round": 0,
+              "command": "world.actor.brief",
+              "sourceIds": [],
+              "failureReason": "Actor not found: Mei -Lin it’s her wedding day",
+              "omissionReason": null
+            }
+          ],
+          "changes": {
+            "events": 2,
+            "memoryNodes": 0,
+            "statePatches": 1
+          },
+          "context": {
+            "truncated": false,
+            "wikiChunks": 0,
+            "memoryNodes": 8,
+            "totalTokens": 22959,
+            "recentEntries": 50,
+            "timelineEvents": 8
+          },
+          "warningCount": 1,
+          "stateExtractionMode": "deferred",
+          "stateExtractionError": null,
+          "stateExtractionJobId": "job_extract_turn_state_story_52d7c651_0b16_4b91_890d_e7f226f7926b_turn_state_narration_d59d75d4_6e78_4f_0c20c89c902a0019",
+          "stateExtractionStatus": "succeeded"
+        },
+        "narrativeMode": "parallel_pov",
+        "contextReceipt": {
+          "turnId": "d59d75d4-6e78-4f26-96a3-49b8faf4fb51",
+          "budgets": {
+            "wikiCharsMax": 4000,
+            "wikiCharsUsed": 0,
+            "memoryTokensMax": 2400,
+            "memoryTokensUsed": 677,
+            "dynamicContextTokensMax": 108762,
+            "recentDialogueTokensMax": 12000
+          },
+          "skipped": [
+            {
+              "reason": "clamped_by_model_capacity",
+              "source": "dynamic_context"
+            },
+            {
+              "reason": "137 not selected by relevance, visibility or section limits",
+              "source": "recentEntries"
+            },
+            {
+              "reason": "4 not selected by relevance, visibility or section limits",
+              "source": "sceneCheckpointNotes"
+            },
+            {
+              "reason": "77 not selected by relevance, visibility or section limits",
+              "source": "timelineEvents"
+            },
+            {
+              "reason": "79 not selected by relevance, visibility or section limits",
+              "source": "chapters"
+            },
+            {
+              "reason": "12 not selected by relevance, visibility or section limits",
+              "source": "arcs"
+            },
+            {
+              "reason": "146 not selected by relevance, visibility or section limits",
+              "source": "factionSheets"
+            },
+            {
+              "reason": "1 not selected by relevance, visibility or section limits",
+              "source": "beliefs"
+            },
+            {
+              "reason": "41 not selected by relevance, visibility or section limits",
+              "source": "agreements"
+            }
+          ],
+          "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+          "included": {
+            "arcs": 2,
+            "facts": 0,
+            "arcsSent": 2,
+            "chapters": 2,
+            "totalChars": 95405,
+            "wikiChunks": 0,
+            "memoryNodes": 8,
+            "totalTokens": 22959,
+            "chaptersSent": 2,
+            "factionSheets": [
+              "faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_old_blood",
+              "veil_faction_house_belaerys",
+              "veil_faction_aurion_eastern_expedition"
+            ],
+            "recentEntries": 50,
+            "patchProposals": 0,
+            "timelineEvents": 8,
+            "memoryNodesSent": 8,
+            "continuityWarnings": 0,
+            "chaptersSuppressedByArc": 68,
+            "chaptersSuppressedByArcs": 68,
+            "unresolvedCharacterReferences": 0
+          },
+          "selection": {
+            "groups": [
+              {
+                "kind": "recentEntries",
+                "sent": 50,
+                "loaded": 187,
+                "omitted": 137,
+                "partial": 0,
+                "sentIds": [
+                  "entry_6809d9e0-388a-4823-af01-2f253d5a9bdc",
+                  "narration_6809d9e0-388a-4823-af01-2f253d5a9bdc",
+                  "entry_145a356a-3c7d-4c02-b439-1a9f54b39549",
+                  "narration_145a356a-3c7d-4c02-b439-1a9f54b39549",
+                  "entry_4492284f-c9c6-40fe-8d2f-fa09069269f6",
+                  "narration_4492284f-c9c6-40fe-8d2f-fa09069269f6",
+                  "entry_1048afc7-0d76-44a7-912a-00130f638045",
+                  "narration_1048afc7-0d76-44a7-912a-00130f638045",
+                  "entry_ab80f88d-3dd6-4f3a-8c92-f7e22868ee27",
+                  "narration_ab80f88d-3dd6-4f3a-8c92-f7e22868ee27",
+                  "entry_efca546e-3b8a-41be-b388-85e07ab9e45d",
+                  "narration_efca546e-3b8a-41be-b388-85e07ab9e45d",
+                  "entry_2f48f5a3-96e9-48c1-84e0-efbf0d1b7b50",
+                  "narration_2f48f5a3-96e9-48c1-84e0-efbf0d1b7b50",
+                  "entry_de83aeaf-3ae4-49c2-8844-853ddb184b3d",
+                  "narration_de83aeaf-3ae4-49c2-8844-853ddb184b3d",
+                  "entry_5b29a207-1026-4a9b-8ef3-d889c251be9e",
+                  "narration_5b29a207-1026-4a9b-8ef3-d889c251be9e",
+                  "entry_83bd39e4-3b29-4ff6-a74f-bb16dfafd491",
+                  "narration_83bd39e4-3b29-4ff6-a74f-bb16dfafd491",
+                  "entry_237b7cb7-8cc4-42a3-9bde-e3aff7b5ccf2",
+                  "narration_237b7cb7-8cc4-42a3-9bde-e3aff7b5ccf2",
+                  "entry_8688e419-b30d-413b-b13a-6c2451a1d7b0",
+                  "narration_8688e419-b30d-413b-b13a-6c2451a1d7b0",
+                  "entry_bb26296e-96db-4c14-90f2-cb6da8b85c0d",
+                  "narration_bb26296e-96db-4c14-90f2-cb6da8b85c0d",
+                  "entry_477001e7-429f-4093-95f3-f6e6d9a0e20f",
+                  "narration_477001e7-429f-4093-95f3-f6e6d9a0e20f",
+                  "entry_7cf84f74-8704-4d4e-b4b9-2b2b7126202a",
+                  "narration_7cf84f74-8704-4d4e-b4b9-2b2b7126202a",
+                  "entry_6a76c34e-8d6f-4f1a-ba3d-91701e83d705",
+                  "narration_6a76c34e-8d6f-4f1a-ba3d-91701e83d705",
+                  "entry_3e855e32-7490-4fbc-bfe5-9bfc2775a64b",
+                  "narration_3e855e32-7490-4fbc-bfe5-9bfc2775a64b",
+                  "entry_5829cf91-6515-4f26-8a2e-e7889f26598b",
+                  "narration_5829cf91-6515-4f26-8a2e-e7889f26598b",
+                  "narration_9a4b5a7f-8e34-4e94-a014-794541f131e7",
+                  "narration_338827fa-453e-4e8a-9b1e-e7931c76f732",
+                  "entry_583777d7-6782-4f29-8424-bbc47d08722e",
+                  "narration_583777d7-6782-4f29-8424-bbc47d08722e",
+                  "entry_65292015-abef-4bc3-8593-07b02562c41b",
+                  "narration_65292015-abef-4bc3-8593-07b02562c41b",
+                  "entry_f43d8ccb-97b2-4cf1-9dd1-f113cae18b7c",
+                  "narration_f43d8ccb-97b2-4cf1-9dd1-f113cae18b7c",
+                  "entry_69637b4a-0b1e-4f32-8ac4-2396cd57828f",
+                  "narration_69637b4a-0b1e-4f32-8ac4-2396cd57828f",
+                  "entry_ffad85a7-c22d-4e8c-bf4c-6dcd8f352f6f",
+                  "narration_ffad85a7-c22d-4e8c-bf4c-6dcd8f352f6f",
+                  "entry_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6",
+                  "narration_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6"
+                ],
+                "selected": 50,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "memoryNodes",
+                "sent": 8,
+                "loaded": 8,
+                "omitted": 0,
+                "partial": 0,
+                "sentIds": [
+                  "transcript_narration_0536543f-a6a6-4726-87fd-8667890dda10",
+                  "mem_chapter_chapter_entry_d33faa63_e50b_43d8_8760_3b494a9d41ee_narration_e10ac3ec_3482_4f0d_af75_391fe576a3a7",
+                  "transcript_narration_517292e7-1ca0-4a33-9b21-5c6cc4439dc1",
+                  "transcript_narration_f354ed96-aff8-4bd6-ab27-0ff6a89d9f1d",
+                  "transcript_narration_6611c1df-6dbc-4395-a6cc-7eb806e34b4f",
+                  "transcript_narration_07144073-1ec8-4665-a8b3-7802fae940ce",
+                  "transcript_narration_00ff36a1-120a-49e9-a404-c533792f7ad4",
+                  "transcript_narration_8b16d840-77ee-4b5c-9680-f3be3a597cee"
+                ],
+                "selected": 8,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "sceneCheckpointNotes",
+                "sent": 0,
+                "loaded": 4,
+                "omitted": 4,
+                "partial": 0,
+                "sentIds": [],
+                "selected": 0,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "timelineEvents",
+                "sent": 8,
+                "loaded": 85,
+                "omitted": 77,
+                "partial": 0,
+                "sentIds": [
+                  "event_2e2281f2-8094-4d21-98d1-b81d57fbb54c",
+                  "event_cb06a9cc-c22d-49ab-b86f-4448d26df2ba",
+                  "event_32607a00-2d86-4bce-9df7-7fe4abf34abd",
+                  "event_a70ff37d-1a57-4065-a630-86a045007e71",
+                  "event_3e0d0404-5912-4b8b-9596-d08a939f53f3",
+                  "event_b23a25b8-10d2-4ef7-9274-3241162d3327",
+                  "event_faction_signal_event_world_tick_story_52d7c651_0b16_4b91_890d_e7f226f7926b_veil_faction_house_belaerys_faction_project_veil_faction_house_belaerys_wardship_exchan_e94fb936dfe4",
+                  "event_f960efee-5ecd-4f31-9409-2d1951dfff95"
+                ],
+                "selected": 8,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "chapters",
+                "sent": 2,
+                "loaded": 81,
+                "omitted": 79,
+                "partial": 0,
+                "sentIds": [
+                  "chapter_narration_afe43b73_1b71_4ad1_b14a_e4719dd3e240_entry_bb26296e_96db_4c14_90f2_cb6da8b85c0d",
+                  "chapter_narration_f911516f_8168_4dfe_a293_7cb474266884_entry_afe43b73_1b71_4ad1_b14a_e4719dd3e240"
+                ],
+                "selected": 2,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "arcs",
+                "sent": 2,
+                "loaded": 14,
+                "omitted": 12,
+                "partial": 0,
+                "sentIds": [
+                  "arc_chapter_entry_5617fee8_1085_4311_bf6e_a624a1a21e8d_narration_a7792e5d_ac5c_4725_ab14_f0c1ece885f0_chapter_entry_77bdac09_69c6_4e58_86a0_e586c5e2884_73beaa163693",
+                  "arc_chapter_narration_8b9e0390_6c46_4caf_a8f9_89044043c1d3_entry_4df0e9eb_73bc_477c_bab9_4e059afd85a0_chapter_entry_826610f3_1de1_4512_9e1e_fead856caab_059954176f65"
+                ],
+                "selected": 2,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "factionSheets",
+                "sent": 3,
+                "loaded": 149,
+                "omitted": 146,
+                "partial": 0,
+                "sentIds": [
+                  "faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_old_blood",
+                  "veil_faction_house_belaerys",
+                  "veil_faction_aurion_eastern_expedition"
+                ],
+                "selected": 3,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "beliefs",
+                "sent": 0,
+                "loaded": 1,
+                "omitted": 1,
+                "partial": 0,
+                "sentIds": [],
+                "selected": 0,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "agreements",
+                "sent": 8,
+                "loaded": 49,
+                "omitted": 41,
+                "partial": 0,
+                "sentIds": [
+                  "agreement_8016efb7-b6be-400a-b8f5-c9238747d087",
+                  "agreement_a6f4f2da-9fc2-44b0-9ea6-9565384d4031",
+                  "agreement_159839b5-46c4-4ef8-95b4-01b424d7d8ff",
+                  "agreement_2cbcd45d-4530-47b7-871c-761b1e61fa9b",
+                  "agreement_a65a7ee3-c4fc-413b-8748-210920f317d7",
+                  "agreement_c5f72f7f-0c05-4b5b-8ee0-030a07d0f471",
+                  "agreement_4060a67c-967c-496a-bffe-20ba703e9e21",
+                  "agreement_4cdf03ce-6e64-47c5-af72-75072c205938"
+                ],
+                "selected": 8,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "threads",
+                "sent": 7,
+                "loaded": 7,
+                "omitted": 0,
+                "partial": 0,
+                "sentIds": [
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_summer_sea_claim_ba10487e787d3f8d",
+                  "veil_thread_not_the_heir",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_smoke_over_the_fish_market_2ee13974ee611fa5",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_house_belaerys_territorial_claim_03404ab92bd29acb",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_blood_in_sunspear_bd5fbf2103f0cb45",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_message_that_drew_aegon_east",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_accord_s_reckoning_21bdf6d9c9a5cb07"
+                ],
+                "selected": 7,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "wikiBlocks",
+                "sent": 0,
+                "loaded": 0,
+                "omitted": 0,
+                "partial": 0,
+                "sentIds": [],
+                "selected": 0,
+                "omittedIds": [],
+                "partialIds": []
+              }
+            ],
+            "version": 1,
+            "requests": [
+              {
+                "id": "primary",
+                "label": "Primary narration request",
+                "sections": [
+                  {
+                    "id": "system",
+                    "chars": 13246,
+                    "label": "System instructions",
+                    "tokens": 2812
+                  },
+                  {
+                    "id": "context",
+                    "chars": 32942,
+                    "label": "Scene and memory",
+                    "tokens": 8285
+                  },
+                  {
+                    "id": "history",
+                    "chars": 48906,
+                    "label": "Recent dialogue",
+                    "tokens": 11787
+                  },
+                  {
+                    "id": "action",
+                    "chars": 311,
+                    "label": "Player action and tool observations",
+                    "tokens": 75
+                  }
+                ],
+                "totalChars": 95405,
+                "totalTokens": 22959
+              }
+            ],
+            "sections": [
+              {
+                "id": "system",
+                "chars": 13246,
+                "label": "System instructions",
+                "tokens": 2812
+              },
+              {
+                "id": "context",
+                "chars": 32942,
+                "label": "Scene and memory",
+                "tokens": 8285
+              },
+              {
+                "id": "history",
+                "chars": 48906,
+                "label": "Recent dialogue",
+                "tokens": 11787
+              },
+              {
+                "id": "action",
+                "chars": 311,
+                "label": "Player action and tool observations",
+                "tokens": 75
+              }
+            ]
+          },
+          "truncated": false,
+          "cacheSegments": [
+            {
+              "hit": true,
+              "kind": "prompt_system",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:prompt_system:a5ab91cccc7f6300dac27830e92eb3104931d76f28db74ddd6aeafa29fc98a3e",
+              "contentHash": "5c665f7d196178481b6f006a3dc31a8054ab5689183c0abfc282c8d3785faafb",
+              "invalidated": false,
+              "tokenEstimate": 3312,
+              "dependencyCount": 1
+            },
+            {
+              "hit": true,
+              "kind": "campaign_continuity",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:campaign_continuity:19a109bf679edc14de67ba4e8035db4b487f1378a646352c9f2ca7b25410734a",
+              "contentHash": "edba4aaa6a16d745080254c076b4c2e9c7bcad10f8394c8e0ccbeda6cafbcf49",
+              "invalidated": false,
+              "tokenEstimate": 13733,
+              "dependencyCount": 27
+            },
+            {
+              "hit": true,
+              "kind": "tool_schema",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:tool_schema:893698a9adbabc5acbdb628c070818a5067b517ad280231da74c6902eb3b8913",
+              "contentHash": "2d49ddf4ba001ff863fa5c8df8049b9269b84d70b898099a2ea6526d838bf5cb",
+              "invalidated": false,
+              "tokenEstimate": 7,
+              "dependencyCount": 1
+            }
+          ],
+          "continuityLedger": {
+            "facts": [],
+            "warnings": [],
+            "patchProposals": []
+          },
+          "unresolvedCharacterReferences": []
+        },
+        "stateExtraction": {
+          "mode": "deferred"
+        },
+        "generationTimings": [
+          {
+            "model": "deepseek/deepseek-v4-pro-0813",
+            "status": "success",
+            "operation": "turn.narration",
+            "serviceId": "narrative",
+            "durationMs": 49713,
+            "retryCount": 0,
+            "totalTokens": 26332,
+            "finishReason": "stop",
+            "requestTokens": 23384,
+            "responseTokens": 2948,
+            "providerCostUsd": 0.01919828592,
+            "cacheWriteTokens": null,
+            "cachedInputTokens": 2944,
+            "timeToFirstTokenMs": 39534
+          }
+        ],
+        "memoryTokenBudget": 2400,
+        "retrievedMemoryIds": [
+          "transcript_narration_0536543f-a6a6-4726-87fd-8667890dda10",
+          "mem_chapter_chapter_entry_d33faa63_e50b_43d8_8760_3b494a9d41ee_narration_e10ac3ec_3482_4f0d_af75_391fe576a3a7",
+          "transcript_narration_517292e7-1ca0-4a33-9b21-5c6cc4439dc1",
+          "transcript_narration_f354ed96-aff8-4bd6-ab27-0ff6a89d9f1d",
+          "transcript_narration_6611c1df-6dbc-4395-a6cc-7eb806e34b4f",
+          "transcript_narration_07144073-1ec8-4665-a8b3-7802fae940ce",
+          "transcript_narration_00ff36a1-120a-49e9-a404-c533792f7ad4",
+          "transcript_narration_8b16d840-77ee-4b5c-9680-f3be3a597cee"
+        ],
+        "wikiContextCitations": [],
+        "wikiContextPageCount": 0,
+        "wikiContextSeedCount": 0
+      },
+      "header": "[ 🕰️ Time 10:04 | 🗓️ Day Twenty-Seventh, Moon 6, 299 AC | 📍 Yin — Hall of the Vermillion Steps, bridal dressing chamber | 🌤️ Morning, warm, incense-heavy air ]"
+    },
+    {
+      "id": "narration_711e2d27-46d7-4d88-a739-987b38433d5c",
+      "position": 2499,
+      "metadata": {
+        "source": "server_turn",
+        "actionType": "pov",
+        "engineCache": {
+          "hitCount": 3,
+          "segments": [
+            {
+              "hit": true,
+              "kind": "prompt_system",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:prompt_system:a5ab91cccc7f6300dac27830e92eb3104931d76f28db74ddd6aeafa29fc98a3e",
+              "hitCount": 302,
+              "missCount": 14,
+              "contentHash": "5c665f7d196178481b6f006a3dc31a8054ab5689183c0abfc282c8d3785faafb",
+              "invalidated": false,
+              "tokenEstimate": 3312,
+              "dependencyCount": 1
+            },
+            {
+              "hit": true,
+              "kind": "campaign_continuity",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:campaign_continuity:19a109bf679edc14de67ba4e8035db4b487f1378a646352c9f2ca7b25410734a",
+              "hitCount": 969,
+              "missCount": 68,
+              "contentHash": "edba4aaa6a16d745080254c076b4c2e9c7bcad10f8394c8e0ccbeda6cafbcf49",
+              "invalidated": false,
+              "tokenEstimate": 13733,
+              "dependencyCount": 27
+            },
+            {
+              "hit": true,
+              "kind": "tool_schema",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:tool_schema:893698a9adbabc5acbdb628c070818a5067b517ad280231da74c6902eb3b8913",
+              "hitCount": 1036,
+              "missCount": 1,
+              "contentHash": "2d49ddf4ba001ff863fa5c8df8049b9269b84d70b898099a2ea6526d838bf5cb",
+              "invalidated": false,
+              "tokenEstimate": 7,
+              "dependencyCount": 1
+            }
+          ],
+          "missCount": 0,
+          "tokenEstimate": 17052
+        },
+        "parallelPov": {
+          "character": "Mei -Lin continue the narrative",
+          "direction": null
+        },
+        "clientTurnId": "711e2d27-46d7-4d88-a739-987b38433d5c",
+        "gmTurnReceipt": {
+          "steps": [
+            {
+              "id": "context",
+              "label": "Loading memory, timeline, and lore",
+              "detail": "dynamic context: clamped by model capacity",
+              "status": "skipped"
+            },
+            {
+              "id": "situation",
+              "label": "Reviewing situation and stakes",
+              "status": "succeeded"
+            },
+            {
+              "id": "dialogue",
+              "label": "Checking dialogue and character motives",
+              "status": "succeeded"
+            },
+            {
+              "id": "location",
+              "label": "Anchoring location and elapsed time",
+              "status": "succeeded"
+            },
+            {
+              "id": "plot",
+              "label": "Reviewing faction and plot pressure",
+              "status": "succeeded"
+            },
+            {
+              "id": "explore",
+              "label": "Exploring campaign records",
+              "detail": "1 tool call",
+              "status": "succeeded"
+            },
+            {
+              "id": "narrate",
+              "label": "Weaving the scene",
+              "status": "succeeded"
+            },
+            {
+              "id": "canon",
+              "label": "Reconciling durable canon",
+              "detail": "applied",
+              "status": "succeeded"
+            }
+          ],
+          "tools": [
+            {
+              "ok": false,
+              "label": "Building an actor brief: Mei -Lin continue the narrative",
+              "round": 0,
+              "command": "world.actor.brief",
+              "sourceIds": [],
+              "failureReason": "Actor not found: Mei -Lin continue the narrative",
+              "omissionReason": null
+            }
+          ],
+          "changes": {
+            "events": 3,
+            "memoryNodes": 0,
+            "statePatches": 1
+          },
+          "context": {
+            "truncated": false,
+            "wikiChunks": 0,
+            "memoryNodes": 8,
+            "totalTokens": 24532,
+            "recentEntries": 49,
+            "timelineEvents": 8
+          },
+          "warningCount": 1,
+          "stateExtractionMode": "deferred",
+          "stateExtractionError": null,
+          "stateExtractionJobId": "job_extract_turn_state_story_52d7c651_0b16_4b91_890d_e7f226f7926b_turn_state_narration_711e2d27_46d7_4d_981aca9195f0299f",
+          "stateExtractionStatus": "succeeded"
+        },
+        "narrativeMode": "parallel_pov",
+        "contextReceipt": {
+          "turnId": "711e2d27-46d7-4d88-a739-987b38433d5c",
+          "budgets": {
+            "wikiCharsMax": 4000,
+            "wikiCharsUsed": 0,
+            "memoryTokensMax": 2400,
+            "memoryTokensUsed": 1096,
+            "dynamicContextTokensMax": 108699,
+            "recentDialogueTokensMax": 12000
+          },
+          "skipped": [
+            {
+              "reason": "clamped_by_model_capacity",
+              "source": "dynamic_context"
+            },
+            {
+              "reason": "137 not selected by relevance, visibility or section limits",
+              "source": "recentEntries"
+            },
+            {
+              "reason": "78 not selected by relevance, visibility or section limits",
+              "source": "timelineEvents"
+            },
+            {
+              "reason": "79 not selected by relevance, visibility or section limits",
+              "source": "chapters"
+            },
+            {
+              "reason": "12 not selected by relevance, visibility or section limits",
+              "source": "arcs"
+            },
+            {
+              "reason": "144 not selected by relevance, visibility or section limits",
+              "source": "factionSheets"
+            },
+            {
+              "reason": "112 not selected by relevance, visibility or section limits",
+              "source": "beliefs"
+            },
+            {
+              "reason": "41 not selected by relevance, visibility or section limits",
+              "source": "agreements"
+            }
+          ],
+          "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+          "included": {
+            "arcs": 2,
+            "facts": 0,
+            "arcsSent": 2,
+            "chapters": 2,
+            "totalChars": 101926,
+            "wikiChunks": 0,
+            "memoryNodes": 8,
+            "totalTokens": 24532,
+            "chaptersSent": 2,
+            "factionSheets": [
+              "veil_faction_house_belaerys",
+              "veil_faction_aurion_eastern_expedition",
+              "veil_faction_golden_empire_yi_ti",
+              "faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_old_blood",
+              "veil_scratch_asoiaf_faction_asoiaf_lion_of_night_0211"
+            ],
+            "recentEntries": 49,
+            "patchProposals": 0,
+            "timelineEvents": 8,
+            "memoryNodesSent": 8,
+            "continuityWarnings": 0,
+            "chaptersSuppressedByArc": 68,
+            "chaptersSuppressedByArcs": 68,
+            "unresolvedCharacterReferences": 0
+          },
+          "selection": {
+            "groups": [
+              {
+                "kind": "recentEntries",
+                "sent": 49,
+                "loaded": 186,
+                "omitted": 137,
+                "partial": 0,
+                "sentIds": [
+                  "entry_145a356a-3c7d-4c02-b439-1a9f54b39549",
+                  "narration_145a356a-3c7d-4c02-b439-1a9f54b39549",
+                  "entry_4492284f-c9c6-40fe-8d2f-fa09069269f6",
+                  "narration_4492284f-c9c6-40fe-8d2f-fa09069269f6",
+                  "entry_1048afc7-0d76-44a7-912a-00130f638045",
+                  "narration_1048afc7-0d76-44a7-912a-00130f638045",
+                  "entry_ab80f88d-3dd6-4f3a-8c92-f7e22868ee27",
+                  "narration_ab80f88d-3dd6-4f3a-8c92-f7e22868ee27",
+                  "entry_efca546e-3b8a-41be-b388-85e07ab9e45d",
+                  "narration_efca546e-3b8a-41be-b388-85e07ab9e45d",
+                  "entry_2f48f5a3-96e9-48c1-84e0-efbf0d1b7b50",
+                  "narration_2f48f5a3-96e9-48c1-84e0-efbf0d1b7b50",
+                  "entry_de83aeaf-3ae4-49c2-8844-853ddb184b3d",
+                  "narration_de83aeaf-3ae4-49c2-8844-853ddb184b3d",
+                  "entry_5b29a207-1026-4a9b-8ef3-d889c251be9e",
+                  "narration_5b29a207-1026-4a9b-8ef3-d889c251be9e",
+                  "entry_83bd39e4-3b29-4ff6-a74f-bb16dfafd491",
+                  "narration_83bd39e4-3b29-4ff6-a74f-bb16dfafd491",
+                  "entry_237b7cb7-8cc4-42a3-9bde-e3aff7b5ccf2",
+                  "narration_237b7cb7-8cc4-42a3-9bde-e3aff7b5ccf2",
+                  "entry_8688e419-b30d-413b-b13a-6c2451a1d7b0",
+                  "narration_8688e419-b30d-413b-b13a-6c2451a1d7b0",
+                  "entry_bb26296e-96db-4c14-90f2-cb6da8b85c0d",
+                  "narration_bb26296e-96db-4c14-90f2-cb6da8b85c0d",
+                  "entry_477001e7-429f-4093-95f3-f6e6d9a0e20f",
+                  "narration_477001e7-429f-4093-95f3-f6e6d9a0e20f",
+                  "entry_7cf84f74-8704-4d4e-b4b9-2b2b7126202a",
+                  "narration_7cf84f74-8704-4d4e-b4b9-2b2b7126202a",
+                  "entry_6a76c34e-8d6f-4f1a-ba3d-91701e83d705",
+                  "narration_6a76c34e-8d6f-4f1a-ba3d-91701e83d705",
+                  "entry_3e855e32-7490-4fbc-bfe5-9bfc2775a64b",
+                  "narration_3e855e32-7490-4fbc-bfe5-9bfc2775a64b",
+                  "entry_5829cf91-6515-4f26-8a2e-e7889f26598b",
+                  "narration_5829cf91-6515-4f26-8a2e-e7889f26598b",
+                  "narration_9a4b5a7f-8e34-4e94-a014-794541f131e7",
+                  "narration_338827fa-453e-4e8a-9b1e-e7931c76f732",
+                  "entry_583777d7-6782-4f29-8424-bbc47d08722e",
+                  "narration_583777d7-6782-4f29-8424-bbc47d08722e",
+                  "entry_65292015-abef-4bc3-8593-07b02562c41b",
+                  "narration_65292015-abef-4bc3-8593-07b02562c41b",
+                  "entry_f43d8ccb-97b2-4cf1-9dd1-f113cae18b7c",
+                  "narration_f43d8ccb-97b2-4cf1-9dd1-f113cae18b7c",
+                  "entry_69637b4a-0b1e-4f32-8ac4-2396cd57828f",
+                  "narration_69637b4a-0b1e-4f32-8ac4-2396cd57828f",
+                  "entry_ffad85a7-c22d-4e8c-bf4c-6dcd8f352f6f",
+                  "narration_ffad85a7-c22d-4e8c-bf4c-6dcd8f352f6f",
+                  "entry_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6",
+                  "narration_7a5e4d7b-13d7-4cc7-9fd0-55dda3ac32b6",
+                  "narration_d59d75d4-6e78-4f26-96a3-49b8faf4fb51"
+                ],
+                "selected": 49,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "memoryNodes",
+                "sent": 8,
+                "loaded": 8,
+                "omitted": 0,
+                "partial": 0,
+                "sentIds": [
+                  "transcript_narration_d100a88c-c0b3-41e6-9a47-f1805229604f",
+                  "mem_chapter_chapter_entry_d33faa63_e50b_43d8_8760_3b494a9d41ee_narration_e10ac3ec_3482_4f0d_af75_391fe576a3a7",
+                  "transcript_narration_398678c2-e5e9-48c8-a2b6-019e89285ca8",
+                  "transcript_narration_9af925ed-a3a4-400d-b73e-8913a5faa2fc",
+                  "transcript_narration_7d34d295-01da-44f5-9e73-31b12cd7f489",
+                  "transcript_narration_d4777b56-448b-45a4-ab46-3f4ac113e1a8",
+                  "transcript_narration_1571c893-4068-4a0b-9d43-b201085056df",
+                  "transcript_narration_1e9a7ff5-a9d7-4015-9c59-73e32c6796a9"
+                ],
+                "selected": 8,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "sceneCheckpointNotes",
+                "sent": 0,
+                "loaded": 0,
+                "omitted": 0,
+                "partial": 0,
+                "sentIds": [],
+                "selected": 0,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "timelineEvents",
+                "sent": 8,
+                "loaded": 86,
+                "omitted": 78,
+                "partial": 0,
+                "sentIds": [
+                  "event_2e2281f2-8094-4d21-98d1-b81d57fbb54c",
+                  "event_cb06a9cc-c22d-49ab-b86f-4448d26df2ba",
+                  "event_32607a00-2d86-4bce-9df7-7fe4abf34abd",
+                  "event_a70ff37d-1a57-4065-a630-86a045007e71",
+                  "event_a7c77523-8bf2-45fe-a100-65be0db82bdc",
+                  "event_b9b8d306-0b4e-4244-aa4d-a2397ffdc7ec",
+                  "event_3e0d0404-5912-4b8b-9596-d08a939f53f3",
+                  "event_b23a25b8-10d2-4ef7-9274-3241162d3327"
+                ],
+                "selected": 8,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "chapters",
+                "sent": 2,
+                "loaded": 81,
+                "omitted": 79,
+                "partial": 0,
+                "sentIds": [
+                  "chapter_narration_afe43b73_1b71_4ad1_b14a_e4719dd3e240_entry_bb26296e_96db_4c14_90f2_cb6da8b85c0d",
+                  "chapter_narration_f911516f_8168_4dfe_a293_7cb474266884_entry_afe43b73_1b71_4ad1_b14a_e4719dd3e240"
+                ],
+                "selected": 2,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "arcs",
+                "sent": 2,
+                "loaded": 14,
+                "omitted": 12,
+                "partial": 0,
+                "sentIds": [
+                  "arc_chapter_entry_5617fee8_1085_4311_bf6e_a624a1a21e8d_narration_a7792e5d_ac5c_4725_ab14_f0c1ece885f0_chapter_entry_77bdac09_69c6_4e58_86a0_e586c5e2884_73beaa163693",
+                  "arc_chapter_narration_8b9e0390_6c46_4caf_a8f9_89044043c1d3_entry_4df0e9eb_73bc_477c_bab9_4e059afd85a0_chapter_entry_826610f3_1de1_4512_9e1e_fead856caab_059954176f65"
+                ],
+                "selected": 2,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "factionSheets",
+                "sent": 5,
+                "loaded": 149,
+                "omitted": 144,
+                "partial": 0,
+                "sentIds": [
+                  "veil_faction_house_belaerys",
+                  "veil_faction_aurion_eastern_expedition",
+                  "veil_faction_golden_empire_yi_ti",
+                  "faction_tag_story_52d7c651_0b16_4b91_890d_e7f226f7926b_old_blood",
+                  "veil_scratch_asoiaf_faction_asoiaf_lion_of_night_0211"
+                ],
+                "selected": 5,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "beliefs",
+                "sent": 8,
+                "loaded": 120,
+                "omitted": 112,
+                "partial": 0,
+                "sentIds": [
+                  "belief_416f2a48-32e9-4113-9286-6362bfcd8090",
+                  "belief_1aaeab77-f29e-4a00-934f-651d04ed955a",
+                  "belief_9768e2b8-88f5-4ed5-b3d9-7e68d994c5b6",
+                  "belief_4055f7d1-d2c0-4db0-b8a5-30cc13b21592",
+                  "belief_38bcd6ae-2260-4bac-a953-d3a99c1fbce0",
+                  "belief_da24070a-a57b-4134-81cd-9dd662676d22",
+                  "belief_11bac330-e21a-40b0-b959-bf78d6d412bc",
+                  "belief_6a90fade-1aaf-44a6-8ba9-a68da0d6313e"
+                ],
+                "selected": 8,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "agreements",
+                "sent": 8,
+                "loaded": 49,
+                "omitted": 41,
+                "partial": 0,
+                "sentIds": [
+                  "agreement_a6f4f2da-9fc2-44b0-9ea6-9565384d4031",
+                  "agreement_159839b5-46c4-4ef8-95b4-01b424d7d8ff",
+                  "agreement_2cbcd45d-4530-47b7-871c-761b1e61fa9b",
+                  "agreement_8016efb7-b6be-400a-b8f5-c9238747d087",
+                  "agreement_a65a7ee3-c4fc-413b-8748-210920f317d7",
+                  "agreement_a8d6ce2e-0b16-482d-a45f-854d40617f91",
+                  "agreement_275db041-7e54-4111-852d-fb45727e6794",
+                  "agreement_6e409346-9c7f-400b-ad9b-f5261adbcbb2"
+                ],
+                "selected": 8,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "threads",
+                "sent": 7,
+                "loaded": 7,
+                "omitted": 0,
+                "partial": 0,
+                "sentIds": [
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_summer_sea_claim_ba10487e787d3f8d",
+                  "veil_thread_not_the_heir",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_smoke_over_the_fish_market_2ee13974ee611fa5",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_house_belaerys_territorial_claim_03404ab92bd29acb",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_blood_in_sunspear_bd5fbf2103f0cb45",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_message_that_drew_aegon_east",
+                  "plot_thread_story_52d7c651_0b16_4b91_890d_e7f226f7926b_the_accord_s_reckoning_21bdf6d9c9a5cb07"
+                ],
+                "selected": 7,
+                "omittedIds": [],
+                "partialIds": []
+              },
+              {
+                "kind": "wikiBlocks",
+                "sent": 0,
+                "loaded": 0,
+                "omitted": 0,
+                "partial": 0,
+                "sentIds": [],
+                "selected": 0,
+                "omittedIds": [],
+                "partialIds": []
+              }
+            ],
+            "version": 1,
+            "requests": [
+              {
+                "id": "primary",
+                "label": "Primary narration request",
+                "sections": [
+                  {
+                    "id": "system",
+                    "chars": 13246,
+                    "label": "System instructions",
+                    "tokens": 2812
+                  },
+                  {
+                    "id": "context",
+                    "chars": 39187,
+                    "label": "Scene and memory",
+                    "tokens": 9797
+                  },
+                  {
+                    "id": "history",
+                    "chars": 49178,
+                    "label": "Recent dialogue",
+                    "tokens": 11852
+                  },
+                  {
+                    "id": "action",
+                    "chars": 315,
+                    "label": "Player action and tool observations",
+                    "tokens": 71
+                  }
+                ],
+                "totalChars": 101926,
+                "totalTokens": 24532
+              }
+            ],
+            "sections": [
+              {
+                "id": "system",
+                "chars": 13246,
+                "label": "System instructions",
+                "tokens": 2812
+              },
+              {
+                "id": "context",
+                "chars": 39187,
+                "label": "Scene and memory",
+                "tokens": 9797
+              },
+              {
+                "id": "history",
+                "chars": 49178,
+                "label": "Recent dialogue",
+                "tokens": 11852
+              },
+              {
+                "id": "action",
+                "chars": 315,
+                "label": "Player action and tool observations",
+                "tokens": 71
+              }
+            ]
+          },
+          "truncated": false,
+          "cacheSegments": [
+            {
+              "hit": true,
+              "kind": "prompt_system",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:prompt_system:a5ab91cccc7f6300dac27830e92eb3104931d76f28db74ddd6aeafa29fc98a3e",
+              "contentHash": "5c665f7d196178481b6f006a3dc31a8054ab5689183c0abfc282c8d3785faafb",
+              "invalidated": false,
+              "tokenEstimate": 3312,
+              "dependencyCount": 1
+            },
+            {
+              "hit": true,
+              "kind": "campaign_continuity",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:campaign_continuity:19a109bf679edc14de67ba4e8035db4b487f1378a646352c9f2ca7b25410734a",
+              "contentHash": "edba4aaa6a16d745080254c076b4c2e9c7bcad10f8394c8e0ccbeda6cafbcf49",
+              "invalidated": false,
+              "tokenEstimate": 13733,
+              "dependencyCount": 27
+            },
+            {
+              "hit": true,
+              "kind": "tool_schema",
+              "cacheKey": "engine-cache:story_52d7c651-0b16-4b91-890d-e7f226f7926b:tool_schema:893698a9adbabc5acbdb628c070818a5067b517ad280231da74c6902eb3b8913",
+              "contentHash": "2d49ddf4ba001ff863fa5c8df8049b9269b84d70b898099a2ea6526d838bf5cb",
+              "invalidated": false,
+              "tokenEstimate": 7,
+              "dependencyCount": 1
+            }
+          ],
+          "continuityLedger": {
+            "facts": [],
+            "warnings": [],
+            "patchProposals": []
+          },
+          "unresolvedCharacterReferences": []
+        },
+        "stateExtraction": {
+          "mode": "deferred"
+        },
+        "generationTimings": [
+          {
+            "model": "deepseek/deepseek-v4-pro-0813",
+            "status": "success",
+            "operation": "turn.narration",
+            "serviceId": "narrative",
+            "durationMs": 29420,
+            "retryCount": 0,
+            "totalTokens": 26638,
+            "finishReason": "stop",
+            "requestTokens": 24955,
+            "responseTokens": 1683,
+            "providerCostUsd": 0.01774512432,
+            "cacheWriteTokens": null,
+            "cachedInputTokens": 2944,
+            "timeToFirstTokenMs": 17468
+          }
+        ],
+        "memoryTokenBudget": 2400,
+        "retrievedMemoryIds": [
+          "transcript_narration_d100a88c-c0b3-41e6-9a47-f1805229604f",
+          "mem_chapter_chapter_entry_d33faa63_e50b_43d8_8760_3b494a9d41ee_narration_e10ac3ec_3482_4f0d_af75_391fe576a3a7",
+          "transcript_narration_398678c2-e5e9-48c8-a2b6-019e89285ca8",
+          "transcript_narration_9af925ed-a3a4-400d-b73e-8913a5faa2fc",
+          "transcript_narration_7d34d295-01da-44f5-9e73-31b12cd7f489",
+          "transcript_narration_d4777b56-448b-45a4-ab46-3f4ac113e1a8",
+          "transcript_narration_1571c893-4068-4a0b-9d43-b201085056df",
+          "transcript_narration_1e9a7ff5-a9d7-4015-9c59-73e32c6796a9"
+        ],
+        "wikiContextCitations": [],
+        "wikiContextPageCount": 0,
+        "wikiContextSeedCount": 0
+      },
+      "header": "[ 🕰️ Time 10:06 | 🗓️ Day Twenty-Seventh, Moon 6, 299 AC | 📍 Yin — Hall of the Vermillion Steps, threshold of the great hall | 🌤️ Morning, warm, incense-heavy air ]"
+    }
+  ],
+  "patchId": "location_pov_repair_3f371ded-ea12-4fb5-9262-ca0b762da46e",
+  "version": 3340,
+  "operations": [
+    {
+      "op": "replace",
+      "path": "/stories/story_52d7c651-0b16-4b91-890d-e7f226f7926b/currentLocationId",
+      "before": "entity_f879c54b-a838-4114-852b-0b4634fc9722",
+      "value": "entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587"
+    },
+    {
+      "op": "replace",
+      "path": "/stories/story_52d7c651-0b16-4b91-890d-e7f226f7926b/currentWorldTime",
+      "before": "Day Twenty-Seventh, Moon 6, 299 AC | 10:06",
+      "value": "Day Twenty-Seventh, Moon 6, 299 AC | 09:33"
+    },
+    {
+      "op": "replace",
+      "path": "/entities/entity_f879c54b-a838-4114-852b-0b4634fc9722/state",
+      "before": {
+        "current": true,
+        "connections": []
+      },
+      "value": {
+        "current": false,
+        "connections": [],
+        "isCurrentLocation": false
+      }
+    },
+    {
+      "op": "replace",
+      "path": "/entities/entity_f5e3952f-a9b9-4d89-9ed6-57d32effe587/state",
+      "before": {
+        "current": false,
+        "connections": [
+          {
+            "direction": "west through the city streets",
+            "targetName": "Volantis — the eastern pier",
+            "travelTimeMinutes": 20
+          }
+        ],
+        "locationKind": "site"
+      },
+      "value": {
+        "current": true,
+        "connections": [
+          {
+            "direction": "west through the city streets",
+            "targetName": "Volantis — the eastern pier",
+            "travelTimeMinutes": 20
+          }
+        ],
+        "locationKind": "site",
+        "isCurrentLocation": true
+      }
+    },
+    {
+      "op": "replace",
+      "path": "/entities/veil_entity_leng_yi_harbor/state",
+      "before": {
+        "type": "location",
+        "region": null,
+        "current": false,
+        "terrain": "Jade Sea harbor beside humid jungle",
+        "connections": [],
+        "isCurrentLocation": true
+      },
+      "value": {
+        "type": "location",
+        "region": null,
+        "current": false,
+        "terrain": "Jade Sea harbor beside humid jungle",
+        "connections": [],
+        "isCurrentLocation": false
+      }
+    }
+  ]
+}

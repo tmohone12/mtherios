@@ -1,0 +1,1096 @@
+{
+  "recordedAt": "2026-09-07T21:58:05.412Z",
+  "storyId": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+  "serverVersion": 3341,
+  "kept": [
+    "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_a0e5cd5c42049eac",
+    "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3338_c69b7f6a39fd9d57"
+  ],
+  "priorJobs": [
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_location_lore_index_story_52d7c651_0b_c20f21f20ccb732f",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "location_lore_edit",
+        "recordTypes": [
+          "entities",
+          "relationships",
+          "facts"
+        ]
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:22.124Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:22.124Z",
+      "updated_at": "2026-09-07T21:51:22.124Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_location_lore_edit_story_vault_3341_7bc13a2ee07853aa",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "reason": "location-lore-edit",
+        "serverVersion": 3341
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:22.122Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:22.122Z",
+      "updated_at": "2026-09-07T21:51:22.122Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_location_lore_index_story_52d7c651_0b_da7929052bccc733",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "location_lore_edit",
+        "recordTypes": [
+          "entities",
+          "relationships",
+          "facts"
+        ]
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:22.063Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:22.063Z",
+      "updated_at": "2026-09-07T21:51:22.063Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_location_lore_edit_story_vault_3339_377ce09a90b1491b",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "reason": "location-lore-edit",
+        "serverVersion": 3339
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:22.062Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:22.062Z",
+      "updated_at": "2026-09-07T21:51:22.062Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3338_c69b7f6a39fd9d57",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3338
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:22.015Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:22.015Z",
+      "updated_at": "2026-09-07T21:51:22.015Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_a0e5cd5c42049eac",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3338
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:22.015Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:22.015Z",
+      "updated_at": "2026-09-07T21:51:22.015Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3337_8dad46381d7826b9",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3337
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:21.662Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:21.662Z",
+      "updated_at": "2026-09-07T21:51:21.662Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_7732cca561ffb4e8",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3337
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:21.662Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:21.662Z",
+      "updated_at": "2026-09-07T21:51:21.662Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_bf61e4b60dfe18ac",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3336
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:21.295Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:21.295Z",
+      "updated_at": "2026-09-07T21:51:21.295Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3336_9cf659b363735c24",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3336
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:21.295Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:21.295Z",
+      "updated_at": "2026-09-07T21:51:21.295Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_5721f320ccd1de66",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3335
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:20.948Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:20.948Z",
+      "updated_at": "2026-09-07T21:51:20.948Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3335_746f654eb47cc276",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3335
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:20.948Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:20.948Z",
+      "updated_at": "2026-09-07T21:51:20.948Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3334_219fda836499a54f",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3334
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:20.616Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:20.616Z",
+      "updated_at": "2026-09-07T21:51:20.616Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_c442fe075c7c6a33",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3334
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:20.616Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:20.616Z",
+      "updated_at": "2026-09-07T21:51:20.616Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_4d9a568bd445fdc0",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3333
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:20.254Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:20.254Z",
+      "updated_at": "2026-09-07T21:51:20.254Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3333_be5a69f106c10b72",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3333
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:20.253Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:20.253Z",
+      "updated_at": "2026-09-07T21:51:20.253Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3332_b291f2d0f2759840",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3332
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:19.894Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:19.894Z",
+      "updated_at": "2026-09-07T21:51:19.894Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_e577066b160b5475",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3332
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:19.894Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:19.894Z",
+      "updated_at": "2026-09-07T21:51:19.894Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3331_83bab557e7d98f24",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3331
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:19.556Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:19.556Z",
+      "updated_at": "2026-09-07T21:51:19.556Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_626e9fcbaf2c9ae2",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3331
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:19.556Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:19.556Z",
+      "updated_at": "2026-09-07T21:51:19.556Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_e82f88324e6309a8",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3330
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:19.219Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:19.219Z",
+      "updated_at": "2026-09-07T21:51:19.219Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3330_fdd989ba52c6c94b",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3330
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:19.218Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:19.218Z",
+      "updated_at": "2026-09-07T21:51:19.218Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_c2030001f94b4af7",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3329
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:18.832Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:18.832Z",
+      "updated_at": "2026-09-07T21:51:18.832Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3329_9ae887ecfdfcfcc2",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3329
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:18.832Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:18.832Z",
+      "updated_at": "2026-09-07T21:51:18.832Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_11ea0608db807f67",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3328
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:18.456Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:18.456Z",
+      "updated_at": "2026-09-07T21:51:18.456Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3328_f86a21e224a12973",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3328
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:18.456Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:18.456Z",
+      "updated_at": "2026-09-07T21:51:18.456Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3327_314f2064b1eadefc",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3327
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:18.140Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:18.140Z",
+      "updated_at": "2026-09-07T21:51:18.140Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_6e04c730c3c36564",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3327
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:18.140Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:18.140Z",
+      "updated_at": "2026-09-07T21:51:18.140Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3326_46e305ae1759aad5",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3326
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:17.816Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:17.816Z",
+      "updated_at": "2026-09-07T21:51:17.816Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_401da6bb286d9f82",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3326
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:17.816Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:17.816Z",
+      "updated_at": "2026-09-07T21:51:17.816Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_48342d07126c4a43",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3325
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:17.482Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:17.482Z",
+      "updated_at": "2026-09-07T21:51:17.482Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3325_b07b9a3dddb0ad8b",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3325
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:17.481Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:17.481Z",
+      "updated_at": "2026-09-07T21:51:17.481Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3324_678c37362a4118dd",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3324
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:17.153Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:17.153Z",
+      "updated_at": "2026-09-07T21:51:17.153Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_fc143f1a206f321a",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3324
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:17.153Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:17.153Z",
+      "updated_at": "2026-09-07T21:51:17.153Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_a96aa5e522c88070",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3323
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:16.807Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:16.807Z",
+      "updated_at": "2026-09-07T21:51:16.807Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3323_8841321bb5a99bff",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3323
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:16.807Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:16.807Z",
+      "updated_at": "2026-09-07T21:51:16.807Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_253897783f163c99",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3322
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:16.462Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:16.462Z",
+      "updated_at": "2026-09-07T21:51:16.462Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3322_0aa5e5e6512552c1",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3322
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:16.462Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:16.462Z",
+      "updated_at": "2026-09-07T21:51:16.462Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3321_ce83a05365b88356",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3321
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:16.113Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:16.113Z",
+      "updated_at": "2026-09-07T21:51:16.113Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_f15abdbac59ee663",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3321
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:16.113Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:16.113Z",
+      "updated_at": "2026-09-07T21:51:16.113Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_e50db1c19bce404b",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3320
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:15.764Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:15.764Z",
+      "updated_at": "2026-09-07T21:51:15.764Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3320_59f28ae9ee276cae",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3320
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:15.763Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:15.763Z",
+      "updated_at": "2026-09-07T21:51:15.763Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_e68f74de0382c0de",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3319
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:15.412Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:15.412Z",
+      "updated_at": "2026-09-07T21:51:15.412Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3319_5bb4d54a67c89107",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3319
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:15.412Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:15.412Z",
+      "updated_at": "2026-09-07T21:51:15.412Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_3dbb9225257426b3",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3318
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:15.034Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:15.034Z",
+      "updated_at": "2026-09-07T21:51:15.034Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3318_e3bfed719e1e327b",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3318
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:15.033Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:15.033Z",
+      "updated_at": "2026-09-07T21:51:15.033Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_f2863514ea59eb55",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3317
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:14.653Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:14.653Z",
+      "updated_at": "2026-09-07T21:51:14.653Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3317_f2cfd9b4fdddfd4f",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3317
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:14.653Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:14.653Z",
+      "updated_at": "2026-09-07T21:51:14.653Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_7251e488f3247a59",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3316
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:14.282Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:14.282Z",
+      "updated_at": "2026-09-07T21:51:14.282Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3316_bdf84adbe5b8a91c",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3316
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:14.281Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:14.281Z",
+      "updated_at": "2026-09-07T21:51:14.281Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_cf886a17d4bd404b",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3315
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:13.873Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:13.873Z",
+      "updated_at": "2026-09-07T21:51:13.873Z"
+    },
+    {
+      "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3315_6333e3e9bf652776",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "sync_story_vault",
+      "payload": {
+        "index": true,
+        "reason": "canon-repair",
+        "source": "canon_repair",
+        "serverVersion": 3315
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:13.873Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:13.873Z",
+      "updated_at": "2026-09-07T21:51:13.873Z"
+    },
+    {
+      "id": "job_index_canonical_records_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_index_story_52d7c651_0b1_f31f4f4787e3a0ed",
+      "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+      "type": "index_canonical_records",
+      "payload": {
+        "reason": "canon_repair",
+        "serverVersion": 3314
+      },
+      "status": "queued",
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "run_after": "2026-09-07T21:51:13.443Z",
+      "locked_at": null,
+      "locked_by": null,
+      "last_error": null,
+      "metadata": {},
+      "created_at": "2026-09-07T21:51:13.443Z",
+      "updated_at": "2026-09-07T21:51:13.443Z"
+    }
+  ],
+  "rationale": "All selected jobs rebuild projections from the current canonical database. Retain one full canonical index and one vault/index refresh at the final pilot version; preserve every superseded job receipt and leave running jobs unchanged.",
+  "abandonedClaim": {
+    "id": "job_sync_story_vault_story_52d7c651_0b16_4b91_890d_e7f226f7926b_canon_repair_story_vault_3311_b29831d56f2d2ba9",
+    "story_id": "story_52d7c651-0b16-4b91-890d-e7f226f7926b",
+    "type": "sync_story_vault",
+    "payload": {
+      "index": true,
+      "reason": "canon-repair",
+      "source": "canon_repair",
+      "serverVersion": 3311
+    },
+    "status": "running",
+    "attempt_count": 1,
+    "max_attempts": 3,
+    "run_after": "2026-09-07T21:51:12.243Z",
+    "locked_at": "2026-09-07T21:55:06.089Z",
+    "locked_by": "mtheriosd_6088",
+    "last_error": null,
+    "metadata": {},
+    "created_at": "2026-09-07T21:51:12.243Z",
+    "updated_at": "2026-09-07T21:55:06.089Z"
+  }
+}

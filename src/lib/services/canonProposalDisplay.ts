@@ -1,5 +1,17 @@
 type JsonRecord = Record<string, unknown>;
 
+/** World record queries return SQL names; canon snapshots use model names. */
+export function proposalRecordView(proposal: JsonRecord): JsonRecord {
+	return {
+		...proposal,
+		proposalType: proposal.proposalType ?? proposal.proposal_type,
+		targetTable: proposal.targetTable ?? proposal.target_table,
+		targetRecordId: proposal.targetRecordId ?? proposal.target_record_id,
+		proposedBy: proposal.proposedBy ?? proposal.proposed_by,
+		sourceEntryIds: proposal.sourceEntryIds ?? proposal.source_entry_ids,
+	};
+}
+
 function asRecord(value: unknown): JsonRecord {
 	return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
 }
@@ -92,6 +104,7 @@ function characterContextDescription(proposal: JsonRecord): string {
 }
 
 export function formatProposalSummary(proposal: JsonRecord): string {
+	proposal = proposalRecordView(proposal);
 	if (proposal.proposalType === 'character_reference_review') {
 		const name = characterReferenceName(proposal);
 		const context = characterReferenceContext(proposal);
@@ -104,6 +117,7 @@ export function formatProposalSummary(proposal: JsonRecord): string {
 }
 
 export function formatProposalSubline(proposal: JsonRecord): string {
+	proposal = proposalRecordView(proposal);
 	const parts = [
 		asString(proposal.status),
 		asString(proposal.proposalType),
@@ -114,6 +128,7 @@ export function formatProposalSubline(proposal: JsonRecord): string {
 }
 
 export function formatProposalDescription(proposal: JsonRecord): string {
+	proposal = proposalRecordView(proposal);
 	if (proposal.proposalType === 'character_reference_review') {
 		const operationValue = namedOperationValue(proposal);
 		return compact(operationValue.description, 180) || compact(proposal.reason, 180);

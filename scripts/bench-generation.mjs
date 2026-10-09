@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 
 import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { arch, cpus, platform, totalmem } from 'node:os';
 import postgres from 'postgres';
 import {
 	buildBenchCampaignBootstrapCommandRequest,
+	buildBenchMemoryRetrieveCommandRequest,
+	buildBenchPreviewCommandRequest,
 	buildBenchCampaignStatusCommandRequest,
 	buildBenchTranscriptPageCommandRequest,
 	buildBenchTurnCommandRequest,
@@ -15,8 +19,10 @@ import {
 	verifyDbLongCampaignBenchmark,
 } from './bench-generation-core.mjs';
 import { databaseUrl } from './db-env.mjs';
+import { harnessBuildId } from './harness-build-id.mjs';
 
-const DEFAULT_URL = process.env.MTHERIOS_BENCH_URL || 'http://127.0.0.1:5173';
+import { resolveAppUrl } from './runtime-config.mjs';
+const DEFAULT_URL = process.env.MYTHENGINE_BENCH_URL || process.env.MTHERIOS_BENCH_URL || resolveAppUrl();
 
 function parseArgs(argv) {
 	const args = {
@@ -33,6 +39,9 @@ function parseArgs(argv) {
 		maxDurationMs: 1_000,
 		maxHeapMb: 128,
 		batchSize: 1_000,
+		rounds: 3,
+		concurrency: 4,
+		samples: 8,
 		keepSeed: false,
 		replaceSeed: false,
 		seedStoryId: '',
@@ -68,6 +77,12 @@ function parseArgs(argv) {
 		else if (arg.startsWith('--max-heap-mb=')) args.maxHeapMb = Number.parseInt(arg.slice('--max-heap-mb='.length), 10);
 		else if (arg === '--batch-size' && next) args.batchSize = Number.parseInt(next, 10), i += 1;
 		else if (arg.startsWith('--batch-size=')) args.batchSize = Number.parseInt(arg.slice('--batch-size='.length), 10);
+		else if (arg === '--rounds' && next) args.rounds = Number.parseInt(next, 10), i += 1;
+		else if (arg.startsWith('--rounds=')) args.rounds = Number.parseInt(arg.slice('--rounds='.length), 10);
+		else if (arg === '--concurrency' && next) args.concurrency = Number.parseInt(next, 10), i += 1;
+		else if (arg.startsWith('--concurrency=')) args.concurrency = Number.parseInt(arg.slice('--concurrency='.length), 10);
+		else if (arg === '--samples' && next) args.samples = Number.parseInt(next, 10), i += 1;
+		else if (arg.startsWith('--samples=')) args.samples = Number.parseInt(arg.slice('--samples='.length), 10);
 		else if (arg === '--seed-story-id' && next) args.seedStoryId = next, i += 1;
 		else if (arg.startsWith('--seed-story-id=')) args.seedStoryId = arg.slice('--seed-story-id='.length);
 		else if (arg === '--db-url' && next) args.dbUrl = next, i += 1;
@@ -84,6 +99,9 @@ function parseArgs(argv) {
 	args.maxDurationMs = Number.isFinite(args.maxDurationMs) && args.maxDurationMs > 0 ? Math.trunc(args.maxDurationMs) : 1_000;
 	args.maxHeapMb = Number.isFinite(args.maxHeapMb) && args.maxHeapMb > 0 ? Math.trunc(args.maxHeapMb) : 128;
 	args.batchSize = Number.isFinite(args.batchSize) && args.batchSize > 0 ? Math.min(5_000, Math.trunc(args.batchSize)) : 1_000;
+	args.rounds = Number.isFinite(args.rounds) && args.rounds > 0 ? Math.min(50, Math.trunc(args.rounds)) : 3;
+	args.concurrency = Number.isFinite(args.concurrency) && args.concurrency > 0 ? Math.min(16, Math.trunc(args.concurrency)) : 4;
+	args.samples = Number.isFinite(args.samples) && args.samples > 0 ? Math.min(100, Math.trunc(args.samples)) : 8;
 	args.seedStoryId = String(args.seedStoryId || '').trim();
 	args.dbUrl = String(args.dbUrl || '').trim();
 	return args;
@@ -94,8 +112,10 @@ function usage() {
 
 Usage:
   npm run bench:generation -- --mode long-campaign [--turns 10000]
-  npm run bench:generation -- --mode db-long-campaign [--turns 10000] [--url http://127.0.0.1:5173]
-  npm run bench:generation -- --story-id <story-id> [--mode jobs|world-sim|turn] [--url http://127.0.0.1:5173]
+  npm run bench:generation -- --mode db-long-campaign [--turns 10000] [--url http://127.0.0.1:5174]
+  npm run bench:generation -- --mode db-memory-load [--turns 5000] [--samples 8] [--concurrency 4] [--url http://127.0.0.1:5174]
+  npm run bench:generation -- --mode preview-load --story-id <story-id> [--samples 8] [--concurrency 4]
+  npm run bench:generation -- --story-id <story-id> [--mode jobs|world-sim|turn] [--url http://127.0.0.1:5174]
 
 Examples:
   npm run bench:generation -- --mode long-campaign --turns 10000
@@ -178,6 +198,87 @@ function printPhaseTable(phases) {
 function countNewApiCalls(before, after) {
 	const beforeIds = new Set(before.map((log) => log.id).filter(Boolean));
 	return after.filter((log) => !beforeIds.has(log.id)).length;
+}
+
+function benchmarkHardware() {
+	return {
+		platform: platform(),
+		arch: arch(),
+		cpuCount: cpus().length,
+		cpuModel: cpus()[0]?.model ?? null,
+		totalMemoryMb: Math.round(totalmem() / 1024 / 1024),
+	};
+}
+
+async function readStoryCorpusCounts(storyId, dbUrl) {
+	const sql = postgres(dbUrl || databaseUrl(), { max: 1, prepare: false });
+	try {
+		const [row] = await sql.unsafe(`
+			select
+				(select count(*)::int from story_entries where story_id = '${String(storyId).replaceAll("'", "''")}') as entries,
+				(select count(*)::int from memory_nodes where story_id = '${String(storyId).replaceAll("'", "''")}') as "memoryNodes"
+		`);
+		return { storyEntries: Number(row?.entries ?? 0), memoryNodes: Number(row?.memoryNodes ?? 0) };
+	} finally {
+		await sql.end({ timeout: 1 });
+	}
+}
+
+async function runPreviewLoadBenchmark(args) {
+	if (!args.storyId) throw new Error('--story-id is required for preview-load.');
+	const durations = [];
+	const preparations = [];
+	for (let start = 0; start < args.samples; start += args.concurrency) {
+		const batch = Array.from({ length: Math.min(args.concurrency, args.samples - start) }, async (_, offset) => {
+			const request = buildBenchPreviewCommandRequest({
+				storyId: args.storyId,
+				playerText: args.playerText,
+				localVersion: args.localVersion,
+				clientTurnId: `bench_preview_${Date.now()}_${start + offset}_${randomUUID().slice(0, 8)}`,
+			});
+			const started = performance.now();
+			const payload = unwrapBenchEngineCommandPayload(await requestJson(args.url, request.requestPath, {
+				method: 'POST',
+				body: JSON.stringify(request.body),
+				timeoutMs: request.timeoutMs,
+			}), 'turn.preview');
+			durations.push(Math.round(performance.now() - started));
+			if (Number.isFinite(payload.preparationMs)) preparations.push(payload.preparationMs);
+		});
+		await Promise.all(batch.map(task => task));
+	}
+	const build = await harnessBuildId(process.cwd(), [
+		'scripts/bench-generation.mjs',
+		'scripts/bench-generation-core.mjs',
+		'src/lib/server/turn/orchestrator.ts',
+		'src/lib/server/turn/provider.ts',
+		'src/lib/server/memory/retrieval.ts',
+	]);
+	const report = {
+		createdAt: new Date().toISOString(), mode: 'preview-load', build,
+		url: args.url, storyId: args.storyId, samples: durations.length,
+		concurrency: args.concurrency, durationMs: { p50: percentile(durations, 0.5), p95: percentile(durations, 0.95), max: Math.max(...durations) },
+		preparationMs: { p50: percentile(preparations, 0.5), p95: percentile(preparations, 0.95), max: preparations.length ? Math.max(...preparations) : null },
+		hardware: benchmarkHardware(),
+		corpus: await readStoryCorpusCounts(args.storyId, args.dbUrl),
+		providerCalls: 0, writes: false, retrievalDeadlineMs: 3_000,
+		gate: { serialPreparationP95Ms: null, concurrentPreparationP95Ms: null, note: 'Compare serial and concurrent reports for the same build/corpus; concurrency is not treated as a pass when it exceeds the proposed 1-second local target.' },
+	};
+	const reportDir = new URL('../evals/performance/results/', import.meta.url);
+	await mkdir(reportDir, { recursive: true });
+	const reportFile = `${report.createdAt.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}-${args.concurrency}x.json`;
+	const reportPath = new URL(reportFile, reportDir);
+	await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+	report.reportPath = reportPath.pathname.replace(/^\//, '').replaceAll('/', '\\');
+	console.log(JSON.stringify(report, null, 2));
+	if (report.durationMs.p95 > args.maxDurationMs) throw new Error(`Preview-load p95 exceeded --max-duration-ms (${report.durationMs.p95}ms > ${args.maxDurationMs}ms).`);
+}
+
+function percentile(values, fraction) {
+	const sorted = [...values].sort((a, b) => a - b);
+	if (sorted.length === 0) return null;
+	const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * fraction) - 1));
+	return sorted[index];
 }
 
 function seedStoryId(args) {
@@ -264,11 +365,12 @@ async function runEngineCommand(baseUrl, request) {
 
 async function runDbLongCampaignBenchmark(args) {
 	const sql = postgres(args.dbUrl || databaseUrl(), { max: 1, prepare: false });
+	const build = await harnessBuildId(process.cwd(), ['scripts/bench-generation.mjs', 'scripts/bench-generation-core.mjs', 'src/lib/server/turn/orchestrator.ts', 'src/lib/server/turn/provider.ts', 'src/lib/server/memory/retrieval.ts']);
 	let seed = null;
 	try {
 		seed = await seedDbLongCampaign(sql, args);
 		const gatewayStarted = performance.now();
-		const [status, transcript, bootstrap] = await Promise.all([
+		const [status, transcript, bootstrap, memory] = await Promise.all([
 			runEngineCommand(args.url, buildBenchCampaignStatusCommandRequest({
 				storyId: seed.storyId,
 				entryLimit: args.entryLimit,
@@ -281,6 +383,11 @@ async function runDbLongCampaignBenchmark(args) {
 				storyId: seed.storyId,
 				entryLimit: args.entryLimit,
 			})),
+			runEngineCommand(args.url, buildBenchMemoryRetrieveCommandRequest({
+				storyId: seed.storyId,
+				query: 'evidence',
+				tokenBudget: 600,
+			})),
 		]);
 		const gatewayDurationMs = Math.round(performance.now() - gatewayStarted);
 		const verification = verifyDbLongCampaignBenchmark({
@@ -290,10 +397,26 @@ async function runDbLongCampaignBenchmark(args) {
 			status,
 			transcript,
 			bootstrap,
+			memory,
 		});
+		const report = {
+			createdAt: new Date().toISOString(), mode: 'db-long-campaign', build,
+			url: args.url, storyId: seed.storyId, turns: args.turns,
+			entries: seed.entryCount, entryLimit: args.entryLimit,
+			seedDurationMs: seed.durationMs, gatewayDurationMs,
+			verification, providerCalls: 0, writes: true,
+			writeScope: 'disposable benchmark story only; cleaned up after verification',
+		};
+		const reportDir = new URL('../evals/performance/results/', import.meta.url);
+		await mkdir(reportDir, { recursive: true });
+		const reportFile = `${report.createdAt.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}-db-${args.turns}t.json`;
+		const reportPath = new URL(reportFile, reportDir);
+		await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+		report.reportPath = reportPath.pathname.replace(/^\//, '').replaceAll('/', '\\');
 
 		console.log('Mtherios generation benchmark');
 		console.log('  mode: db-long-campaign');
+		console.log(`  build: ${build.identity} ${build.gitHead || 'no-git-head'} dirty=${build.dirty} status=${build.dirtyStatusSha256}`);
 		console.log(`  url: ${args.url}`);
 		console.log(`  storyId: ${seed.storyId}`);
 		console.log(`  turns: ${args.turns}`);
@@ -303,6 +426,8 @@ async function runDbLongCampaignBenchmark(args) {
 		console.log(`  projection: ${verification.projection.length}/${verification.projection.limit} entries positions ${verification.projection.firstPosition}-${verification.projection.lastPosition}`);
 		console.log(`  transcript: ${verification.transcript.length}/${verification.transcript.limit} entries positions ${verification.transcript.firstPosition}-${verification.transcript.lastPosition} hasMore=${verification.transcript.hasMore}`);
 		console.log(`  bootstrap: total=${verification.bootstrap?.entryCount ?? 'n/a'} selected=${verification.bootstrap?.selectedLength ?? 'n/a'} count=${verification.bootstrap?.projectionCountEntries ?? 'n/a'}`);
+		console.log(`  memory: nodes=${verification.memory?.nodeCount ?? 'n/a'} tokens=${verification.memory?.tokenEstimate ?? 'n/a'} degraded=${verification.memory?.degradedSources?.join(' | ') || 'none'}`);
+		console.log(`  report: ${report.reportPath}`);
 
 		if (!verification.ok) {
 			for (const error of verification.errors) console.log(`  error: ${error}`);
@@ -319,25 +444,108 @@ async function runDbLongCampaignBenchmark(args) {
 	}
 }
 
+async function runDbMemoryLoadBenchmark(args) {
+	const sql = postgres(args.dbUrl || databaseUrl(), { max: 1, prepare: false });
+	const build = await harnessBuildId(process.cwd(), ['scripts/bench-generation.mjs', 'scripts/bench-generation-core.mjs', 'src/lib/server/turn/orchestrator.ts', 'src/lib/server/turn/provider.ts', 'src/lib/server/memory/retrieval.ts']);
+	let seed = null;
+	try {
+		seed = await seedDbLongCampaign(sql, args);
+		const durations = [];
+		const responses = [];
+		for (let start = 0; start < args.samples; start += args.concurrency) {
+			const batch = Array.from({ length: Math.min(args.concurrency, args.samples - start) }, (_, offset) => (async () => {
+				const started = performance.now();
+				const result = await runEngineCommand(args.url, buildBenchMemoryRetrieveCommandRequest({
+					storyId: seed.storyId,
+					query: 'evidence',
+					tokenBudget: 600,
+					clientCommandId: `bench_memory_${Date.now()}_${start + offset}`,
+				}));
+				responses.push({
+					nodeCount: Array.isArray(result.nodes) ? result.nodes.length : null,
+					tokenEstimate: Number.isFinite(result.tokenEstimate) ? result.tokenEstimate : null,
+					degradedSources: Array.isArray(result.retrievalDebug)
+						? result.retrievalDebug.filter((item) => typeof item === 'string' && /failed|unavailable|timed out/i.test(item))
+						: ['missing retrieval receipt'],
+				});
+				durations.push(Math.round(performance.now() - started));
+			})());
+			await Promise.all(batch);
+		}
+		const degradedSources = responses.flatMap((response) => response.degradedSources);
+		const maxNodes = Math.max(0, ...responses.map((response) => response.nodeCount ?? 0));
+		const report = {
+			createdAt: new Date().toISOString(), mode: 'db-memory-load', build,
+			url: args.url, storyId: seed.storyId, turns: args.turns,
+			entries: seed.entryCount, samples: durations.length, concurrency: args.concurrency,
+			seedDurationMs: seed.durationMs,
+			durationMs: { p50: percentile(durations, 0.5), p95: percentile(durations, 0.95), max: Math.max(...durations) },
+			maxNodes, responses, degradedSources, providerCalls: 0, writes: true,
+			writeScope: 'disposable benchmark story only; cleaned up after verification',
+			gate: { maxNodes: 32, degradedSources: 0, note: 'Identical retrieval requests should share active work and retain an explicit receipt.' },
+		};
+		const reportDir = new URL('../evals/performance/results/', import.meta.url);
+		await mkdir(reportDir, { recursive: true });
+		const reportFile = `${report.createdAt.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}-db-memory-${args.turns}t-${args.concurrency}x.json`;
+		const reportPath = new URL(reportFile, reportDir);
+		await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+		report.reportPath = reportPath.pathname.replace(/^\//, '').replaceAll('/', '\\');
+
+		console.log('Mtherios generation benchmark');
+		console.log('  mode: db-memory-load');
+		console.log(`  build: ${build.identity} ${build.gitHead || 'no-git-head'} dirty=${build.dirty} status=${build.dirtyStatusSha256}`);
+		console.log(`  url: ${args.url}`);
+		console.log(`  storyId: ${seed.storyId}`);
+		console.log(`  turns: ${args.turns}`);
+		console.log(`  entries: ${seed.entryCount}`);
+		console.log(`  duration p50/p95/max: ${report.durationMs.p50}/${report.durationMs.p95}/${report.durationMs.max}ms`);
+		console.log(`  max nodes: ${maxNodes}`);
+		console.log(`  degraded sources: ${degradedSources.join(' | ') || 'none'}`);
+		console.log(`  report: ${report.reportPath}`);
+		if (maxNodes > 32 || degradedSources.length > 0) throw new Error('DB memory-load benchmark failed bounded retrieval assertions.');
+	} finally {
+		if (seed && !args.keepSeed) {
+			await cleanupSeedStory(sql, seed.storyId);
+			console.log(`  cleanup: deleted ${seed.storyId}`);
+		} else if (seed) {
+			console.log(`  cleanup: kept ${seed.storyId}`);
+		}
+		await sql.end({ timeout: 5 });
+	}
+}
+
 async function runBenchmark(args) {
+	if (args.mode === 'db-memory-load') {
+		await runDbMemoryLoadBenchmark(args);
+		return;
+	}
+	if (args.mode === 'preview-load') {
+		await runPreviewLoadBenchmark(args);
+		return;
+	}
 	if (args.mode === 'long-campaign') {
-		const result = buildLongCampaignBenchmark(args);
-		const heapMb = typeof result.heapDeltaBytes === 'number'
-			? result.heapDeltaBytes / 1024 / 1024
-			: null;
+		const results = Array.from({ length: args.rounds }, () => buildLongCampaignBenchmark(args));
+		const build = await harnessBuildId(process.cwd(), ['scripts/bench-generation.mjs', 'scripts/bench-generation-core.mjs', 'src/lib/server/turn/orchestrator.ts', 'src/lib/server/turn/provider.ts', 'src/lib/server/memory/retrieval.ts']);
+		const result = results.at(-1);
+		const durations = results.map((row) => row.durationMs);
+		const heapDeltas = results.map((row) => row.heapDeltaBytes).filter((value) => typeof value === 'number');
+		const heapMb = heapDeltas.length > 0 ? heapDeltas.at(-1) / 1024 / 1024 : null;
 		console.log('Mtherios generation benchmark');
 		console.log('  mode: long-campaign');
+		console.log(`  build: ${build.identity} ${build.gitHead || 'no-git-head'} dirty=${build.dirty} status=${build.dirtyStatusSha256}`);
+		console.log(`  rounds: ${results.length}`);
 		console.log(`  turns: ${result.turns}`);
 		console.log(`  entries: ${result.entryCount}`);
-		console.log(`  duration: ${result.durationMs}ms`);
+		console.log(`  duration p50/p95: ${percentile(durations, 0.5)}ms/${percentile(durations, 0.95)}ms`);
 		if (heapMb != null) console.log(`  heap delta: ${heapMb.toFixed(2)}MB`);
 		console.log(`  projection: ${result.projection.selected}/${result.projection.limit} entries positions ${result.projection.firstPosition}-${result.projection.lastPosition}`);
 		console.log(`  prompt: ${result.prompt.selected}/${result.prompt.limit} entries positions ${result.prompt.firstPosition}-${result.prompt.lastPosition} tokens~${result.prompt.tokenEstimate}`);
 		console.log(`  cache warm hits: ${result.cache.warmAssembly.hits}/${result.cache.stableSegmentCount}`);
+		console.log(`  cache assembly cold/warm: ${result.cache.timings.coldMs.toFixed(3)}ms/${result.cache.timings.warmMs.toFixed(3)}ms`);
 		console.log(`  cache invalidated after character edit: ${result.cache.afterCharacterEdit.changedKeys.join(', ') || 'none'}`);
-		if (!result.ok) throw new Error('Long-campaign benchmark failed bounded projection/cache assertions.');
-		if (result.durationMs > args.maxDurationMs) {
-			throw new Error(`Long-campaign benchmark exceeded --max-duration-ms (${result.durationMs}ms > ${args.maxDurationMs}ms).`);
+		if (results.some((row) => !row.ok)) throw new Error('Long-campaign benchmark failed bounded projection/cache assertions.');
+		if (durations.some((durationMs) => durationMs > args.maxDurationMs)) {
+			throw new Error(`Long-campaign benchmark exceeded --max-duration-ms (${Math.max(...durations)}ms > ${args.maxDurationMs}ms).`);
 		}
 		if (heapMb != null && heapMb > args.maxHeapMb) {
 			throw new Error(`Long-campaign benchmark exceeded --max-heap-mb (${heapMb.toFixed(2)}MB > ${args.maxHeapMb}MB).`);
@@ -392,6 +600,8 @@ async function runBenchmark(args) {
 
 	console.log(`Mtherios generation benchmark`);
 	console.log(`  mode: ${args.mode}`);
+	const build = await harnessBuildId(process.cwd(), ['scripts/bench-generation.mjs', 'scripts/bench-generation-core.mjs', 'src/lib/server/turn/orchestrator.ts', 'src/lib/server/turn/provider.ts', 'src/lib/server/memory/retrieval.ts']);
+	console.log(`  build: ${build.identity} ${build.gitHead || 'no-git-head'} dirty=${build.dirty} status=${build.dirtyStatusSha256}`);
 	console.log(`  url: ${args.url}`);
 	console.log(`  storyId: ${args.storyId}`);
 	console.log(`  total duration: ${totalMs}ms`);

@@ -1,0 +1,51 @@
+{
+  "createdAt": "2026-09-07T10:27:51.062Z",
+  "mode": "db-memory-load",
+  "build": {
+    "identity": "mtherios@0.0.1",
+    "version": "0.0.1",
+    "source": "local-checkout",
+    "artifact": "working-tree",
+    "externalId": null,
+    "gitHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+    "dirty": true,
+    "dirtyFileCount": 491,
+    "dirtyStatusSha256": "b31193cdc6e6c647fcdab1cb616ebdbcabd10fff7cd7564a6c619c2cfff28580",
+    "sourceHashes": {
+      "scripts/bench-generation.mjs": "2c83a562c1f2d4d2d998d7db81a55d306c539efeeeecae53b0bfbd4281d08f06",
+      "scripts/bench-generation-core.mjs": "c09fed5007630df6d4141425b42f5c47abd6b4ab8138d53d4897dad0644f007f",
+      "src/lib/server/turn/orchestrator.ts": "cd347862810b2272bc18dc22854c981044572eb6e9fd3043111dd0137700efac",
+      "src/lib/server/turn/provider.ts": "d1b8fe0ac1802923ac2aecbb853f916c039511ee9493ed2a2b40a9cfd372839f",
+      "src/lib/server/memory/retrieval.ts": "b00c7456a911974f7096d72df482f8b5607750566c64a06cd04dab920fc66862"
+    }
+  },
+  "url": "http://127.0.0.1:5177",
+  "storyId": "bench_long_probe3_20260907",
+  "turns": 5000,
+  "entries": 10000,
+  "samples": 1,
+  "concurrency": 1,
+  "seedDurationMs": 1145,
+  "durationMs": {
+    "p50": 931,
+    "p95": 931,
+    "max": 931
+  },
+  "maxNodes": 4,
+  "responses": [
+    {
+      "nodeCount": 4,
+      "tokenEstimate": 203,
+      "degradedSources": []
+    }
+  ],
+  "degradedSources": [],
+  "providerCalls": 0,
+  "writes": true,
+  "writeScope": "disposable benchmark story only; cleaned up after verification",
+  "gate": {
+    "maxNodes": 32,
+    "degradedSources": 0,
+    "note": "Identical retrieval requests should share active work and retain an explicit receipt."
+  }
+}

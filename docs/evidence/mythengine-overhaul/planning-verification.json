@@ -1,0 +1,36 @@
+{
+  "verifiedAt": "2026-09-21T22:14:39.338Z",
+  "scope": "Source-copy and implementation-plan verification only; no application implementation, dependency install, build, services, migrations or provider calls.",
+  "plan": "mythengine-overhaul-plan-2026-09-21.md",
+  "planSha256": "b427b86a963ee30476e477b46926cc991d56ef1f3e76274a2b7a2388d6ef77fc",
+  "lines": 482,
+  "words": 9655,
+  "localLinksChecked": 46,
+  "phases": 13,
+  "requirementRows": 22,
+  "markdownWhitespace": "passed (git diff --no-index --check)",
+  "baselineFilesVerified": 760,
+  "sourceStatusUnchanged": true,
+  "sourceHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+  "cloneHead": "e283fbcf1fd69a0a9d6384f82c791e1cb580925f",
+  "cloneBranch": "codex/mythengine-overhaul",
+  "reviews": [
+    "context/research",
+    "GM tools/interactions/dice/images/maps",
+    "assistant/content/history/batches"
+  ],
+  "intendedDeliveryChanges": [
+    "README.md",
+    "docs/mythengine-overhaul-plan-2026-09-21.md",
+    "docs/evidence/mythengine-overhaul/planning-verification.json"
+  ],
+  "deliveredAt": "2026-09-21T22:15:47.670Z",
+  "deliveredPlan": "E:\\DEV\\Projects\\MythEngine\\docs\\mythengine-overhaul-plan-2026-09-21.md",
+  "postDeliveryVerification": {
+    "sourceFileHashesUnchanged": true,
+    "sourceGitStatusUnchanged": true,
+    "cloneBaselineMatchesExceptIntendedReadmeChange": true,
+    "deliveredPlanHashMatches": true,
+    "readmeWhitespace": "passed"
+  }
+}

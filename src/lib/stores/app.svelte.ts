@@ -9,6 +9,7 @@ import { refreshStoryCatalog } from '$lib/services/serverStories';
 class AppStore {
 	onboardingComplete = $state(false);
 	currentStoryId = $state<string | null>(null);
+	pendingStoryEntryId = $state<string | null>(null);
 	activeShelfId = $state<string | null>(null);
 	showWizard = $state(false);
 	loading = $state(true);
@@ -66,8 +67,14 @@ class AppStore {
 	}
 
 	openStory(storyId: string) {
+		this.pendingStoryEntryId = null;
 		this.currentStoryId = storyId;
 		setSetting('lastStoryId', storyId).catch(e => console.warn('[App] Failed to persist last story:', e));
+	}
+
+	openStorySource(storyId: string, entryId: string) {
+		this.openStory(storyId);
+		this.pendingStoryEntryId = entryId;
 	}
 
 	openShelf(shelfId: string | null) {
@@ -77,6 +84,7 @@ class AppStore {
 	}
 
 	closeStory() {
+		this.pendingStoryEntryId = null;
 		this.currentStoryId = null;
 		deleteSetting('lastStoryId').catch(e => console.warn('[App] Failed to clear last story:', e));
 	}

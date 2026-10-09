@@ -7,11 +7,8 @@ export type DialogueSpeakerInput =
 
 interface SpeakerCandidate {
 	displayName: string;
-	tone: number;
 	cuePatterns: string[];
 }
-
-const DIALOGUE_TONE_COUNT = 8;
 
 const HONORIFICS = new Set([
 	'captain',
@@ -135,7 +132,6 @@ function buildSpeakerCandidates(speakers: readonly DialogueSpeakerInput[]): Spea
 		seenNames.add(normalizedDisplayName);
 		candidates.push({
 			displayName,
-			tone: candidates.length % DIALOGUE_TONE_COUNT,
 			cuePatterns,
 		});
 	}
@@ -189,19 +185,18 @@ function renderTextWithBreaks(text: string): string {
 	return escapeHtml(text).replace(/\n/g, '<br/>');
 }
 
-function renderDialogueSpan(quote: string, tone: number, speaker: SpeakerCandidate | null): string {
+function renderDialogueSpan(quote: string, speaker: SpeakerCandidate | null): string {
 	const speakerAttrs = speaker
 		? ` data-speaker="${escapeHtmlAttribute(speaker.displayName)}" title="${escapeHtmlAttribute(speaker.displayName)}"`
 		: '';
 
-	return `<span class="dialogue dialogue-tone-${tone}"${speakerAttrs}>&ldquo;${escapeHtml(quote)}&rdquo;</span>`;
+	return `<span class="dialogue"${speakerAttrs}>&ldquo;${escapeHtml(quote)}&rdquo;</span>`;
 }
 
 function renderParagraphWithDialogue(paragraph: string, speakers: readonly SpeakerCandidate[]): string {
 	const quoteRegex = /\u201c([^\u201d]+)\u201d|"([^"]+)"|&quot;([\s\S]*?)&quot;/g;
 	let html = '';
 	let lastIndex = 0;
-	let quoteIndex = 0;
 	let match: RegExpExecArray | null;
 
 	while ((match = quoteRegex.exec(paragraph)) !== null) {
@@ -209,13 +204,11 @@ function renderParagraphWithDialogue(paragraph: string, speakers: readonly Speak
 		const quoteStart = match.index;
 		const quoteEnd = quoteStart + match[0].length;
 		const speaker = inferSpeaker(paragraph, quoteStart, quoteEnd, speakers);
-		const tone = speaker?.tone ?? quoteIndex % DIALOGUE_TONE_COUNT;
 
 		html += renderTextWithBreaks(paragraph.slice(lastIndex, quoteStart));
-		html += renderDialogueSpan(quote, tone, speaker);
+		html += renderDialogueSpan(quote, speaker);
 
 		lastIndex = quoteEnd;
-		quoteIndex += 1;
 	}
 
 	html += renderTextWithBreaks(paragraph.slice(lastIndex));
@@ -263,7 +256,7 @@ function renderDiceCard(marker: string): string {
 }
 
 /**
- * Format narrative text with SillyTavern-style colored dialogue and dice roll cards.
+ * Format narrative text with consistent dialogue highlighting and dice roll cards.
  */
 export function formatNarrative(text: string, speakers: readonly DialogueSpeakerInput[] = []): string {
 	const speakerCandidates = buildSpeakerCandidates(speakers);

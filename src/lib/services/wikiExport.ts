@@ -1,3 +1,4 @@
+import { isCurrentAgreement } from '$lib/contracts/agreements';
 /**
  * Wiki export — bundles a story's lorebook + chapters as a folder of
  * markdown files, zipped for download. The output opens cleanly in
@@ -272,10 +273,10 @@ function renderEntryMarkdown(
 		}
 		if (relAgreements.length > 0) {
 			parts.push('### Active agreements');
-			for (const a of relAgreements.filter((x) => x.status === 'active')) {
+			for (const a of relAgreements.filter((x) => isCurrentAgreement(x))) {
 				parts.push(`- **${a.category}** with ${a.parties.filter((p) => !matchesEntity(p)).map((p) => `[[${p}]]`).join(', ') || '—'}: ${a.terms}${a.secrecy !== 'public' ? ` *(${a.secrecy})*` : ''}`);
 			}
-			const resolved = relAgreements.filter((x) => x.status !== 'active');
+			const resolved = relAgreements.filter((x) => !isCurrentAgreement(x));
 			if (resolved.length > 0) {
 				parts.push('', '### Past agreements');
 				for (const a of resolved) {
@@ -482,9 +483,9 @@ function renderAgentSchemaMarkdown(
 		relationshipCount: number;
 	},
 ): string {
-	return `# Mtherios Wiki Maintainer Schema
+	return `# MythEngine Wiki Maintainer Schema
 
-You are maintaining an LLM-generated Mtherios story wiki. Treat this vault as a persistent knowledge base that compounds over time.
+You are maintaining an LLM-generated MythEngine story wiki. Treat this vault as a persistent knowledge base that compounds over time.
 
 ## Layers
 
@@ -557,7 +558,7 @@ function renderSynthesisMarkdown(
 	lines.push(`- Wiki entries: ${entries.length}`);
 	lines.push(`- Chapters: ${chapters.length}`);
 	lines.push(`- Arcs: ${arcs.length}`);
-	lines.push(`- Active agreements: ${agreements.filter((a) => a.status === 'active').length}`);
+	lines.push(`- Active agreements: ${agreements.filter((a) => isCurrentAgreement(a)).length}`);
 	lines.push(`- Active rumors: ${rumors.filter((r) => r.status !== 'stale' && r.status !== 'debunked').length}`);
 	lines.push('');
 

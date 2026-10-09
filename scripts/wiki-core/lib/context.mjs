@@ -17,6 +17,12 @@ export function buildContextPack(vault, search, options) {
 		semanticScore: row.semanticScore ?? 0,
 		exactScore: row.exactScore ?? 0,
 	}));
+	const queryTokens = [...new Set(String(search.query ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(token => token.length >= 4))];
+	const ownScore = (page) => {
+		const title = String(page.title ?? '').toLowerCase();
+		const body = stripMarkdown(page.body).toLowerCase().slice(0, 2400);
+		return queryTokens.reduce((score, token) => score + (title.includes(token) ? 3 : body.includes(token) ? 1 : 0), 0);
+	};
 
 	for (const seed of seeds) {
 		const graph = followGraph(vault, seed.path, normalizedOptions.followDepth);
@@ -39,26 +45,39 @@ export function buildContextPack(vault, search, options) {
 	}
 
 	const ordered = [...pageMap.values()]
+		.filter(item => item.distance === 0 || (ownScore(item.page) > 0
+			&& item.page.layer !== 'root' && (item.page.backlinks?.length ?? 0) <= 30))
 		.sort((a, b) =>
 			a.distance - b.distance ||
+			ownScore(b.page) - ownScore(a.page) ||
 			b.seedScore - a.seedScore ||
 			layerWeight(a.page.layer) - layerWeight(b.page.layer) ||
 			a.page.title.localeCompare(b.page.title),
 		)
 		.slice(0, normalizedOptions.pageLimit)
 		.map((item, index) => pageRecord(item, index + 1, normalizedOptions.pageChars));
+	const retained = [];
+	for (const page of ordered) {
+		const candidate = [...retained, { ...page, citationId: retained.length + 1 }];
+		if (contextMarkdown(search.query, candidate, Number.MAX_SAFE_INTEGER).length <= normalizedOptions.maxChars) {
+			retained.push(candidate.at(-1));
+		} else if (retained.length === 0) {
+			const headerLength = contextMarkdown(search.query, [{ ...page, text: '' }], Number.MAX_SAFE_INTEGER).length;
+			retained.push({ ...page, text: clipText(page.text, Math.max(0, normalizedOptions.maxChars - headerLength - 16)) });
+		}
+	}
 
 	return {
 		query: search.query,
 		generatedAt: new Date().toISOString(),
 		semanticError: search.semanticError,
 		seedCount: seeds.length,
-		pageCount: ordered.length,
+		pageCount: retained.length,
 		seeds,
-		pages: ordered,
+		pages: retained,
 		edges: [...edgeMap.values()],
-		citations: ordered.map((page) => `[${page.citationId}] ${page.title} <${page.path}>`),
-		contextMarkdown: contextMarkdown(search.query, ordered, normalizedOptions.maxChars),
+		citations: retained.map((page) => `[${page.citationId}] ${page.title} <${page.path}>`),
+		contextMarkdown: contextMarkdown(search.query, retained, normalizedOptions.maxChars),
 	};
 }
 

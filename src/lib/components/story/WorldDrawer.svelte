@@ -1,18 +1,22 @@
 <script lang="ts">
+	import CampaignFacts from './CampaignFacts.svelte';
+	import { isCurrentAgreement } from '$lib/contracts/agreements';
+	import ContextSelection from './ContextSelection.svelte';
+	import MemoryProcessingStatus from './MemoryProcessingStatus.svelte';
 	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search, Database, RefreshCw, AlertTriangle, User, Save } from 'lucide-svelte';
 	import { WORLD_SIM_DAY_INTERVAL, normalizeRelation } from '$lib/services/ai/tools/helpers';
-	import { maybeRunWorldSim } from '$lib/services/ai/tools/executor';
-	import { runBackendPlotBrainPlan, runBackendWorldSimTick } from '$lib/services/backendMemory';
-	import { settings } from '$lib/stores/settings.svelte';
+	import { runBackendWorldSimTick } from '$lib/services/backendMemory';
 	import { story } from '$lib/stores/story.svelte';
 	import { getChapters, getArcs, getSyncOpsForStory } from '$lib/services/database';
 	import { fetchEngineCacheStatus } from '$lib/services/serverStories';
 	import { saveCanonicalArc } from '$lib/services/canonicalWrites';
 	import { ai } from '$lib/services/ai';
 	import { uuid } from '$lib/utils/uuid';
+	import { DND_ABILITIES, normalizePlayerSheet, type PlayerSheet } from '$lib/utils/playerSheet';
 	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
 	import { downloadStoryVaultArchive, fetchStoryVaultStatus, runStoryVaultJob, type StoryVaultStatus } from '$lib/services/storyVault';
 	import { terminalSyncDisplay, terminalSyncToneClass } from './terminalSyncDisplay';
+	import PlotDirectorPanel from './PlotDirectorPanel.svelte';
 	import type { EngineCacheSegmentDiagnostics } from '$lib/contracts/engine';
 	import type { Arc, Character, Entry, FactionActionRecord, FactionEntryState, Story, SyncOutboxOp } from '$lib/types';
 	import { fly } from 'svelte/transition';
@@ -22,6 +26,8 @@
 	const estimateTokens = (text: string) => Math.ceil(text.length / 4);
 	const contextTotal = $derived.by(() => {
 		if (!story.currentStory) return 0;
+		if (story.currentStory.serverStoryId) return story.lastContextReceipt?.storyId === story.currentStory.serverStoryId
+			? story.lastContextReceipt.included.totalTokens ?? 0 : 0;
 		let total = 250; // base overhead
 		for (const c of story.characters.filter(c => c.status === 'active')) {
 			total += estimateTokens(`${c.name}: ${c.description ?? ''}\n`);
@@ -52,12 +58,27 @@
 		if (val >= 1000) return `${(val / 1000).toFixed(1)}K`;
 		return String(val);
 	}
+	function formatUsd(value: number | null | undefined): string {
+		return typeof value === 'number' && Number.isFinite(value) ? `$${value.toFixed(4)}` : 'unavailable';
+	}
+	function displayText(value: string | null | undefined): string {
+		return (value ?? '').replace(/\\r\\n|\\n|\\r/g, '\n');
+	}
 	interface Props {
 		open: boolean;
 		onClose: () => void;
 	}
 
 	let { open, onClose }: Props = $props();
+	let drawerPanel = $state<HTMLDivElement | null>(null);
+	let drawerWasOpen = false;
+
+	$effect(() => {
+		if (open && !drawerWasOpen) {
+			requestAnimationFrame(() => drawerPanel?.focus());
+		}
+		drawerWasOpen = open;
+	});
 
 	const activeChars = $derived(story.characters.filter(c => c.status === 'active'));
 	const activeNpcs = $derived(activeChars.filter(c => c.relationship !== 'self'));
@@ -329,6 +350,7 @@
 		return { years: t.years, days: t.days, hms: `${pad(t.hours)}:${pad(t.minutes)}` };
 	});
 	const daysUntilSim = $derived.by(() => {
+		if (!story.currentStory?.serverStoryId) return null;
 		const t = story.currentStory?.timeTracker;
 		if (!t) return null;
 		const totalDays = t.years * 365 + t.days;
@@ -339,74 +361,19 @@
 
 	// Manual world-sim trigger ─────────────────────────────────────────
 	let runningWorldSim = $state(false);
-	const worldSimEnabled = $derived(settings.getServiceConfig('worldSimulation').enabled);
+	let worldSimError = $state('');
 	const backendWorldSim = $derived(Boolean(story.currentStory?.serverStoryId));
-	const canRunWorldSim = $derived(backendWorldSim || worldSimEnabled);
 	async function runWorldSimNow() {
 		const current = story.currentStory;
-		if (runningWorldSim || !canRunWorldSim || !current) return;
+		if (runningWorldSim || !current?.serverStoryId) return;
 		runningWorldSim = true;
+		worldSimError = '';
 		try {
-			if (current.serverStoryId) {
-				await runBackendWorldSimTick(current);
-				await story.pullBackendProjection();
-			} else {
-				await maybeRunWorldSim({ force: true });
-			}
+			await runBackendWorldSimTick(current);
+			await story.pullBackendProjection();
 		}
-		catch (e) { console.error('[WorldDrawer] manual world sim failed:', e); }
+		catch (e) { worldSimError = e instanceof Error ? e.message : String(e); }
 		runningWorldSim = false;
-	}
-
-	let runningPlotBrain = $state(false);
-	let pendingPlotFrameId = $state<string | null>(null);
-	let plotBrainResult = $state<Record<string, unknown> | null>(null);
-	let plotBrainError = $state('');
-	let plotBrainStoryId = '';
-	$effect(() => {
-		const currentStoryId = story.currentStory?.serverStoryId ?? '';
-		if (currentStoryId !== plotBrainStoryId) {
-			plotBrainStoryId = currentStoryId;
-			pendingPlotFrameId = null;
-			plotBrainResult = null;
-		}
-		const projectionStory = story.campaignProjection?.story;
-		if (!currentStoryId || projectionStory?.id !== currentStoryId || pendingPlotFrameId) return;
-		const metadata = projectionStory.metadata;
-		if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return;
-		const plotBrain = (metadata as Record<string, unknown>).plotBrain;
-		if (!plotBrain || typeof plotBrain !== 'object' || Array.isArray(plotBrain)) return;
-		const frameId = (plotBrain as Record<string, unknown>).pendingFrameId;
-		if (typeof frameId === 'string' && frameId.trim()) pendingPlotFrameId = frameId;
-	});
-	const plotBrainSummary = $derived.by(() => {
-		if (!plotBrainResult) return '';
-		const count = (key: string) => typeof plotBrainResult?.[key] === 'number' ? plotBrainResult[key] as number : 0;
-		return `${count('plotCardCount')} cards · ${count('threadCount')} threads · ${count('eventCount')} beats`;
-	});
-	async function runPlotBrain(execute: boolean) {
-		const current = story.currentStory;
-		if (runningPlotBrain || !current?.serverStoryId || (execute && !pendingPlotFrameId)) return;
-		runningPlotBrain = true;
-		plotBrainError = '';
-		try {
-			const result = await runBackendPlotBrainPlan(current, {
-				execute,
-				frameId: execute ? pendingPlotFrameId ?? undefined : undefined,
-			});
-			if (!result) throw new Error('Plot brain returned no result.');
-			plotBrainResult = result;
-			if (execute) {
-				await story.pullBackendProjection();
-				pendingPlotFrameId = null;
-			} else {
-				pendingPlotFrameId = typeof result.frameId === 'string' ? result.frameId : null;
-			}
-		} catch (error) {
-			plotBrainError = error instanceof Error ? error.message : String(error);
-		} finally {
-			runningPlotBrain = false;
-		}
 	}
 
 	// ── Meters (player only sees visible meters) ──
@@ -416,11 +383,11 @@
 
 	// ── Living World ──
 	const activeAgreements = $derived(
-		story.agreements.filter(a => a.status === 'active'),
+		story.agreements.filter(isCurrentAgreement),
 	);
 	const pastAgreements = $derived(
 		story.agreements
-			.filter(a => a.status !== 'active')
+			.filter(a => !isCurrentAgreement(a))
 			.sort((a, b) => (b.resolvedChapterNumber ?? 0) - (a.resolvedChapterNumber ?? 0))
 			.slice(0, 12),
 	);
@@ -541,6 +508,7 @@
 	let protagonistPromptDraft = $state('');
 	let protagonistReputationDraft = $state('');
 	let protagonistAssetsDraft = $state('');
+	let protagonistSheetDraft = $state<PlayerSheet>(normalizePlayerSheet(null));
 	let protagonistSaving = $state(false);
 	let protagonistSaveError = $state<string | null>(null);
 	let protagonistSavedAt = $state<number | null>(null);
@@ -595,6 +563,7 @@
 			protagonistPrompt(protagonist),
 			story.currentStory.playerReputation ?? '',
 			protagonistAssets.join('|'),
+			JSON.stringify(characterMetadata(protagonist).playerSheet ?? {}),
 		].join(':');
 		if (key === protagonistDraftKey) return;
 		protagonistDraftKey = key;
@@ -603,6 +572,7 @@
 		protagonistPromptDraft = protagonistPrompt(protagonist);
 		protagonistReputationDraft = story.currentStory.playerReputation ?? '';
 		protagonistAssetsDraft = protagonistAssets.join('\n');
+		protagonistSheetDraft = normalizePlayerSheet(characterMetadata(protagonist).playerSheet);
 		protagonistSaveError = null;
 		protagonistSavedAt = null;
 	});
@@ -673,7 +643,8 @@
 				name,
 				description: protagonistDescriptionDraft.trim() || null,
 				prompt: protagonistPromptDraft.trim() || null,
-				assets: splitDraftLines(protagonistAssetsDraft),
+			assets: splitDraftLines(protagonistAssetsDraft),
+			playerSheet: normalizePlayerSheet(protagonistSheetDraft),
 			});
 			await story.updatePlayerReputation(protagonistReputationDraft.trim() || null);
 			protagonistSavedAt = Date.now();
@@ -935,7 +906,7 @@
 		}
 		for (const ev of story.worldEvents) {
 			rows.push({
-				when: ev.appliedAt ?? ev.triggerPosition ?? Date.now(),
+				when: ev.appliedAt ?? ev.createdAt,
 				kind: 'event',
 				title: ev.name,
 				detail: ev.description,
@@ -959,61 +930,69 @@
 </script>
 
 {#if open}
-<div class="fixed inset-0 z-40 flex justify-end" transition:fly={{ x: 0, duration: 0 }}>
-	<button class="absolute inset-0 bg-black/40" aria-label="Close world drawer" onclick={onClose}></button>
+<div class="world-overlay" transition:fly={{ x: 0, duration: 0 }}>
+	<button class="world-backdrop" aria-label="Close world drawer" onclick={onClose}></button>
 
-	<div class="relative z-10 flex h-[100dvh] min-h-0 w-full max-w-[26rem] flex-col border-l border-[var(--border-primary)] bg-[var(--bg-secondary)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
-		transition:fly={{ x: 420, duration: 200 }}>
+	<div
+		bind:this={drawerPanel}
+		class="world-panel"
+		transition:fly={{ x: 560, duration: 200 }}
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="world-drawer-title"
+		tabindex="-1"
+		onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }}
+	>
 
 		<!-- Header -->
-		<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-4 py-3">
-			<span class="font-display text-sm tracking-wide text-[var(--text-accent)]">World State</span>
-			<div class="flex items-center gap-1">
+		<div class="world-header">
+			<div class="world-heading"><p class="world-eyebrow">Your story companion</p><h2 id="world-drawer-title">World state</h2><p class="world-story-title">{story.currentStory?.title ?? 'The details that bring your story to life'}</p></div>
+			<div class="world-header-actions">
 				<button onclick={handleExportWiki} disabled={exportingWiki || !story.currentStory}
-					class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-amber-400 disabled:opacity-40 sm:h-8 sm:w-8"
+					class="world-icon-button" aria-label="Export story wiki"
 					title="Export agent-maintained Obsidian wiki vault">
 					{#if exportingWiki}<Loader2 class="h-4 w-4 animate-spin" />{:else}<FileArchive class="h-4 w-4" />{/if}
 				</button>
-				<button onclick={onClose} class="flex h-11 w-11 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] sm:h-8 sm:w-8" aria-label="Close world drawer">
+				<button onclick={onClose} class="world-icon-button" aria-label="Close world drawer">
 					<X class="h-5 w-5" />
 				</button>
 			</div>
 		</div>
 
 		<!-- Tabs -->
-		<div class="flex border-b border-[var(--border-primary)]">
+		<div class="world-tabs" role="group" aria-label="World state sections">
 			<button
-				class="min-h-11 flex-1 px-3 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'player' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				class:active={drawerTab === 'player'} aria-pressed={drawerTab === 'player'} aria-controls="world-drawer-content"
 				onclick={() => drawerTab = 'player'}
 			>
-				Player
+				<User size={15} strokeWidth={1.5} /><span>Player</span>
 			</button>
 			<button
-				class="min-h-11 flex-1 px-3 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'characters' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				class:active={drawerTab === 'characters'} aria-pressed={drawerTab === 'characters'} aria-controls="world-drawer-content"
 				onclick={() => drawerTab = 'characters'}
 			>
-				Characters
+				<Users size={15} strokeWidth={1.5} /><span>Characters</span>
 			</button>
 			<button
-				class="min-h-11 flex-1 px-3 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'story' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				class:active={drawerTab === 'story'} aria-pressed={drawerTab === 'story'} aria-controls="world-drawer-content"
 				onclick={() => drawerTab = 'story'}
 			>
-				Story
+				<BookOpen size={15} strokeWidth={1.5} /><span>Story</span>
 			</button>
 			<button
-				class="min-h-11 flex-1 px-3 py-2.5 text-center text-xs font-display tracking-wider transition-colors {drawerTab === 'technical' ? 'text-[var(--text-accent)] border-b-2 border-[var(--text-accent)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+				class:active={drawerTab === 'technical'} aria-pressed={drawerTab === 'technical'} aria-controls="world-drawer-content"
 				onclick={() => drawerTab = 'technical'}
 			>
-				Technical
+				<Activity size={15} strokeWidth={1.5} /><span>Technical</span>
 			</button>
 		</div>
 
-		<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 space-y-6">
+		<div id="world-drawer-content" class="world-content space-y-7" aria-label={`${drawerTab === 'player' ? 'Player' : drawerTab === 'characters' ? 'Characters' : drawerTab === 'story' ? 'Story' : 'Technical'} details`}>
 			{#if drawerTab === 'player'}
 			<div>
 				<div class="mb-2 flex items-center gap-2">
 					<User class="h-4 w-4 text-[var(--text-accent)]" />
-					<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">User Character</span>
+					<span class="world-section-title font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">User Character</span>
 				</div>
 				<div class="space-y-3 rounded-lg bg-[var(--bg-tertiary)] p-3">
 					<label class="block space-y-1.5">
@@ -1061,6 +1040,22 @@
 						></textarea>
 					</label>
 
+					<div class="space-y-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-3">
+						<div><p class="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-accent)]">D&D-style sheet</p><p class="mt-0.5 text-[10px] text-[var(--text-muted)]">Save ability scores to apply their modifiers to GM checks. Unsaved values are defaults; proficiency, armor, and HP do not add check bonuses.</p></div>
+						<div class="grid grid-cols-3 gap-2">
+							{#each DND_ABILITIES as ability}
+								<label class="space-y-1"><span class="block text-center text-[10px] text-[var(--text-muted)]">{ability.label}</span><input type="number" min="1" max="30" class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-center text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={protagonistSheetDraft.abilities[ability.id]} /></label>
+							{/each}
+						</div>
+						<div class="grid grid-cols-2 gap-2">
+							<label class="space-y-1"><span class="text-[10px] text-[var(--text-muted)]">Armor Class</span><input type="number" min="0" max="99" class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={protagonistSheetDraft.armorClass} /></label>
+							<label class="space-y-1"><span class="text-[10px] text-[var(--text-muted)]">Speed</span><input type="number" min="0" max="300" class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={protagonistSheetDraft.speed} /></label>
+							<label class="space-y-1"><span class="text-[10px] text-[var(--text-muted)]">HP current</span><input type="number" min="0" max="999" class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={protagonistSheetDraft.hitPoints.current} /></label>
+							<label class="space-y-1"><span class="text-[10px] text-[var(--text-muted)]">HP maximum</span><input type="number" min="1" max="999" class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={protagonistSheetDraft.hitPoints.max} /></label>
+							<label class="col-span-2 space-y-1"><span class="text-[10px] text-[var(--text-muted)]">Proficiency bonus</span><input type="number" min="0" max="20" class="w-full rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--text-accent)]" bind:value={protagonistSheetDraft.proficiencyBonus} /></label>
+						</div>
+					</div>
+
 					<div class="flex items-center justify-between gap-3">
 						<div class="min-h-5 text-[10px]">
 							{#if protagonistSaveError}
@@ -1093,7 +1088,7 @@
 				<div>
 					<div class="mb-2 flex items-center gap-2">
 						<Users class="h-4 w-4 text-[var(--text-accent)]" />
-						<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Create Character</span>
+						<span class="world-section-title font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Create Character</span>
 					</div>
 					<div class="space-y-3 rounded-lg bg-[var(--bg-tertiary)] p-3">
 						<label class="block space-y-1.5">
@@ -1158,7 +1153,7 @@
 
 				<div>
 					<div class="mb-2 flex items-center justify-between">
-						<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Current Characters</span>
+						<span class="world-section-title font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Current Characters</span>
 						<span class="text-[10px] text-[var(--text-muted)]">{story.characters.length}</span>
 					</div>
 					<div class="space-y-2">
@@ -1171,7 +1166,7 @@
 									</div>
 								</div>
 								{#if character.description}
-									<p class="mt-1 line-clamp-3 text-xs leading-relaxed text-[var(--text-muted)]">{character.description}</p>
+									<p class="mt-1 line-clamp-3 whitespace-pre-line text-xs leading-relaxed text-[var(--text-muted)]">{displayText(character.description)}</p>
 								{/if}
 							</div>
 						{/each}
@@ -1181,19 +1176,22 @@
 			{/if}
 
 			{#if drawerTab === 'story'}
+				<CampaignFacts />
+				<PlotDirectorPanel />
+
 				<!-- Protagonist -->
 				{#if protagonist && false}
 				<div>
 					<div class="mb-2 flex items-center gap-2">
 						<span class="text-xs">⭐</span>
-						<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Protagonist</span>
+						<span class="world-section-title font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Protagonist</span>
 					</div>
 					<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2">
 						<div class="flex items-center gap-2">
 							<span class="text-sm font-semibold text-[var(--text-primary)]">{protagonist?.name ?? ''}</span>
 						</div>
 						{#if protagonist?.description}
-							<p class="mt-1 text-xs text-[var(--text-muted)] line-clamp-3">{protagonist?.description}</p>
+							<p class="mt-1 whitespace-pre-line text-xs text-[var(--text-muted)] line-clamp-3">{displayText(protagonist?.description)}</p>
 						{/if}
 						{#if (protagonist?.traits?.length ?? 0) > 0}
 							<div class="mt-1.5 flex flex-wrap gap-1">
@@ -1235,7 +1233,7 @@
 			<div>
 				<div class="mb-2 flex items-center gap-2">
 					<MapPin class="h-4 w-4 text-blue-400" />
-					<span class="font-display text-xs tracking-wider uppercase text-blue-400">Location</span>
+					<span class="world-section-title font-display text-xs tracking-wider uppercase text-blue-400">Location</span>
 				</div>
 				{#if currentLocation}
 					{@const charsHere = presenceMap.get(currentLocation.name) ?? []}
@@ -1266,7 +1264,7 @@
 			<div>
 				<div class="mb-2 flex items-center gap-2">
 					<Activity class="h-4 w-4 text-pink-400" />
-					<span class="font-display text-xs tracking-wider uppercase text-pink-400">Meters ({visibleMeters.length})</span>
+					<span class="world-section-title font-display text-xs tracking-wider uppercase text-pink-400">Meters ({visibleMeters.length})</span>
 				</div>
 				<div class="space-y-1.5">
 					{#each visibleMeters as m}
@@ -1291,7 +1289,7 @@
 			<div>
 				<div class="mb-2 flex items-center gap-2">
 					<MapPin class="h-4 w-4 text-emerald-400" />
-					<span class="font-display text-xs tracking-wider uppercase text-emerald-400">Presence</span>
+					<span class="world-section-title font-display text-xs tracking-wider uppercase text-emerald-400">Presence</span>
 				</div>
 				<div class="space-y-1.5">
 					{#each [...presenceMap.entries()] as [locName, charNames]}
@@ -1328,7 +1326,7 @@
 			<div>
 				<div class="mb-2 flex items-center gap-2">
 					<Users class="h-4 w-4 text-[var(--text-accent)]" />
-					<span class="font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Characters ({activeNpcs.length})</span>
+					<span class="world-section-title font-display text-xs tracking-wider uppercase text-[var(--text-accent)]">Characters ({activeNpcs.length})</span>
 				</div>
 				{#if activeNpcs.length === 0}
 					<p class="text-xs text-[var(--text-muted)]">No characters yet.</p>
@@ -1344,7 +1342,7 @@
 									{/if}
 								</div>
 								{#if char.description}
-									<p class="mt-1 text-xs text-[var(--text-muted)] line-clamp-2">{char.description}</p>
+									<p class="mt-1 whitespace-pre-line text-xs text-[var(--text-muted)] line-clamp-2">{displayText(char.description)}</p>
 								{/if}
 								{#if char.traits && char.traits.length > 0}
 									<div class="mt-1.5 flex flex-wrap gap-1">
@@ -1370,7 +1368,7 @@
 			<div>
 				<div class="mb-2 flex items-center gap-2">
 					<Swords class="h-4 w-4 text-amber-400" />
-					<span class="font-display text-xs tracking-wider uppercase text-amber-400">Items ({story.items.length})</span>
+					<span class="world-section-title font-display text-xs tracking-wider uppercase text-amber-400">Items ({story.items.length})</span>
 				</div>
 				{#if story.items.length === 0}
 					<p class="text-xs text-[var(--text-muted)]">No items found.</p>
@@ -1397,7 +1395,7 @@
 					onclick={() => agreementsCollapsed = !agreementsCollapsed}>
 					<div class="flex items-center gap-2">
 						<Scale class="h-4 w-4 text-violet-400" />
-						<span class="font-display text-xs tracking-wider uppercase text-violet-400">Promises & Agreements</span>
+						<span class="world-section-title font-display text-xs tracking-wider uppercase text-violet-400">Promises & Agreements</span>
 						<span class="text-[10px] text-[var(--text-muted)]">
 							{activeAgreements.length + pastAgreements.length}
 						</span>
@@ -1410,13 +1408,13 @@
 					{#if activeAgreements.length > 0}
 						<div class="mb-3">
 							<div class="mb-1 flex items-center gap-1.5">
-								<span class="text-[9px] tracking-wider uppercase text-violet-400/80">Active ({activeAgreements.length})</span>
+								<span class="text-[9px] tracking-wider uppercase text-violet-400/80">Current ({activeAgreements.length})</span>
 							</div>
 							<div class="space-y-1">
 								{#each activeAgreements as a}
 									<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-1.5">
 										<div class="flex items-baseline gap-1.5 text-[10px]">
-											<span class="rounded bg-violet-500/10 px-1 py-0.5 text-violet-400 capitalize">{a.category}</span>
+											<span class="rounded bg-violet-500/10 px-1 py-0.5 text-violet-400 capitalize">{a.category} · {a.status}</span>
 											<span class="text-[var(--text-primary)] truncate">{a.parties.join(' ↔ ')}</span>
 											{#if a.secrecy !== 'public'}
 												<span class="ml-auto rounded bg-rose-500/10 px-1 py-0 text-rose-400 italic">{a.secrecy}</span>
@@ -1446,7 +1444,7 @@
 									<div class="rounded-lg bg-[var(--bg-tertiary)]/60 px-2.5 py-1.5">
 										<div class="flex items-baseline gap-1.5 text-[10px]">
 											<span class="rounded bg-[var(--bg-primary)] px-1 py-0.5 text-[var(--text-muted)] capitalize">{a.category}</span>
-											<span class="text-[var(--text-muted)] truncate line-through">{a.parties.join(' ↔ ')}</span>
+											<span class="text-[var(--text-muted)] truncate">{a.parties.join(' ↔ ')}</span>
 											<span class="ml-auto italic capitalize {statusColor}">{a.status}</span>
 											{#if a.resolvedChapterNumber != null}
 												<span class="text-[9px] text-[var(--text-muted)]">ch.{a.resolvedChapterNumber}</span>
@@ -1468,7 +1466,7 @@
 			<div>
 				<div class="mb-2 flex items-center gap-2">
 					<Flag class="h-4 w-4 text-orange-400" />
-					<span class="font-display text-xs tracking-wider uppercase text-orange-400">Factions ({visibleFactionEntries.length}/{allFactionEntries.length})</span>
+					<span class="world-section-title font-display text-xs tracking-wider uppercase text-orange-400">Factions ({visibleFactionEntries.length}/{allFactionEntries.length})</span>
 				</div>
 
 				<div class="mb-2 space-y-2">
@@ -1570,7 +1568,7 @@
 					<div class="mt-2 flex flex-wrap gap-2">
 						{#if hiddenFactionCount > 0}
 							<button
-								class="flex items-center gap-1.5 rounded-lg bg-[rgba(251,146,60,0.12)] px-2.5 py-1.5 text-[10px] text-orange-300 transition-colors hover:bg-[rgba(251,146,60,0.2)]"
+								class="flex items-center gap-1.5 rounded-lg bg-[var(--text-accent)]/12 px-2.5 py-1.5 text-[10px] text-[var(--text-accent)] transition-colors hover:bg-[var(--text-accent)]/20"
 								onclick={() => factionDisplayLimit = Math.min(filteredFactionEntries.length, factionDisplayLimit + FACTION_PAGE_SIZE)}
 							>
 								<ChevronDown class="h-3 w-3" />
@@ -1604,7 +1602,7 @@
 					onclick={() => alliancesCollapsed = !alliancesCollapsed}>
 					<div class="flex items-center gap-2">
 						<Handshake class="h-4 w-4 text-cyan-400" />
-						<span class="font-display text-xs tracking-wider uppercase text-cyan-400">Alliances</span>
+						<span class="world-section-title font-display text-xs tracking-wider uppercase text-cyan-400">Alliances</span>
 						<span class="text-[10px] text-[var(--text-muted)]">{alliances.length}</span>
 					</div>
 					{#if alliancesCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
@@ -1647,7 +1645,7 @@
 					onclick={() => livingWorldCollapsed = !livingWorldCollapsed}>
 					<div class="flex items-center gap-2">
 						<Zap class="h-4 w-4 text-violet-400" />
-						<span class="font-display text-xs tracking-wider uppercase text-violet-400">Living World</span>
+						<span class="world-section-title font-display text-xs tracking-wider uppercase text-violet-400">Living World</span>
 						<span class="text-[10px] text-[var(--text-muted)]">
 							{recentFactionActions.length + activeRumors.length + recentWorldEvents.length}
 						</span>
@@ -1735,7 +1733,7 @@
 			<div>
 				<div class="mb-2 flex items-center gap-2">
 					<ScrollText class="h-4 w-4 text-purple-400" />
-					<span class="font-display text-xs tracking-wider uppercase text-purple-400">Active Lore ({story.lorebookEntries.length})</span>
+					<span class="world-section-title font-display text-xs tracking-wider uppercase text-purple-400">Active Lore ({story.lorebookEntries.length})</span>
 				</div>
 				<div class="space-y-1.5">
 					{#each story.lorebookEntries.slice(0, 10) as entry}
@@ -1753,11 +1751,14 @@
 
 
 			<!-- Story Memory: Arcs → Uncovered Chapters -->
+			{#if story.currentStory?.serverStoryId}
+				<MemoryProcessingStatus storyId={story.currentStory.serverStoryId} />
+			{/if}
 			<div>
 				<div class="mb-2 flex items-center justify-between">
 					<div class="flex items-center gap-2">
 						<Layers class="h-4 w-4 text-orange-400" />
-						<span class="font-display text-xs tracking-wider uppercase text-orange-400">Story Memory</span>
+						<span class="world-section-title font-display text-xs tracking-wider uppercase text-orange-400">Story Memory</span>
 					</div>
 					{#if arcs.length > 0 || chapters.length > 0}
 						<button onclick={exportArcsAsJson} class="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" title="Export arcs & chapters">
@@ -1767,7 +1768,7 @@
 				</div>
 
 				{#if arcs.length === 0 && chapters.length === 0}
-					<p class="text-xs text-[var(--text-muted)]">No chapters yet. Chapters are created every ~20 messages, arcs every 5 chapters.</p>
+					<p class="text-xs text-[var(--text-muted)]">No chapters yet. Each chapter summarizes 20 completed turns, and each arc summarizes 10 chapters.</p>
 				{/if}
 
 				<!-- Arcs (condensed chapter groups) -->
@@ -1924,24 +1925,24 @@
 				<div class="mb-1.5 flex items-center justify-between">
 					<div class="flex items-center gap-1.5">
 						<Gauge class="h-3.5 w-3.5 text-cyan-400" />
-						<span class="font-display text-[10px] tracking-wider uppercase text-cyan-400">Context</span>
+						<span class="font-display text-[10px] tracking-wider uppercase text-cyan-400">{story.currentStory.serverStoryId ? 'Last primary request' : 'Context estimate'}</span>
 					</div>
 					<span class="text-[10px] tabular-nums {contextPercent > 80 ? 'text-rose-400' : contextPercent > 50 ? 'text-amber-400' : 'text-emerald-400'}">
-						~{formatTokens(contextTotal)} / 200K
+						{#if story.currentStory.serverStoryId}{contextTotal ? `~${formatTokens(contextTotal)} tokens` : 'No saved receipt'}{:else}~{formatTokens(contextTotal)} / 200K{/if}
 					</span>
 				</div>
-				<div class="rounded-full bg-[var(--bg-primary)] h-2 overflow-hidden">
+				{#if !story.currentStory.serverStoryId}<div class="rounded-full bg-[var(--bg-primary)] h-2 overflow-hidden">
 					<div
 						class="h-full transition-all duration-300 rounded-full {contextPercent > 80 ? 'bg-rose-500' : contextPercent > 50 ? 'bg-amber-500' : 'bg-cyan-500'}"
 						style="width: {contextPercent}%"
 					></div>
-				</div>
+				</div>{/if}
 			</div>
 			{/if}
 
 
 			<!-- World Tick -->
-			{#if backendWorldSim || worldSimEnabled}
+			{#if story.currentStory}
 			<div>
 				<div class="mb-2 flex items-center gap-1.5">
 					<Play class="h-3.5 w-3.5 text-sky-400" />
@@ -1949,51 +1950,21 @@
 				</div>
 				<button
 					onclick={runWorldSimNow}
-					disabled={runningWorldSim || !canRunWorldSim || !story.currentStory}
+					disabled={runningWorldSim || !backendWorldSim}
 					class="flex w-full items-center justify-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-1.5 text-xs text-sky-400 transition-colors hover:bg-sky-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
-					title={backendWorldSim ? 'Run a terminal-owned world tick now' : worldSimEnabled ? 'Run browser world simulation now (bypasses the 7-day cadence)' : 'World simulation is disabled in settings'}
+					title={backendWorldSim ? 'Run a terminal-owned world tick now' : 'Connect this story to the terminal engine to run world ticks'}
 				>
 					{#if runningWorldSim}
 						<Loader2 class="h-3.5 w-3.5 animate-spin" />
 						<span>Running world sim…</span>
 					{:else}
 						<Play class="h-3.5 w-3.5" />
-						<span>{backendWorldSim ? 'Run terminal world tick' : 'Run world sim now'}</span>
+						<span>{backendWorldSim ? 'Run terminal world tick' : 'World tick requires terminal sync'}</span>
 					{/if}
 				</button>
+				{#if worldSimError}<p role="alert" class="mt-1 text-xs text-red-400">{worldSimError}</p>{/if}
 			</div>
 			{/if}
-
-			{#if backendWorldSim}
-			<div>
-				<div class="mb-2 flex items-center gap-1.5">
-					<Zap class="h-3.5 w-3.5 text-violet-400" />
-					<span class="font-display text-[10px] tracking-wider uppercase text-violet-400">Plot Pulse</span>
-				</div>
-				<div class="grid grid-cols-2 gap-2">
-					<button
-						onclick={() => runPlotBrain(false)}
-						disabled={runningPlotBrain}
-						class="flex items-center justify-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 text-xs text-violet-300 hover:bg-violet-500/10 disabled:cursor-not-allowed disabled:opacity-40"
-						title="Draft a reviewable strategic plot frame"
-					>
-						{#if runningPlotBrain}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<Zap class="h-3.5 w-3.5" />{/if}
-						Draft
-					</button>
-					<button
-						onclick={() => runPlotBrain(true)}
-						disabled={runningPlotBrain || !pendingPlotFrameId}
-						class="flex items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
-						title="Apply this exact reviewed plot draft"
-					>
-						<Save class="h-3.5 w-3.5" /> Apply
-					</button>
-				</div>
-				{#if plotBrainSummary}<p class="mt-1.5 text-[10px] text-[var(--text-muted)]">{plotBrainSummary}{pendingPlotFrameId ? ' · ready to apply' : ''}</p>{/if}
-				{#if plotBrainError}<p class="mt-1.5 text-[10px] text-rose-400">{plotBrainError}</p>{/if}
-			</div>
-			{/if}
-
 
 			<!-- Terminal engine projection -->
 			{#if backendWorldSim}
@@ -2112,6 +2083,10 @@
 							<div class="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--text-muted)]">
 								<span>{lastTurnPerformance.prompt.messageCount} messages</span>
 								<span>{lastTurnPerformance.prompt.totalChars} chars</span>
+								<span class={lastTurnPerformance.generation.providerCostUsd != null ? 'text-emerald-300' : ''}>
+									provider cost {formatUsd(lastTurnPerformance.generation.providerCostUsd)}
+								</span>
+								<span>provider cache read {formatOptionalTokens(lastTurnPerformance.generation.cachedInputTokens)} · write {formatOptionalTokens(lastTurnPerformance.generation.cacheWriteTokens)}</span>
 								{#if lastTurnPerformance.cache}
 									<span>cache {lastTurnPerformance.cache.hitCount}/{lastTurnPerformance.cache.hitCount + lastTurnPerformance.cache.missCount}</span>
 									<span>{lastTurnPerformance.cache.segmentCount} segments</span>
@@ -2134,7 +2109,7 @@
 							<div class="mb-1 flex items-center justify-between gap-2">
 								<span class="uppercase tracking-wider text-[var(--text-muted)]">Context Receipt</span>
 								<span class="tabular-nums {lastContextReceipt.truncated ? 'text-amber-400' : 'text-emerald-400'}">
-									{lastContextReceipt.truncated ? 'Truncated' : 'Full'}
+									{lastContextReceipt.truncated ? 'Budget trimmed' : 'Within budget'}
 								</span>
 							</div>
 							<div class="grid grid-cols-4 gap-2 text-[9px]">
@@ -2147,7 +2122,7 @@
 									<div class="tabular-nums text-[var(--text-primary)]">{lastContextReceipt.included.memoryNodes}</div>
 								</div>
 								<div>
-									<div class="uppercase tracking-wider text-[var(--text-muted)]">Wiki</div>
+									<div class="uppercase tracking-wider text-[var(--text-muted)]">Wiki blocks</div>
 									<div class="tabular-nums text-[var(--text-primary)]">{lastContextReceipt.included.wikiChunks}</div>
 								</div>
 								<div>
@@ -2183,6 +2158,11 @@
 									<span>{lastContextReceipt.included.factionSheets.length} faction sheets</span>
 								{/if}
 							</div>
+							{#if lastContextReceipt.selection}
+								<ContextSelection selection={lastContextReceipt.selection} />
+							{:else}
+								<p class="mt-2 text-[var(--text-muted)]">Legacy receipt: counts may describe loaded records. Send a new turn for actual selection details.</p>
+							{/if}
 							{#if lastContextReceipt.unresolvedCharacterReferences.length}
 								<div class="mt-1">
 									<div class="mb-1 uppercase tracking-wider text-[var(--text-muted)]">Character refs kept</div>
@@ -2385,7 +2365,7 @@
 					onclick={() => timelineCollapsed = !timelineCollapsed}>
 					<div class="flex items-center gap-2">
 						<ScrollText class="h-4 w-4 text-amber-400" />
-						<span class="font-display text-xs tracking-wider uppercase text-amber-400">Timeline</span>
+						<span class="world-section-title font-display text-xs tracking-wider uppercase text-amber-400">Timeline</span>
 						<span class="text-[10px] text-[var(--text-muted)]">{timelineRows.length}</span>
 					</div>
 					{#if timelineCollapsed}<ChevronRight class="h-3.5 w-3.5 text-[var(--text-muted)]" />
@@ -2433,3 +2413,41 @@
 	</div>
 </div>
 {/if}
+
+<style>
+	.world-overlay { position:fixed; inset:0; z-index:40; display:flex; justify-content:flex-end; }
+	.world-backdrop { position:absolute; inset:0; background:rgb(5 9 5 / .58); backdrop-filter:blur(3px); }
+	.world-panel { position:relative; z-index:1; display:flex; flex-direction:column; width:min(560px, 100%); height:100dvh; min-height:0; padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); border-left:1px solid var(--border-primary); background:var(--bg-primary); color:var(--text-primary); box-shadow:-20px 0 70px #0004; }
+	.world-header { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding:27px 26px 23px; border-bottom:1px solid var(--border-primary); background:var(--bg-secondary); }
+	.world-heading { min-width:0; }
+	.world-eyebrow { margin:0 0 8px; font-size:9px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-accent); }
+	.world-heading h2 { margin:0; font-family:var(--font-display); font-size:30px; font-weight:400; line-height:1.15; letter-spacing:-.03em; }
+	.world-story-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin:9px 0 0; color:var(--text-muted); font-size:12px; line-height:1.5; }
+	.world-header-actions { display:flex; gap:4px; flex-shrink:0; }
+	.world-icon-button { display:flex; align-items:center; justify-content:center; width:38px; height:38px; border:1px solid var(--border-primary); border-radius:7px; color:var(--text-muted); }
+	.world-icon-button:hover { color:var(--text-accent); background:var(--bg-tertiary); }
+	.world-icon-button:disabled { opacity:.4; }
+	.world-tabs { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); flex-shrink:0; gap:4px; padding:12px 20px; border-bottom:1px solid var(--border-primary); background:var(--bg-secondary); }
+	.world-tabs button { display:flex; align-items:center; justify-content:center; gap:7px; min-width:0; min-height:42px; padding:9px 8px; border:1px solid transparent; border-radius:7px; font-size:11px; font-weight:500; color:var(--text-muted); transition:background .15s, color .15s; }
+	.world-tabs button:hover { background:var(--bg-tertiary); color:var(--text-primary); }
+	.world-tabs button.active { color:var(--text-accent); border-color:color-mix(in srgb, var(--text-accent) 20%, transparent); background:color-mix(in srgb, var(--text-accent) 8%, transparent); }
+	.world-tabs :global(svg) { flex-shrink:0; }
+	.world-panel :global(button:focus-visible), .world-panel :global(input:focus-visible), .world-panel :global(textarea:focus-visible), .world-panel :global(select:focus-visible), .world-panel :global(summary:focus-visible) { outline:2px solid var(--text-accent); outline-offset:3px; }
+	.world-content { min-height:0; flex:1; overflow-y:auto; overscroll-behavior:contain; padding:27px 26px 36px; }
+	.world-content > div { min-width:0; }
+	.world-content > div + div { padding-top:24px; border-top:1px solid var(--border-secondary); }
+	.world-section-title { color:var(--text-primary); font-family:var(--font-display); font-size:19px; line-height:1.3; font-weight:400; text-transform:none; letter-spacing:-.02em; }
+	.world-content :global([class~="text-[9px]"]) { font-size:10px; line-height:1.55; }
+	.world-content :global([class~="text-[10px]"]) { font-size:11px; line-height:1.55; }
+	.world-content :global(p) { line-height:1.7; }
+	.world-content :global(label > span:first-child) { color:var(--text-secondary); font-size:11px; line-height:1.5; letter-spacing:.02em; text-transform:none; }
+	.world-content :global(input:not([type='checkbox']):not([type='range'])), .world-content :global(select) { min-height:40px; font-size:12px; }
+	.world-content :global(textarea) { font-size:13px; line-height:1.65; }
+	.world-content :global(button) { min-height:34px; }
+	.world-content :global([class~="rounded-lg"][class~="bg-[var(--bg-tertiary)]"]) { border:1px solid var(--border-secondary); border-radius:10px; background:var(--bg-secondary); }
+	.world-content :global([class~="space-y-3"][class~="p-3"]) { padding:18px; }
+	.world-content :global([class~="space-y-3"] > label + label) { margin-top:16px; }
+	@media (max-width:600px) { .world-panel { width:100%; border-left:0; } .world-header { padding:23px 20px 20px; gap:12px; } .world-heading h2 { font-size:28px; } .world-content { padding:23px 20px calc(30px + env(safe-area-inset-bottom)); } .world-tabs { padding:10px 15px; gap:3px; } }
+	@media (max-width:420px) { .world-tabs button { gap:0; padding:9px 4px; } .world-tabs :global(svg) { display:none; } .world-content { padding-left:16px; padding-right:16px; } .world-content :global([class~="space-y-3"][class~="p-3"]) { padding:14px; } }
+	@media (prefers-reduced-motion:reduce) { .world-tabs button { transition:none; } }
+</style>
