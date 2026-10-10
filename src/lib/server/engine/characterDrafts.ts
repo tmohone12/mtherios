@@ -140,25 +140,12 @@ async function resolveCharacterUpdateService(): Promise<CharacterUpdateServiceRe
 		return { serviceId: CHARACTER_UPDATE_SERVICE_ID, resolved: primary, reason: null };
 	}
 
-	// A persisted row is an explicit operator choice. Disabled or invalid means skip/fail visibly,
-	// rather than silently spending money on a different model.
-	if (primary.setting !== null) {
-		return {
-			serviceId: CHARACTER_UPDATE_SERVICE_ID,
-			resolved: null,
-			reason: primary.missingReason ?? 'Character Update service is unavailable.',
-		};
-	}
-
-	// Upgrade compatibility for installations that have not saved the new service row yet.
-	const fallback = await resolveServiceGeneration('classifier');
-	if (hasAvailableProfile(fallback)) {
-		return { serviceId: 'classifier', resolved: fallback, reason: primary.missingReason };
-	}
+	// Character continuity already inherits the Classifier role; disabled or unconfigured
+	// means skip or fail visibly rather than spending on a different model.
 	return {
-		serviceId: null,
+		serviceId: CHARACTER_UPDATE_SERVICE_ID,
 		resolved: null,
-		reason: primary.missingReason ?? fallback.missingReason ?? 'No character update model is configured.',
+		reason: primary.missingReason ?? 'Character Update service is unavailable.',
 	};
 }
 

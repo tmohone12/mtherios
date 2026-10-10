@@ -7,7 +7,8 @@ export const agentToolSchema = z.enum(['read', 'search', 'list', 'write', 'updat
 export type AgentTool = z.infer<typeof agentToolSchema>;
 
 export const agentSettingLabels = {
-	gmPiRuntime: 'Pi GM runtime for new turns', assistantPiRuntime: 'Pi Assistant runtime for new messages',
+	// gmPiRuntime is retired (every new GM turn uses Pi); the key stays readable for saved documents.
+	gmPiRuntime: 'Pi GM runtime for new turns (retired; always on)', assistantPiRuntime: 'Pi Assistant runtime for new messages',
 	gmResearch: 'GM Research', gmAdaptiveResearch: 'Adaptive GM research for direct turns', gmNames: 'GM Names', gmPlayerRolls: 'Player roll requests', gmQuestions: 'GM questions',
 	gmImages: 'GM chat images', assistantQuestions: 'Assistant questions', assistantSubagents: 'Assistant batch helpers', assistantImages: 'Assistant chat images', automaticCovers: 'Automatic project covers',
 } as const;

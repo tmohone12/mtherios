@@ -631,6 +631,79 @@ export const llmServiceSettings = pgTable('llm_service_settings', {
 	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+/** Provider connection, model and generation defaults shared by roles and tasks (migration 0054). */
+export const modelProfiles = pgTable('model_profiles', {
+	id: text('id').primaryKey(),
+	name: text('name').notNull(),
+	providerType: text('provider_type').notNull(),
+	baseUrl: text('base_url'),
+	apiKeyRef: text('api_key_ref'),
+	model: text('model').notNull(),
+	contextWindowTokens: integer('context_window_tokens'),
+	capabilities: jsonb('capabilities').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	generation: jsonb('generation').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	revision: integer('revision').notNull().default(1),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const modelRoles = pgTable('model_roles', {
+	role: text('role').primaryKey(),
+	profileId: text('profile_id').references(() => modelProfiles.id, { onDelete: 'restrict' }),
+	fallbackProfileIds: jsonb('fallback_profile_ids').$type<string[]>().notNull().default(jsonArray),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	revision: integer('revision').notNull().default(1),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+/** Explicit differences from a task's role; a missing row means full inheritance. */
+export const modelTaskOverrides = pgTable('model_task_overrides', {
+	taskId: text('task_id').primaryKey(),
+	profileId: text('profile_id').references(() => modelProfiles.id, { onDelete: 'restrict' }),
+	enabled: boolean('enabled'),
+	parameters: jsonb('parameters').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	systemPromptOverride: text('system_prompt_override'),
+	fallbackProfileIds: jsonb('fallback_profile_ids').$type<string[]>().notNull().default(jsonArray),
+	budget: jsonb('budget').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	revision: integer('revision').notNull().default(1),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+/** Named narrative prompt presets (migration 0055). */
+export const promptPresets = pgTable('prompt_presets', {
+	id: text('id').primaryKey(),
+	kind: text('kind').notNull().default('narrative'),
+	name: text('name').notNull(),
+	description: text('description').notNull().default(''),
+	currentRevision: integer('current_revision').notNull(),
+	defaultRevision: integer('default_revision'),
+	isDefault: boolean('is_default').notNull().default(false),
+	archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'string' }),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+/** Immutable preset revisions. */
+export const promptPresetRevisions = pgTable('prompt_preset_revisions', {
+	presetId: text('preset_id').notNull().references(() => promptPresets.id, { onDelete: 'restrict' }),
+	revision: integer('revision').notNull(),
+	document: jsonb('document').$type<Record<string, unknown>>().notNull(),
+	note: text('note').notNull().default(''),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (table) => ({ pk: primaryKey({ columns: [table.presetId, table.revision] }) }));
+
+/** A story's explicit preset revision; absent means the default preset's default revision. */
+export const storyPromptPresets = pgTable('story_prompt_presets', {
+	storyId: text('story_id').primaryKey().references(() => stories.id, { onDelete: 'cascade' }),
+	presetId: text('preset_id').notNull(),
+	revision: integer('revision').notNull(),
+	selectedAt: timestamp('selected_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+});
+
 export const searchIndexRecords = pgTable('search_index_records', {
 	id: text('id').primaryKey(),
 	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
@@ -714,6 +787,107 @@ export const summaryGenerationCheckpoints = pgTable('summary_generation_checkpoi
 	stateCheck: check('summary_checkpoint_state', sql`(${table.status}='running' and ${table.leaseOwner} is not null and ${table.leaseUntil} is not null and ${table.result} is null)
 		or (${table.status}='complete' and ${table.leaseOwner} is null and ${table.leaseUntil} is null and ${table.result} is not null and ${table.failure} is null)
 		or (${table.status}='failed' and ${table.leaseOwner} is null and ${table.leaseUntil} is null and ${table.result} is null and ${table.failure} is not null)`),
+}));
+
+/** Authoritative fictional time per story branch (see server/events/worldClock.ts). */
+export const worldClocks = pgTable('world_clocks', {
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	branch: text('branch').notNull().default('primary'),
+	/** Minutes since 00:00 of the anchor day. */
+	minutes: integer('minutes').notNull().default(0),
+	precision: text('precision').notNull(),
+	calendar: jsonb('calendar').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	anchor: jsonb('anchor').$type<Record<string, unknown>>().notNull(),
+	label: text('label'),
+	revision: integer('revision').notNull().default(1),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, table => ({
+	pk: primaryKey({ columns: [table.storyId, table.branch] }),
+	precisionCheck: check('world_clocks_precision_check', sql`${table.precision} in ('minute','approximate','day','unknown')`),
+	minutesCheck: check('world_clocks_minutes_check', sql`${table.minutes} >= 0`),
+}));
+
+/** Auditable world-time changes; one row per source operation (op key). */
+export const worldTimeChanges = pgTable('world_time_changes', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	branch: text('branch').notNull().default('primary'),
+	opKey: text('op_key').notNull(),
+	status: text('status').notNull(),
+	kind: text('kind').notNull(),
+	proposer: text('proposer').notNull(),
+	sourceEntryId: text('source_entry_id'),
+	sourceTurn: integer('source_turn'),
+	reason: text('reason').notNull(),
+	requestedMinutes: integer('requested_minutes'),
+	appliedMinutes: integer('applied_minutes'),
+	beforeMinutes: integer('before_minutes'),
+	afterMinutes: integer('after_minutes'),
+	beforeLabel: text('before_label'),
+	afterLabel: text('after_label'),
+	clockRevision: integer('clock_revision'),
+	interruptedBy: jsonb('interrupted_by').$type<string[]>().notNull().default(jsonArray),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, table => ({
+	opKey: uniqueIndex('world_time_changes_op').on(table.storyId, table.branch, table.opKey),
+	storyCreatedIdx: index('world_time_changes_story_created_idx').on(table.storyId, table.createdAt),
+	statusCheck: check('world_time_changes_status_check', sql`${table.status} in ('applied','rejected')`),
+	kindCheck: check('world_time_changes_kind_check', sql`${table.kind} in ('advance','anchor','set')`),
+}));
+
+/** Logical archival memory window: one slot per story, scope and chapter number. */
+export const chapterWindows = pgTable('chapter_windows', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	scope: text('scope').notNull().default('primary'),
+	number: integer('number').notNull(),
+	/** Latest frozen attempt; the attempt row owns the lifecycle state. */
+	revision: integer('revision').notNull(),
+	chapterId: text('chapter_id'),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, table => ({
+	slot: uniqueIndex('chapter_windows_slot').on(table.storyId, table.scope, table.number),
+}));
+
+/** One frozen revision of a window: exact sources, inputs, draft and lifecycle state. */
+export const chapterWindowAttempts = pgTable('chapter_window_attempts', {
+	windowId: text('window_id').notNull().references(() => chapterWindows.id, { onDelete: 'cascade' }),
+	revision: integer('revision').notNull(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	policy: text('policy').notNull(),
+	state: text('state').notNull(),
+	afterChapterId: text('after_chapter_id'),
+	startPosition: integer('start_position').notNull(),
+	endPosition: integer('end_position').notNull(),
+	sourceEntryIds: jsonb('source_entry_ids').$type<string[]>().notNull(),
+	sourceFingerprint: text('source_fingerprint').notNull(),
+	scope: text('scope').notNull().default('primary'),
+	pov: text('pov').notNull().default('primary'),
+	compiler: text('compiler').notNull(),
+	summarizerRevision: text('summarizer_revision').notNull(),
+	inputs: jsonb('inputs').$type<Record<string, unknown> | null>(),
+	draft: jsonb('draft').$type<Record<string, unknown> | null>(),
+	draftHash: text('draft_hash'),
+	ownerJobId: text('owner_job_id'),
+	leaseUntil: timestamp('lease_until', { withTimezone: true, mode: 'string' }),
+	extraction: jsonb('extraction').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	failure: jsonb('failure').$type<Record<string, unknown> | null>(),
+	invalidation: jsonb('invalidation').$type<Record<string, unknown> | null>(),
+	reconciliations: jsonb('reconciliations').$type<Array<Record<string, unknown>>>().notNull().default(jsonArray),
+	reference: jsonb('reference').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	chapterId: text('chapter_id'),
+	committedAt: timestamp('committed_at', { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, table => ({
+	pk: primaryKey({ columns: [table.windowId, table.revision] }),
+	storyStateIdx: index('chapter_window_attempts_story_state_idx').on(table.storyId, table.state),
+	policyCheck: check('chapter_window_attempts_policy_check', sql`${table.policy} in ('live','reviewed','historical')`),
+	stateCheck: check('chapter_window_attempts_state_check', sql`${table.state} in ('waiting','ready','generating','validated','committed','retryable_failure','needs_configuration','uncertain_dispatch','invalidated')`),
+	committedCheck: check('chapter_window_attempts_committed', sql`(${table.state} = 'committed') = (${table.chapterId} is not null and ${table.committedAt} is not null)`),
 }));
 
 export const apiCallLogs = pgTable('api_call_logs', {

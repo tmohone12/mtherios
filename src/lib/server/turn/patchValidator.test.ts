@@ -15,6 +15,8 @@ import {
 	stories,
 	storyEntries,
 	storyEvents,
+	worldClocks,
+	worldTimeChanges,
 } from '$lib/server/db/schema';
 import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
 import { applyValidatedTurnUpdate, parseTurnUpdate } from './patchValidator';
@@ -488,7 +490,11 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(updateCalls.every(call => call.source === 'tx')).toBe(true);
 		expect(selectLocks).toEqual([
 			expect.objectContaining({ source: 'tx', table: stories, strength: 'update' }),
+			expect.objectContaining({ source: 'tx', table: worldClocks, strength: 'update' }),
 		]);
+		// The stated duration is the classifier's proposal; the clock applies it once for this turn.
+		expect(insertCalls.find(call => call.table === worldTimeChanges)?.value).toMatchObject({ opKey: 'turn:entry_assistant', status: 'applied',
+			kind: 'advance', proposer: 'classifier', requestedMinutes: 60, appliedMinutes: 60, beforeLabel: 'Twilight of Ashes', afterLabel: 'Twilight of Ashes (+1h)' });
 
 		const patchInsert = insertCalls.find(call => call.table === statePatches)?.value as { id: string };
 		const eventInserts = insertCalls
@@ -514,7 +520,7 @@ describe('applyValidatedTurnUpdate', () => {
 				createdTurn: 7,
 				occurredTurn: 7,
 				scheduledTurn: null,
-				worldTime: 'Twilight of Ashes',
+				worldTime: 'Twilight of Ashes (+1h)',
 				locationIds: [],
 				memoryImpact: {},
 				serverVersion: 12,
@@ -577,7 +583,7 @@ describe('applyValidatedTurnUpdate', () => {
 		});
 		expect(turnUpdate).toMatchObject({
 			currentTurn: 8,
-			currentWorldTime: 'Twilight of Ashes',
+			currentWorldTime: 'Twilight of Ashes (+1h)',
 			currentLocationId: 'entity_bridge',
 			serverVersion: 12,
 			updatedAt: expect.any(String),
@@ -974,7 +980,7 @@ describe('applyValidatedTurnUpdate', () => {
 		});
 	});
 
-	it('uses time_delta only to initialize an empty clock and preserves location state without a new anchor', async () => {
+	it('treats time_delta as an elapsed duration, never as a clock label, and preserves location state without a new anchor', async () => {
 		const { db, insertCalls, storyUpdates } = createDbMock({
 			story: { ...storyRow, currentWorldTime: null },
 			entityRows: [entityRows[2], ...entityRows.filter(row => row.id !== 'entity_bridge')],
@@ -1001,9 +1007,10 @@ describe('applyValidatedTurnUpdate', () => {
 			.find(value => value.id === 'entity_bridge');
 		expect(bridgeInsert?.state).toMatchObject({ current: true });
 		expect(storyUpdates.find(value => value.currentTurn === 8)).toMatchObject({
-			currentWorldTime: 'Dawn after the fire',
+			currentWorldTime: null,
 			currentLocationId: 'entity_bridge',
 		});
+		expect(insertCalls.some(call => call.table === worldTimeChanges || call.table === worldClocks)).toBe(false);
 	});
 
 	it('uses a known header location during empty supplemental extraction even when its clock is unknown', async () => {
@@ -1104,8 +1111,9 @@ describe('applyValidatedTurnUpdate', () => {
 			serverVersion: 12,
 		});
 
+		// The second-line header is not a header; the classifier's stated day still passes.
 		expect(storyUpdates.find(value => value.currentTurn === 8)).toMatchObject({
-			currentWorldTime: 'Twilight of Ashes',
+			currentWorldTime: 'Twilight of Ashes (+1d)',
 			currentLocationId: 'entity_bridge',
 		});
 	});
@@ -1755,7 +1763,7 @@ describe('applyValidatedTurnUpdate', () => {
 			title: 'Ash bridge secured',
 			createdTurn: 7,
 			occurredTurn: 7,
-			worldTime: 'Twilight of Ashes',
+			worldTime: 'Twilight of Ashes (+1h)',
 			sourceEntryIds: ['entry_assistant'],
 			sourcePatchIds: [patchInsert.id],
 			serverVersion: 13,
@@ -1763,7 +1771,9 @@ describe('applyValidatedTurnUpdate', () => {
 		expect(eventInserts.find(event => event.title === 'Turn resolved')).toBeUndefined();
 		expect(memoryInserts).toEqual([]);
 		expect(storyUpdates.find(updatePayload => 'currentTurn' in updatePayload)).toBeUndefined();
-		expect(storyUpdates.find(updatePayload => updatePayload.currentWorldTime)).toBeUndefined();
+		// The inline turn applied no time; the deferred classifier duration applies once under the turn's op key.
+		expect(storyUpdates.filter(updatePayload => updatePayload.currentWorldTime)).toEqual([expect.objectContaining({ currentWorldTime: 'Twilight of Ashes (+1h)' })]);
+		expect(insertCalls.find(call => call.table === worldTimeChanges)?.value).toMatchObject({ opKey: 'turn:entry_assistant', sourceTurn: 7, proposer: 'classifier' });
 		expect(dbMocks.enqueueTurnProjectionJobs).toHaveBeenCalledWith(expect.objectContaining({
 			storyId: 'story_1',
 			eventIds: result.eventIds,

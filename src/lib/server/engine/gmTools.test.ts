@@ -42,6 +42,32 @@ it('keeps unrelated secrets out of the actor-decision evidence view', () => {
 	expect(result.sourceIds).not.toContain('entry_secret');
 });
 
+it('keeps a secret plot against the actor unknown until the actor witnesses or learns it', () => {
+	const data = fixture();
+	const plot = { ...data.events[0], id: 'event_poison_plot', title: 'Poison plot', body: 'The Lord arranges to poison Mira at the feast.', visibility: 'secret',
+		actorEntityIds: ['npc_lord'], targetEntityIds: ['npc_mira'], sourceEntryIds: ['entry_plot'] } as any;
+	const planned = { ...data.events[0], id: 'event_mira_plan', title: 'Planned escape', body: 'Mira will flee at dawn.', status: 'scheduled',
+		actorEntityIds: ['npc_mira'], targetEntityIds: [], sourceEntryIds: ['entry_plan'] } as any;
+	data.events.push(plot, planned);
+	data.relationships.push({ ...data.relationships[0], id: 'rel_lord_mira', sourceEntityId: 'npc_lord', targetEntityId: 'npc_mira', label: 'secretly despises' } as any);
+	data.memberships.push({ ...data.memberships[0], id: 'membership_mira_guild', entityId: 'npc_mira', factionId: 'faction_guild', status: 'active' } as any);
+	data.agreements.push({ ...data.agreements[0], id: 'agreement_guild_secret', parties: ['faction_guild', 'npc_lord'], secrecy: 'secret', status: 'active', terms: 'The guild sells Mira to the Lord.' } as any);
+	const actor = data.entities.find(entity => entity.id === 'npc_mira')!;
+	actor.state = { ...(actor.state as object), knownFacts: ['The feast hall has a servants’ door.'] };
+
+	const unknown = JSON.stringify(buildActorDecisionView(data, { actorId: 'npc_mira', eventLimit: 6 }).data);
+	expect(unknown).not.toContain('poison');
+	expect(unknown).not.toContain('flee at dawn');
+	expect(unknown).not.toContain('secretly despises');
+	expect(unknown).not.toContain('sells Mira');
+	expect(unknown).toContain('servants’ door');
+
+	const learned = buildActorDecisionView({ ...data, knowledgeLinks: [{ eventId: 'event_poison_plot', npcEntityId: 'npc_mira', role: 'learned' }] },
+		{ actorId: 'npc_mira', eventLimit: 6 });
+	expect(JSON.stringify(learned.data)).toContain('poison Mira at the feast');
+	expect((learned.data.witnessedEvents as Array<{ id: string; role: string }>).find(event => event.id === 'event_poison_plot')?.role).toBe('learned');
+});
+
 it('does not let actor decisions choose the player character\'s behavior', () => {
 	expect(() => buildActorDecisionView(fixture(), { actorId: 'pc_aurion', eventLimit: 6 }))
 		.toThrow('Player character cannot be an actor-decision subject.');

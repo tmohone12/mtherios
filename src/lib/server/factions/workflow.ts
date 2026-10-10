@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {countTokens} from '$lib/utils/tokens';
 import { getDb } from '$lib/server/db/client';
-import { agreements, backendJobs, entities, factions, factionGoals, factionMemberships, factionProjects, factionResources, llmServiceSettings, npcBeliefs, npcEventLinks, relationships, stories, storyEvents, storyThreads, syncOps } from '$lib/server/db/schema';
+import { agreements, backendJobs, entities, factions, factionGoals, factionMemberships, factionProjects, factionResources, npcBeliefs, npcEventLinks, relationships, stories, storyEvents, storyThreads, syncOps } from '$lib/server/db/schema';
 import { requireResolvedServiceProfile, resolveServiceGeneration } from '$lib/server/engine/llmSettings';
 import { generateServerTextWithMetrics, parseJsonFromGeneratedText, ServerGenerationError, type ServerGenerationResult } from '$lib/server/turn/provider';
 import { chooseJevOption, isJevModel } from '$lib/server/turn/jev';
@@ -61,11 +61,10 @@ async function storySnapshot(storyId: string) {
  return story;
 }
 async function modelSettingsRevision(serviceIds: string[]) {
- const rows = await getDb().select({ serviceId: llmServiceSettings.serviceId, updatedAt: llmServiceSettings.updatedAt,
-  enabled: llmServiceSettings.enabled, provider: llmServiceSettings.providerType, model: llmServiceSettings.model,
-  baseUrl: llmServiceSettings.baseUrl }).from(llmServiceSettings).where(inArray(llmServiceSettings.serviceId, serviceIds));
  const availability=await Promise.all(serviceIds.map(async serviceId=>{
   try { const resolved=await resolveServiceGeneration(serviceId);return {serviceId,available:!!resolved.profile,
+   enabled: resolved.provenance?.enabled ?? false, source: resolved.provenance?.source ?? null, profileId: resolved.provenance?.profileId ?? null,
+   profileRevision: resolved.provenance?.profileRevision ?? null,
    generation: resolved.generation, provider: resolved.profile?.providerType ?? null,
    baseUrl: resolved.profile?.baseUrl ?? null, contextWindowTokens: resolved.profile?.contextWindowTokens ?? null }; }
   catch { return {serviceId,available:false}; }
@@ -73,7 +72,7 @@ async function modelSettingsRevision(serviceIds: string[]) {
  // Restoring a configured key or ending explicit local-only testing is a meaningful change.
  // Hash effective generation settings/availability, never credentials or actor evidence,
  // so changed provider resolution can recover even without a changed saved row.
- return fingerprint({settings:rows.sort((a, b) => a.serviceId.localeCompare(b.serviceId)),availability,
+ return fingerprint({availability,
   inferencePolicy:process.env.MYTHENGINE_TEST_LOCAL_ONLY==='true'?'local-only-testing':'configured-providers'});
 }
 async function saveWorkflow(storyId: string, baseVersion: number, workflow: Record<string, unknown>) {

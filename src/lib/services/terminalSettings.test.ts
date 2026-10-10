@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { syncTerminalLlmSettingsFromBrowser, syncInheritedGameMasterTools, refreshTerminalLlmSettings, patchTerminalLlmSettings } from './terminalSettings';
+import { syncTerminalLlmSettingsFromBrowser, refreshTerminalLlmSettings, patchTerminalLlmSettings } from './terminalSettings';
 
 const fetchMock = vi.fn();
 
@@ -122,16 +122,16 @@ describe('terminal settings engine gateway client', () => {
 				}),
 				expect.objectContaining({
 					serviceId: 'classifier',
-					providerType: 'openai',
-					model: 'gpt-4.1-mini',
 					temperature: 0.2,
 					maxTokens: 1024,
 					systemPromptOverride: null,
-					apiKeyRef: 'env:OPENAI_API_KEY',
 				}),
 			],
 			secrets: [],
 		});
+		// The classifier has no saved model of its own: it inherits its role on the server.
+		const classifier = (body.args as { settings: Array<Record<string, unknown>> }).settings[1];
+		for (const key of ['providerType', 'baseUrl', 'model', 'apiKeyRef']) expect(classifier).not.toHaveProperty(key);
 	});
 	it('does not resync retired service configs', async () => {
 		await syncTerminalLlmSettingsFromBrowser(['activeRecall', 'worldSimulation']);
@@ -171,24 +171,18 @@ describe('terminal settings engine gateway client', () => {
 	it.each([
 		['smallBrain', 0.3],
 		['characterUpdate', 0.2],
-	])('uses classification provider defaults for %s terminal sync', async (serviceId, temperature) => {
-		fetchMock.mockResolvedValue(engineResponse('settings.llm.save', { settings: [] }));
-
+	])('sends only parameters for an inheriting %s task and classification defaults once it is explicit', async (serviceId, temperature) => {
+		fetchMock.mockImplementation(async () => engineResponse('settings.llm.save', { settings: [] }));
 		await syncTerminalLlmSettingsFromBrowser([serviceId]);
+		const inherited = ((await postedCommand()).args as { settings: Array<Record<string, unknown>> }).settings[0];
+		expect(inherited).toMatchObject({ serviceId, temperature, maxTokens: 4096 });
+		expect(inherited).not.toHaveProperty('model');
+		expect(inherited).not.toHaveProperty('providerType');
 
-		const body = await postedCommand();
-		expect(body.args).toEqual({
-			settings: [
-				expect.objectContaining({
-					serviceId,
-					providerType: 'openai',
-					model: 'gpt-4.1-mini',
-					temperature,
-					maxTokens: 4096,
-				}),
-			],
-			secrets: [],
-		});
+		settingsMock.serviceConfigs[serviceId] = { model: '', profileId: 'profile_openai' };
+		await syncTerminalLlmSettingsFromBrowser([serviceId]);
+		expect(((await postedCommand()).args as { settings: Array<Record<string, unknown>> }).settings[0])
+			.toMatchObject({ serviceId, providerType: 'openai', model: 'gpt-4.1-mini', temperature });
 	});
 
 	it('syncs the batch spend ceiling and conservative prices to server metadata', async () => {
@@ -206,14 +200,15 @@ describe('terminal settings engine gateway client', () => {
 		await syncTerminalLlmSettingsFromBrowser(['narrative'], true);
 		expect((await postedCommand()).args).toEqual(expect.objectContaining({ secrets: [{ ref: 'env:OPENAI_API_KEY', value: 'sk-browser-key' }] }));
 	});
-	it('updates inherited Memory and Context tasks while preserving saved specialist models', async () => {
-		fetchMock.mockResolvedValue(engineResponse('settings.llm.save', { settings: [] }));
-		settingsMock.serviceConfigs.characterUpdate = { model: 'specialist-model' };
-		settingsMock.profileModels.guidance = 'guidance-model';
-		await syncInheritedGameMasterTools();
-		const body = await postedCommand();
-		const saved = (body.args as { settings: Array<{ serviceId: string }> }).settings.map(setting => setting.serviceId);
-		expect(saved).toEqual(['classifier', 'smallBrain']);
+	it('keeps a server-inherited task inherited in the browser after a refresh', async () => {
+		fetchMock.mockResolvedValueOnce(engineResponse('settings.llm.list', { settings: [
+			{ serviceId: 'smallBrain', providerType: 'openai', model: 'gm-model', temperature: 0.3, maxTokens: 1200, enabled: true, metadata: { inherited: true } },
+			{ serviceId: 'characterUpdate', providerType: 'openai', model: 'specialist-model', temperature: 0.2, maxTokens: 4096, enabled: true, metadata: { inherited: false } },
+		] }));
+		await refreshTerminalLlmSettings();
+		expect(settingsMock.serviceConfigs.smallBrain).toMatchObject({ model: '', profileId: '', inherited: true, effectiveModel: 'gm-model' });
+		expect(settingsMock.serviceConfigs.characterUpdate).toMatchObject({ model: 'specialist-model', inherited: false });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 	it('changes context budget without sending cached reasoning, provider or credentials', async () => {
 		fetchMock.mockResolvedValue(engineResponse('settings.llm.save', { settings: [] }));

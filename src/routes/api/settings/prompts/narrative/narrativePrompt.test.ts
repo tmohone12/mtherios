@@ -4,7 +4,9 @@ import { buildServerNarrativeSystemPrompt } from '$lib/server/turn/promptPacket'
 import { GET } from './+server';
 
 const getDbMock = vi.hoisted(() => vi.fn());
+const presetMock = vi.hoisted(() => vi.fn());
 vi.mock('$lib/server/db/client', () => ({ getDb: getDbMock }));
+vi.mock('$lib/server/engine/promptPresets', () => ({ resolveStoryNarrativePreset: presetMock }));
 
 function readPrompt(query = '') {
 	return GET({ url: new URL(`http://localhost/api/settings/prompts/narrative${query}`) } as Parameters<typeof GET>[0]);
@@ -13,6 +15,7 @@ function readPrompt(query = '') {
 describe('narrative built-in prompt preview', () => {
 	beforeEach(() => {
 		getDbMock.mockReset();
+		presetMock.mockReset().mockResolvedValue(null);
 	});
 
 	it('previews the default or selected genre without a database', async () => {
@@ -55,6 +58,18 @@ describe('narrative built-in prompt preview', () => {
 		expect(result.builtInPrompt).toContain(`Story-specific preamble:\n${story.headerPrompt}`);
 		expect(select).toHaveBeenCalledTimes(1);
 		expect(limit).toHaveBeenCalledWith(1);
+	});
+
+	it("previews the story's selected preset revision", async () => {
+		const story = { title: 'Terse tale', genre: null, headerPrompt: null, metadata: {}, settings: {} };
+		getDbMock.mockReturnValue({ select: vi.fn(() => ({ from: () => ({ where: () => ({ limit: vi.fn().mockResolvedValue([story]) }) }) })) });
+		const { BUILT_IN_NARRATIVE_PRESET } = await import('$lib/server/turn/narrativePreset');
+		const document = { ...BUILT_IN_NARRATIVE_PRESET, sections: BUILT_IN_NARRATIVE_PRESET.sections.filter(section => section.id !== 'prose') };
+		presetMock.mockResolvedValue({ document, name: 'Terse', use: { presetId: 'terse', revision: 2, contentHash: 'x', source: 'story' } });
+		const result = narrativePromptPreviewSchema.parse(await (await readPrompt('?storyId=story_terse')).json());
+		expect(presetMock).toHaveBeenCalledWith('story_terse');
+		expect(result.builtInPrompt).toBe(buildServerNarrativeSystemPrompt(story, { document }));
+		expect(result.builtInPrompt).not.toContain('Keep prose concrete and clear');
 	});
 
 	it('rejects invalid selectors before querying the database', async () => {

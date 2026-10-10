@@ -7,11 +7,17 @@ vi.mock('./summaryCheckpoints', async importOriginal => {
 	const memory = memorySummaryCheckpointStore(); mocks.clearStore = () => memory.rows.clear();
 	return { ...actual, withSummaryCheckpoint: <T>(input: Parameters<typeof actual.withSummaryCheckpoint<T>>[0], generate: () => Promise<T>) => actual.withSummaryCheckpoint(input, generate, memory.store) };
 });
+// The Summaries task with two explicitly configured fallback profiles; nothing falls
+// back to the Classifier or GameMaster role implicitly.
 vi.mock('$lib/server/engine/llmSettings', () => ({
-	resolveServiceGeneration: vi.fn(async (id: string) => ({
-		profile: { providerType: 'nanogpt', baseUrl: 'https://example.invalid', apiKey: mocks.secret },
-		generation: { model: (['arcCondensation', 'memory'].includes(id) ? 'same-model' : id) + mocks.modelVersion, reasoningEffort: mocks.reasoning, temperature: 0.3 },
-	})),
+	resolveServiceGeneration: vi.fn(async () => {
+		const service = (model: string) => ({
+			profile: { providerType: 'nanogpt', baseUrl: 'https://example.invalid', apiKey: mocks.secret },
+			generation: { model: model + mocks.modelVersion, reasoningEffort: mocks.reasoning, temperature: 0.3 },
+		});
+		return { ...service('same-model'), provenance: { limits: { maxRequests: 8 } },
+			fallbacks: ['classifier', 'narrative'].map(model => ({ profileId: `${model}-fallback`, ...service(model) })) };
+	}),
 }));
 vi.mock('$lib/server/engine/generationAccounting', () => ({ recordGenerationApiCalls: mocks.log, generationAttemptResult: (value: unknown) => value }));
 vi.mock('$lib/server/turn/provider', () => ({ generateServerTextWithMetrics: mocks.generate,

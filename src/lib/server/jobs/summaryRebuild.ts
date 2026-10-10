@@ -14,6 +14,7 @@ import {
 	upsertArcMemoryNode, upsertChapterMemoryNode, upsertSagaMemoryNode,
 } from './processor';
 import { generateReadableNarrative } from './summaryGeneration';
+import { recordHistoricalChapterWindows } from './chapterWindows';
 import { replaceMtheriosStoryNarrative } from '$lib/services/ai/context/mtheriosSummaryFormat';
 
 type Job = typeof backendJobs.$inferSelect & { storyId: string };
@@ -345,6 +346,9 @@ export async function rebuildStorySummaries(job: Job): Promise<Record<string, un
 		await tx.delete(chapters).where(eq(chapters.storyId, job.storyId));
 		if (snapshot.memoryNodes.length) await tx.delete(memoryNodes).where(and(eq(memoryNodes.storyId, job.storyId), inArray(memoryNodes.id, snapshot.memoryNodes.map(node => node.id))));
 		if (draftChapters.length) await tx.insert(chapters).values(draftChapters);
+		// Historical windows only: no consumer jobs, no present-day character/faction changes, no clock.
+		await recordHistoricalChapterWindows(tx, { storyId: job.storyId, jobId: job.id, committedAt: now,
+			chapters: draftChapters.map(row => ({ id: row.id, number: row.number, sourceEntryIds: row.sourceEntryIds, metadata: row.metadata })), entries: current.entries });
 		if (draftArcs.length) await tx.insert(arcs).values(draftArcs);
 		if (draftSagas.length) await tx.insert(sagas).values(draftSagas);
 		const shared = { db: tx, storyId: job.storyId, serverVersion, now, jobId: job.id };

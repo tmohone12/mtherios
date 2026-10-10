@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { actorPsychologySchema } from './actorPsychology';
 import { sceneCheckpointSelectionSchema } from './sceneCheckpoint';
+import { modelTaskProvenanceSchema } from './modelTasks';
+import { promptPresetUseSchema } from './promptPresets';
 
 export const jsonObjectSchema = z.record(z.string(), z.unknown());
 export const jsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
@@ -1000,6 +1002,18 @@ export const gmTurnReceiptSchema = z.object({
 		selectedMemoryText: z.string().nullable().optional(),
 		reason: z.string().nullable().default(null),
 		model: z.string().nullable().default(null),
+		/** How the decision was obtained, separately from what it proposes. Never an applied outcome. */
+		decision: z.object({
+			mode: z.enum(['action', 'psychology_then_action']),
+			requestCount: z.number().int().nonnegative(),
+			transport: z.enum(['completed', 'failed', 'timed_out', 'not_sent', 'reused']),
+			validation: z.enum(['valid', 'invalid', 'not_checked']),
+			outcome: z.enum(['proposed', 'abstained', 'unavailable']),
+			choice: z.string().nullable(),
+			/** The model's confidence in its choice; not the probability that the action succeeds. */
+			modelConfidence: z.number().min(0).max(1).nullable(),
+			applied: z.literal(false),
+		}).strict().optional(),
 	}).strict()).default([]),
 	steps: z.array(z.object({
 		id: z.string(),
@@ -1034,6 +1048,10 @@ export const gmTurnReceiptSchema = z.object({
 	stateExtractionJobId: z.string().nullable().default(null),
 	stateExtractionError: z.string().nullable().default(null),
 	warningCount: z.number().int().nonnegative(),
+	/** Effective model task configuration used by this turn: profile, revision, source and limits. */
+	modelTasks: z.array(modelTaskProvenanceSchema).default([]),
+	/** Narrative preset revision used to compose the narrator instructions. */
+	promptPreset: promptPresetUseSchema.nullable().default(null),
 }).strict();
 
 export const turnResponseSchema = z.object({

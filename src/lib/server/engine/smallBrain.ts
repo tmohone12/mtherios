@@ -81,34 +81,15 @@ function fail(request: SmallBrainRunRequest, model: string, warnings: string[]):
 }
 
 async function resolveGeneration(warnings: string[]): Promise<ResolvedGeneration | null> {
-	let primaryReason = '';
+	// Lore research inherits the GameMaster role unless explicitly overridden; it never
+	// borrows the Classifier, including when it is disabled.
 	try {
 		const primary = await resolveServiceGeneration('smallBrain');
 		if (primary.profile && primary.generation.model?.trim()) return primary;
-		primaryReason = primary.profile
-			? 'smallBrain profile has no configured model.'
-			: primary.missingReason ?? 'smallBrain profile is unavailable.';
+		warn(warnings, primary.profile ? 'smallBrain profile has no configured model.' : primary.missingReason ?? 'smallBrain profile is unavailable.');
 	} catch (error) {
-		primaryReason = `smallBrain resolution failed: ${message(error)}`;
+		warn(warnings, `smallBrain resolution failed: ${message(error)}`);
 	}
-
-	let fallback: ResolvedGeneration;
-	try {
-		fallback = await resolveServiceGeneration('classifier');
-	} catch (error) {
-		warn(warnings, primaryReason);
-		warn(warnings, `classifier resolution failed: ${message(error)}`);
-		return null;
-	}
-	if (fallback.profile && fallback.generation.model?.trim()) {
-		warn(warnings, `smallBrain unavailable; using classifier fallback: ${primaryReason}`);
-		return fallback;
-	}
-
-	warn(warnings, primaryReason);
-	warn(warnings, fallback.profile
-		? 'classifier profile has no configured model.'
-		: fallback.missingReason ?? 'classifier profile is unavailable.');
 	return null;
 }
 

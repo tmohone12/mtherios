@@ -3,6 +3,7 @@
 	import JevProviderPanel from './JevProviderPanel.svelte';
 	import AgentSettingsPanel from './AgentSettingsPanel.svelte';
 	import ServiceConfigPanel from './ServiceConfigPanel.svelte';
+	import ModelRolesPanel from './ModelRolesPanel.svelte';
 	import PromptsPanel from './PromptsPanel.svelte';
 	import PromptInspector from './PromptInspector.svelte';
 	import ContextWindow from '../story/ContextWindow.svelte';
@@ -17,7 +18,7 @@
 		contextBudgetValueToSliderIndex,
 		formatTokenBudgetCompact,
 	} from '$lib/services/memorySettings';
-	import { defaultTerminalApiKeyRef, refreshTerminalLlmSettings, patchTerminalLlmSettings, syncInheritedGameMasterTools } from '$lib/services/terminalSettings';
+	import { defaultTerminalApiKeyRef, refreshTerminalLlmSettings, patchTerminalLlmSettings } from '$lib/services/terminalSettings';
 	import type { ProviderType, APIProfile, UISettings } from '$lib/types';
 	import { uuid } from '$lib/utils/uuid';
 	import { fade } from 'svelte/transition';
@@ -319,7 +320,6 @@
 		try {
 			await settings.setServiceConfig('narrative', { profileId: settings.activeProfileId ?? '', model: settings.narrativeSettings.model });
 			await patchTerminalLlmSettings([{ serviceId: 'narrative', providerType, baseUrl: customUrl || providerConfig?.baseUrl || null, model: settings.narrativeSettings.model || null, apiKeyRef: normalizedKeyRef || defaultTerminalApiKeyRef(providerType) }], apiKey.trim() ? [{ ref: normalizedKeyRef || defaultTerminalApiKeyRef(providerType), value: apiKey.trim() }] : []);
-			await syncInheritedGameMasterTools();
 			await refreshTerminalLlmSettings();
 			testStatus = 'success';
 			testMessage = 'Saved provider and synced terminal runtime settings.';
@@ -414,7 +414,6 @@
 	async function syncNarrativeRuntimeSetting(field: 'model' | 'temperature' | 'maxTokens' | 'reasoningEffort') {
 		try {
 			await patchTerminalLlmSettings([{ serviceId: 'narrative', [field]: settings.narrativeSettings[field] }]);
-			if (field === 'model') await syncInheritedGameMasterTools();
 			await refreshTerminalLlmSettings();
 		} catch (error) {
 			console.warn('[Settings] Terminal sync for narrative settings failed:', error);
@@ -911,6 +910,8 @@
 				{:else if activeTab === 'agents'}
 				<AgentSettingsPanel />
 			{:else if activeTab === 'services'}
+				<ModelRolesPanel />
+				<p class="text-xs text-[var(--text-muted)]">Advanced per-task settings below edit the same server settings; a task left on its role keeps inheriting it.</p>
 				<ServiceConfigPanel onBack={() => activeTab = 'providers'} />
 
 				<!-- ═══ TAB: PROMPTS ═══ -->

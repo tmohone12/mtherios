@@ -8,6 +8,7 @@ import { PROVIDERS, type ProviderConfig } from '$lib/services/ai/sdk/providers/c
 import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET, DEFAULT_RECENT_DIALOGUE_TOKENS, DEFAULT_RECENT_DIALOGUE_TURNS, normalizeRecentDialogueTokens, normalizeRecentDialogueTurns } from '$lib/services/memorySettings';
 import { FIXED_CHAPTER_SETTINGS } from '$lib/services/chapterCadence';
 import type { UISettings, APIProfile, ProviderType, ReasoningEffort } from '$lib/types';
+import { modelTaskDefinition } from '$lib/contracts/modelTasks';
 
 // ── Per-Service Configuration ──
 export interface ServiceConfig {
@@ -17,6 +18,9 @@ export interface ServiceConfig {
 	systemPromptOverride: string; // empty = use default
 	enabled: boolean;
 	profileId: string; // API profile to use — empty = active profile (default)
+	/** Server-resolved model when this task inherits its role; never saved as an override. */
+	effectiveModel?: string;
+	inherited?: boolean;
 	dialogueMode?: 'all' | 'important';
 	batchMaxCostUsd?: number | null;
 	batchInputUsdPerMillion?: number | null;
@@ -43,6 +47,12 @@ export const SERVICE_DEFINITIONS: Record<string, { label: string; description: s
 	arcCondensation: { label: 'Arc Condensation', description: 'Condense chapters into arc summaries', profile: 'memoryContext', defaultTemp: 0.3, defaultMaxTokens: 4096 },
 	sagaCondensation: { label: 'Saga Condensation', description: 'Condense arcs into long-term saga summaries', profile: 'memoryContext', defaultTemp: 0.25, defaultMaxTokens: 4096 },
 };
+
+// The UI and server share one set of enablement defaults.
+for (const [id, definition] of Object.entries(SERVICE_DEFINITIONS)) {
+	const task = modelTaskDefinition(id);
+	if (task) definition.defaultEnabled = task.defaultEnabled;
+}
 
 // ── Service Profile Groups ──
 // Services in the same profile share one LLM model setting.
@@ -356,7 +366,7 @@ class SettingsStore {
 			: '';
 		const fallbackModel = profileModel || narrativeFallback || '';
 		if (existing) {
-			return { ...existing, model: existing.model || fallbackModel, profileId: existing.profileId ?? '' };
+			return { ...existing, model: existing.model || existing.effectiveModel || fallbackModel, profileId: existing.profileId ?? '' };
 		}
 		return {
 			model: fallbackModel,

@@ -387,6 +387,8 @@ export const engineTimelineScheduleArgsSchema = z.object({
 	title: z.string().min(1),
 	body: z.string().min(1),
 	delayTurns: z.number().int().nonnegative().default(0),
+	/** Schedule by world time instead of turns: due when the World Clock reaches now + this many minutes. */
+	delayWorldMinutes: z.number().int().positive().max(366 * 24 * 60).optional(),
 	currentTurn: z.number().int().nonnegative().optional(),
 	currentWorldTime: z.string().nullable().optional(),
 	worldTime: z.string().nullable().optional(),

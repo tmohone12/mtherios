@@ -19,7 +19,7 @@ import { executeEngineCommand } from './command';
 import { actorBriefArgsSchema, getActorDecisionView } from './gmTools';
 import { requireResolvedServiceProfile, resolveServiceGeneration } from './llmSettings';
 import { generationAttemptResult, recordGenerationApiCalls, reuseGenerationResult } from './generationAccounting';
-import { boundedJevSourceIds, chooseJevOption, isJevModel } from '$lib/server/turn/jev';
+import { boundedJevSourceIds, chooseJevOption, decisionModeFrom, isJevModel } from '$lib/server/turn/jev';
 import { runCompactResearch } from './research';
 import { publicResearchReceipt } from './researchHistory';
 import { nameRequestSchema, parseNameCandidates } from './generatedNames';
@@ -40,21 +40,21 @@ const object = (value: unknown): Record<string, unknown> => value && typeof valu
 const text = (value: unknown) => typeof value === 'string' ? value : String(value ?? '');
 const activeGmRuns = new Map<string, { controller: AbortController; finished: Promise<void>; leaseOwner: string }>();
 const isPiRun = (run: Row) => object(run.continuation).runtime === AGENT_RUNTIME_VERSION;
-async function generateAgentText(run: Row, operation: string, options: ServerGenerationOptions) {
+async function generateAgentText(run: Row, operation: string, options: ServerGenerationOptions, serviceId = operation === 'turn.generate_names' ? 'nameGeneration' : 'gmToolPlanner') {
   try {
     const result = await generateServerTextWithMetrics({ ...options, onAttempt: async attempt => {
       await options.onAttempt?.(attempt);
-      await recordGenerationApiCalls({ storyId: text(run.game_id), serviceId: 'classifier', operation,
+      await recordGenerationApiCalls({ storyId: text(run.game_id), serviceId, operation,
         profile: options.profile, result: generationAttemptResult(attempt), status: attempt.status, error: attempt.error ?? undefined,
         metadata: { clientTurnId: text(run.client_turn_id), runId: text(run.id) } });
     } });
-    await recordGenerationApiCalls({ storyId: text(run.game_id), serviceId: 'classifier', operation,
+    await recordGenerationApiCalls({ storyId: text(run.game_id), serviceId, operation,
       profile: options.profile, result, status: 'success', metadata: { clientTurnId: text(run.client_turn_id), runId: text(run.id) } });
     return result;
   } catch (error) {
     if (error instanceof ServerGenerationError) {
       const result = error.result;
-      await recordGenerationApiCalls({ storyId: text(run.game_id), serviceId: 'classifier', operation,
+      await recordGenerationApiCalls({ storyId: text(run.game_id), serviceId, operation,
         profile: options.profile, result, status: 'error', error, metadata: { clientTurnId: text(run.client_turn_id), runId: text(run.id) } });
     }
     throw error;
@@ -204,13 +204,14 @@ export async function startAgentRun(input: unknown, storyId: string, options: Pr
     return snapshot(text(existing.id), storyId);
   }
   const runId = `run_${randomUUID()}`;
-  const settings = await getAgentSettings({ projectId: text(game.shelf_id), gameId: storyId });
-  const continuation = settings.effective.gmPiRuntime ? { runtime: AGENT_RUNTIME_VERSION, messages: [], receipts: [] } : [];
+  // Every new turn uses the Pi runtime. The legacy planner runtime is retired: a saved
+  // `gmPiRuntime: false` no longer selects it; existing legacy runs stay readable.
+  const continuation = { runtime: AGENT_RUNTIME_VERSION, messages: [], receipts: [] };
   try {
     await getDb().transaction(async tx => {
       const [pending] = await tx.execute(sql`select id from agent_runs where game_id=${storyId} and status in ('running','awaiting_input','committing') limit 1`);
       if (pending) throw new MutationError('REVISION_CONFLICT', 'Another agent run is pending in this game.');
-      await tx.execute(sql`insert into agent_runs(id,project_id,game_id,client_turn_id,status,request,continuation,lease_until,expires_at) values(${runId},${game.shelf_id},${storyId},${turn.clientTurnId},'running',${JSON.stringify(safeTurn)}::jsonb,${JSON.stringify(continuation)}::jsonb,now()+${settings.effective.gmPiRuntime ? sql`interval '30 seconds'` : sql`interval '3 minutes'`},now()+interval '24 hours')`);
+      await tx.execute(sql`insert into agent_runs(id,project_id,game_id,client_turn_id,status,request,continuation,lease_until,expires_at) values(${runId},${game.shelf_id},${storyId},${turn.clientTurnId},'running',${JSON.stringify(safeTurn)}::jsonb,${JSON.stringify(continuation)}::jsonb,now()+interval '30 seconds',now()+interval '24 hours')`);
       await event(tx, runId, 'run.started', { clientTurnId: turn.clientTurnId });
     });
   } catch (error) {
@@ -419,8 +420,8 @@ async function planNext(run: Row): Promise<Decision> {
   await getDb().execute(sql`update agent_runs set context_fingerprint=${contextFingerprint},settings_fingerprint=${hash(settings.effective)},updated_at=now() where id=${run.id} and status='running'`);
   const instruction = `You are the GameMaster's bounded tool planner. The canonical game context follows as evidence. You may request multiple independent native tools in this round, within the remaining tool budget, or finish tool use. Tool results arrive in the next round; never make a call that depends on another call's unseen result. A player question, player roll, document or map change, or image request ends this round; wait for its result before planning more tools. Never narrate the turn here. Use only enabled tools: ${enabled.join(', ')}. Check consequential gaps in scene facts, history, actor knowledge, and rules; proactively use a bounded lookup when it can resolve a material uncertainty before narration. Stop looking once the evidence is sufficient. Research returns public, source-linked excerpts; recall can search GM-only history and lore, then read a specific hit. Keep recall results out of player and NPC knowledge until separately established. Let NPCs and the world make supported choices; do not ask the player to direct them. The update tool edits only existing game-owned custom documents whose item and type revisions were read from that document. Never use it for a character, canonical world record, campaign file, or story clock; canonical changes belong in the turn update pipeline. Ask a player question only when their choice is necessary. If the player explicitly leaves independent choices unresolved, ask each one separately before narration; ask only one question in this tool round. Give each independent choice its own descriptive option IDs; reuse those IDs if restating that choice. When a named NPC's consequential choice is uncertain, use askJev with that actor's ID and two to five concrete plausible actions. Set purpose to immediate_response when the options answer this player's immediate action, so the turn can reuse the result in narration and dialogue. A previous offer accepted by the player is settled evidence: include honoring the terms among plausible actions, not a repeat demand. Jev's actor-scoped answer is advice, not canon or a reason to override established behavior. Do not ask JEV for routine or already-settled reactions. For dice, use the game's actual rules and notation (such as 2d6+3, 4d6kh3, 2d20kl1, 6d6[Pool], or 4dF+2); never assume d20 or treat a sum as success without the rules. Use generateNames for a requested list of new names when enabled; candidates are not canon. ${usedNames ? 'Name candidates were already generated in this run. Use those exact candidates; do not request generateNames again.' : ''} Use image tools only when the player explicitly asks for an image, and report the returned image receipt accurately. ${usedImage ? 'An image was already requested in this run; do not request another image tool.' : ''} Never invent scope, roles, IDs, evidence, or a prior result. Previous validated observations: ${observationsText}. A player answer in these observations is accepted and cannot be retracted by you; do not ask the same choice again. Finish tool use when you have enough evidence for the turn.`;
   const prompt = prepared.narrativePrompt;
-  const plannerService = await resolveServiceGeneration('classifier');
-  const profile = requireResolvedServiceProfile('classifier', plannerService);
+  const plannerService = await resolveServiceGeneration('gmToolPlanner');
+  const profile = requireResolvedServiceProfile('gmToolPlanner', plannerService);
   const plannerInstruction = `${MAX_AGENT_TOOL_CALLS - priorCalls.length} tool calls remain. Avoid repeating completed lookups. For world.actor.brief supply args.actorId or args.name from known context. ${instruction}`;
   const plannerBudgeted = prepared.narrativeSystemDynamic ? applyPromptContextBudget(prepared.prompt.prompt,
     Math.min(5_000, countTokens(prepared.narrativeSystemDynamic)), undefined,
@@ -638,10 +639,22 @@ async function executeCall(run: Row, call: ToolCall) {
               })),
             ].filter(item => availableSourceIds.has(item.id) && item.description.trim()).slice(0, 5)
               .map(item => ({ ...item, description: item.description.slice(0, 220) }));
-            attempt = { ...attempt, networkAttempted: true,
-              evidenceHash: hash({ actorEvidence: actorView.data, sourceIds: actorView.sourceIds }),
+            const decisionMode = decisionModeFrom(service.setting?.metadata);
+            const evidenceHash = hash({ actorEvidence: actorView.data, sourceIds: actorView.sourceIds });
+            // Equivalent decision tasks reuse one answer, whatever their tool-call IDs.
+            const decisionKey = hash({ actorId: call.args.actorId, playerActionHash: actionContext.actionHash, evidenceHash,
+              question: call.args.question, purpose: call.args.purpose, options: call.args.options, interactions: interactionEvidence,
+              policy: { decisionTaskVersion: 'immediate_response_v1', mode: decisionMode, profileRevision: service.provenance?.profileRevision ?? null },
+              model: service.generation.model });
+            const [equivalent] = await getDb().execute(sql`select call_id, result from agent_tool_calls where run_id=${run.id} and tool='askJev'
+              and status='completed' and call_id<>${call.callId} and result->>'decisionKey'=${decisionKey}
+              and result->>'status' in ('proposed','held','insufficient_evidence') order by updated_at desc limit 1`);
+            attempt = { ...attempt, networkAttempted: true, evidenceHash, decisionKey, decisionMode,
               configuredModel: service.generation.model,
               sourceIds: boundedJevSourceIds([call.args.actorId, ...actorView.sourceIds]) };
+            if (equivalent) {
+              result = { ...object(equivalent.result), networkAttempted: false, reusedFromCallId: text(equivalent.call_id) };
+            } else {
             // ponytail: an interrupted request may lose advice; replaying it risks a second paid decision.
             const [claimed] = await getDb().execute(sql`update agent_tool_calls set result=${JSON.stringify(attempt)}::jsonb,updated_at=now()
               where run_id=${run.id} and call_id=${call.callId} and status='reserved' and result is null returning call_id`);
@@ -649,7 +662,7 @@ async function executeCall(run: Row, call: ToolCall) {
               result = { ...attempt, status: 'unavailable', reason: 'JEV request was already attempted; its result is unknown.' };
             } else {
               const decision = await chooseJevOption({ profile: service.profile, model: service.generation.model!,
-                storyId: text(run.game_id), operation: 'agent.askJev', psychology: true,
+                storyId: text(run.game_id), operation: 'agent.askJev', psychology: decisionMode === 'psychology_then_action',
                 evidence: { question: call.args.question, playerAction: turn.playerText,
                   playerInteractions: interactionEvidence, actorEvidence: actorView.data },
                 sourceIds: [call.args.actorId, ...actorView.sourceIds],
@@ -664,6 +677,7 @@ async function executeCall(run: Row, call: ToolCall) {
                 confidence: decision.confidence, sourceIds: decision.sourceIds, model: decision.model,
 				...(decision.psychology ? { psychology: decision.psychology } : {}),
                 usage: decision.usage } : { ...attempt, status: 'insufficient_evidence' };
+            }
             }
           }
         }
@@ -698,9 +712,9 @@ async function executeCall(run: Row, call: ToolCall) {
     let result: { status: 'ok'; names: string[]; intent: string } | { status: 'unavailable'; reason: string };
     try {
       const prepared = await prepareServerTurnContext(turnRequestSchema.parse(run.request), { inspection: true });
-      const namesService = await resolveServiceGeneration('classifier');
+      const namesService = await resolveServiceGeneration('nameGeneration');
       generated = await generateAgentText(run, 'turn.generate_names', {
-        profile: requireResolvedServiceProfile('classifier', namesService), model: namesService.generation.model ?? undefined,
+        profile: requireResolvedServiceProfile('nameGeneration', namesService), model: namesService.generation.model ?? undefined,
         temperature: 0.75, maxTokens: 512 + call.args.count * 64, timeoutMs: 30_000, maxRetries: 0,
         system: 'Generate name candidates only. Follow the campaign naming instructions and requested style. Return exactly one JSON object with a names array of the requested length. Each name must be distinct, 2-80 characters, and absent from the exclusions. Do not create or claim canonical characters, places, or organizations.',
         systemDynamic: prepared.narrativeSystemDynamic.slice(0, 6_000),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyBackendJobFailure } from './failureClassification';
+import { classifyBackendJobFailure, describeBackendJobError } from './failureClassification';
 
 describe('background failure recovery decisions', () => {
 	it.each([
@@ -20,5 +20,16 @@ describe('background failure recovery decisions', () => {
 		expect(classifyBackendJobFailure('Server LLM request failed (429): rate quota exceeded; retry later')).toEqual({ cause: 'provider_unavailable', retryable: true });
 		expect(classifyBackendJobFailure('Server LLM request failed (429): insufficient_quota')).toEqual({ cause: 'provider_account', retryable: false });
 		expect(classifyBackendJobFailure('Monthly quota exhausted')).toEqual({ cause: 'provider_account', retryable: false });
+	});
+	it('classifies a wrapped database failure by its server reason, without bound parameters', () => {
+		const wrapped = new Error(['Failed query: insert into "story_threads" ("id", "description") values ($1, $2)',
+			'params: plot_thread_x,A long private description'].join('\n'), {
+			cause: new Error('deadlock detected'),
+		});
+		const text = describeBackendJobError(wrapped);
+		expect(text).toBe('deadlock detected (query: insert into "story_threads" ("id", "description") values ($1, $2))');
+		expect(text).not.toContain('private description');
+		expect(classifyBackendJobFailure(text)).toEqual({ cause: 'provider_unavailable', retryable: true });
+		expect(describeBackendJobError(new Error('Unexpected compiler failure'))).toBe('Unexpected compiler failure');
 	});
 });

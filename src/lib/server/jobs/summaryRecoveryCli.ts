@@ -1,6 +1,7 @@
 import {pathToFileURL} from 'node:url';
 import {runRecoveryOperator} from './summaryRecoveryOperator';
-export {authorizeChapterReplacement,reconcileCommittedChapterRunner} from './chapterSummaryRunner';
+export {reconcileCommittedChapterRunner} from './chapterSummaryRunner';
+export {authorizeChapterReplacement} from './chapterReplacementRecovery';
 export {sourceEvidenceCatalog,materializeReferenceSelection,referenceSelectionPrompt,EVIDENCE_REFERENCE_PROTOCOL} from './summaryEvidenceReferences';
 export {recoveryHash,proposeRecoveryEvidenceRepair,reviewRetainedRecoveryStage,reviewRetainedRecoveryCompletion,validateRecoveryDraft,planSummaryRecovery,previewRecoveryCalls,reviewRecoveryDraft,commitRecoveryDraft} from './summaryRecovery';
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) {

@@ -17,13 +17,12 @@
 	let message = $state('');
 	let requestNumber = 0;
 	const groups: Array<{ title: string; description: string; keys: AgentSettingKey[] }> = [
-		{ title: 'Run your conversations', description: 'Choose the runtime for new turns. Saved runs keep their original runtime and selected model.', keys: ['gmPiRuntime', 'assistantPiRuntime'] },
+		{ title: 'Run your conversations', description: 'Choose the Assistant runtime. GM turns always use Pi; saved runs keep their original runtime and selected model.', keys: ['assistantPiRuntime'] },
 		{ title: 'At the game table', description: 'Give the GM tools to investigate the world and involve you in the scene.', keys: ['gmResearch', 'gmAdaptiveResearch', 'gmNames', 'gmPlayerRolls', 'gmQuestions'] },
 		{ title: 'Your writing Assistant', description: 'Control how the Assistant asks for direction and works on project material.', keys: ['assistantQuestions', 'assistantSubagents'] },
 		{ title: 'Illustrate your world', description: 'Chat images and automatic project covers are independent choices.', keys: ['gmImages', 'assistantImages', 'automaticCovers'] },
 	];
-	const descriptions: Record<AgentSettingKey, string> = {
-		gmPiRuntime: 'Pi follows related lookups within a turn. Off uses the legacy GM runtime.',
+	const descriptions: Partial<Record<AgentSettingKey, string>> = {
 		assistantPiRuntime: 'Pi manages saved tool activity and recovery. Off uses the legacy Assistant runtime.',
 		gmResearch: 'Allow research into available story and world sources.',
 		gmAdaptiveResearch: 'Additional research for legacy direct turns. Pi already follows its own tool steps.',

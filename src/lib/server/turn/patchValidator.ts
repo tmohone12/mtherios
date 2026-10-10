@@ -24,6 +24,7 @@ import {
 	storyEvents,
 } from '$lib/server/db/schema';
 import { buildNpcEventLinksForEvent } from '$lib/server/events/timeline';
+import { applyWorldTimeChange, headerTimeProposal, loadWorldClock, parseWorldDuration, type WorldTimeChangeResult, type WorldTimeProposal, type WorldTimeProposer } from '$lib/server/events/worldClock';
 import { enqueueFactionCadenceJob, enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
 import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from '$lib/server/memory/entityResolver';
 import { worldStateUpdateSchema, worldStateTimelineEventSchema, type WorldStateTimelineEvent, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
@@ -967,14 +968,42 @@ export async function applyValidatedTurnUpdate(
 
 		const currentTurn = story.currentTurn ?? 0;
 		const currentWorldTime = story.currentWorldTime ?? null;
-		const nextWorldTime = narrationAnchor?.currentWorldTime
-			?? currentWorldTime
-			?? stringValue(input.update.time_delta)?.slice(0, 240)
-			?? null;
 		const currentLocationId = story.currentLocationId ?? null;
 		const timelineTurn = Number.isFinite(input.timelineTurn ?? NaN)
 			? Math.max(0, Math.trunc(input.timelineTurn as number))
 			: currentTurn;
+		// World time belongs to the clock. The narration header and the classifier's
+		// time_delta are proposals, applied once per turn (op key) and never as a rewind.
+		// OOC, non-canon, thought and parallel-POV turns propose nothing.
+		const playerSource = sourceEntries.find(entry => entry.id === input.playerEntryId);
+		const timeExempt = !primaryScene
+			|| sourceEntries.some(entry => recordValue(entry.metadata).nonCanon === true || recordValue(entry.metadata).actionType === 'ooc')
+			|| ['think', 'thought'].includes(String(recordValue(playerSource?.metadata).actionType ?? recordValue(playerSource?.metadata).narrativeMode ?? ''));
+		let clockChange: WorldTimeChangeResult | null = null;
+		if (!timeExempt) {
+			const clock = await loadWorldClock(input.storyId, tx, currentWorldTime);
+			const duration = parseWorldDuration(stringValue(input.update.time_delta));
+			const fromHeader = headerTimeProposal(clock, narrationAnchor?.currentWorldTime ?? null);
+			if (fromHeader && 'rejected' in fromHeader) warnings.push(`World clock kept ${clock.label ?? 'its time'}: the narration header was not applied (${fromHeader.rejected}).`);
+			const durationProposal: WorldTimeProposal | null = duration && duration.minutes > 0
+				? { kind: 'advance', minutes: duration.minutes, text: stringValue(input.update.time_delta) ?? null } : null;
+			// An exact stated duration outranks the header; the header outranks a vague estimate.
+			const [proposal, proposer]: [WorldTimeProposal | null, WorldTimeProposer] = durationProposal && duration?.exact
+				? [durationProposal, 'classifier']
+				: fromHeader && !('rejected' in fromHeader) ? [fromHeader, 'gm_header'] : [durationProposal, 'classifier'];
+			if (proposal) {
+				clockChange = await applyWorldTimeChange(tx, { storyId: input.storyId, opKey: `turn:${input.assistantEntryId}`, proposal, proposer,
+					reason: proposer === 'gm_header' ? 'Narration header time for this turn.' : 'Classifier elapsed time for this turn.',
+					sourceEntryId: input.assistantEntryId, sourceTurn: isSupplemental ? timelineTurn : currentTurn,
+					storyLabel: currentWorldTime, writeStoryLabel: false, serverVersion: input.serverVersion });
+				if (clockChange.status === 'rejected') warnings.push(`World clock rejected this turn's time change: ${clockChange.reason}.`);
+				if (clockChange.interrupted) warnings.push(`World clock stopped at ${clockChange.label}: ${clockChange.dueEventIds.length} scheduled event(s) became due.`);
+			}
+		}
+		// The parallel-POV header still labels its own events; the main clock never moves for it.
+		const nextWorldTime = primaryScene
+			? (clockChange && clockChange.status === 'applied' ? clockChange.label : currentWorldTime)
+			: narrationAnchor?.currentWorldTime ?? currentWorldTime;
 		const insertNpcLinksForEvent = async (event: {
 			eventId: string;
 			actorNpcEntityIds?: string[];

@@ -29,6 +29,8 @@ export interface ChapterCanonicalThread {
 	sourceEntryIds: string[];
 	sourceEventIds: string[];
 	sourcePatchIds: string[];
+	/** Snapshot revision; a deferred plan only updates a thread still at this revision. */
+	serverVersion?: number;
 }
 
 export interface ChapterThreadEvent {
@@ -37,9 +39,9 @@ export interface ChapterThreadEvent {
 }
 
 export interface ChapterThreadPlan {
-	updates: Array<{ threadId: string; values: Record<string, unknown> }>;
+	updates: Array<{ threadId: string; values: Record<string, unknown>; expectedServerVersion?: number }>;
 	inserts: Array<Record<string, unknown> & { id: string; description: string }>;
-	eventUpdates: Array<{ eventId: string; threadIds: string[] }>;
+	eventUpdates: Array<{ eventId: string; threadIds: string[]; previousThreadIds?: string[] }>;
 	openThreadIds: string[];
 }
 
@@ -268,13 +270,16 @@ export function buildChapterThreadPlan(input: {
 	}
 
 	return {
-		updates: [...updates].map(([threadId, values]) => ({ threadId, values })),
+		updates: [...updates].map(([threadId, values]) => {
+			const expectedServerVersion = existingById.get(threadId)?.serverVersion;
+			return typeof expectedServerVersion === 'number' ? { threadId, values, expectedServerVersion } : { threadId, values };
+		}),
 		inserts,
 		eventUpdates: input.events.flatMap((event) => {
 			const threadIds = eventThreadIds.get(event.id) ?? [];
 			return threadIds.length === event.threadIds.length && threadIds.every((id, index) => id === event.threadIds[index])
 				? []
-				: [{ eventId: event.id, threadIds }];
+				: [{ eventId: event.id, threadIds, previousThreadIds: event.threadIds }];
 		}),
 		openThreadIds: unique(openIds).filter((id) => !closedIds.has(id)),
 	};

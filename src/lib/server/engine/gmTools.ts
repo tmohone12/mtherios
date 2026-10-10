@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { readPlayerCapabilities } from '$lib/contracts/playerCapabilities';
 import { readNpcAgency } from '$lib/contracts/npcAgency';
@@ -6,6 +6,7 @@ import { getDb } from '$lib/server/db/client';
 import { loadLocationLore } from '$lib/server/memory/locationLore';
 import { isNarrativeTimelineEvent } from '$lib/server/events/timeline';
 import { appliedStrategicFrameForStory } from '$lib/services/ai/context/strategicFramePromptCard';
+import { normalizeCharacterCard } from '$lib/server/turn/characterContext';
 import {
 	agreements,
 	entities,
@@ -16,6 +17,7 @@ import {
 	factionResources,
 	factions,
 	npcBeliefs,
+	npcEventLinks,
 	relationships,
 	stories,
 	storyEvents,
@@ -335,15 +337,27 @@ function publicVisibility(value: unknown): boolean {
 	return value === 'public' || value === 'player_known' || value === 'known';
 }
 
+/** Event-link roles that establish the actor perceived or was told about an event. */
+export const ACTOR_KNOWLEDGE_LINK_ROLES = ['actor', 'witness', 'knower', 'witnessed', 'learned', 'shared'] as const;
+
+/** The bounded records an actor-decision view reads; GmToolData satisfies it. */
+export type ActorDecisionData = Pick<GmToolData, 'story' | 'entities' | 'relationships' | 'factions' | 'memberships' | 'resources' | 'goals' | 'projects' | 'beliefs' | 'agreements' | 'events'> & {
+	/** The actor's own knowledge links; omitted means none are known. */
+	knowledgeLinks?: Array<{ eventId: string; npcEntityId: string; role: string }>;
+};
+
 /**
  * Builds the only evidence packet that may be sent to an actor-decision model.
  * It intentionally does not reuse `buildActorBrief`: that GM surface can see
- * unrelated hidden events and faction records. An actor may see its own
- * beliefs, commitments, and events in which it was explicitly involved, plus
- * public faction context. Missing knowledge is represented as an omission,
- * never filled from narrator truth.
+ * unrelated hidden events and faction records. An actor knows only committed events
+ * it took part in, events linked to it as witnessed/learned/shared, and the evidence
+ * for its own beliefs. Being the target of an event is not evidence of knowing it,
+ * so a secret plot against the actor stays unknown. Other characters' private
+ * attitudes (incoming relationship edges) and a faction's secret agreements are not
+ * the actor's knowledge either. Missing knowledge is an omission, never filled from
+ * narrator truth.
  */
-export function buildActorDecisionView(data: GmToolData, rawArgs: ActorDecisionViewArgs): EvidenceReceipt<JsonRecord> {
+export function buildActorDecisionView(data: ActorDecisionData, rawArgs: ActorDecisionViewArgs): EvidenceReceipt<JsonRecord> {
 	const args = actorDecisionViewArgsSchema.parse(rawArgs);
 	const actor = data.entities.find((row) => row.id === args.actorId && row.type === 'character');
 	if (!actor) throw new Error(`Character actor not found: ${args.actorId}`);
@@ -351,13 +365,15 @@ export function buildActorDecisionView(data: GmToolData, rawArgs: ActorDecisionV
 		throw new Error('Player character cannot be an actor-decision subject.');
 	const warnings: string[] = [];
 	const beliefs = data.beliefs.filter((row) => row.believerEntityId === actor.id).slice(0, 16);
-	const knownEventIds = new Set(beliefs.flatMap((row) => row.evidenceEventIds));
+	const beliefEvidenceIds = new Set(beliefs.flatMap((row) => row.evidenceEventIds));
+	const linkRoles = new Map((data.knowledgeLinks ?? [])
+		.filter((link) => link.npcEntityId === actor.id && (ACTOR_KNOWLEDGE_LINK_ROLES as readonly string[]).includes(link.role))
+		.map((link) => [link.eventId, link.role]));
+	const knownEventRole = (row: typeof storyEvents.$inferSelect) => row.actorEntityIds.includes(actor.id) ? 'actor'
+		: linkRoles.get(row.id) ?? (beliefEvidenceIds.has(row.id) ? 'belief_evidence' : null);
 	const witnessedEvents = data.events
-		.filter((row) => isNarrativeTimelineEvent(row) && (
-			knownEventIds.has(row.id)
-			|| row.actorEntityIds.includes(actor.id)
-			|| row.targetEntityIds.includes(actor.id)
-		))
+		// Past, accepted events only: scheduled/due events are plans, not experience.
+		.filter((row) => row.status === 'committed' && isNarrativeTimelineEvent(row) && knownEventRole(row) !== null)
 		.sort((a, b) => eventTurn(b) - eventTurn(a))
 		.slice(0, args.eventLimit);
 	const memberships = data.memberships.filter((row) => row.entityId === actor.id && row.status === 'active');
@@ -365,22 +381,31 @@ export function buildActorDecisionView(data: GmToolData, rawArgs: ActorDecisionV
 	const publicGoals = data.goals.filter((row) => factionIds.includes(row.factionId) && row.status !== 'closed' && publicVisibility(row.secrecy));
 	const publicProjects = data.projects.filter((row) => factionIds.includes(row.factionId) && isOpenFactionProject(row) && publicVisibility(row.visibility));
 	const publicResources = data.resources.filter((row) => factionIds.includes(row.factionId) && row.status === 'available' && publicVisibility(row.visibility));
-	const relations = data.relationships.filter((row) => row.sourceEntityId === actor.id || row.targetEntityId === actor.id).slice(0, 16);
-	const ownPartyKeys = new Set([actor.id, normalize(actor.name), ...factionIds]);
-	const agreementsForActor = data.agreements.filter((row) => (row.status === 'active' || row.status === 'contested') && row.parties.some((party) => ownPartyKeys.has(party) || ownPartyKeys.has(normalize(party)))).slice(0, 12);
+	// The actor's own view of others; another character's attitude toward the actor is that character's private state.
+	const relations = data.relationships.filter((row) => row.sourceEntityId === actor.id).slice(0, 16);
+	const personalKeys = new Set([actor.id, normalize(actor.name)]);
+	const agreementsForActor = data.agreements.filter((row) => {
+		if (row.status !== 'active' && row.status !== 'contested') return false;
+		const direct = row.parties.some((party) => personalKeys.has(party) || personalKeys.has(normalize(party)));
+		const viaFaction = row.parties.some((party) => factionIds.includes(party));
+		return direct || (viaFaction && row.secrecy !== 'secret');
+	}).slice(0, 12);
 	const entityNames = new Map(data.entities.map((row) => [row.id, row.name]));
 	const factionNames = new Map(data.factions.map((row) => [row.id, row.name]));
+	// Authored knowledge through the shared character contract: facts and memories the actor holds.
+	const card = normalizeCharacterCard({ entity: actor });
 	if (beliefs.length === 0) warnings.push('No actor-belief records exist; do not infer private knowledge from narrator truth.');
 	if (witnessedEvents.length === 0) warnings.push('No witnessed or belief-linked event is available for this actor.');
 	return {
 		data: {
 			actor: { id: actor.id, name: actor.name, description: text(actor.description, 900), state: actorDecisionState(actor) },
+			personalKnowledge: {
+				knownFacts: card.knowledge.knownFacts.slice(-8),
+				memories: card.knowledge.memories.slice(0, 8),
+			},
 			beliefs: beliefs.map((row) => ({ id: row.id, belief: text(row.belief, 650), confidence: row.confidence, subjectId: row.subjectEntityId, evidenceEventIds: row.evidenceEventIds })),
-			witnessedEvents: witnessedEvents.map((row) => ({ id: row.id, title: row.title, body: text(row.body, 650), turn: eventTurn(row), role: row.actorEntityIds.includes(actor.id) ? 'actor' : row.targetEntityIds.includes(actor.id) ? 'target' : 'belief_evidence' })),
-			relationships: relations.map((row) => {
-				const otherId = row.sourceEntityId === actor.id ? row.targetEntityId : row.sourceEntityId;
-				return { id: row.id, otherId, otherName: entityNames.get(otherId) ?? otherId, type: row.type, label: row.label, strength: row.strength, direction: row.sourceEntityId === actor.id ? 'outgoing' : 'incoming' };
-			}),
+			witnessedEvents: witnessedEvents.map((row) => ({ id: row.id, title: row.title, body: text(row.body, 650), turn: eventTurn(row), role: knownEventRole(row) })),
+			relationships: relations.map((row) => ({ id: row.id, otherId: row.targetEntityId, otherName: entityNames.get(row.targetEntityId) ?? row.targetEntityId, type: row.type, label: row.label, strength: row.strength, direction: 'outgoing' })),
 			commitments: agreementsForActor.map((row) => ({ id: row.id, category: row.category, terms: text(row.terms, 650), status: row.status, consequences: strings(row.consequences, 8) })),
 			publicFactionContext: {
 				memberships: memberships.map((row) => ({ factionId: row.factionId, factionName: factionNames.get(row.factionId) ?? row.factionId, role: row.role, rank: row.rank })),
@@ -388,11 +413,12 @@ export function buildActorDecisionView(data: GmToolData, rawArgs: ActorDecisionV
 				projects: publicProjects.slice(0, 8).map((row) => ({ id: row.id, project: row.project, progress: row.progress, dueTurn: row.dueTurn, risks: strings(row.risks, 6) })),
 				resources: publicResources.slice(0, 10).map((row) => ({ id: row.id, kind: row.kind, name: row.name, amount: row.amount, locationId: row.locationId })),
 			},
-			knowledgeBoundary: 'Use only the beliefs, witnessed events, personal commitments, relationships, and public faction context in this packet. Absence is uncertainty, not permission to infer a secret or another actor\'s plan.',
+			knowledgeBoundary: 'Use only the personal knowledge, beliefs, witnessed events, personal commitments, the actor\'s own relationships, and public faction context in this packet. Absence is uncertainty, not permission to infer a secret or another actor\'s plan.',
 		},
 		sourceIds: sources(actor, ...beliefs, ...witnessedEvents, ...relations, ...memberships, ...publicGoals, ...publicProjects, ...publicResources, ...agreementsForActor),
 		warnings,
-		unresolved: beliefs.length === 0 && witnessedEvents.length === 0 ? ['No supported personal knowledge beyond the actor profile.'] : [],
+		unresolved: beliefs.length === 0 && witnessedEvents.length === 0 && card.knowledge.knownFacts.length === 0 && card.knowledge.memories.length === 0
+			? ['No supported personal knowledge beyond the actor profile.'] : [],
 		truncated: beliefs.length >= 16 || witnessedEvents.length >= args.eventLimit || relations.length >= 16 || agreementsForActor.length >= 12,
 	};
 }
@@ -763,8 +789,46 @@ export async function getActorBrief(storyId: string, args: ActorBriefArgs): Prom
 	return buildActorBrief(await loadGmToolData(storyId), actorBriefArgsSchema.parse(args));
 }
 
+/** Bounded reads for one actor's decision view, instead of loading the whole campaign per actor. */
+export async function loadActorDecisionData(storyId: string, actorId: string, eventLimit: number): Promise<ActorDecisionData> {
+	const db = getDb();
+	const [[story], [actor], beliefRows, linkRows, membershipRows, relationshipRows, agreementRows] = await Promise.all([
+		db.select().from(stories).where(eq(stories.id, storyId)).limit(1),
+		db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, actorId))).limit(1),
+		db.select().from(npcBeliefs).where(and(eq(npcBeliefs.storyId, storyId), eq(npcBeliefs.believerEntityId, actorId))).orderBy(desc(npcBeliefs.updatedAt)).limit(16),
+		db.select({ eventId: npcEventLinks.eventId, npcEntityId: npcEventLinks.npcEntityId, role: npcEventLinks.role }).from(npcEventLinks)
+			.where(and(eq(npcEventLinks.storyId, storyId), eq(npcEventLinks.npcEntityId, actorId), inArray(npcEventLinks.role, [...ACTOR_KNOWLEDGE_LINK_ROLES])))
+			.orderBy(desc(npcEventLinks.updatedAt)).limit(64),
+		db.select().from(factionMemberships).where(and(eq(factionMemberships.storyId, storyId), eq(factionMemberships.entityId, actorId))),
+		db.select().from(relationships).where(and(eq(relationships.storyId, storyId), eq(relationships.sourceEntityId, actorId))).limit(16),
+		db.select().from(agreements).where(and(eq(agreements.storyId, storyId), inArray(agreements.status, ['active', 'contested']))).orderBy(desc(agreements.updatedAt)).limit(200),
+	]);
+	if (!story) throw new Error(`Story not found: ${storyId}`);
+	const factionIds = membershipRows.filter((row) => row.status === 'active').map((row) => row.factionId);
+	const knownEventIds = unique([...linkRows.map((row) => row.eventId), ...beliefRows.flatMap((row) => row.evidenceEventIds)], 128);
+	const otherIds = unique(relationshipRows.map((row) => row.targetEntityId), 32);
+	const [factionRows, goalRows, projectRows, resourceRows, eventRows, otherRows] = await Promise.all([
+		factionIds.length ? db.select().from(factions).where(and(eq(factions.storyId, storyId), inArray(factions.id, factionIds))) : [],
+		factionIds.length ? db.select().from(factionGoals).where(and(eq(factionGoals.storyId, storyId), inArray(factionGoals.factionId, factionIds))) : [],
+		factionIds.length ? db.select().from(factionProjects).where(and(eq(factionProjects.storyId, storyId), inArray(factionProjects.factionId, factionIds))) : [],
+		factionIds.length ? db.select().from(factionResources).where(and(eq(factionResources.storyId, storyId), inArray(factionResources.factionId, factionIds))) : [],
+		db.select().from(storyEvents).where(and(eq(storyEvents.storyId, storyId), eq(storyEvents.status, 'committed'),
+			knownEventIds.length
+				? or(sql`${storyEvents.actorEntityIds} ? ${actorId}`, inArray(storyEvents.id, knownEventIds))
+				: sql`${storyEvents.actorEntityIds} ? ${actorId}`))
+			.orderBy(desc(sql`coalesce(${storyEvents.occurredTurn}, ${storyEvents.createdTurn})`), desc(storyEvents.updatedAt)).limit(Math.max(eventLimit * 3, 12)),
+		otherIds.length ? db.select().from(entities).where(and(eq(entities.storyId, storyId), inArray(entities.id, otherIds))) : [],
+	]);
+	return {
+		story, entities: [...(actor ? [actor] : []), ...otherRows], relationships: relationshipRows, factions: factionRows,
+		memberships: membershipRows, resources: resourceRows, goals: goalRows, projects: projectRows, beliefs: beliefRows,
+		agreements: agreementRows, events: eventRows, knowledgeLinks: linkRows,
+	};
+}
+
 export async function getActorDecisionView(storyId: string, args: ActorDecisionViewArgs): Promise<EvidenceReceipt<JsonRecord>> {
-	return buildActorDecisionView(await loadGmToolData(storyId), actorDecisionViewArgsSchema.parse(args));
+	const parsed = actorDecisionViewArgsSchema.parse(args);
+	return buildActorDecisionView(await loadActorDecisionData(storyId, parsed.actorId, parsed.eventLimit), parsed);
 }
 
 export async function checkScene(storyId: string, args: SceneCheckArgs): Promise<EvidenceReceipt<JsonRecord>> {

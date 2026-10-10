@@ -47,7 +47,6 @@ import {
 	shouldQueueChapterSummaryWithoutState,
 	shouldRunGmExploration,
 	shouldRunActiveRecallInvestigation,
-	shouldUseLegacyClassifierFallback,
 	withBudget,
 } from './orchestrator';
 
@@ -1231,14 +1230,9 @@ describe('turn orchestrator prompt budgeting', () => {
 			.toEqual([expect.objectContaining({ name: 'Inner Residence', current: true })]);
 	});
 
-	it('uses configured classifier tokens and falls back only when the classifier row is absent', () => {
+	it('uses configured classifier tokens', () => {
 		expect(classifierGenerationMaxTokens({ maxTokens: 4096 })).toBe(4096);
 		expect(classifierGenerationMaxTokens({})).toBe(2048);
-		expect(shouldUseLegacyClassifierFallback({ profile: null, setting: null })).toBe(true);
-		expect(shouldUseLegacyClassifierFallback({
-			profile: null,
-			setting: { enabled: false } as any,
-		})).toBe(false);
 	});
 
 	it('reserves provider output and framing before allocating dynamic context', () => {

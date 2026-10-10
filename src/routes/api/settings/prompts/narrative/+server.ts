@@ -6,6 +6,7 @@ import { getDb } from '$lib/server/db/client';
 import { stories } from '$lib/server/db/schema';
 import { apiError } from '$lib/server/memory/http';
 import { buildServerNarrativeSystemPrompt, resolveServerStoryPromptPack } from '$lib/server/turn/promptPacket';
+import { resolveStoryNarrativePreset } from '$lib/server/engine/promptPresets';
 
 export const GET: RequestHandler = async ({ url }) => {
 	try {
@@ -29,8 +30,10 @@ export const GET: RequestHandler = async ({ url }) => {
 			story = row;
 		}
 		const promptPack = resolveServerStoryPromptPack(story);
+		// A story's preview shows the preset revision its turns use.
+		const preset = query.storyId ? await resolveStoryNarrativePreset(query.storyId) : null;
 		return json(narrativePromptPreviewSchema.parse({
-			builtInPrompt: buildServerNarrativeSystemPrompt(story),
+			builtInPrompt: buildServerNarrativeSystemPrompt(story, preset),
 			promptPackId: promptPack.id,
 			promptPackLabel: promptPack.label,
 			storyId: query.storyId ?? null,

@@ -27,8 +27,9 @@ describe('Jev NPC decisions', () => {
 	] as const)('routes %s %s through typed decisions', async (provider, model) => {
 		const fetcher = vi.fn().mockImplementation(() => Response.json({ ...answer(), model })); vi.stubGlobal('fetch', fetcher);
 		const result = await generateJevReaction({ ...input, model, profile: { ...input.profile, providerType: provider } });
-		expect(fetcher.mock.calls[1][0]).toBe(provider === 'nanogpt' ? 'https://nano-gpt.com/api/v1/decisions' : 'https://openrouter.ai/api/alpha/decisions');
-		expect(JSON.parse(fetcher.mock.calls[1][1].body)).toMatchObject({model, questions: {reaction: {type: 'choice'}}});
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		expect(fetcher.mock.calls[0][0]).toBe(provider === 'nanogpt' ? 'https://nano-gpt.com/api/v1/decisions' : 'https://openrouter.ai/api/alpha/decisions');
+		expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({model, questions: {reaction: {type: 'choice'}}});
 		expect(JSON.parse(result.text)).toMatchObject({status: 'propose', knowledgeSourceIds: ['fact-1']});
 	});
 	it('rejects a model on the wrong provider and oversized evidence before dispatch', async () => {
@@ -67,21 +68,24 @@ describe('Jev NPC decisions', () => {
 	it('uses the Decisions API with actor evidence and returns an advisory, source-bound reaction', async () => {
 		const fetchMock = vi.fn().mockImplementation(() => Response.json(answer())); vi.stubGlobal('fetch', fetchMock);
 		const result = await generateJevReaction(input);
-		const [url, request] = fetchMock.mock.calls[1];
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const [url, request] = fetchMock.mock.calls[0];
 		expect(url).toBe('https://openrouter.ai/api/alpha/decisions');
 		const body = JSON.parse(request.body);
-		expect(body.state).toMatchObject({ playerAction: input.playerText, actorEvidence: input.actorView, actorPsychology:{judgment:'threatened',relationshipDelta:-1,affinityApplied:false} });
+		expect(body.state).toEqual({ playerAction: input.playerText, actorEvidence: input.actorView });
+		expect(Object.keys(body.questions)).toEqual(['reaction']);
 		expect(body.questions.reaction.criteria).toHaveProperty('insufficient_evidence');
 		expect(body).not.toHaveProperty('messages');
-		expect(JSON.parse(result.text)).toMatchObject({ status: 'propose', knowledgeSourceIds: ['fact-1'] });
-		expect(result.usage.providerCostUsd).toBe(0.000021);
+		expect(JSON.parse(result.text)).toMatchObject({ status: 'propose', knowledgeSourceIds: ['fact-1'],
+			decision: { mode: 'action', requestCount: 1, choice: 'refuse', modelConfidence: 0.96, validation: 'valid' } });
+		expect(result.usage.providerCostUsd).toBe(0.0000105);
 	});
 	it('keeps an accepted offer and its source in the actor decision', async () => {
 		const fetchMock = vi.fn().mockImplementation(() => Response.json(answer('cooperate'))); vi.stubGlobal('fetch', fetchMock);
 		const offer = { sourceEntryId: 'entry_offer', speech: 'I offer the river path.' };
 		const result = await generateJevReaction({ ...input, playerText: 'I accept.',
 			actorView: { ...input.actorView, recentOffer: offer }, sourceIds: ['fact-1', offer.sourceEntryId] });
-		const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+		const body = JSON.parse(fetchMock.mock.calls[0][1].body);
 		expect(body.state.actorEvidence.recentOffer).toEqual(offer);
 		expect(body.questions.reaction.criteria.cooperate).toContain('without reopening the same bargain');
 		expect(JSON.parse(result.text)).toMatchObject({ status: 'propose', knowledgeSourceIds: ['fact-1', 'entry_offer'] });
@@ -94,7 +98,7 @@ describe('Jev NPC decisions', () => {
 		const fetchMock = vi.fn().mockImplementation(() => Response.json(answer())); vi.stubGlobal('fetch', fetchMock);
 		const result = await generateJevReaction({ ...input,
 			profile: { ...input.profile, providerType: 'nanogpt' }, model });
-		const [url, request] = fetchMock.mock.calls[1];
+		const [url, request] = fetchMock.mock.calls[0];
 		expect(url).toBe('https://nano-gpt.com/api/v1/decisions');
 		expect(request.headers.Authorization).toBe('Bearer test-key');
 		expect(JSON.parse(request.body).model).toBe(expectedModel);
@@ -107,7 +111,7 @@ describe('Jev NPC decisions', () => {
 		const result = await generateJevReaction({ ...input, model: 'kev-latest', profile: {
 			...input.profile, providerType: 'openai-compatible', baseUrl: 'http://127.0.0.1:8008/v1', apiKey: '',
 		} });
-		const [url, request] = fetchMock.mock.calls[1];
+		const [url, request] = fetchMock.mock.calls[0];
 		expect(url).toBe('http://127.0.0.1:8008/v1/systemone');
 		expect(request.headers).not.toHaveProperty('Authorization');
 		expect(JSON.parse(request.body).model).toBe('kev-latest');
@@ -331,7 +335,7 @@ describe('psychology before expression', () => {
  it('conditions the reaction on psychology computed from the same NPC traits',async()=>{
   const actorView={actor:{name:'Silas',state:{traits:['proud','resents control'],goals:['avoid arrest']}},relationships:[{otherName:'Player',label:'suspicious'}],beliefs:[{id:'fact-1',belief:'The captain would punish my admitted theft.'}]};
   const fetcher=vi.fn().mockImplementation(()=>Response.json(answer()));vi.stubGlobal('fetch',fetcher);
-  const result=await generateJevReaction({...input,playerText:'Help me bypass the guards or I report your admitted theft.',actorView});
+  const result=await generateJevReaction({...input,playerText:'Help me bypass the guards or I report your admitted theft.',actorView,mode:'psychology_then_action'});
   const [evaluation,reaction]=fetcher.mock.calls.map(call=>JSON.parse(call[1].body));
   expect(Object.keys(evaluation.questions)).toEqual(['internal_judgment','emotional_intensity','relationship_delta','action_triage']);
   expect(evaluation.state.actorEvidence).toEqual(actorView);
@@ -343,15 +347,18 @@ describe('psychology before expression', () => {
   expect(result.usage.requestTokens).toBe(500);
   expect(actorView.relationships[0].label).toBe('suspicious');
  });
- it('keeps unsupported psychology unset and withholds the automatic proposal',async()=>{
+ it('abstains after unusable psychology without buying a reaction request',async()=>{
   const json=answer();(json.answers as Record<string,{confidence:number}>).internal_judgment.confidence=0.3;
-  vi.stubGlobal('fetch',vi.fn().mockImplementation(()=>Response.json(json)));
-  const result=JSON.parse((await generateJevReaction(input)).text);
-  expect(result).toMatchObject({status:'insufficient_evidence',immediateAction:null,psychology:{judgment:null,affinityApplied:false}});
+  const fetcher=vi.fn().mockImplementation(()=>Response.json(json));vi.stubGlobal('fetch',fetcher);
+  const result=JSON.parse((await generateJevReaction({...input,mode:'psychology_then_action'})).text);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(Object.keys(JSON.parse(fetcher.mock.calls[0][1].body).questions)).not.toContain('reaction');
+  expect(result).toMatchObject({status:'insufficient_evidence',immediateAction:null,psychology:{judgment:null,affinityApplied:false},
+   decision:{mode:'psychology_then_action',requestCount:1,choice:null}});
  });
  it('rejects malformed psychology before asking for an action',async()=>{
   const fetcher=vi.fn().mockImplementation(()=>Response.json({answers:{}}));vi.stubGlobal('fetch',fetcher);
-  await expect(generateJevReaction(input)).rejects.toThrow();expect(fetcher).toHaveBeenCalledTimes(1);
+  await expect(generateJevReaction({...input,mode:'psychology_then_action'})).rejects.toThrow();expect(fetcher).toHaveBeenCalledTimes(1);
  });
  it('also conditions a planner NPC choice while retaining bounded actions',async()=>{
   const fetcher=vi.fn().mockImplementation((_url,init)=>{
