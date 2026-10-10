@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { observedAssistantSources } from './assistantSources';
 
 describe('Assistant source observations', () => {
+  it('retains exact read ranges and hashes even when more lines remain, and refuses search-only citations', () => {
+    const sourceRef = 'mount:selected:lore%2Fpromise.md';
+    const read = { sourceRef, text: 'The bridge oath binds only the elected keeper.', startLine: 30, endLine: 31, sha256: 'a'.repeat(64), revision: '1:hash', truncated: true };
+    const reply = `“The bridge oath binds only the elected keeper.” [source:${sourceRef}]`;
+    expect(observedAssistantSources(reply, [], [{ tool: 'read', result: read }])).toEqual([
+      { kind: 'file', id: sourceRef, sourceRef, startLine: 30, endLine: 31, sha256: read.sha256, revision: '1:hash' },
+    ]);
+    expect(() => observedAssistantSources(reply, [], [{ tool: 'search', result: { items: [read] } }])).toThrow('lacks an exact observed quote');
+    expect(observedAssistantSources(reply, [], [{ tool: 'read', result: read }, { tool: 'read', result: { ...read, startLine: 80, endLine: 81, text: 'Another source range follows below.' } }])).toHaveLength(1);
+  });
   it('links only cited sources actually delivered by current context or tool results', () => {
     const context = [{ kind: 'content', id: 'visible', revision: 2, description: 'The blue door is locked.' }, { kind: 'story_entry', id: 'scene', revision: 9, text: 'Rain falls over the clearing.' }];
     const observations = [
@@ -23,6 +33,16 @@ describe('Assistant source observations', () => {
     expect(observedAssistantSources('draft stale', [{ kind: 'content', id: 'stale', revision: null }], [
       { tool: 'write', result: { applied: false, itemId: 'draft', afterRevision: 1 } },
     ])).toEqual([]);
+  });
+
+  it('shows one source when a verified readback citation and applied receipt identify the same revision', () => {
+    const observations = [
+      { tool: 'update', result: { applied: true, itemId: 'promise', afterRevision: 2 } },
+      { tool: 'read', result: { id: 'promise', type_id: 'notes', revision: 2, data: { notes: 'The sealed letter may be delivered unopened.' } } },
+    ];
+    expect(observedAssistantSources('Successfully updated promise. “The sealed letter may be delivered unopened.” [source:promise]', [], observations)).toEqual([
+      { kind: 'content', id: 'promise', revision: 2 },
+    ]);
   });
 
   it('rejects fabricated or unquoted factual citations and leaves bare mentions unlinked', () => {

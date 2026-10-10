@@ -7,14 +7,34 @@ import { getDb } from '$lib/server/db/client';
 import { MutationError } from './mutationSafety';
 import { history } from './content';
 import type { ContentItem } from '$lib/contracts/content';
+import { currentServerProviderHooks } from '$lib/server/turn/provider';
 
 const MAX_IMAGE_BYTES = 10_000_000;
 const storageKey = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpg|webp)$/;
 type MediaType = 'image/png' | 'image/jpeg' | 'image/webp';
 type AssetRow = { id: string; project_id: string; game_id: string | null; storage_key: string; media_type: MediaType; byte_size: number; sha256: string; visibility: 'gm' | 'public'; origin_job_id: string | null };
 type AssetScope = { projectId: string; gameId?: string };
+export type ImageRunOrigin = { role: 'gm' | 'assistant'; runId: string; conversationId?: string };
 type Db = ReturnType<typeof getDb>;
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/** Lock the authorizing run before attaching an image; immutable paid receipts may remain unattached. */
+export async function assertImageOriginActive(tx: Pick<Db, 'execute'>, input: AssetScope & { origin?: ImageRunOrigin }): Promise<void> {
+  const signal = currentServerProviderHooks()?.signal;
+  signal?.throwIfAborted();
+  if (!input.origin) return;
+  const [run] = input.origin.role === 'gm'
+    ? await tx.execute(sql`select status,continuation->'state'->'budget'->>'stopReason' as stop_reason from agent_runs
+        where id=${input.origin.runId} and project_id=${input.projectId} and game_id=${input.gameId ?? ''} for update`)
+    : await tx.execute(sql`select r.status,r.result->'runtime'->'budget'->>'stopReason' as stop_reason from assistant_runs r
+        join assistant_conversations c on c.id=r.conversation_id where r.id=${input.origin.runId}
+          and r.conversation_id=${input.origin.conversationId ?? ''} and c.project_id=${input.projectId}
+          and c.game_id is not distinct from ${input.gameId ?? null} for update of r`);
+  if (!run) throw new MutationError('SCOPE_DENIED', 'Image run is unavailable in this project and game.');
+  if (!['running', 'awaiting_input', 'committing', 'completed'].includes(String(run.status)) || run.stop_reason)
+    throw new MutationError('IMAGE_CANCELLED', 'The originating run stopped before image attachment.');
+  signal?.throwIfAborted();
+}
 
 export function imageMediaType(bytes: Uint8Array): MediaType {
   if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw new MutationError('INVALID_IMAGE', 'Image size must be between 1 and 10 MB.');
@@ -114,9 +134,10 @@ export async function cleanupImportedImageAssets(keys: readonly string[]): Promi
 }
 
 /** A stale generated cover cannot replace a later human selection. */
-export async function selectContentCover(input: AssetScope & { itemId: string; assetId: string | null; expectedCoverRevision: number; actor?: Record<string, unknown> }): Promise<{ item: ContentItem }> {
+export async function selectContentCover(input: AssetScope & { itemId: string; assetId: string | null; expectedCoverRevision: number; actor?: Record<string, unknown>; origin?: ImageRunOrigin }): Promise<{ item: ContentItem }> {
   if (!Number.isSafeInteger(input.expectedCoverRevision) || input.expectedCoverRevision < 0) throw new MutationError('REVISION_REQUIRED', 'Read the current cover revision first.');
   return getDb().transaction(async tx => {
+    await assertImageOriginActive(tx, input);
     const [item] = await tx.execute(sql`select i.*,t.revision as type_revision from content_items i join content_types t on t.id=i.type_id where i.id=${input.itemId} and i.project_id=${input.projectId} and i.game_id is not distinct from ${input.gameId ?? null} for update of i`);
     if (!item || item.deleted_at) throw new MutationError('SCOPE_DENIED', 'Document was not found in the selected project and game.');
     if (Number(item.cover_revision) !== input.expectedCoverRevision) throw new MutationError('REVISION_CONFLICT', 'The cover changed. Reload it before selecting another image.');

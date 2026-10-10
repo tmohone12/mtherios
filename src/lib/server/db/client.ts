@@ -33,3 +33,10 @@ export async function closeDb(): Promise<void> {
 		dbClient = null;
 	}
 }
+
+/** Share the existing connection pool with bounded SQL-only derived workflows. */
+export function getSqlClient(): Sql {
+	getDb();
+	if(!sqlClient)throw new BackendNotConfiguredError();
+	return sqlClient;
+}

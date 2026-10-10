@@ -66,6 +66,44 @@
 		await loadMemory();
 	});
 
+	// Keep newly published chapters visible without exposing scheduler controls
+	// in the reading workspace. Generation belongs to the server's own timer.
+	const chapterRefreshStoryId = $derived(story.currentStory?.id === selectedStoryId ? story.currentStory.serverStoryId : null);
+	$effect(() => {
+		const localStoryId = selectedStoryId;
+		const serverStoryId = chapterRefreshStoryId;
+		if (!localStoryId || !serverStoryId) return;
+		let disposed = false;
+		let busy = false;
+		let previousNumber: number | undefined;
+		async function refreshPublishedChapters() {
+			if (busy || disposed) return;
+			busy = true;
+			try {
+				const response = await fetch(`/api/app/chapters?storyId=${encodeURIComponent(serverStoryId!)}`);
+				if (!response.ok) return;
+				const status = await response.json();
+				const number = status.boundary?.number;
+				if (disposed || !Number.isInteger(number)) return;
+				if (previousNumber !== undefined && number > previousNumber) {
+					await story.refreshNewChapters();
+					if (disposed) return;
+					const updated = await getChapters(localStoryId!);
+					if (disposed) return;
+					chapters = updated;
+				}
+				previousNumber = number;
+			} catch (error) {
+				console.warn('[chapters] Could not refresh published chapters:', error);
+			} finally {
+				busy = false;
+			}
+		}
+		void refreshPublishedChapters();
+		const timer = setInterval(() => void refreshPublishedChapters(), 60_000);
+		return () => { disposed = true; clearInterval(timer); };
+	});
+
 	async function loadMemory() {
 		if (!selectedStoryId) {
 			chapters = [];

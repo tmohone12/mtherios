@@ -24,11 +24,12 @@ import {
 	storyEvents,
 } from '$lib/server/db/schema';
 import { buildNpcEventLinksForEvent } from '$lib/server/events/timeline';
-import { enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
+import { enqueueFactionCadenceJob, enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
 import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from '$lib/server/memory/entityResolver';
 import { worldStateUpdateSchema, worldStateTimelineEventSchema, type WorldStateTimelineEvent, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
 import { isParallelPovEntry } from '$lib/services/ai/context/parallelPov';
 import { durableCharacterEventMemoryList } from './characterEventMemory';
+import { boundCharacterIdentity } from '$lib/server/engine/characterContinuity';
 
 type TurnPersistenceDb = Pick<ReturnType<typeof getDb>, 'delete' | 'insert' | 'select' | 'update'>;
 
@@ -232,7 +233,7 @@ function queueTurnContinuityProposal(
 	},
 ) {
 	// Keep review for unresolved places and explicit automatic character creation attempts.
-	if (input.metadata.sourceType !== 'unresolved_location_reference' && input.metadata.automaticCharacterCreation !== true) return;
+	if (input.metadata.sourceType !== 'unresolved_location_reference' && input.metadata.automaticCharacterCreation !== true && input.metadata.sourceType !== 'character_identity_conflict') return;
 	ledger.patchProposals.push({
 		id: id('proposal'), storyId: input.storyId, proposalType: input.proposalType,
 		targetTable: input.targetTable, targetRecordId: input.targetRecordId,
@@ -447,10 +448,8 @@ async function insertSourceRefs(db: TurnPersistenceDb, input: unknown): Promise<
 }
 
 export function parseTurnUpdate(input: unknown): { update: WorldStateUpdate; warnings: string[] } {
-	const parsed = extractedUpdateSchema.safeParse(input);
+	const parsed = extractedUpdateSchema.safeParse('update' in recordValue(input) ? input : { update: input });
 	if (parsed.success) return { update: parsed.data.update, warnings: [] };
-	const direct = worldStateUpdateSchema.safeParse(input);
-	if (direct.success) return { update: direct.data, warnings: [] };
 	return {
 		update: worldStateUpdateSchema.parse({}),
 		warnings: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`),
@@ -461,12 +460,17 @@ async function findEntityByName(db: TurnPersistenceDb, storyId: string, name: st
 	const rows = await db
 		.select()
 		.from(entities)
-		.where(and(eq(entities.storyId, storyId), eq(entities.name, name)))
+		.where(and(eq(entities.storyId, storyId), or(eq(entities.id, name), sql`lower(${entities.name}) = lower(${name})`)))
 		.limit(20);
 	const normalized = normalizeName(name);
-	return rows.find((row) => normalizeName(row.name) === normalized && (!type || row.type === type))
-		?? rows.find((row) => normalizeName(row.name) === normalized)
-		?? null;
+	const exact = rows.filter(row => (row.id === name || normalizeName(row.name) === normalized) && (!type || row.type === type));
+	if (exact.length) return exact.length === 1 ? exact[0] : null;
+	// Reuse canonical aliases; fuzzy/semantic similarity cannot grant an identity or knowledge.
+	const resolved = await resolveEntityIdentity({ storyId, candidate: { id: name, name, type: type ?? 'character' }, db, includeSemantic: false });
+	const matches = resolved.candidates.filter(row => (!type || row.type === type) && row.signals.some(signal => ['exact:id', 'exact:name', 'exact:alias'].includes(signal)));
+	if (matches.length !== 1) return null;
+	const [entity] = await db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, matches[0].entityId))).limit(1);
+	return entity?.id === matches[0].entityId ? entity : null;
 }
 
 async function findCharacterEntityByName(db: TurnPersistenceDb, storyId: string, name: string): Promise<typeof entities.$inferSelect | null> {
@@ -509,6 +513,8 @@ async function upsertEntity(
 		entityId?: string;
 		primaryScene?: boolean;
 		creationEvidence?: string;
+		narration?: string;
+		originalNarration?: string;
 	} = {},
 ): Promise<string | null> {
 	if (options.primaryScene === false) {
@@ -521,7 +527,7 @@ async function upsertEntity(
 			delete state.isPresent;
 		}
 	}
-	const aliases = Array.isArray(state.aliases)
+	let aliases = Array.isArray(state.aliases)
 		? state.aliases.filter((alias): alias is string => typeof alias === 'string' && alias.trim().length > 0)
 		: [];
 	if (type === 'character' && isCharacterTitleOnlyName(name)) return null;
@@ -568,12 +574,31 @@ async function upsertEntity(
 	}
 	const entityId = resolvedEntityId ?? id('entity');
 	const existingRows = resolvedEntityId
-		? await db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, resolvedEntityId))).limit(1)
+		? await db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, resolvedEntityId))).for('update').limit(1)
 		: [];
-	const existing = existingRows.find(row => row.id === resolvedEntityId);
-	const canonicalName = existing && normalizeName(existing.name) !== normalizeName(name) && existing.name.length >= name.length
+	const existing = existingRows.find(row => row.id === resolvedEntityId && row.storyId === storyId && row.type === type);
+	const canonicalName = existing && (type === 'character' || normalizeName(existing.name) !== normalizeName(name) && existing.name.length >= name.length)
 		? existing.name
 		: name;
+	if (existing && type === 'character') {
+		const bounded = boundCharacterIdentity({ storyId, entityId, names: [existing.name, name, ...stringList(recordValue(existing.state).aliases)],
+			current: { ...recordValue(existing.state), description: existing.description }, patch: { ...state, ...(description ? { description } : {}) },
+			sources: sourceEntryIds.map(id => ({ id, storyId, content: options.narration ?? '' })),
+		});
+		const proposed = Object.fromEntries(bounded.conflicts.map(conflict => [conflict.field, conflict.proposed]));
+		if (Object.keys(proposed).length) queueTurnContinuityProposal(continuityLedger, {
+			storyId, proposalType: 'character_context_update', targetTable: 'entities', targetRecordId: entityId,
+			operations: [{ op: 'replace', path: `/characters/${entityId}/state`, value: proposed }],
+			reason: 'Extracted identity changes need source and namesake review.', suggestion: 'Preserve authored identity; review each original passage before accepting a revelation or retcon.',
+			affectedEntityIds: [entityId], confidence: 0, sourceEntryIds, sourcePatchIds, sourceField: 'characters', serverVersion, now: createdAt,
+			metadata: { sourceType: 'character_identity_conflict', identityConflicts: bounded.conflicts, characterUpdateBaseVersion: serverVersion,
+				identitySourceHashes: sourceEntryIds.map(id => ({ id, sha256: createHash('sha256').update(options.originalNarration ?? options.narration ?? '').digest('hex') })) },
+		});
+		state = bounded.patch;
+		delete state.description;
+		description = existing.description;
+		aliases = stringList(recordValue(existing.state).aliases);
+	}
 	const nextState = mergeEntityState(existing?.state as Record<string, unknown> | null ?? {}, state, {
 		sourceEntryId: sourceEntryIds[0],
 		timestamp: createdAt,
@@ -910,6 +935,35 @@ export async function applyValidatedTurnUpdate(
 		const narrationSource = sourceEntries.find(entry => entry.id === input.assistantEntryId && entry.type === 'narration');
 		const canonicalNarration = narrationSource && !sourceEntries.some(entry => recordValue(entry.metadata).nonCanon === true || recordValue(entry.metadata).actionType === 'ooc')
 			? narrationSource.content : '';
+		const knownAudience = async (names: string[] | undefined, evidence: string | undefined) => {
+			if (!names?.length) return [] as string[];
+			if (!evidence || !canonicalNarration.includes(evidence)) { warnings.push('Skipped knowledge delta: missing exact canonical narration quote.'); return [] as string[]; }
+			const audience: string[] = [];
+			const quoted = ` ${normalizeName(evidence)} `;
+			for (const name of names) {
+				const entity = await findEntityByName(tx, input.storyId, name);
+				if (!entity || !['character', 'faction'].includes(entity.type) || ![name, entity.name].some(reference => quoted.includes(` ${normalizeName(reference)} `))) {
+					warnings.push(`Skipped knowledge audience ${name}: identity is unresolved/ambiguous or absent from its quote.`); continue;
+				}
+				audience.push(entity.id);
+			}
+			return sourceIds(...audience);
+		};
+		const learnedClaims = async (claims: WorldStateTimelineEvent['actor_claims']) => {
+			const projected: Array<{ text: string; knownBy: string[]; kind: string; evidence: string; sourceEntryIds: string[] }> = [];
+			for (const claim of claims ?? []) {
+				if (!claim.evidence.includes(claim.text)) { warnings.push('Skipped knowledge claim: text is not a span of its evidence.'); continue; }
+				const knownBy = await knownAudience(claim.known_by, claim.evidence);
+				if (knownBy.length) projected.push({ text: claim.text, knownBy, kind: claim.kind, evidence: claim.evidence, sourceEntryIds: [input.assistantEntryId] });
+			}
+			return projected;
+		};
+		const insertKnowledgeLinks = async (eventId: string, knownBy: string[], visibility: string) => {
+			if (!knownBy.length) return;
+			await tx.insert(npcEventLinks).values(knownBy.map(npcEntityId => ({ id: `npc_event_${eventId}_${npcEntityId}`, storyId: input.storyId,
+				eventId, npcEntityId, role: 'knower', visibility, evidenceStrength: 1, sourceEntryIds: [input.assistantEntryId], sourcePatchIds: patchIds,
+				serverVersion: input.serverVersion, createdAt, updatedAt: createdAt }))).onConflictDoNothing();
+		};
 
 		const currentTurn = story.currentTurn ?? 0;
 		const currentWorldTime = story.currentWorldTime ?? null;
@@ -1074,6 +1128,8 @@ export async function applyValidatedTurnUpdate(
 			const entityId = await upsertEntity(tx, input.storyId, 'character', character.name, character.description, state, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0, {
 				allowCreate,
 				creationEvidence: character.creation_evidence,
+				narration: canonicalNarration,
+				originalNarration: narrationSource?.content ?? input.narration,
 				sourceField: 'characters',
 				entityId: character.entityId,
 				primaryScene,
@@ -1525,8 +1581,11 @@ export async function applyValidatedTurnUpdate(
 				continue;
 			}
 			const strength = normalizedRelationshipStrength(rel.strength);
+			const relationshipAudience = await knownAudience(rel.known_by, rel.evidence);
+			const relationshipMetadata = { ...recordValue(existingRelationship?.metadata), knownBy: relationshipAudience, knownByActor: false, knowledgeEvidence: relationshipAudience.length ? rel.evidence : null };
 			if (existingRelationship) {
 				await tx.update(relationships).set({
+					metadata: relationshipMetadata,
 					label: rel.label ?? existingRelationship.label,
 					strength,
 					bidirectional: rel.bidirectional,
@@ -1545,7 +1604,7 @@ export async function applyValidatedTurnUpdate(
 					label: rel.label,
 					strength,
 					bidirectional: rel.bidirectional,
-					metadata: {},
+					metadata: relationshipMetadata,
 					sourceEntryIds: [input.assistantEntryId],
 					sourceEventIds: [],
 					sourcePatchIds: patchIds,
@@ -1848,6 +1907,7 @@ export async function applyValidatedTurnUpdate(
 			}
 			const uniqueResolvedPartyIds = sourceIds(...resolvedPartyIds);
 			const uniqueResolvedFactionIds = sourceIds(...resolvedFactionIds);
+			const agreementAudience = await knownAudience(proposedAgreement.known_by, proposedAgreement.evidence);
 			const actorPartyIds = uniqueResolvedPartyIds.slice(0, 1);
 			const targetPartyIds = uniqueResolvedPartyIds.slice(1);
 			affectedEntityIds.push(...uniqueResolvedPartyIds);
@@ -1866,6 +1926,7 @@ export async function applyValidatedTurnUpdate(
 				sourcePatchIds: patchIds,
 				metadata: {
 					agreement: proposedAgreement, agreementId, agreementStatus: nextStatus,
+					actorClaims: agreementAudience.length ? [{ text: proposedAgreement.evidence, knownBy: agreementAudience, kind: 'learned', sourceEntryIds: [input.assistantEntryId] }] : [],
 					previousAgreement: previous ?? null,
 					currentAgreement: { id: agreementId, ...agreementValue },
 				},
@@ -1929,6 +1990,7 @@ export async function applyValidatedTurnUpdate(
 				sourceEntryIds: [input.assistantEntryId],
 				sourcePatchIds: patchIds,
 			});
+			await insertKnowledgeLinks(eventId, agreementAudience, visibility);
 			eventIds.push(eventId);
 			if (previous) {
 				await tx.update(agreements).set(agreementValue).where(and(eq(agreements.storyId, input.storyId), eq(agreements.id, agreementId)));
@@ -2003,8 +2065,9 @@ export async function applyValidatedTurnUpdate(
 		for (const { event: timelineEvent, npcActionEntityId } of timelineEvents) {
 			const eventId = npcActionEntityId
 				? `event_npc_action_${createHash('sha256').update(JSON.stringify([input.storyId, input.assistantEntryId, npcActionEntityId])).digest('hex').slice(0, 32)}`
-				: id('event');
+				: `event_timeline_${createHash('sha256').update(JSON.stringify([input.storyId, input.assistantEntryId, timelineEvent.type, timelineEvent.title, timelineEvent.description, timelineEvent.status])).digest('hex').slice(0, 32)}`;
 			const status = timelineEvent.status;
+			const actorClaims = status === 'committed' ? await learnedClaims(timelineEvent.actor_claims) : [];
 			const scheduledTurn = scheduledTurnForTimelineEvent(timelineEvent, timelineTurn);
 			if (status === 'scheduled' && timelineEvent.due_turn === null && timelineEvent.delay_turns === null) {
 				warnings.push(`Scheduled timeline event "${timelineEvent.title}" defaulted to next turn because no due_turn or delay_turns was provided.`);
@@ -2114,6 +2177,7 @@ export async function applyValidatedTurnUpdate(
 				sourcePatchIds: patchIds,
 				metadata: {
 					reason: timelineEvent.reason,
+					actorClaims,
 					sourceType: npcActionEntityId ? 'npc_independent_action' : 'turn_timeline_event',
 					actorNames: timelineEvent.actor_names,
 					targetNames: timelineEvent.target_names,
@@ -2189,6 +2253,7 @@ export async function applyValidatedTurnUpdate(
 				sourceEntryIds: [input.assistantEntryId],
 				sourcePatchIds: patchIds,
 			});
+			await insertKnowledgeLinks(eventId, sourceIds(...actorClaims.flatMap(claim => claim.knownBy)), timelineEvent.visibility);
 			eventIds.push(eventId);
 		}
 
@@ -2306,6 +2371,15 @@ export async function applyValidatedTurnUpdate(
 				serverVersion: input.serverVersion,
 				updatedAt: createdAt,
 			}).where(eq(stories.id, input.storyId));
+		}
+		// Commit the independent faction wake with its clock/turn change. A crash
+		// after this transaction cannot strand the fifth turn; deferred extraction
+		// can also supply elapsed world time after the interactive turn has ended.
+		const worldTimeJump = primaryScene && nextWorldTime !== currentWorldTime;
+		if (!isSupplemental || worldTimeJump) {
+			await enqueueFactionCadenceJob({ storyId: input.storyId,
+				currentTurn: currentTurn + (isSupplemental ? 0 : 1), worldTimeJump,
+				worldTime: primaryScene ? nextWorldTime : currentWorldTime }, tx);
 		}
 	};
 	if (options.transaction) {

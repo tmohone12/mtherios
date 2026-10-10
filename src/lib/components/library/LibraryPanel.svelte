@@ -40,6 +40,8 @@
 	let searchQuery = $state('');
 	let sortOrder = $state('recent');
 	let shelfOpen = $state(false);
+	let importMenuOpen = $state(false);
+	let createShelfOpen = $state(false);
 	let loadingStories = $state(true);
 	let shelvesError = $state('');
 	let storiesError = $state('');
@@ -53,6 +55,8 @@
 	const selectedShelf = $derived(shelves.find((shelf) => shelf.id === app.activeShelfId) ?? shelves[0] ?? null);
 	const selectedShelfId = $derived(selectedShelf?.id ?? app.activeShelfId ?? null);
 	const visibleStories = $derived(selectedShelfId ? stories.filter((story) => (story.shelfId ?? 'shelf_default') === selectedShelfId) : stories);
+	const latestStory = $derived(stories.reduce<Story | null>((latest, story) => !isArchived(story) && (!latest || story.updatedAt > latest.updatedAt) ? story : latest, null));
+	const latestShelf = $derived(shelves.find((shelf) => shelf.id === (latestStory?.shelfId ?? 'shelf_default')));
 	const filteredStories = $derived(visibleStories
 		.filter((story) => `${story.title} ${story.description ?? ''} ${story.genre ?? ''}`.toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase()))
 		.sort((a, b) => sortOrder === 'title' ? a.title.localeCompare(b.title) : sortOrder === 'oldest' ? a.updatedAt - b.updatedAt : b.updatedAt - a.updatedAt));
@@ -125,7 +129,7 @@
 			}];
 		}
 		if (!app.activeShelfId && shelves[0]) app.openShelf(shelves[0].id);
-		await loadStories();
+		await loadStories(shelfOpen ? selectedShelfId : null);
 	}
 
 	async function loadBackendStatus() {
@@ -160,9 +164,8 @@
 		}
 	}
 
-	async function loadStories() {
+	async function loadStories(shelfId: string | null = selectedShelfId) {
 		const request = ++storyRequest;
-		const shelfId = selectedShelfId;
 		loadingStories = true;
 		storiesError = '';
 		catalogWarning = '';
@@ -181,11 +184,35 @@
 
 	function formatDate(ts: number) {
 		const d = new Date(ts);
+		if (!Number.isFinite(d.getTime())) return 'Date unavailable';
 		const now = new Date();
-		const diff = now.getTime() - d.getTime();
-		if (diff < 86400000) return 'Today';
-		if (diff < 172800000) return 'Yesterday';
-		return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+		if (d.toDateString() === now.toDateString()) return 'Today';
+		const yesterday = new Date(now);
+		yesterday.setDate(now.getDate() - 1);
+		if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+		return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' as const } : {}) });
+	}
+
+	function openStory(story: Story) {
+		app.openShelf(story.shelfId ?? 'shelf_default');
+		app.openStory(story.id);
+	}
+
+	async function showShelves() {
+		shelfOpen = false;
+		searchQuery = '';
+		showTrash = false;
+		await loadStories(null);
+	}
+
+	function handleLibraryKeydown(event: KeyboardEvent) {
+		if (event.key !== 'Escape') return;
+		const menu = event.target instanceof Element ? event.target.closest('.import-menu[open], .create-shelf[open]') : null;
+		importMenuOpen = false;
+		createShelfOpen = false;
+		confirmDelete = null;
+		confirmPurge = null;
+		menu?.querySelector('summary')?.focus();
 	}
 
 	async function selectShelf(shelfId: string) {
@@ -199,7 +226,7 @@
 
 	async function handleCreateShelf() {
 		const name = newShelfName.trim();
-		if (!name) return;
+		if (!name || creatingShelf) return;
 		creatingShelf = true;
 		try {
 			const result = await createBackendShelf({
@@ -213,7 +240,8 @@
 			newShelfGenre = '';
 			shelves = [result.shelf, ...shelves.filter((shelf) => shelf.id !== result.shelfId)];
 			app.openShelf(result.shelfId);
-		shelfOpen = true;
+			shelfOpen = true;
+			createShelfOpen = false;
 			await loadStories();
 		} catch (error) {
 			console.error('Shelf creation failed:', error);
@@ -378,6 +406,7 @@
 		}
 	}
 </script>
+<svelte:window onkeydown={handleLibraryKeydown} />
 <input bind:this={fileInput} type="file" accept=".json" class="hidden" aria-label="Import story file" onchange={handleImport} />
 <input bind:this={wikiInput} type="file" accept=".zip" class="hidden" aria-label="Import wiki archive" onchange={handleImportWiki} />
 
@@ -385,19 +414,19 @@
 	<div class="library-page">
 		<header class="library-header">
 			<div>
-				<p class="eyebrow">The stories you make your own</p>
-				<h1>{shelfOpen ? selectedShelf?.name ?? "Your stories" : "Your shelves"}<span class="heading-period">.</span></h1>
-				<p class="page-description">{shelfOpen ? "Choose a story to continue." : "Choose a shelf to explore its stories."}</p>
+				<p class="eyebrow"><BookOpen size={15} strokeWidth={1.5} />Your story workspace</p>
+				<h1>{shelfOpen ? selectedShelf?.name ?? 'Your stories' : 'Your library'}<span class="heading-period">.</span></h1>
+				<p class="page-description">{shelfOpen ? selectedShelf?.description || 'Stories in this world, ready for your next choice.' : 'Return to a story. Explore a world. Begin another.'}</p>
 			</div>
 			<div class="header-actions">
-				<details class="import-menu">
+				<details class="import-menu" bind:open={importMenuOpen}>
 					<summary class="button button-secondary"><Upload size={15} /> Import <ChevronDown size={14} /></summary>
 					<div class="import-options">
-						<button onclick={() => fileInput.click()} disabled={importing}><Upload size={16} /><span>{importing ? 'Importing story…' : 'Import story'}<small>Restore a story from JSON</small></span></button>
-						<button onclick={() => wikiInput.click()} disabled={importingWiki}><FileArchive size={16} /><span>{importingWiki ? 'Importing wiki…' : 'Import wiki'}<small>Bring a wiki ZIP into a new story</small></span></button>
+						<button onclick={() => { importMenuOpen = false; fileInput.click(); }} disabled={importing}><Upload size={16} /><span>{importing ? 'Importing story…' : 'Import story'}<small>Restore a story from JSON</small></span></button>
+						<button onclick={() => { importMenuOpen = false; wikiInput.click(); }} disabled={importingWiki}><FileArchive size={16} /><span>{importingWiki ? 'Importing wiki…' : 'Import wiki'}<small>Bring a wiki ZIP into a new story</small></span></button>
 					</div>
 				</details>
-				{#if shelfOpen}<button class="button button-primary" onclick={() => app.startNewStory(selectedShelfId)} disabled={!selectedShelfId}><Plus size={17} /> New story</button>{/if}
+				<button class="button button-primary" onclick={() => app.startNewStory(selectedShelfId)} disabled={!selectedShelfId}><Plus size={17} /> New story</button>
 			</div>
 		</header>
 		{#if importFile}
@@ -418,10 +447,33 @@
 		{/if}
 		{#if importError}<p role="alert" class="campaign-import-error">{importError}</p>{/if}
 
+		{#if shelvesError || storiesError || catalogWarning}
+			<div class="catalog-notice" role="alert"><AlertTriangle size={16} /><div>{#if shelvesError}<p>{shelvesError}</p>{/if}{#if storiesError}<p>{storiesError}</p>{/if}{#if catalogWarning}<p>{catalogWarning}</p>{/if}</div><button class="button button-secondary" onclick={loadLibrary} disabled={loadingStories}><RefreshCw size={14} />Retry</button></div>
+		{/if}
+
+		{#if !shelfOpen}
+			{#if loadingStories}
+				<div class="continue-loading" role="status"><RefreshCw size={20} class="animate-spin" /><span>Finding your stories…</span></div>
+			{:else if latestStory}
+				<section class="continue-story" aria-labelledby="continue-title">
+					<div class="continue-copy">
+						<p class="eyebrow">Most recently updated</p>
+						<h2 id="continue-title">{latestStory.title}</h2>
+						<p class="continue-description">{latestStory.description || 'Your next choice is waiting. Return to the story and see where it leads.'}</p>
+						<div class="continue-meta">{#if latestShelf}<span><Layers size={14} />{latestShelf.name}</span>{/if}{#if latestStory.genre}<span>{latestStory.genre}</span>{/if}<span>Updated {formatDate(latestStory.updatedAt).toLocaleLowerCase()}</span></div>
+						<button class="button button-primary continue-button" onclick={() => latestStory && openStory(latestStory)}>Continue story<ArrowRight size={17} /></button>
+					</div>
+					<div class="continue-art" aria-hidden="true"><div class="book-mark"><BookOpen size={52} strokeWidth={0.8} /></div><span>The next page is yours</span></div>
+				</section>
+			{:else if !storiesError && !catalogWarning}
+				<section class="empty-collection"><BookOpen size={32} strokeWidth={1.2} /><h2>Your first story starts here.</h2><p>Create a story, or import one to bring an existing world with you.</p><button class="button button-primary" onclick={() => app.startNewStory(selectedShelfId)} disabled={!selectedShelfId}><Plus size={16} /> Create a story</button></section>
+			{/if}
+		{/if}
+
 		<section class="shelf-section" aria-label="Library shelves">
 			<div class="shelf-toolbar">
-				{#if shelfOpen}<button class="button button-secondary" onclick={() => { shelfOpen = false; searchQuery = ''; showTrash = false; }}><ArrowLeft size={15} />All shelves</button>{/if}
-				<details class="create-shelf">
+				{#if shelfOpen}<button class="button button-quiet" onclick={showShelves}><ArrowLeft size={15} />All shelves</button>{:else}<div class="shelf-heading"><h2>Your shelves <span class="shelf-count">{shelves.length}</span></h2><p>Shared worlds, collected in one place.</p></div>{/if}
+				<details class="create-shelf" bind:open={createShelfOpen}>
 					<summary class="button button-quiet"><Plus size={15} /> New shelf</summary>
 					<form class="shelf-form" onsubmit={(e) => { e.preventDefault(); handleCreateShelf(); }}>
 						<h3>A home for a new world</h3>
@@ -435,28 +487,24 @@
 				</details>
 			</div>
 			{#if !shelfOpen}
-				{#if shelvesError}<div class="catalog-notice" role="alert"><p>{shelvesError}</p><button class="button button-secondary" onclick={loadLibrary}>Retry</button></div>{/if}
 				<div class="shelf-grid">
 					{#each shelves as shelf (shelf.id)}
 						<button class="shelf-card" onclick={() => selectShelf(shelf.id)} aria-label={`Open shelf ${shelf.name}`}>
-							<Layers size={28} strokeWidth={1.2} /><h2>{shelf.name}</h2>
+							<div class="shelf-card-top"><Layers size={22} strokeWidth={1.3} /><span>{shelf.storyCount} {shelf.storyCount === 1 ? 'story' : 'stories'}</span></div><h3>{shelf.name}</h3>
 							<p>{shelf.description || shelf.genre || 'A home for your stories.'}</p>
-							<span>{shelf.storyCount} {shelf.storyCount === 1 ? 'story' : 'stories'}<ArrowRight size={16} /></span>
+							<span>Explore shelf<ArrowRight size={16} /></span>
 						</button>
 					{/each}
 				</div>
 			{:else}
 			<div class="collection-toolbar">
-				<div class="collection-heading"><h2>Stories</h2><p>{loadingStories ? 'Loading stories…' : `${visibleStories.length} ${visibleStories.length === 1 ? 'story' : 'stories'}`}{#if selectedShelf?.genre}<span> / </span>{selectedShelf.genre}{/if}</p></div>
+				<div class="collection-heading"><h2>Stories on this shelf</h2><p>{loadingStories ? 'Loading stories…' : `${visibleStories.length} ${visibleStories.length === 1 ? 'story' : 'stories'}`}{#if selectedShelf?.genre}<span> / </span>{selectedShelf.genre}{/if}</p></div>
 				<div class="collection-controls">
-					<label class="search-control"><Search size={16} /><input type="search" aria-label="Search stories in this shelf" placeholder="Find a story…" bind:value={searchQuery} /></label>
+					<label class="search-control"><Search size={16} /><input type="search" aria-label="Search stories in this shelf" placeholder="Search this shelf" bind:value={searchQuery} /></label>
 					<select aria-label="Sort stories" bind:value={sortOrder}><option value="recent">Recently updated</option><option value="title">Title A–Z</option><option value="oldest">Oldest updated</option></select>
 				</div>
 			</div>
 
-			{#if shelvesError || storiesError || catalogWarning}
-				<div class="catalog-notice" role="alert"><AlertTriangle size={16} /><div>{#if shelvesError}<p>{shelvesError}</p>{/if}{#if storiesError}<p>{storiesError}</p>{/if}{#if catalogWarning}<p>{catalogWarning}</p>{/if}</div><button class="button button-secondary" onclick={loadLibrary} disabled={loadingStories}><RefreshCw size={14} />Retry</button></div>
-			{/if}
 			{#if loadingStories}
 				<div class="empty-collection" role="status"><RefreshCw size={26} class="animate-spin" /><p>Loading stories…</p></div>
 			{:else if visibleStories.length === 0 && (shelvesError || storiesError || catalogWarning)}
@@ -469,7 +517,7 @@
 				<div class="story-grid">
 					{#each filteredStories as story, index (story.id)}
 						<article class="story-card">
-							<button class="story-open" onclick={() => app.openStory(story.id)} aria-label={`Open ${story.title}`}>
+							<button class="story-open" onclick={() => openStory(story)} aria-label={`Open ${story.title}`}>
 								<div class="story-cover" aria-hidden="true"><span class="cover-index">{String(index + 1).padStart(2, '0')}</span><div class="cover-frame"><BookOpen size={32} strokeWidth={1} /></div><span class="cover-caption">{story.genre ?? selectedShelf?.genre ?? 'A MythEngine story'}</span></div>
 									<div class="story-copy"><p class="story-genre">{story.genre ?? selectedShelf?.genre ?? 'Uncharted worlds'}</p><h3>{story.title}</h3><p class="story-description">{story.description || 'A story waiting for your next choice.'}</p></div>
 							</button>
@@ -502,7 +550,7 @@
 		{/if}
 
 		<details class="runtime-details">
-			<summary><span class="runtime-indicator" class:healthy={backendHealth === 'Ready'}></span><span>{backendHealth === 'Ready' ? 'All systems ready' : backendHealth === 'Connecting' ? 'Connecting to your library' : 'Library needs attention'}</span><span class="runtime-label">Runtime details</span><ChevronDown size={13} /></summary>
+			<summary><span class="runtime-indicator" class:healthy={backendHealth === 'Ready'}></span><span>{backendHealth === 'Ready' ? 'All systems ready' : backendHealth === 'Connecting' ? 'Connecting to your library' : 'Some services need attention'}</span><span class="runtime-label">Runtime details</span><ChevronDown size={13} /></summary>
 			<div class="runtime-content">
 				{#if backendProjection}
 					<div class="runtime-facts"><span><Wifi size={14} /> Runtime {backendProjection.runtimeOk ? 'online' : 'needs attention'}</span><span>Qdrant {backendProjection.qdrantOk ? 'ok' : 'down'}</span><span>Ollama {backendProjection.ollamaOk ? 'ok' : backendProjection.ollamaRequired ? 'down' : 'optional'}</span></div><p class="data-root">Data location: {backendProjection.dataRoot}</p>
@@ -516,12 +564,27 @@
 </div>
 
 <style>
-	.shelf-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap:20px; }
-	.shelf-card { display:flex; flex-direction:column; align-items:flex-start; min-height:220px; padding:26px; text-align:left; border:1px solid var(--border-primary); border-radius:12px; background:var(--bg-secondary); color:var(--text-accent); }
+	.continue-story { display:grid; grid-template-columns:minmax(0, 1fr) 220px; min-height:295px; border:1px solid color-mix(in srgb, var(--text-accent) 32%, var(--border-primary)); border-radius:14px; background:linear-gradient(125deg, color-mix(in srgb, var(--text-accent) 7%, var(--bg-secondary)), var(--bg-secondary)); overflow:hidden; }
+	.continue-copy { min-width:0; padding:32px 36px; }
+	.continue-copy h2 { margin:0 0 13px; max-width:760px; color:var(--text-primary); font-family:var(--font-display); font-size:clamp(28px, 3vw, 39px); font-weight:400; letter-spacing:-.025em; line-height:1.2; overflow-wrap:anywhere; }
+	.continue-description { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; overflow:hidden; max-width:660px; margin:0 0 19px; color:var(--text-secondary); font-size:14px; line-height:1.7; }
+	.continue-meta { display:flex; flex-wrap:wrap; gap:8px 18px; margin-bottom:24px; color:var(--text-muted); font-size:11px; }
+	.continue-meta span { display:inline-flex; align-items:center; gap:6px; min-width:0; overflow-wrap:anywhere; }
+	.continue-button { min-width:164px; }
+	.continue-art { display:flex; flex-direction:column; justify-content:center; align-items:center; gap:27px; color:var(--text-accent); border-left:1px solid color-mix(in srgb, var(--text-accent) 12%, transparent); background:color-mix(in srgb, var(--text-accent) 3%, transparent); }
+	.book-mark { display:grid; place-items:center; width:110px; height:140px; border:1px solid color-mix(in srgb, var(--text-accent) 28%, transparent); border-radius:60px 60px 3px 3px; box-shadow:0 0 0 12px color-mix(in srgb, var(--text-accent) 3%, transparent); }
+	.continue-art > span { font-size:9px; text-transform:uppercase; letter-spacing:.13em; }
+	.continue-loading { display:flex; align-items:center; justify-content:center; gap:12px; min-height:230px; border:1px solid var(--border-primary); border-radius:14px; color:var(--text-secondary); font-size:13px; }
+	.shelf-heading h2 { display:flex; align-items:center; gap:10px; margin:0 0 6px; font-family:var(--font-display); font-size:25px; font-weight:400; color:var(--text-primary); }
+	.shelf-heading p { margin:0; color:var(--text-muted); font-size:12px; }
+	.shelf-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap:16px; margin-top:20px; }
+	.shelf-card { display:flex; flex-direction:column; align-items:flex-start; min-width:0; min-height:195px; padding:24px; text-align:left; border:1px solid var(--border-primary); border-radius:11px; background:var(--bg-secondary); color:var(--text-accent); }
 	.shelf-card:hover { border-color:var(--text-accent); background:var(--bg-tertiary); }
-	.shelf-card h2 { margin:20px 0 10px; font:24px var(--font-display); color:var(--text-primary); }
-	.shelf-card p { color:var(--text-secondary); font-size:13px; line-height:1.6; }
-	.shelf-card > span { display:flex; justify-content:space-between; width:100%; margin-top:auto; padding-top:18px; font-size:12px; }
+	.shelf-card-top { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; }
+	.shelf-card-top span { color:var(--text-muted); font-size:11px; }
+	.shelf-card h3 { margin:18px 0 8px; font:24px var(--font-display); color:var(--text-primary); overflow-wrap:anywhere; }
+	.shelf-card p { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; overflow:hidden; margin:0 0 16px; color:var(--text-secondary); font-size:13px; line-height:1.6; }
+	.shelf-card > span { display:flex; justify-content:space-between; width:100%; margin-top:auto; padding-top:16px; border-top:1px solid var(--border-secondary); font-size:11px; }
 
 	.library-scroll { height:100%; min-height:0; overflow-y:auto; overscroll-behavior:contain; }
 	.library-page { max-width:1360px; margin:0 auto; padding:44px clamp(22px, 4.2vw, 64px) 36px; }
@@ -530,7 +593,7 @@
 	h1, h2, h3, p { margin-top:0; }
 	h1 { margin-bottom:9px; font-family:var(--font-display); font-size:clamp(36px, 3.4vw, 48px); font-weight:400; line-height:1.14; letter-spacing:-.035em; color:var(--text-primary); }
 	.heading-period { color:var(--text-accent); }
-	.page-description { margin-bottom:0; font-size:13px; color:var(--text-secondary); }
+	.page-description { margin-bottom:0; max-width:650px; font-size:14px; line-height:1.6; color:var(--text-secondary); }
 	.header-actions, .button { display:flex; align-items:center; gap:9px; }
 	.button { justify-content:center; min-height:42px; padding:10px 16px; border:1px solid transparent; border-radius:8px; font-size:12px; font-weight:600; line-height:1.4; white-space:nowrap; cursor:pointer; transition:background .16s, border-color .16s, color .16s; }
 	.button-primary { background:var(--text-accent); color:var(--bg-primary); }
@@ -556,7 +619,7 @@
 	.campaign-import-review select { display:block; margin:8px 0 16px; padding:9px; max-width:100%; color:var(--text-primary); background:var(--bg-primary); border:1px solid var(--border-primary); border-radius:6px; }
 	.campaign-import-review .button { margin-right:8px; }
 	.campaign-import-error { margin-top:12px; color:var(--text-error, #e77); }
-	.shelf-section { margin-top:28px; }
+	.shelf-section { margin-top:32px; }
 	.shelf-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; border-bottom:1px solid var(--border-primary); padding-bottom:14px; }
 	.shelf-count { display:inline-flex; align-items:center; justify-content:center; min-width:21px; padding:1px 5px; border-radius:4px; font-size:10px; background:var(--bg-tertiary); color:var(--text-secondary); }
 	.shelf-form { width:310px; padding:22px; }
@@ -592,10 +655,10 @@
 	.cover-frame { display:flex; align-items:center; justify-content:center; width:61px; height:70px; margin-top:-7px; border:1px solid color-mix(in srgb, var(--cover-color) 25%, transparent); border-radius:30px 30px 2px 2px; }
 	.cover-index { position:absolute; top:16px; left:18px; font-family:var(--font-display); font-size:12px; opacity:.65; }
 	.cover-caption { position:absolute; bottom:15px; left:18px; right:18px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:8px; letter-spacing:.17em; text-transform:uppercase; opacity:.7; }
-	.story-copy { min-height:159px; padding:21px 20px 17px; }
+	.story-copy { min-height:159px; padding:21px 20px 17px; color:var(--text-primary); }
 	.story-genre { margin:0 0 9px; color:var(--text-accent); font-size:9px; font-weight:500; letter-spacing:.1em; text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 	.story-copy h3 { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; overflow:hidden; margin:0 0 9px; font-family:var(--font-display); font-size:21px; line-height:1.23; font-weight:400; letter-spacing:-.02em; overflow-wrap:anywhere; }
-	.story-description { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; overflow:hidden; margin:0; color:var(--text-secondary); font-size:11px; line-height:1.7; }
+	.story-description { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; overflow:hidden; margin:0; color:var(--text-secondary); font-size:13px; line-height:1.65; }
 	.story-footer { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 20px; padding:10px 0; border-top:1px solid var(--border-secondary); color:var(--text-muted); font-size:10px; }
 	.story-footer > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 	.sync-label { text-transform:capitalize; }
@@ -612,7 +675,7 @@
 	.new-story-icon { display:flex; align-items:center; justify-content:center; width:49px; height:49px; margin-bottom:7px; border:1px solid var(--border-primary); border-radius:50%; color:var(--text-accent); }
 	.new-story-title { font-family:var(--font-display); font-size:21px; color:var(--text-secondary); }
 	.empty-collection { display:flex; flex-direction:column; align-items:center; padding:45px 20px; color:var(--text-accent); text-align:center; border:1px dashed var(--border-primary); border-radius:12px; }
-	.empty-collection h3 { font-family:var(--font-display); font-size:25px; font-weight:400; margin:17px 0 7px; color:var(--text-primary); }
+	.empty-collection h2, .empty-collection h3 { font-family:var(--font-display); font-size:25px; font-weight:400; margin:17px 0 7px; color:var(--text-primary); }
 	.empty-collection p { color:var(--text-secondary); font-size:12px; margin-bottom:22px; }
 	.search-result-count { color:var(--text-muted); font-size:11px; margin:15px 0 0; }
 	.library-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px; margin-top:26px; padding:13px 0; border-top:1px solid var(--border-primary); }
@@ -644,6 +707,8 @@
 	.runtime-error { color:#dd9b97; margin:10px 0 0; }
 	.runtime-success { color:var(--success); margin:10px 0 0; }
 	@media (min-width:1600px) { .story-grid { grid-template-columns:repeat(4, minmax(0, 1fr)); } }
+	@media (max-width:900px) { .continue-story { grid-template-columns:minmax(0, 1fr) 160px; } .continue-copy { padding:27px; } .continue-art > span { display:none; } .book-mark { width:86px; height:112px; } }
+	@media (max-width:600px) { .continue-story { grid-template-columns:1fr; } .continue-copy { padding:24px; } .continue-art { display:none; } .continue-copy h2 { font-size:30px; } .continue-description { font-size:13px; } .continue-meta { gap:8px 13px; } .shelf-heading h2 { font-size:23px; } .shelf-heading p { max-width:200px; font-size:11px; line-height:1.5; } .shelf-grid { gap:12px; } .shelf-card { min-height:180px; padding:20px; } }
 	@media (max-width:1100px) { .story-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }     .collection-toolbar { align-items:flex-start; } .collection-controls { flex-direction:column; align-items:stretch; } .search-control input { width:145px; } .collection-controls select { max-width:none; } }
 	@media (max-width:700px) { .library-page { padding:26px 20px 100px; } .library-header { align-items:flex-start; flex-direction:column; gap:19px; margin-bottom:24px; } .header-actions { width:100%; } .header-actions > .button-primary { margin-left:auto; }       .shelf-section { margin-top:20px; } .shelf-toolbar { gap:8px; } .create-shelf > summary { padding:9px 6px; font-size:11px; } .shelf-form { width:min(310px, calc(100vw - 40px)); } .collection-toolbar { flex-direction:column; gap:16px; padding-top:22px; } .collection-controls { flex-direction:row; width:100%; gap:8px; } .search-control { flex:1; min-width:0; } .search-control input { width:100%; } .collection-controls select { max-width:145px; } .story-grid { gap:13px; } .story-cover { height:125px; } .story-copy { padding:16px; min-height:145px; } .story-copy h3 { font-size:20px; } .story-footer { margin:0 15px; } .sync-label { display:none; } .collection-facts { gap:11px; } .trash-section { padding:18px; } .trash-row { flex-wrap:wrap; gap:8px; } .trash-actions { margin-left:auto; } }
 	@media (max-width:440px) { .story-grid { grid-template-columns:1fr; } .story-cover { height:150px; } .story-copy { min-height:0; } .story-copy h3 { font-size:23px; } .new-story-card { min-height:185px; } .story-footer { padding:9px 0; } .icon-button { width:40px; height:40px; } .collection-facts span:last-child { display:none; } }

@@ -72,7 +72,11 @@ export function assertRuntimeIsolation(options) {
 		app = new URL(options.appUrl);
 	} catch { throw new Error('Invalid runtime URL; check database, Qdrant and app configuration.'); }
 	if (!['postgres:', 'postgresql:'].includes(database.protocol) || !['http:', 'https:'].includes(qdrant.protocol) || !['http:', 'https:'].includes(app.protocol)) throw new Error('Unsupported runtime URL protocol.');
-	if (options.allowSharedRuntime) return;
+	if (options.isolatedTestCopy) {
+  if (options.jobWorker && (options.jobWorkerScope !== 'faction' || options.jobBatchLimit !== 1)) throw new Error('Test copy worker must use faction scope and batch size one.');
+  if (!loopback(database) || database.pathname !== '/mythengine_faction_copy_20261001' || options.port !== 5174 || !options.dataRoot.endsWith('data-faction-test') || !options.qdrantCollection.startsWith('mythengine_faction_copy_20261001')) throw new Error('Test copy isolation guard: dedicated database, data root, collection and port required.');
+ }
+ if (options.allowSharedRuntime) return;
 	// The application may replace Mtherios on its old HTTP port. Keep the
 	// database, vector store and filesystem isolation independent of that port.
 	if ((loopback(database) && (database.port === '5432' || database.pathname === '/mtherios')) ||
@@ -96,6 +100,7 @@ export function safeRuntimeSummary(options) {
 		database: { host: database.hostname, port: database.port || '5432', name: database.pathname.slice(1) },
 		qdrantUrl: safeUrl(options.qdrantUrl), qdrantCollection: options.qdrantCollection,
 		jobWorker: options.jobWorker, jobWorkerScope: options.jobWorkerScope, wikiAutoIndex: options.wikiAutoIndexStoryVaults,
+		chapterRunnerEnabled: options.chapterRunnerEnabled, chapterRunnerStoryId: options.chapterRunnerStoryId,
 		allowSharedRuntime: options.allowSharedRuntime,
 		localKevEnabled: options.localKevEnabled, localEmbeddingsEnabled: options.localEmbeddingsEnabled,
 		environmentKeys: Object.keys(process.env).filter(key => /^(MYTHENGINE_|MTHERIOS_|DATABASE_URL$|PORT$|QDRANT_)/.test(key) && !/KEY|SECRET|TOKEN/.test(key)),
@@ -128,6 +133,9 @@ export function resolveRuntimeOptions(argv = [], { cwd: workingDirectory = proce
 	const wikiAutoIndexStoryVaults = booleanOption(flags['wiki-auto-index'], env.MTHERIOS_WIKI_AUTO_INDEX, fileConfig.wikiAutoIndexStoryVaults, false);
 	const databaseUrl = String(flags['database-url'] ?? env.DATABASE_URL ?? fileConfig.databaseUrl ?? DEFAULT_DATABASE_URL);
 	const jobWorker = booleanOption(flags['job-worker'], env.MTHERIOS_JOB_WORKER, fileConfig.jobWorker, false);
+	const chapterRunnerEnabled = booleanOption(flags['chapter-runner'], env.MTHERIOS_CHAPTER_RUNNER, fileConfig.chapterRunnerEnabled, false);
+	const chapterRunnerStoryId = String(flags['chapter-runner-story'] ?? env.MTHERIOS_CHAPTER_RUNNER_STORY_ID ?? fileConfig.chapterRunnerStoryId ?? '').trim();
+	if(chapterRunnerEnabled && !chapterRunnerStoryId)throw new Error('Chapter-only runner requires an explicit story ID.');
 	const jobWorkerScope = String(flags['job-worker-scope'] ?? env.MTHERIOS_JOB_WORKER_SCOPE ?? fileConfig.jobWorkerScope ?? 'all');
 	if (!['all', 'faction'].includes(jobWorkerScope)) throw new Error('Invalid job worker scope.');
 	const jobIntervalMs = Math.max(1000, Number(flags['job-interval-ms'] ?? env.MTHERIOS_JOB_INTERVAL_MS ?? fileConfig.jobIntervalMs ?? 5000));
@@ -146,6 +154,8 @@ export function resolveRuntimeOptions(argv = [], { cwd: workingDirectory = proce
 	const memoryEmbeddingDimensions = Math.max(1, Number(flags['memory-embedding-dimensions'] ?? env.MEMORY_EMBEDDING_DIMENSIONS ?? fileConfig.memoryEmbeddingDimensions ?? 1536));
 
 	const options = {
+		isolatedTestCopy: fileConfig.isolatedTestCopy === true,
+		testLocalInferenceOnly: fileConfig.testLocalInferenceOnly !== false,
 		cwd,
 		configPath,
 		dataRoot,
@@ -166,6 +176,8 @@ export function resolveRuntimeOptions(argv = [], { cwd: workingDirectory = proce
 		wikiAutoIndexStoryVaults,
 		databaseUrl,
 		jobWorker,
+		chapterRunnerEnabled,
+		chapterRunnerStoryId,
 		jobWorkerScope,
 		jobIntervalMs,
 		jobTimeoutMs,
@@ -251,6 +263,7 @@ export function buildRuntimeEnv(options, inputEnv = process.env) {
 	const env = normalizeRuntimeEnv(inputEnv);
 	const result = {
 		...env,
+		MYTHENGINE_TEST_LOCAL_ONLY: options.isolatedTestCopy && options.testLocalInferenceOnly !== false ? 'true' : (env.MYTHENGINE_TEST_LOCAL_ONLY ?? 'false'),
 		NODE_ENV: env.NODE_ENV ?? (options.dev ? 'development' : 'production'),
 		BODY_SIZE_LIMIT: env.BODY_SIZE_LIMIT ?? '128M',
 		HOST: options.host,
@@ -270,6 +283,8 @@ export function buildRuntimeEnv(options, inputEnv = process.env) {
 		MTHERIOS_LOCAL_EMBEDDINGS: options.localEmbeddingsEnabled ? 'true' : 'false',
 		MTHERIOS_WIKI_AUTO_INDEX: options.wikiAutoIndexStoryVaults ? 'true' : 'false',
 		MTHERIOS_JOB_WORKER: options.jobWorker ? 'true' : 'false',
+		MTHERIOS_CHAPTER_RUNNER: options.chapterRunnerEnabled ? 'true' : 'false',
+		MTHERIOS_CHAPTER_RUNNER_STORY_ID: options.chapterRunnerStoryId ?? '',
 		MTHERIOS_JOB_WORKER_SCOPE: options.jobWorkerScope,
 		MTHERIOS_JOB_INTERVAL_MS: String(options.jobIntervalMs),
 		MTHERIOS_JOB_TIMEOUT_MS: String(options.jobTimeoutMs),

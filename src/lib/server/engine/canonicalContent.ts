@@ -32,12 +32,16 @@ function view(record: Record<string,unknown>, metadata: CanonicalEnvelope) {
   return { record, envelope: metadata, revision: { metadataRevision: metadata.revision, recordVersion: Number(record.server_version), adapterVersion: metadata.adapter_version } };
 }
 export async function readCanonicalWorkspace(input: unknown) {
+  return getDb().transaction(tx => readCanonicalWorkspaceInTransaction(tx, input), { isolationLevel:'repeatable read',accessMode:'read only' });
+}
+export async function readCanonicalWorkspaceInTransaction(tx: Tx, input: unknown, lock = false) {
   const request = canonicalContentSchema.parse(input);
-  return getDb().transaction(async tx => {
-    await scoped(tx, request);
+    await scoped(tx, request, lock);
     if (request.id) {
-      const [record] = await tx.execute(recordQuery({ ...request, id: request.id }));
-      if (!record) denied(); return view(record,await envelope(tx,{ ...request,id:request.id }));
+      const [record] = await tx.execute(recordQuery({ ...request, id: request.id }, lock));
+      if (!record) denied(); const metadata = await envelope(tx,{ ...request,id:request.id }, lock);
+      if (metadata.source_deleted) denied();
+      return view(record,metadata);
     }
     const table = request.kind === 'factions' ? sql`factions` : sql`entities`;
     const kindFilter = request.kind === 'factions' ? sql`` : sql`and r.type=${kinds[request.kind]}`;
@@ -47,7 +51,6 @@ export async function readCanonicalWorkspace(input: unknown) {
       and strpos(lower(r.name),lower(${request.q})) > 0
       order by c.folder,r.name,r.id limit 51 offset ${request.offset}`);
     return { records:rows.slice(0,50), nextCursor:rows.length > 50 ? String(request.offset+50) : null };
-  },{ isolationLevel:'repeatable read',accessMode:'read only' });
 }
 
 async function saveMetadata(tx: Tx, current: CanonicalEnvelope, record: Record<string,unknown>, changes: Record<string,unknown>, reason: string, actor: Record<string,unknown> = {role:'client',id:'local-client'}) {
@@ -60,9 +63,11 @@ async function saveMetadata(tx: Tx, current: CanonicalEnvelope, record: Record<s
   return saved as unknown as CanonicalEnvelope;
 }
 export async function editCanonicalWorkspace(input: unknown) {
+  return getDb().transaction(tx => editCanonicalWorkspaceInTransaction(tx, input));
+}
+export async function editCanonicalWorkspaceInTransaction(tx: Tx, input: unknown, actor: Record<string, unknown> = {role:'client',id:'local-client'}) {
   assertSafeJson(input); const request=canonicalEditSchema.parse(input);
   if (!Object.keys(request.metadata ?? {}).length && !Object.keys(request.updates ?? {}).length) throw new MutationError('INVALID_CONTENT','Supply metadata or record changes.');
-  return getDb().transaction(async tx => {
     await scoped(tx,request,true);
     // Match canonical writers' lock order: source record, then its catalog envelope.
     const [record] = await tx.execute(recordQuery(request,true)); if (!record) denied();
@@ -72,13 +77,12 @@ export async function editCanonicalWorkspace(input: unknown) {
     if (Object.entries(actual).some(([key,value]) => request.expected[key as keyof typeof actual] !== value)) throw new MutationError('REVISION_CONFLICT','This canonical record or its workspace metadata changed. Reload before saving.',{expected:request.expected,actual});
     let updated=record;
     if (Object.keys(request.updates ?? {}).length) {
-      await tx.execute(sql`select set_config('mythengine.content_actor','{"role":"client","id":"local-client"}',true)`);
-      const result = await patchWorldRecord(request.gameId,request.kind,request.id,{updates:request.updates!,expectedVersion:request.expected.recordVersion,jsonMode:'merge',reason:'Canonical content workspace edit.'},{role:'client',id:'local-client'},tx);
+      await tx.execute(sql`select set_config('mythengine.content_actor',${JSON.stringify(actor)},true)`);
+      const result = await patchWorldRecord(request.gameId,request.kind,request.id,{updates:request.updates!,expectedVersion:request.expected.recordVersion,jsonMode:'merge',reason:'Canonical content workspace edit.'},{role:'client',id:actor.role === 'assistant' ? 'local-user-approved-assistant' : 'local-client', ...(typeof actor.runId === 'string' ? {runId:actor.runId} : {})},tx);
       updated=result.record; current=await envelope(tx,request);
     }
-    if (Object.keys(request.metadata ?? {}).length) current=await saveMetadata(tx,current,updated,request.metadata!,'Workspace metadata edit');
+    if (Object.keys(request.metadata ?? {}).length) current=await saveMetadata(tx,current,updated,request.metadata!,'Workspace metadata edit',actor);
     return view(updated,current);
-  });
 }
 export async function canonicalWorkspaceHistory(input: unknown) {
   const request=canonicalHistorySchema.parse(input); await scoped(getDb(),request);

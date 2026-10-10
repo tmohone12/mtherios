@@ -194,12 +194,14 @@ export async function reviewPatchProposal(
 	decision: 'approved' | 'rejected',
 	reviewer = 'human',
 	notes = '',
+	expectedProposalVersion?: number,
 ) {
 	return await runCanonCommand<JsonRecord>(storyId, 'patchProposal.review', {
 		proposalId,
 		decision,
 		reviewer,
 		notes,
+		...(expectedProposalVersion !== undefined ? { expectedProposalVersion } : {}),
 	});
 }
 

@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { assertAssistantReplySupported, assistantToolDefinitions, assistantToolSchema } from './assistantTools';
 
 describe('Assistant tool arguments', () => {
+  it('browses, searches and reads exact scoped source ranges without provider-owned mounts or scope', () => {
+    const list = { tool: 'list', callId: 'sources', args: { kind: 'source', sourceKind: 'mounted', mountId: 'selected', path: 'lore', limit: 10 } };
+    const read = { tool: 'read', callId: 'source-read', args: { kind: 'source', sourceRef: 'mount:selected:lore%2Fpromise.md', startLine: 10, lineCount: 20, expectedHash: 'a'.repeat(64), expectedRevision: '1:hash' } };
+    expect(assistantToolSchema.parse(list)).toMatchObject(list);
+    expect(assistantToolSchema.parse(read)).toMatchObject(read);
+    expect(assistantToolSchema.parse({ tool: 'search', callId: 'find', args: { kind: 'source', sourceKind: 'content', query: 'bridge promise' } })).toBeTruthy();
+    expect(() => assistantToolSchema.parse({ ...read, args: { ...read.args, projectId: 'other' } })).toThrow();
+    expect(() => assistantToolSchema.parse({ ...list, args: { ...list.args, rootPath: 'C:/Users' } })).toThrow();
+    expect(() => assistantToolSchema.parse({ ...read, args: { ...read.args, lineCount: 201 } })).toThrow();
+    expect(assistantToolDefinitions.search.parameters).toMatchObject({ type: 'object' });
+  });
   it('keeps batch scope server-owned and separates plan from dispatch', () => {
     const plan = { tool: 'subagent', callId: 'batch-plan', args: { action: 'plan', typeId: 'gear', expectedTypeRevision: 1,
       objective: 'Update the catalog notes for every Gear item.', instructions: 'Keep other fields exactly as they are.',

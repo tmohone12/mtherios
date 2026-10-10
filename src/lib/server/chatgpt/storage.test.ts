@@ -1,0 +1,12 @@
+import {expect,test} from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {createChatgptFileStore,windowsCredentialProtection,type CredentialProtection} from './storage';
+test('atomically protects records and serializes independent store owners without losing changes',async()=>{
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'mythengine-mock-storage-'));const protection:CredentialProtection={protect:async b=>Buffer.from(b.toString('base64')),unprotect:async b=>Buffer.from(b.toString(),'base64')};
+ try{const first=createChatgptFileStore(directory,protection),second=createChatgptFileStore(directory,protection);expect((await first.read()).accounts).toEqual([]);await Promise.all([first.change(async r=>{r.hostId='fixture-host';await new Promise(r=>setTimeout(r,30));}),second.change(r=>{r.selections.fixture={accountKey:'fake-account',model:'fake-model'};})]);expect(await second.read()).toMatchObject({hostId:'fixture-host',selections:{fixture:{model:'fake-model'}}});expect(await fs.readFile(path.join(directory,'session.dpapi'),'utf8')).not.toContain('fake-account');await expect(first.change(r=>{r.hostId='uncommitted';throw Error('fail');})).rejects.toThrow('fail');expect((await first.read()).hostId).toBe('fixture-host');expect(await fs.readdir(directory)).toEqual(['session.dpapi']);}
+ finally{await fs.rm(directory,{recursive:true});}
+});
+test('fails closed without credential protection and does not create identity on read',async()=>{const directory=path.join(os.tmpdir(),'mythengine-missing-'+Date.now());const store=createChatgptFileStore(directory);expect(store.supported).toBe(false);expect(await store.read()).toEqual({version:1,accounts:[],selections:{}});await expect(store.change(r=>{r.hostId='fake';})).rejects.toThrow('required');await expect(fs.stat(directory)).rejects.toMatchObject({code:'ENOENT'});});
+test.runIf(process.platform==='win32')('Windows DPAPI roundtrip and private directory ACL use only disposable mock bytes',async()=>{const directory=await fs.mkdtemp(path.join(os.tmpdir(),'mythengine-dpapi-fixture-'));try{const protection=windowsCredentialProtection(),input=Buffer.from('FAKE TEST CREDENTIAL ONLY');await protection.secureDirectory!(directory);const encrypted=await protection.protect(input);expect(encrypted.equals(input)).toBe(false);expect(await protection.unprotect(encrypted)).toEqual(input);}finally{await fs.rm(directory,{recursive:true});}});

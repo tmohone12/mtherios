@@ -7,6 +7,7 @@
  */
 
 import { story } from '$lib/stores/story.svelte';
+import { CHARACTER_IDENTITY_FIELDS, automaticCharacterUpdate, retainAutomaticCharacterIdentity } from '$lib/contracts/automaticCharacterUpdate';
 import {
 	briefTerminalWiki,
 	contextTerminalWiki,
@@ -564,27 +565,28 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 	if (!story.currentStory) return;
 
 	const protagonistName = story.protagonist?.name?.toLowerCase();
-	const knownCharacterNames = new Set(story.characters.map(c => c.name.toLowerCase()));
+	const knownCharacterNames = new Set(story.characters.filter(character => story.characters.filter(other => other.name.toLowerCase() === character.name.toLowerCase()).length === 1).map(character => character.name.toLowerCase()));
 
 	// ── Characters ──
 	for (const char of args.characters) {
 		if (!char.name) continue;
+		const needle = char.name.toLowerCase();
+		const targets = story.lorebookEntries.filter(e => e.type === 'character' && (
+			e.name?.toLowerCase() === needle || (e.aliases ?? []).some(a => a?.toLowerCase() === needle)
+		));
+		if (targets.length > 1) continue;
 
-		if (knownCharacterNames.has(char.name.toLowerCase())) {
+		if (story.characters.filter(c => c.name.toLowerCase() === needle).length === 1) {
 			await story.updateCharacterFromClassification(char.name, {
-				description: char.description,
 				relationship: char.relationship,
 				status: char.status,
-				traits: char.traits,
 				partyMember: char.party_member,
 				partyRole: char.party_role,
 			});
 		}
 
-		const needle = char.name.toLowerCase();
-		const target = story.lorebookEntries.find(e => e.type === 'character' && (
-			e.name?.toLowerCase() === needle || (e.aliases ?? []).some(a => a?.toLowerCase() === needle)
-		));
+		// Classification may have just committed a narrow delta and refreshed the projection.
+		const target = targets.length === 1 ? story.lorebookEntries.find(entry => entry.id === targets[0].id) : undefined;
 		if (target) {
 			const previousState = recordValue(target.state);
 			const newState = mergedCharacterContinuityState(
@@ -593,11 +595,16 @@ async function handleWorldStateUpdate(args: WorldStateUpdate): Promise<void> {
 				story.entries.at(-1),
 				char.name.toLowerCase() === protagonistName,
 			);
-			const aliases = mergeStrings(target.aliases ?? [], cleanStrings(char.aliases));
-			if (JSON.stringify(newState) !== JSON.stringify(previousState) || aliases.length !== (target.aliases ?? []).length) {
-				const result = await patchCanonicalLorebookEntry(target.id, { state: newState as any, aliases, updatedAt: Date.now() });
+			const aliases = target.aliases ?? [];
+			const automatic = automaticCharacterUpdate({ ...previousState, description: target.description }, { ...newState, ...(char.description ? { description: char.description } : {}) }, story.entries.at(-1)?.id ? [story.entries.at(-1)!.id] : []);
+			const retained = retainAutomaticCharacterIdentity(previousState, newState);
+			const identityRequest = JSON.stringify([automatic.sourceEntryIds, Object.fromEntries(Object.entries(recordValue(automatic.patch)).filter(([key]) => CHARACTER_IDENTITY_FIELDS.has(key)))]);
+			const repeatedIdentityOnly = Object.keys(recordValue(automatic.patch)).every(key => CHARACTER_IDENTITY_FIELDS.has(key)) && target.metadata?.lastAutomaticIdentityRequest === identityRequest;
+			if (Object.keys(recordValue(automatic.patch)).length && !repeatedIdentityOnly) {
+				const result = await patchCanonicalLorebookEntry(target.id, { state: retained as any, aliases, metadata: { ...target.metadata, automaticCharacterUpdate: automatic }, updatedAt: Date.now() });
 				applyCurrentStoryServerVersion(result.serverVersion);
-				const projected = result.entry ?? { ...target, state: newState as any, aliases };
+				const projected = result.entry ?? { ...target, state: retained as any, aliases };
+				projected.metadata = { ...projected.metadata, lastAutomaticIdentityRequest: identityRequest };
 				story.lorebookEntries = story.lorebookEntries.map(e => e.id === target.id ? projected : e);
 			}
 		}

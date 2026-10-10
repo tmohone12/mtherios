@@ -673,7 +673,7 @@ function inferAffectedEntityIds(type: string, record: JsonRecord): string[] {
 	return [...ids];
 }
 
-async function queueManualRecordPatchJobs(input: { storyId: string; serverVersion: number; type: string; recordId: string }, tx: Parameters<typeof enqueueBackendJob>[1]) {
+async function queueManualRecordPatchJobs(input: { storyId: string; serverVersion: number; type: string; recordId: string }, tx: Parameters<typeof enqueueStoryVaultSyncJob>[1]) {
  if (['jobs', 'searchIndex', 'apiCallLogs'].includes(input.type)) return;
  const indexType = ['characters', 'locations', 'items', 'concepts'].includes(input.type) ? 'entities' : input.type;
  await enqueueStoryVaultSyncJob({ storyId: input.storyId, serverVersion: input.serverVersion, reason: 'manual-record-edit', payload: { recordType: input.type, recordId: input.recordId } }, tx);
@@ -781,7 +781,7 @@ export async function getWorldRecord(storyId: string, type: string, recordId: st
 	};
 }
 
-async function validateRecordReferences(tx: Parameters<typeof enqueueBackendJob>[1], storyId: string, edits: Array<{ column: string; value: unknown }>) {
+async function validateRecordReferences(tx: Pick<ReturnType<typeof getDb>, 'execute'>, storyId: string, edits: Array<{ column: string; value: unknown }>) {
 	const referenceTables: Record<string, string> = {
 		entity_id: 'entities', source_entity_id: 'entities', target_entity_id: 'entities', subject_entity_id: 'entities', npc_entity_id: 'entities', current_location_id: 'entities', location_id: 'entities',
 		entity_ids: 'entities', member_entity_ids: 'entities', actor_entity_ids: 'entities', target_entity_ids: 'entities', location_ids: 'entities', territory_ids: 'entities', affected_entity_ids: 'entities', related_entity_ids: 'entities', actor_ids: 'entities',

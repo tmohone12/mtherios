@@ -8,8 +8,9 @@ import { generatePortraitImage, readPortraitImageStatus } from './portraitImages
 import { contentCoverSelectSchema } from '$lib/contracts/content';
 import { projectImageStyleSaveSchema } from '$lib/contracts/imageStyle';
 import { saveProjectImageStyle } from './imageStyle';
-import { startAgentRun, getAgentRun, getCurrentAgentRun, getAgentRunHistory, respondAgentRun, cancelAgentRun, retryFailedAgentRun } from './agentRuns';
-import { answerAssistantQuestion, cancelAssistantConversationBatch, cancelAssistantRun, createAssistantConversation, listAssistantConversations, readAssistantConversation, reviewAssistantApproval, sendAssistantMessage } from './assistantConversations';
+import { startAgentRun, submitAgentTurn, getAgentRun, getCurrentAgentRun, getAgentRunHistory, respondAgentRun, cancelAgentRun, retryFailedAgentRun } from './agentRuns';
+import { answerAssistantQuestion, cancelAssistantConversationBatch, cancelAssistantRun, createAssistantConversation, listAssistantConversations, readAssistantConversation, reviewAssistantApproval, undoAssistantStoryApproval, resumeAssistantRun, sendAssistantMessage } from './assistantConversations';
+import { sourceMountsCommand, readRunSourceFile } from './sourceFiles';
 import { getAgentSettings, saveAgentSettings, runProjectAgentJob } from './agentSettings';
 import { agentSettingsReadSchema, agentSettingsSaveSchema } from '$lib/contracts/agentTools';
 import { MutationError } from './mutationSafety';
@@ -102,7 +103,7 @@ import {
 	syncPushRequestSchema,
 	turnRequestSchema,
 	type RetrievedMemoryPacket,
-	type TurnResponse,
+	type TurnSubmissionResponse,
 } from '$lib/contracts/memory';
 import { getCampaignProjection } from './projections';
 import { getEngineCacheStatus } from './cache';
@@ -138,7 +139,7 @@ import {
 	upsertBackendLivingMemoryFromLocal,
 	upsertBackendSagaFromLocal,
 } from '$lib/server/memory/canonical';
-import { normalizeGmToolArgs, prepareServerTurn, prepareServerTurnPreview, processServerTurn, type PreparedServerTurnSummary, type PreparedServerTurnPreview } from '$lib/server/turn/orchestrator';
+import { normalizeGmToolArgs, prepareServerTurn, prepareServerTurnPreview, type ProcessServerTurnOptions, type PreparedServerTurnSummary, type PreparedServerTurnPreview } from '$lib/server/turn/orchestrator';
 import { publishEngineEvent } from './events';
 import {
 	advanceStoryTurn,
@@ -314,7 +315,8 @@ export interface EngineCommandHandlers {
 	reviewPatchProposal?: (input: Parameters<typeof reviewPatchProposalCommand>[0]) => Promise<JsonRecord>;
 	continuityAudit?: (input: Parameters<typeof continuityAuditCommand>[0]) => Promise<JsonRecord>;
 	cleanupCanonDrift?: (input: Parameters<typeof cleanupCanonDriftCommand>[0]) => Promise<JsonRecord>;
-	submitTurn?: (input: unknown) => Promise<TurnResponse>;
+	submitTurn?: (input: unknown) => Promise<TurnSubmissionResponse>;
+	agentTurnOptions?: ProcessServerTurnOptions;
 	loadTimelineBrief?: (input: Parameters<typeof loadGmTimelineBrief>[0]) => Promise<GmTimelineBrief>;
 	scheduleTimelineEvent?: (input: Parameters<typeof scheduleTimelineEvent>[0]) => Promise<StoryEventRow>;
 	advanceStoryTurn?: typeof advanceStoryTurn;
@@ -505,7 +507,8 @@ export async function executeEngineCommand(
 			args: call.args,
 		}, handlers),
 	}));
-	const submitTurn = handlers.submitTurn ?? ((input: unknown) => processServerTurn(input, {
+	const submitTurn = handlers.submitTurn ?? ((input: unknown) => submitAgentTurn(input, {
+		...handlers.agentTurnOptions,
 		runGmTool: async (call) => {
 			const response = await executeEngineCommand({
 				storyId: request.storyId,
@@ -519,6 +522,7 @@ export async function executeEngineCommand(
 			return response.result;
 		},
 		onGmActivity: (activity) => {
+			handlers.agentTurnOptions?.onGmActivity?.(activity);
 			publishEngineEvent({
 				storyId: request.storyId,
 				type: 'gm.activity',
@@ -561,17 +565,29 @@ export async function executeEngineCommand(
 			},
 		});
 			switch (request.command) {
-			case 'assistant.conversation.list': case 'assistant.conversation.create': case 'assistant.conversation.read': case 'assistant.message.send': case 'assistant.question.answer': case 'assistant.restore.review': case 'assistant.approval.review': case 'assistant.run.cancel': case 'assistant.batch.cancel': {
+			case 'assistant.conversation.list': case 'assistant.conversation.create': case 'assistant.conversation.read': case 'assistant.message.send': case 'assistant.question.answer': case 'assistant.restore.review': case 'assistant.approval.review': case 'assistant.storyEdit.undo': case 'assistant.run.cancel': case 'assistant.run.resume': case 'assistant.batch.cancel': {
 				if (request.storyId !== (request.args.gameId ?? '__app__')) throw new MutationError('SCOPE_DENIED', 'Command scope does not match the Assistant conversation.');
 				const result = request.command === 'assistant.conversation.list' ? await listAssistantConversations(request.args)
 					: request.command === 'assistant.conversation.create' ? await createAssistantConversation(request.args)
 					: request.command === 'assistant.conversation.read' ? await readAssistantConversation(request.args)
 					: request.command === 'assistant.message.send' ? await sendAssistantMessage(request.args)
 					: request.command === 'assistant.question.answer' ? await answerAssistantQuestion(request.args)
+					: request.command === 'assistant.run.resume' ? await resumeAssistantRun(request.args)
+					: request.command === 'assistant.storyEdit.undo' ? await undoAssistantStoryApproval(request.args)
 					: request.command === 'assistant.restore.review' || request.command === 'assistant.approval.review' ? await reviewAssistantApproval(request.args)
 					: request.command === 'assistant.batch.cancel' ? await cancelAssistantConversationBatch(request.args) : await cancelAssistantRun(request.args);
 				const response = { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
 				return response;
+			}
+			case 'source.mounts.list': case 'source.mounts.save': case 'source.mounts.remove': {
+				if (request.storyId !== '__app__') throw new MutationError('SCOPE_DENIED', 'Source folders are managed in project settings.');
+				const result = await sourceMountsCommand(request.command, request.args);
+				return { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
+			}
+			case 'source.file.read': {
+				if (request.storyId !== (request.args.gameId ?? '__app__')) throw new MutationError('SCOPE_DENIED', 'Source command does not match its run scope.');
+				const result = await readRunSourceFile(request.args);
+				return { ...base, status: 'succeeded', result, updatedAt: nowIso() } satisfies EngineCommandResponse;
 			}
 			case 'research.preview': {
 				const { getDb } = await import('$lib/server/db/client');
@@ -588,7 +604,7 @@ export async function executeEngineCommand(
 			}
 			case 'agent.run.start': case 'agent.run.status': case 'agent.run.current': case 'agent.run.history': case 'agent.run.respond': case 'agent.run.cancel': case 'agent.run.retry': {
 				const args = { ...request.args, storyId: request.storyId };
-				const result = request.command === 'agent.run.start' ? await startAgentRun(request.args, request.storyId)
+				const result = request.command === 'agent.run.start' ? await startAgentRun(request.args, request.storyId, handlers.agentTurnOptions)
 					: request.command === 'agent.run.status' ? await getAgentRun(args)
 					: request.command === 'agent.run.current' ? await getCurrentAgentRun(args)
 					: request.command === 'agent.run.history' ? await getAgentRunHistory(args)
@@ -2409,6 +2425,11 @@ export async function executeEngineCommand(
 					clientTurnId: typeof args.clientTurnId === 'string' ? args.clientTurnId : request.clientCommandId ?? base.commandId,
 				});
 				const turn = await submitTurn(turnInput);
+				if ('status' in turn) {
+					const response = { ...base, status: 'succeeded', result: turn, updatedAt: nowIso() } satisfies EngineCommandResponse;
+					publishSucceededEvent(response);
+					return response;
+				}
 				const response = {
 					...base,
 					status: 'succeeded',

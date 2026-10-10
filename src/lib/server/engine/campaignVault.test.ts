@@ -28,6 +28,8 @@ function testConfig(root: string): MtheriosAppConfig {
 		wikiEmbedApiKey: '',
 		wikiAutoIndexStoryVaults: false,
 		jobWorkerEnabled: true,
+		chapterRunnerEnabled: false,
+		chapterRunnerStoryId: '',
 		jobWorkerScope: 'all',
 		jobIntervalMs: 5000,
 	};

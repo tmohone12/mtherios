@@ -21,7 +21,7 @@ function deferred<T>() {
 
 describe('library request recovery', () => {
 	function library() {
-		return handlers('library/LibraryPanel', ['loadStories'], { storyRequest: 0, alive: true, allShelves: false, selectedShelfId: 'a', stories: [], loadingStories: false, storiesError: '', catalogWarning: '' });
+		return handlers('library/LibraryPanel', ['loadStories'], { storyRequest: 0, alive: true, shelfOpen: true, selectedShelfId: 'a', stories: [], loadingStories: false, storiesError: '', catalogWarning: '' });
 	}
 	it('keeps the newest shelf when requests finish out of order', async () => {
 		const page = library(), a = deferred<unknown>(), b = deferred<unknown>();
@@ -59,16 +59,16 @@ describe('library request recovery', () => {
 
 describe('lore navigation guards', () => {
 	it('keeps a dirty editor mounted for sidebar and new-story navigation', () => {
-		const app = { startNewStory: vi.fn() };
+		const app = { startNewStory: vi.fn(), selectWorkspace: vi.fn(() => true) };
 		const page = handlers('layout/AppShell', ['canLeaveLore', 'selectPanel', 'startNewStory', 'updateLoreDirty'], { app, loreDirty: true, activePanel: 'database', mobileToolsOpen: true, navigationNotice: '' });
 		page.selectPanel('library'); page.startNewStory();
 		expect(page.activePanel).toBe('database'); expect(app.startNewStory).not.toHaveBeenCalled();
 		expect(page.navigationNotice).toContain('Save or discard');
 		page.updateLoreDirty(false); page.selectPanel('library');
-		expect(page.activePanel).toBe('library'); expect(page.navigationNotice).toBe('');
+		expect(app.selectWorkspace).toHaveBeenCalledWith('library'); expect(page.navigationNotice).toBe('');
 	});
 	it('protects reader Lore against the play tab and back-to-library button', () => {
-		const story = { clear: vi.fn() }, app = { closeStory: vi.fn() };
+		const story = { clear: vi.fn() }, app = { closeStory: vi.fn(() => true) };
 		const page = handlers('story/StoryView', ['canLeaveLore', 'selectWorkspaceTab', 'goBack', 'updateLoreDirty'], { story, app, loreDirty: true, headerSaving: false, workspaceTab: 'lore', navigationNotice: '' });
 		page.selectWorkspaceTab('play'); page.goBack();
 		expect(page.workspaceTab).toBe('lore'); expect(story.clear).not.toHaveBeenCalled();

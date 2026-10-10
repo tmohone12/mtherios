@@ -1,0 +1,17 @@
+import { json,type RequestHandler } from '@sveltejs/kit';
+import { z } from 'zod';
+import { sql } from 'drizzle-orm';
+import { getDb } from '$lib/server/db/client';
+import { chatgptSessions } from '$lib/server/chatgpt/owner';
+import { localBrowserOwner } from '$lib/server/chatgpt/http';
+import {readAssistantConnection} from '$lib/server/engine/assistantConnection';
+import {browserOwnerContext} from '$lib/server/chatgpt/session';
+const scope=z.object({projectId:z.string().min(1).max(200),gameId:z.string().max(200)}).strict();
+const action=scope.extend({action:z.enum(['begin','cancel','models','select','logout']),accountKey:z.string().max(100).nullable().optional(),model:z.string().max(200).optional(),refresh:z.boolean().optional()}).strict().refine(value=>value.refresh===undefined||value.action==='models','Catalog refresh is only valid when loading models.');
+async function assertScope(value:z.infer<typeof scope>){if(!value.gameId){const [project]=await getDb().execute(sql`select id from shelves where id=${value.projectId}`);if(!project)throw Error('Story is outside the selected project.');return;}const [story]=await getDb().execute(sql`select id from stories where id=${value.gameId} and shelf_id=${value.projectId}`);if(!story)throw Error('Story is outside the selected project.');}
+async function connectionStatus(owner:string,value:z.infer<typeof scope>){const status=await chatgptSessions().status(owner,value.projectId,value.gameId);try{return {...status,connection:await browserOwnerContext.run(owner,()=>readAssistantConnection(value.projectId,value.gameId)),connectionError:null};}catch(error){return {...status,connection:null,connectionError:error instanceof Error?error.message:'Assistant service is unavailable.'};}}
+export const GET:RequestHandler=async event=>{try{const owner=localBrowserOwner(event),value=scope.parse(Object.fromEntries(event.url.searchParams));await assertScope(value);return json(await connectionStatus(owner,value),{headers:{'Cache-Control':'no-store'}});}catch(error){const reason=error instanceof Error&&/^(ChatGPT sign-in|Cross-origin|Unable to read protected|Story is outside|Cannot determine)/.test(error.message)?error.message:'Unable to read ChatGPT connection. Use the local app and a valid selected story.';return json({error:reason},{status:400,headers:{'Cache-Control':'no-store'}});}};
+export const POST:RequestHandler=async event=>{try{const owner=localBrowserOwner(event,true),value=action.parse(await event.request.json());await assertScope(value);const sessions=chatgptSessions();
+ switch(value.action){case'begin':return json(await sessions.begin(owner,value.accountKey??undefined),{headers:{'Cache-Control':'no-store'}});case'cancel':await sessions.cancel(owner);break;case'models':if(!value.accountKey)throw Error('Select an account.');return json({accountKey:value.accountKey,models:await sessions.models(owner,value.accountKey,value.refresh??false)},{headers:{'Cache-Control':'no-store'}});case'select':await sessions.select(owner,value.projectId,value.gameId,value.accountKey??null,value.model);break;case'logout':if(!value.accountKey)throw Error('Select an account.');await sessions.logout(owner,value.accountKey);break;}
+ return json(await connectionStatus(owner,value),{headers:{'Cache-Control':'no-store'}});
+ }catch(error){return json({error:error instanceof Error?error.message:'ChatGPT connection failed.'},{status:400,headers:{'Cache-Control':'no-store'}});}};

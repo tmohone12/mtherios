@@ -132,10 +132,12 @@ async function runDevServer(options, env) {
 	});
 
 	const stopJobs = startJobWorker(options);
+	const stopChapters = startChapterRunner(options);
 	try {
 		await waitForChild(child);
 	} finally {
 		stopJobs();
+		stopChapters();
 	}
 }
 
@@ -174,6 +176,26 @@ async function runBuiltServer(options, env) {
 
 	console.log(`MythEngine is listening on http://${options.host}:${options.port}`);
 	startJobWorker(options);
+	startChapterRunner(options);
+}
+
+/** Separate loop for one explicitly configured story; no backend queue recovery. */
+export function startChapterRunner(options,{request=fetch,setTimer=setTimeout}={}) {
+	if(!options.chapterRunnerEnabled)return ()=>{};
+	if(!options.chapterRunnerStoryId)throw new Error('Chapter-only runner requires a story ID.');
+	let stopped=false,timer;
+	const endpoint=`http://${options.host}:${options.port}/api/app/chapters`;
+	const tick=async()=>{
+		if(stopped)return;
+		try {
+			const response=await request(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},
+				body:JSON.stringify({action:'tick',storyId:options.chapterRunnerStoryId}),signal:AbortSignal.timeout(9*60000)});
+			if(!response.ok)console.warn(`[chapters] status ${response.status}; review the Chapters panel.`);
+		}catch{console.warn('[chapters] Waiting for chapter-only endpoint; review the Chapters panel.');}
+		finally{if(!stopped){timer=setTimer(tick,60000);timer.unref?.();}}
+	};
+	timer=setTimer(tick,60000);timer.unref?.();
+	return ()=>{stopped=true;clearTimeout(timer);};
 }
 
 function startJobWorker(options) {

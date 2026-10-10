@@ -1,4 +1,6 @@
-import { and, eq, inArray, lte } from 'drizzle-orm';
+import { and, eq, inArray, lte, sql } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import { factionResourceAvailability } from './intentions';
 import { getDb } from '$lib/server/db/client';
 import {
 	continuityWarnings,
@@ -41,22 +43,24 @@ function numericCosts(project: FactionProjectRow): Array<{ key: string; amount: 
 }
 
 function resourceForCost(resources: FactionResourceRow[], key: string): FactionResourceRow | null {
+	const exact = resources.find(resource => resource.id === key);
+	if (exact) return exact;
 	const target = normalizedKey(key);
-	return resources.find((resource) =>
+	const matches = resources.filter((resource) =>
 		normalizedKey(resource.kind) === target || normalizedKey(resource.name) === target
-	) ?? null;
+	);
+	return matches.length === 1 ? matches[0] : null;
 }
 
-function evaluateProjectCosts(project: FactionProjectRow, resources: FactionResourceRow[]): {
+export function evaluateProjectCosts(project: FactionProjectRow, resources: FactionResourceRow[]): {
 	ok: boolean;
 	warnings: string[];
 	costs: Array<{ key: string; required: number; available: number | null; resourceId: string | null }>;
 } {
 	const costs = numericCosts(project).map((cost) => {
 		const resource = resourceForCost(resources, cost.key);
-		const available = typeof resource?.amount === 'number' && Number.isFinite(resource.amount)
-			? resource.amount
-			: null;
+		const available = resource && resource.status === 'available'
+			? factionResourceAvailability(resource).available : null;
 		return {
 			key: cost.key,
 			required: cost.amount,
@@ -64,16 +68,40 @@ function evaluateProjectCosts(project: FactionProjectRow, resources: FactionReso
 			resourceId: resource?.id ?? null,
 		};
 	});
+	// Kind, display name and ID can name the same pool. Check their combined
+	// demand, never spend a reservation or count the same inventory twice.
+	const totals = new Map<string, number>();
+	for (const cost of costs) if (cost.resourceId) totals.set(cost.resourceId, (totals.get(cost.resourceId) ?? 0) + cost.required);
 	const warnings = costs
-		.filter((cost) => cost.available === null || cost.available < cost.required)
+		.filter((cost) => cost.available === null || cost.available < (totals.get(cost.resourceId!) ?? cost.required))
 		.map((cost) => cost.available === null
-			? `Missing resource "${cost.key}" for due faction project.`
-			: `Insufficient resource "${cost.key}" for due faction project: needs ${cost.required}, has ${cost.available}.`);
+			? `Missing, ambiguous, unavailable or invalid resource "${cost.key}" for due faction project.`
+			: `Insufficient resource "${cost.key}" for due faction project: needs ${totals.get(cost.resourceId!) ?? cost.required}, has ${cost.available}.`);
+	for (const [key, value] of Object.entries(asRecord(project.costs))) {
+		if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+			warnings.push(`Unquantified or invalid cost "${key}" requires review for due faction project.`);
+		}
+	}
 	return {
 		ok: warnings.length === 0,
 		warnings,
 		costs,
 	};
+}
+
+/** Stable across repeat audits; changes when reviewed project or means change. */
+export function dueFactionProjectFingerprint(project: FactionProjectRow, resources: FactionResourceRow[]): string {
+	return createHash('sha256').update(JSON.stringify({
+		project: { id: project.id, storyId: project.storyId, factionId: project.factionId, project: project.project,
+			status: project.status, progress: project.progress, priority: project.priority, dueTurn: project.dueTurn, worldTime: project.worldTime,
+			costs: project.costs, gains: project.gains, risks: project.risks, visibility: project.visibility,
+			metadata: project.metadata,
+			sourceEntryIds: project.sourceEntryIds, sourceEventIds: project.sourceEventIds, sourcePatchIds: project.sourcePatchIds,
+			serverVersion: project.serverVersion, updatedAt: project.updatedAt },
+		resources: resources.map(resource => ({ id: resource.id, kind: resource.kind, name: resource.name,
+			amount: resource.amount, status: resource.status, metadata: resource.metadata, serverVersion: resource.serverVersion }))
+			.sort((a, b) => a.id.localeCompare(b.id)),
+	})).digest('hex');
 }
 
 function sourceRefRows(input: {
@@ -132,6 +160,8 @@ export async function auditDueFactionProjects(input: {
 			eq(factionProjects.storyId, input.storyId),
 			inArray(factionProjects.status, ['planned', 'active']),
 			lte(factionProjects.dueTurn, currentTurn),
+			sql`not coalesce(${factionProjects.metadata}->'persistentProject'->>'version'='1',false)`,
+			sql`not coalesce(${factionProjects.metadata}->'persistentProject'->>'version'='1',false)`,
 		))
 		.limit(limit);
 	if (projects.length === 0) {
@@ -165,14 +195,17 @@ export async function auditDueFactionProjects(input: {
 	for (const project of projects) {
 		const resources = resourcesByFaction.get(project.factionId) ?? [];
 		const costCheck = evaluateProjectCosts(project, resources);
-		const proposalId = `proposal_due_project_${stableSuffix(project.id)}`;
-		const warningId = `warning_due_project_${stableSuffix(project.id)}`;
+		const auditFingerprint = dueFactionProjectFingerprint(project, resources);
+		const auditKey = `${stableSuffix(project.id).slice(0, 55)}_${auditFingerprint.slice(0, 24)}`;
+		const proposalId = `proposal_due_project_${auditKey}`;
+		const warningId = `warning_due_project_${auditKey}`;
 		const factionName = factionNameById.get(project.factionId) ?? project.factionId;
 		const progressComplete = project.progress >= 1;
 		const proposedStatus = !costCheck.ok ? 'blocked' : progressComplete ? 'completed' : 'active';
 		const confidence = progressComplete && costCheck.ok ? 0.78 : 0.62;
 		const auditMetadata = {
 			sourceType: 'due_faction_project_audit',
+			auditFingerprint,
 			projectId: project.id,
 			project: project.project,
 			projectStatus: project.status,
@@ -281,17 +314,19 @@ export async function auditDueFactionProjects(input: {
 		}
 	}
 
-	if (proposalRows.length > 0) await db.insert(patchProposals).values(proposalRows).onConflictDoNothing();
-	if (warningRows.length > 0) await db.insert(continuityWarnings).values(warningRows).onConflictDoNothing();
+	const insertedProposals = proposalRows.length > 0
+		? await db.insert(patchProposals).values(proposalRows).onConflictDoNothing().returning({ id: patchProposals.id }) : [];
+	const insertedWarnings = warningRows.length > 0
+		? await db.insert(continuityWarnings).values(warningRows).onConflictDoNothing().returning({ id: continuityWarnings.id }) : [];
 	if (refRows.length > 0) await db.insert(sourceRefs).values(refRows).onConflictDoNothing();
 
 	return {
 		storyId: input.storyId,
 		currentTurn,
 		dueProjectCount: projects.length,
-		proposalCount: proposalRows.length,
-		warningCount: warningRows.length,
-		proposalIds: proposalRows.map((row) => row.id),
-		warningIds: warningRows.map((row) => row.id),
+		proposalCount: insertedProposals.length,
+		warningCount: insertedWarnings.length,
+		proposalIds: insertedProposals.map((row) => row.id),
+		warningIds: insertedWarnings.map((row) => row.id),
 	};
 }

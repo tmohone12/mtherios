@@ -1,4 +1,6 @@
 import { imageMediaType } from './imageAssets';
+import { currentServerProviderHooks, normalizeServerProviderUsage } from '$lib/server/turn/provider';
+import { countTokens } from '$lib/utils/tokens';
 
 export type ImageProviderResult = { bytes: Uint8Array; usage: Record<string, unknown> | null };
 
@@ -32,7 +34,7 @@ async function boundedJson(response: Response): Promise<Record<string, unknown>>
 }
 
 /** OpenAI-compatible Images API transport. Provider errors exclude response bodies and credentials. */
-export async function generateOpenAiImage(input: { apiKey: string; model: string; prompt: string; baseUrl?: string; provider?: ImageProvider; maxCostUsd?: number; fetchImpl?: typeof fetch }): Promise<ImageProviderResult> {
+export async function generateOpenAiImage(input: { apiKey: string; model: string; prompt: string; baseUrl?: string; provider?: ImageProvider; maxCostUsd?: number; fetchImpl?: typeof fetch; signal?: AbortSignal }): Promise<ImageProviderResult> {
   if (!input.apiKey || !input.model || !input.prompt.trim() || input.prompt.length > 8000) throw new Error('Image provider settings or prompt are incomplete.');
   const provider = input.provider ?? 'openai';
   if (!isImageProfile(provider, input.model)) throw new Error('Configured model is not an image model.');
@@ -41,9 +43,11 @@ export async function generateOpenAiImage(input: { apiKey: string; model: string
   const endpoint = new URL(`${root.endsWith('/v1') ? root : `${root}/v1`}/${provider === 'openrouter' ? 'images' : 'images/generations'}`);
   if (endpoint.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname)) throw new Error('Image provider endpoint must use HTTPS.');
   let estimatedCostUsd: number | null = null;
+  const hooks = currentServerProviderHooks();
+  const signal = AbortSignal.any([AbortSignal.timeout(120_000), ...(input.signal ? [input.signal] : []), ...(hooks?.signal ? [hooks.signal] : [])]);
   if (provider === 'nanogpt') {
     if (!Number.isFinite(input.maxCostUsd) || (input.maxCostUsd ?? 0) <= 0) throw new Error('Set a positive image cost limit before using NanoGPT.');
-    const catalogResponse = await (input.fetchImpl ?? fetch)(new URL(`${root}/images/models`), { signal: AbortSignal.timeout(15_000) });
+    const catalogResponse = await (input.fetchImpl ?? fetch)(new URL(`${root}/images/models`), { signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]) });
     if (!catalogResponse.ok) throw new Error(`Image model catalog returned HTTP ${catalogResponse.status}.`);
     const catalog = await boundedJson(catalogResponse);
     const models = Array.isArray(catalog.data) ? catalog.data : [];
@@ -62,9 +66,16 @@ export async function generateOpenAiImage(input: { apiKey: string; model: string
     ...(provider === 'openai' ? { size: '1024x1024' } : {}),
     ...(provider === 'openrouter' ? {} : provider === 'nanogpt' || input.model.startsWith('dall-e-') ? { response_format: 'b64_json' } : { output_format: 'png' }),
   };
+  const serializedBody = JSON.stringify(body), start = Date.now();
+  const completeScoped = hooks ? await hooks.beforeRequest({ profile: { providerType: provider, apiKey: input.apiKey, baseUrl: root,
+    customModels: [], fetchedModels: [], reasoningModels: [], hiddenModels: [], favoriteModels: [] },
+    model: input.model, system: 'Explicit image generation.', prompt: input.prompt, signal, maxRetries: 0 },
+    { body, serializedBody, inputTokens: countTokens(serializedBody), reservedOutputTokens: 0, contextWindowTokens: 32_000,
+      ...(estimatedCostUsd == null ? {} : { reservedCostUsd: estimatedCostUsd }) }) : undefined;
+  if (signal.aborted) throw signal.reason;
   const response = await (input.fetchImpl ?? fetch)(endpoint, {
     method: 'POST', headers: { Authorization: `Bearer ${input.apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body), signal: AbortSignal.timeout(120_000),
+    body: serializedBody, signal,
   });
   if (!response.ok) {
     const error = await boundedJson(response).catch(() => ({}));
@@ -81,5 +92,10 @@ export async function generateOpenAiImage(input: { apiKey: string; model: string
   const bytes = Buffer.from(b64, 'base64');
   imageMediaType(bytes);
   const usage = result.usage && typeof result.usage === 'object' && !Array.isArray(result.usage) ? result.usage as Record<string, unknown> : null;
+  if (signal.aborted) throw signal.reason;
+  const normalizedUsage = normalizeServerProviderUsage({ usage }, false);
+  normalizedUsage.estimatedCostUsd = estimatedCostUsd;
+  await completeScoped?.({ text: 'Image generated.', model: input.model, endpoint: endpoint.toString(), durationMs: Date.now() - start,
+    promptChars: input.prompt.length, responseChars: b64.length, finishReason: 'stop', usage: normalizedUsage });
   return { bytes, usage: estimatedCostUsd === null ? usage : { ...(usage ?? {}), estimatedCostUsd, pricingSource: 'nanogpt_catalog_max_per_image' } };
 }

@@ -20,6 +20,7 @@ import {
 import { isNarrativeCommandInput, NARRATIVE_COMMAND_PATTERN, NARRATIVE_CONTROL_PREFIX_PATTERN } from '$lib/services/ai/context/controlInput';
 import { buildMemoryPacket, isOocControlText, lookupMentioned, MEMORY_REVISION_KEYS, MEMORY_SUPERSESSION_KEYS, memoryQueryTokens, normalizeLookup, relevantMemoryExcerpt, scoreMemoryNode } from './ranking';
 import { retrieveMemorySource } from './retrievalSource';
+import { currentServerProviderHooks, type ServerProviderRequestHooks } from '$lib/server/turn/provider';
 
 type MemoryNodeRow = typeof memoryNodes.$inferSelect;
 type NpcBeliefRow = typeof npcBeliefs.$inferSelect;
@@ -635,6 +636,22 @@ async function vectorCandidateNodes(
 }
 
 const inFlightRetrievals = new Map<string, Promise<RetrievedMemoryPacket>>();
+const scopedInFlightRetrievals = new WeakMap<ServerProviderRequestHooks, Map<string, Promise<RetrievedMemoryPacket>>>();
+
+/** Actor recall requires a learned projection; visibility and source linkage confer no knowledge. */
+export function actorScopedMemoryNodes(nodes: MemoryNode[], actorId: string | undefined): MemoryNode[] {
+	if (!actorId) return [];
+	return nodes.flatMap((node): MemoryNode[] => {
+		const metadata = (node.metadata ?? {}) as Record<string, unknown>;
+		if (node.type === 'npc_belief' && metadata.believerEntityId === actorId) return [{ ...node, metadata: { believerEntityId: actorId, confidence: metadata.confidence } }];
+		const claims = Array.isArray(metadata.actorClaims) ? metadata.actorClaims : [];
+		const learned = claims.filter(raw => {
+			const claim = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+			return ['learned', 'witnessed', 'shared'].includes(String(claim.kind)) && asStringArray(claim.knownBy).includes(actorId) && typeof claim.text === 'string';
+		}).slice(0, 3).map(raw => String((raw as Record<string, unknown>).text).slice(0, 360));
+		return learned.length ? [{ ...node, title: 'Personally learned claim', content: learned.join('\n'), summary: learned.join('\n'), keywords: [], entityIds: [actorId], factionIds: [], threadIds: [], metadata: { knownBy: [actorId] } }] : [];
+	});
+}
 
 export async function retrieveMemoryPacket(input: unknown): Promise<RetrievedMemoryPacket> {
 	const request = memoryRetrieveRequestSchema.parse(input);
@@ -644,12 +661,16 @@ export async function retrieveMemoryPacket(input: unknown): Promise<RetrievedMem
 	}).from(stories).where(eq(stories.id, request.storyId)).limit(1);
 	const rankedRequest = withAuthoritativeStoryAnchor(request, story ?? null);
 	const key = JSON.stringify(rankedRequest);
-	const active = inFlightRetrievals.get(key);
+	// A request/receipt belongs to one run; never share a paid in-flight embedding across run scopes.
+	const scope = currentServerProviderHooks();
+	let pending = scope ? scopedInFlightRetrievals.get(scope) : inFlightRetrievals;
+	if (!pending) { pending = new Map(); scopedInFlightRetrievals.set(scope!, pending); }
+	const active = pending.get(key);
 	if (active) return active;
 
 	const task = (async () => {
 		const { nodes, request: expandedRequest, debug } = await candidateNodes(rankedRequest);
-		const packet = buildMemoryPacket(nodes, expandedRequest);
+		const packet = buildMemoryPacket(request.anchor === 'actor' ? actorScopedMemoryNodes(nodes, request.actorEntityId) : nodes, expandedRequest);
 		return retrievedMemoryPacketSchema.parse({
 			storyId: request.storyId,
 			query: request.query,
@@ -657,11 +678,11 @@ export async function retrieveMemoryPacket(input: unknown): Promise<RetrievedMem
 			retrievalDebug: [...packet.retrievalDebug, ...debug.sort()],
 		});
 	})();
-	inFlightRetrievals.set(key, task);
+	pending.set(key, task);
 	try {
 		return await task;
 	} finally {
-		if (inFlightRetrievals.get(key) === task) inFlightRetrievals.delete(key);
+		if (pending.get(key) === task) pending.delete(key);
 	}
 }
 
@@ -669,7 +690,7 @@ export function withAuthoritativeStoryAnchor(
 	request: MemoryRetrieveRequest,
 	story: { currentTurn: number; currentLocationId: string | null } | null,
 ): MemoryRetrieveRequest {
-	if (!story) return request;
+	if (!story || request.anchor === 'actor') return { ...request, currentTurn: request.currentTurn ?? story?.currentTurn };
 	const staleClientLocationId = request.locationId && request.locationId !== story.currentLocationId
 		? request.locationId
 		: null;

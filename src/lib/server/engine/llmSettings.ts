@@ -316,13 +316,14 @@ export function mergeLlmServiceSettingPatch(
 	return llmServiceSettingSchema.parse(next);
 }
 
-async function findOrCreateLlmServiceSetting(serviceId: string): Promise<LlmServiceSetting | null> {
+async function findOrCreateLlmServiceSetting(serviceId: string, createIfMissing = true): Promise<LlmServiceSetting | null> {
 	const [row] = await getDb()
 		.select()
 		.from(llmServiceSettings)
 		.where(eq(llmServiceSettings.serviceId, serviceId))
 		.limit(1);
 	if (row) return llmServiceSettingSchema.parse(row);
+	if (!createIfMissing) return null;
 
 	const derived = defaultServiceSetting(serviceId);
 	if (!derived) return null;
@@ -397,14 +398,14 @@ export async function upsertLlmServiceSettings(settings: LlmServiceSettingPatch[
 	return saved;
 }
 
-export async function resolveServiceGeneration(serviceId: string): Promise<{
+export async function resolveServiceGeneration(serviceId: string, createIfMissing = true): Promise<{
 	setting: LlmServiceSetting | null;
 	profile: ProviderProfile | null;
 	generation: { model?: string; temperature?: number; maxTokens?: number; reasoningEffort?: string | null };
 	systemPromptOverride: string | null;
 	missingReason: string | null;
 }> {
-	const setting = await findOrCreateLlmServiceSetting(serviceId);
+	const setting = await findOrCreateLlmServiceSetting(serviceId, createIfMissing);
 	if (!setting) {
 		return {
 			setting: null,

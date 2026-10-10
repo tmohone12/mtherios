@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { chronologicalMemoryPrompt, normalizeReadableNarrative, validateChronologicalMemory } from './summaryGeneration';
+import { chronologicalMemoryPrompt, normalizeReadableNarrative, validateChronologicalMemory, summaryCheckpointIdentity, SUMMARY_GENERATION_POLICY } from './summaryGeneration';
 
 describe('complete chronological summaries', () => {
+	it('changes both root completion and failure identities when system or generation policy changes', () => {
+		const input = { storyId: 'test', kind: 'chapter' as const, sources: [{ id: 'entry', text: 'A recorded consequence.' }] };
+		const original = summaryCheckpointIdentity(input, [], 'window');
+		for (const policy of [
+			{ ...SUMMARY_GENERATION_POLICY, summarySystem: `${SUMMARY_GENERATION_POLICY.summarySystem} Corrected policy.` },
+			{ ...SUMMARY_GENERATION_POLICY, summaryTokens: 16000 },
+			{ ...SUMMARY_GENERATION_POLICY, readableInstructions: ['A corrected readable prompt.'] },
+		]) {
+			const changed = summaryCheckpointIdentity(input, [], 'window', undefined, policy);
+			expect(changed.fingerprint).not.toBe(original.fingerprint);
+			expect(changed.failureFingerprint).not.toBe(original.failureFingerprint);
+		}
+	});
 	it('requires a real account for every source in order and rejects failed output', () => {
 		const sourceIds = Array.from({ length: 20 }, (_, index) => `turn_${index + 1}`);
 		const draft = { title: 'The bargain and its consequences', narrative: 'The negotiators began with a disputed bargain, then settled its consequences in a way that changed the terms of their alliance for the future.', accounts: sourceIds.map(sourceId => ({ sourceId, summary: `An established consequence at ${sourceId}.` })) };

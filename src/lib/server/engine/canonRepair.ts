@@ -23,9 +23,10 @@ import {
 	storyThreads,
 } from '$lib/server/db/schema';
 import { enqueueBackendJob, enqueueStoryVaultSyncJob } from '$lib/server/jobs/outbox';
-import { auditDueFactionProjects } from '$lib/server/factions/projects';
+import { auditDueFactionProjects, dueFactionProjectFingerprint, evaluateProjectCosts } from '$lib/server/factions/projects';
 import { isCharacterTitleOnlyName, resolveEntityIdentity, entityResolutionSummary, type EntityIdentityCandidate } from '$lib/server/memory/entityResolver';
 import { characterDraftSourceSnapshot } from './characterDrafts';
+import { boundCharacterIdentity } from './characterContinuity';
 import { validateLocationParent } from './locationRecords';
 import { isEffectiveContainment } from '$lib/server/memory/locationLore';
 
@@ -228,6 +229,21 @@ async function applyDueFactionProjectProposal(tx: Tx, input: {
 	const metadata = asRecord(input.proposal.metadata);
 	const appliedOperations: JsonRecord[] = [];
 	const currentTurn = asInteger(metadata.currentTurn, 0);
+	const [project] = await tx.select().from(factionProjects).where(and(
+		eq(factionProjects.storyId, input.storyId), eq(factionProjects.id, input.proposal.targetRecordId),
+	)).for('update');
+	if (!project || !['planned', 'active'].includes(project.status)) {
+		throw new Error('Faction project changed or is no longer active. Run the due project audit again.');
+	}
+	const resources = await tx.select().from(factionResources).where(and(
+		eq(factionResources.storyId, input.storyId), eq(factionResources.factionId, project.factionId),
+	)).orderBy(factionResources.id).for('update');
+	if (typeof metadata.auditFingerprint !== 'string'
+		|| metadata.auditFingerprint !== dueFactionProjectFingerprint(project, resources)) {
+		throw new Error('Faction project or resources changed since review. Run the due project audit again.');
+	}
+	const costCheck = evaluateProjectCosts(project, resources);
+	const expectedStatus = !costCheck.ok ? 'blocked' : project.progress >= 1 ? 'completed' : 'active';
 
 	for (const rawOperation of operations) {
 		const operation = asRecord(rawOperation);
@@ -239,10 +255,10 @@ async function applyDueFactionProjectProposal(tx: Tx, input: {
 			const projectId = projectStatusMatch[1];
 			if (projectId !== input.proposal.targetRecordId) continue;
 			const status = asString(operation.value);
-			if (!status) continue;
+			if (status !== expectedStatus) throw new Error('Faction project resolution changed. Run the due project audit again.');
 			const [updated] = await tx.update(factionProjects).set({
 				status,
-				sourcePatchIds: unique([...(input.proposal.sourcePatchIds ?? []), input.proposal.id]),
+				sourcePatchIds: unique([...project.sourcePatchIds, ...(input.proposal.sourcePatchIds ?? []), input.proposal.id]),
 				serverVersion: input.serverVersion,
 				updatedAt: input.now,
 			}).where(and(
@@ -337,6 +353,8 @@ async function applyCharacterContextUpdateProposal(tx: Tx, input: {
 	proposal: typeof patchProposals.$inferSelect;
 	serverVersion: number;
 	now: string;
+	automatic?: boolean;
+	notes?: string | null;
 }): Promise<ProposalApplication> {
 	let proposedState = characterContextUpdateState(input.proposal);
 	if (!proposedState) return emptyProposalApplication();
@@ -351,16 +369,56 @@ async function applyCharacterContextUpdateProposal(tx: Tx, input: {
 		eq(entities.storyId, input.storyId),
 		eq(entities.id, input.proposal.targetRecordId),
 		eq(entities.type, 'character'),
-	)).limit(1);
+	)).for('update');
 	if (!entity) return emptyProposalApplication();
+	const metadata = asRecord(input.proposal.metadata);
+	if (!input.automatic && typeof metadata.characterUpdateBaseVersion === 'number' && entity.serverVersion !== metadata.characterUpdateBaseVersion) {
+		throw new Error('The character changed after this draft. Rebuild it before approving identity changes.');
+	}
+	if (!input.automatic && !/^retcon:\s*\S/i.test(input.notes?.trim() ?? '')) {
+		// Evidence for a new detail does not authorize deleting the established life story.
+		// Require an expanded biography or an explicit author decision; never invent a reconciliation.
+		const existing = asRecord(entity.state);
+		const normalized = (value: string) => value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+		for (const field of ['bio', 'background', 'description']) {
+			const previous = field === 'description' ? entity.description : existing[field] ?? existing.bio ?? existing.background ?? entity.description;
+			const proposed = proposedState[field];
+			if (typeof previous === 'string' && previous.trim() && typeof proposed === 'string' && proposed.trim()
+				&& !normalized(proposed).includes(normalized(previous))) {
+				throw new Error('Preserve the established biography when adding details, or supply explicit author retcon notes beginning with "retcon:" to replace it.');
+			}
+		}
+	}
+	let identityConflicts: unknown[] = [];
+	let identitySourceHashes: unknown[] = [];
+	if (input.automatic) {
+		const sourceRows = input.proposal.sourceEntryIds.length ? await tx.select().from(storyEntries)
+			.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, input.proposal.sourceEntryIds))).for('share') : [];
+		if (!sourceRows.length || sourceRows.length !== new Set(input.proposal.sourceEntryIds).size || sourceRows.some(row => ['user_action', 'system', 'ooc', 'chapter_summary'].includes(row.type) || asRecord(row.metadata).nonCanon || asRecord(row.metadata).non_canon || asRecord(row.metadata).superseded)) {
+			return { ...emptyProposalApplication(), metadata: { forceStatus: 'needs_review', characterUpdateBaseVersion: entity.serverVersion, identityConflicts: Object.entries(proposedState).map(([field, proposed]) => ({ field, previous: asRecord(entity.state)[field] ?? null, proposed, reason: 'Original canonical story evidence is missing or excluded.', sources: [] })) } };
+		}
+		const bounded = boundCharacterIdentity({ storyId: input.storyId, entityId: entity.id,
+			names: [entity.name, ...asStringArray(asRecord(entity.state).aliases)], current: asRecord(entity.state), patch: proposedState,
+			sources: sourceRows.map(row => ({ id: row.id, storyId: row.storyId, content: row.content,
+				narrative: !['user_action', 'system', 'ooc'].includes(row.type) && !asRecord(row.metadata).nonCanon && !asRecord(row.metadata).non_canon && !asRecord(row.metadata).superseded })) });
+		proposedState = bounded.patch;
+		identityConflicts = bounded.conflicts;
+		identitySourceHashes = sourceRows.map(row => ({ id: row.id, type: row.type, sha256: createHash('sha256').update(row.content).digest('hex') }));
+	}
+	if (!Object.keys(proposedState).length) return { ...emptyProposalApplication(), metadata: identityConflicts.length ? { forceStatus: 'needs_review', identityConflicts, identitySourceHashes, characterUpdateBaseVersion: entity.serverVersion } : {} };
 
-	const state = mergeCharacterReferenceState(asRecord(entity.state), proposedState);
+	const statePatch = { ...proposedState };
+	delete statePatch.description;
+	const state = mergeCharacterReferenceState(asRecord(entity.state), statePatch);
+	if (typeof proposedState.bio === 'string' && proposedState.bio.trim()) state.background = proposedState.bio.trim();
+	if (input.automatic && isDeepStrictEqual(state, asRecord(entity.state))) return { ...emptyProposalApplication(), metadata: identityConflicts.length ? { forceStatus: 'needs_review', identityConflicts, identitySourceHashes, characterUpdateBaseVersion: entity.serverVersion } : {} };
 	const sourceEntryIds = unique([...(entity.sourceEntryIds ?? []), ...(input.proposal.sourceEntryIds ?? [])]);
 	const sourceEventIds = unique([...(entity.sourceEventIds ?? []), ...(input.proposal.sourceEventIds ?? [])]);
 	const sourcePatchIds = unique([...(entity.sourcePatchIds ?? []), ...(input.proposal.sourcePatchIds ?? []), input.proposal.id]);
 	await tx.update(entities).set({
 		state,
 		...(typeof proposedState.bio === 'string' && proposedState.bio.trim() ? { description: proposedState.bio.trim() } : {}),
+		...(typeof proposedState.description === 'string' && proposedState.description.trim() ? { description: proposedState.description.trim() } : {}),
 		metadata: {
 			...asRecord(entity.metadata),
 			updatedFromProposal: input.proposal.id,
@@ -403,7 +461,7 @@ async function applyCharacterContextUpdateProposal(tx: Tx, input: {
 			field: 'state',
 		}],
 		affectedEntityIds: [entity.id],
-		metadata: { appliedEntityId: entity.id },
+		metadata: { appliedEntityId: entity.id, ...(identityConflicts.length ? { forceStatus: 'needs_review', identityConflicts, identitySourceHashes, characterUpdateBaseVersion: input.serverVersion } : {}) },
 	};
 }
 
@@ -1138,6 +1196,20 @@ export async function reviewPatchProposal(input: {
 		)).for('update');
 		if (!proposal) throw new Error(`Patch proposal is missing or no longer pending: ${input.proposalId}`);
 		if (input.expectedProposalVersion !== undefined && proposal.serverVersion !== input.expectedProposalVersion) throw new Error('This proposal changed. Reload it before reviewing.');
+		if (input.decision === 'approved' && proposal.proposalType === 'character_context_update') {
+			const metadata = asRecord(proposal.metadata);
+			const hashes = Array.isArray(metadata.identitySourceHashes) ? metadata.identitySourceHashes.map(asRecord) : [];
+			if (hashes.length) {
+				const rows = await tx.select().from(storyEntries).where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, hashes.map(row => asString(row.id))))).for('share');
+				if (hashes.some(hash => !rows.some(row => row.id === hash.id && createHash('sha256').update(row.content).digest('hex') === hash.sha256
+					&& (!hash.type || row.type === hash.type) && !['user_action', 'system', 'ooc', 'chapter_summary'].includes(row.type)
+					&& !asRecord(row.metadata).nonCanon && !asRecord(row.metadata).non_canon && !asRecord(row.metadata).superseded))) throw new Error('Identity evidence changed or disappeared. Rebuild this draft before approving it.');
+			}
+			const conflicts = Array.isArray(metadata.identityConflicts) ? metadata.identityConflicts.map(asRecord) : [];
+			if (conflicts.some(conflict => !Array.isArray(conflict.sources) || !conflict.sources.length) && !/^retcon:\s*\S/i.test(input.notes?.trim() ?? '')) {
+				throw new Error('This identity change has no actor-specific source support. Supply explicit author retcon notes beginning with "retcon:" or rebuild from original evidence.');
+			}
+		}
 		if (input.decision === 'approved' && proposal.proposalType === 'character_reference_review') await lockCharacterDraftSources(tx, proposal);
 		const serverVersion = await bumpStoryVersionTx(tx, input.storyId);
 		let application = emptyProposalApplication();
@@ -1163,6 +1235,7 @@ export async function reviewPatchProposal(input: {
 				proposal,
 				serverVersion,
 				now,
+				notes: input.notes,
 			});
 		}
 
@@ -1291,8 +1364,10 @@ export async function applyChapterScribeCharacterContextProposals(input: {
 				proposal,
 				serverVersion,
 				now,
+				notes: input.notes,
+				automatic: true,
 			});
-			const nextStatus = application.appliedCount > 0 ? 'applied' : 'approved';
+			const nextStatus = asRecord(application.metadata).forceStatus === 'needs_review' ? 'needs_review' : application.appliedCount > 0 ? 'applied' : 'approved';
 			const proposalAffectedEntityIds = unique([...(proposal.affectedEntityIds ?? []), ...application.affectedEntityIds]);
 			const metadata = {
 				...asRecord(proposal.metadata),
@@ -1304,7 +1379,7 @@ export async function applyChapterScribeCharacterContextProposals(input: {
 			};
 			await tx.update(patchProposals).set({
 				status: nextStatus,
-				decision: 'approved',
+				decision: nextStatus === 'needs_review' ? null : 'approved',
 				validatedBy: reviewer,
 				affectedEntityIds: proposalAffectedEntityIds,
 				metadata,
@@ -1320,7 +1395,7 @@ export async function applyChapterScribeCharacterContextProposals(input: {
 			applications.push({
 				proposalId: proposal.id,
 				status: nextStatus,
-				decision: 'approved',
+				decision: nextStatus === 'needs_review' ? null : 'approved',
 				application,
 			});
 		}

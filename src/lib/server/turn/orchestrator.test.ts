@@ -1,3 +1,5 @@
+import { reuseGenerationResult } from '$lib/server/engine/generationAccounting';
+import { emptyServerGenerationUsage } from './provider';
 import { describe, expect, it, vi } from 'vitest';
 import { createMemoryEngineCacheRepository } from '$lib/server/engine/cache';
 import { countTokens } from '$lib/utils/tokens';
@@ -16,6 +18,7 @@ import {
 	buildStateExtractionResponseSchema,
 	buildTurnContextReceipt,
 	buildTurnPerformanceSummary,
+	timingFromResult,
 	calculateDynamicContextBudget,
 	chaptersForPromptContinuity,
 	classifierGenerationMaxTokens,
@@ -1595,6 +1598,17 @@ describe('turn orchestrator prompt budgeting', () => {
 				{ operation: 'turn.final_response.readback', durationMs: 650 },
 			],
 		});
+	});
+});
+
+
+describe('reused narration performance diagnostics', () => {
+	it.each(['turn.pi.investigation', 'turn.pi.narration'])('retains the known source cost once when %s supplied the already-accounted text', operation => {
+		const result = reuseGenerationResult({ text: 'Saved scene', model: 'fixture', endpoint: 'fixture', durationMs: 20, promptChars: 10, responseChars: 11,
+			usage: { ...emptyServerGenerationUsage(), requestTokens: 100, responseTokens: 20, totalTokens: 120, providerCostUsd: 0.03 } }, { operation });
+		const summary = buildTurnPerformanceSummary({ preparedCacheHit: false, prompt: { tokenEstimate: 100, totalChars: 10, messageCount: 1 }, cache: null,
+			generationTimings: [timingFromResult('turn.narration', 'narrative', result, 'success')], timings: [] });
+		expect(summary.generation).toMatchObject({ operationCount: 1, totalTokens: 120, providerCostUsd: 0.03 });
 	});
 });
 

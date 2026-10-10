@@ -167,15 +167,34 @@ describe('executeToolCall update_world_state', () => {
 		expect(storyMock.updateCharacterFromClassification).toHaveBeenCalledWith(
 			'Established Ally',
 			{
-				description: 'Now openly suspicious of the bargain.',
 				relationship: 'uneasy ally',
 				status: 'active',
-				traits: ['watchful'],
+				partyMember: undefined,
+				partyRole: undefined,
 			},
 		);
 		expect(storyMock.addCharacter).not.toHaveBeenCalled();
 		expect(canonicalMocks.saveCanonicalLorebookEntry).not.toHaveBeenCalled();
 		expect(storyMock.updatePresence).toHaveBeenCalledWith(['Established Ally'], 'Old Gate');
+	});
+
+	it('does not choose one of several matching character aliases', async () => {
+		storyMock.lorebookEntries = ['one', 'two'].map(id => ({ id, type: 'character', name: id, aliases: ['Shared Alias'], state: {} } as any));
+		await executeToolCall('update_world_state', { characters: [{ name: 'Shared Alias', background: 'A fabricated spy history.', current_action: 'watching' }] });
+		expect(canonicalMocks.patchCanonicalLorebookEntry).not.toHaveBeenCalled();
+		expect(storyMock.updateCharacterFromClassification).not.toHaveBeenCalled();
+	});
+
+	it('uses the refreshed canonical projection after classification commits', async () => {
+		storyMock.entries = [{ id: 'original_source' }];
+		storyMock.lorebookEntries = [{ id: 'char-established', type: 'character', name: 'Established Ally', state: { currentDisposition: 'old disposition' } } as any];
+		storyMock.updateCharacterFromClassification.mockImplementationOnce(async () => {
+			storyMock.lorebookEntries = [{ ...storyMock.lorebookEntries[0], state: { currentDisposition: 'new disposition' } }];
+		});
+		await executeToolCall('update_world_state', { characters: [{ name: 'Established Ally', relationship: 'new disposition', current_action: 'reading' }] });
+		const automatic = canonicalMocks.patchCanonicalLorebookEntry.mock.calls[0][1].metadata.automaticCharacterUpdate;
+		expect(automatic.patch.currentAction).toBe('reading');
+		expect(automatic.patch).not.toHaveProperty('currentDisposition');
 	});
 
 	it('advances local time without ticking antagonist schemes', async () => {
@@ -222,7 +241,10 @@ describe('executeToolCall update_world_state', () => {
 		expect(JSON.parse(await executeToolCall('update_world_state', update))).toEqual({ success: true });
 		const [, patch] = canonicalMocks.patchCanonicalLorebookEntry.mock.calls[0];
 
-		expect(patch.aliases).toEqual(['The Ally', 'Harbor Witness']);
+		expect(patch.aliases).toEqual(['The Ally']);
+		expect(patch.metadata.automaticCharacterUpdate.patch).toMatchObject({ bio: 'Former guild auditor.', appearance: 'salt-stained blue coat', speechStyle: 'precise and guarded' });
+		expect(patch.state).not.toHaveProperty('bio');
+		expect(patch.state).not.toHaveProperty('appearance');
 		expect(patch.state).toMatchObject({
 			currentDisposition: 'wary ally',
 			present: true,
@@ -232,10 +254,7 @@ describe('executeToolCall update_world_state', () => {
 			currentLocation: 'Counting Room',
 			currentAction: 'guarding the ledger',
 			emotionalState: 'controlled fear',
-			appearance: 'salt-stained blue coat',
-			bio: 'Former guild auditor.',
 			goals: ['Protect her brother.'],
-			speechStyle: 'precise and guarded',
 			relationship: {
 				level: 36,
 				status: 'wary ally',

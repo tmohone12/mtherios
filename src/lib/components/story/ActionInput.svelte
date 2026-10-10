@@ -11,7 +11,7 @@
 	import { declarePlayerScheme } from '$lib/services/ai/scheme/SchemeService';
 	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
 	import { fetchBackendEntriesAround, isTerminalReachabilityError, previewBackendTurn } from '$lib/services/backendMemory';
-	import { completedBackendAgentTurn, currentBackendAgentRun, getBackendAgentRun, readBackendDiceRoll, respondBackendAgentRun, startBackendAgentRun, visibleRollPortrait, type BackendAgentRun, type BackendAgentInteraction } from '$lib/services/backendAgentRuns';
+	import { cancelBackendAgentRun, completedBackendAgentTurn, currentBackendAgentRun, getBackendAgentRun, openBackendAgentRunStream, readBackendAgentSource, readBackendDiceRoll, respondBackendAgentRun, startBackendAgentRun, visibleRollPortrait, type BackendAgentActivity, type BackendAgentRun, type BackendAgentInteraction, type BackendAgentSource } from '$lib/services/backendAgentRuns';
 	import type { TurnPreviewResponse } from '$lib/contracts/memory';
 	import { buildBackendClientContext as buildBackendClientContextHint } from '$lib/services/backendClientContext';
 	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
@@ -48,6 +48,7 @@
 	let customAnswer = $state('');
 	let agentLoadVersion = 0;
 	let hydratedAgentRunId = '';
+	let inspectedAgentSource = $state<{ source: BackendAgentSource; text: string } | null>(null);
 	let modeSheetOpen = $state(false);
 	let modeSheetDialog = $state<HTMLElement | null>(null);
 	let modeSheetTrigger = $state<HTMLButtonElement | null>(null);
@@ -166,6 +167,7 @@
 		const useBackend = backendTurnEnabled;
 		const version = ++agentLoadVersion;
 		agentRun = null;
+		inspectedAgentSource = null;
 		if (!serverStoryId || !localStoryId || !useBackend) return;
 		agentRestoring = true;
 		void (async () => {
@@ -234,6 +236,25 @@
 		!story.engineStreamStatus.connected,
 	));
 	const sendBlocked = $derived(!online || story.hydratingWorld || terminalRuntimeUnavailable || agentRestoring || agentBusy || (agentRun !== null && ['running', 'awaiting_input', 'committing'].includes(agentRun.status)));
+	const activeAgentRun = $derived(agentRun !== null && ['running', 'awaiting_input', 'committing'].includes(agentRun.status));
+	const startingAgentRun = $derived(isGenerating && backendTurnEnabled && !activeAgentRun);
+	const pendingInteraction = $derived(agentRun?.interactions.find(interaction => interaction.status === 'pending'));
+	const turnStatusTitle = $derived(agentRestoring ? 'Restoring your turn' : startingAgentRun ? 'Starting your turn' : agentRun ? {
+		running: 'The Game Master is at work',
+		awaiting_input: pendingInteraction?.kind === 'roll' ? 'Your roll is needed' : 'Your choice is needed',
+		committing: 'Saving your next passage',
+		completed: 'Ready for your next move',
+		failed: 'This turn needs attention',
+		cancelled: 'Turn stopped',
+	}[agentRun.status] : '');
+	const turnStatusHint = $derived(agentRestoring ? 'Checking saved progress before you continue.' : startingAgentRun ? 'Connecting your move to the saved story.' : agentRun ? {
+		running: 'You can keep drafting while the world responds.',
+		awaiting_input: 'Answer below to continue this saved turn.',
+		committing: 'The outcome is being added to your story.',
+		completed: 'The previous turn is complete.',
+		failed: 'Review the message below before trying again.',
+		cancelled: 'You can prepare another move below.',
+	}[agentRun.status] : '');
 
 	async function acceptAgentRun(snapshot: BackendAgentRun, localStoryId: string): Promise<void> {
 		if (draftStoryId !== localStoryId || story.currentStory?.serverStoryId !== snapshot.gameId) return;
@@ -267,6 +288,58 @@
 		}, 2000);
 		return () => clearTimeout(timer);
 	});
+
+	const agentStreamRunId = $derived(agentRun && ['running', 'awaiting_input', 'committing'].includes(agentRun.status) ? agentRun.id : '');
+	const agentStreamGameId = $derived(agentRun && ['running', 'awaiting_input', 'committing'].includes(agentRun.status) ? agentRun.gameId : '');
+	$effect(() => {
+		const runId = agentStreamRunId, gameId = agentStreamGameId;
+		if (!runId || !gameId || typeof EventSource === 'undefined') return;
+		const cursorKey = `mythengine:agent-cursor:${runId}`;
+		const after = Number(localStorage.getItem(cursorKey) ?? 0);
+		const stream = openBackendAgentRunStream(gameId, runId, after, event => {
+			if (agentRun?.id !== runId || story.currentStory?.serverStoryId !== gameId) return;
+			const merged = new Map(agentRun.activity.map(item => [item.seq, item]));
+			merged.set(event.seq, event);
+			agentRun = { ...agentRun, activity: [...merged.values()].sort((a, b) => a.seq - b.seq).slice(-80) };
+			localStorage.setItem(cursorKey, String(event.seq));
+		}, () => {
+			if (agentRun?.id !== runId) return;
+			const localStoryId = draftStoryId;
+			void getBackendAgentRun(gameId, runId).then(snapshot => acceptAgentRun(snapshot, localStoryId))
+				.catch(error => { if (agentRun?.id === runId) turnError = error instanceof Error ? error.message : String(error); });
+		});
+		return () => stream.close();
+	});
+
+	function agentActivityLabel(event: BackendAgentActivity) {
+		const tool = typeof event.data.tool === 'string' ? event.data.tool : 'tool';
+		if (event.event_type === 'tool.reserved') return `Running ${tool}`;
+		if (event.event_type === 'tool.completed') return `Finished ${tool}`;
+		if (event.event_type === 'provider.requested') return `Model request ${event.data.index ?? ''} · ${event.data.model ?? 'configured model'}`;
+		if (event.event_type === 'context.compacted') return `Context compacted · ${event.data.omittedCount ?? (Array.isArray(event.data.omitted) ? event.data.omitted.length : 0)} older results omitted`;
+		if (event.event_type === 'runtime.checkpoint') return `Saved ${event.data.stage ?? 'agent'} progress`;
+		if (event.event_type === 'runtime.handoff') return 'Investigation finished · reserved budget for narration';
+		return event.event_type.replaceAll('.', ' ');
+	}
+
+	async function stopAgentRun() {
+		const current = agentRun;
+		if (!current || agentBusy) return;
+		agentBusy = true;
+		try { await acceptAgentRun(await cancelBackendAgentRun(current.gameId, current.id), draftStoryId); }
+		catch (error) { turnError = error instanceof Error ? error.message : String(error); }
+		finally { agentBusy = false; }
+	}
+
+	async function openAgentSource(source: BackendAgentSource) {
+		const current = agentRun;
+		const projectId = current?.projectId ?? story.currentStory?.shelfId;
+		if (!current || !projectId) return;
+		try {
+			const read = await readBackendAgentSource(projectId, current.gameId, source);
+			if (agentRun?.id === current.id) inspectedAgentSource = { source, text: read.text };
+		} catch (error) { turnError = error instanceof Error ? error.message : String(error); }
+	}
 
 	async function answerAgentInteraction(interaction: BackendAgentInteraction, response: { optionId?: string; text?: string; roll?: true }): Promise<void> {
 		const current = agentRun;
@@ -862,6 +935,7 @@
 	}
 
 	function handleStop() {
+		if (agentRun && ['running', 'awaiting_input', 'committing'].includes(agentRun.status)) void stopAgentRun();
 		abortController?.abort();
 	}
 
@@ -1110,35 +1184,50 @@
 	</div>
 {/if}
 
-<div class="space-y-2">
+<div class="turn-composer">
+	{#if agentRestoring || agentRun || startingAgentRun}
+		<div class="turn-status-strip" class:needs-answer={agentRun?.status === 'awaiting_input'} class:needs-attention={agentRun?.status === 'failed'}>
+			<span class="turn-status-icon" aria-hidden="true">
+				{#if agentRestoring || startingAgentRun || agentRun?.status === 'running' || agentRun?.status === 'committing'}<Loader2 size={17} class="animate-spin" />
+				{:else if agentRun?.status === 'awaiting_input'}<MessageSquare size={17} />
+				{:else}<BookOpen size={17} />{/if}
+			</span>
+			<div class="turn-status-copy" role="status" aria-live="polite" aria-atomic="true"><strong>{turnStatusTitle}</strong><span>{turnStatusHint}</span></div>
+			{#if activeAgentRun}<button type="button" onclick={stopAgentRun} disabled={agentBusy || !online} class="turn-stop" aria-label="Stop this turn" title={!online ? 'Reconnect to stop this turn' : 'Stop this saved turn'}><Square size={12} /><span>Stop</span></button>{/if}
+		</div>
+	{/if}
+	<div class="turn-support">
 	{#if agentRun && agentRun.status !== 'completed'}
-		<div class="space-y-2" aria-label="Game Master interactions">
+		<div class="turn-interactions" aria-label="Game Master interactions">
 			{#each agentRun.interactions as interaction (interaction.id)}
 				{#if interaction.kind === 'question'}
-					<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
-						<div class="text-sm font-medium text-[var(--text-primary)]">{interaction.prompt}</div>
+					<section class="turn-question" aria-label={interaction.status === 'pending' ? 'Your choice' : 'Previous choice'}>
+						<span class="question-eyebrow">{interaction.status === 'pending' ? 'Your choice' : 'Previous choice'}</span>
+						<div class="question-prompt">{interaction.prompt}</div>
 						{#if interaction.status === 'pending'}
-							<div class="mt-2 flex flex-wrap gap-2">
+							<div class="question-options">
 								{#each interaction.options as option (option.id)}
-									<button type="button" disabled={agentBusy || !online} onclick={() => answerAgentInteraction(interaction, { optionId: option.id })} class="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] disabled:opacity-50">{option.label}</button>
+									<button type="button" disabled={agentBusy || !online} onclick={() => answerAgentInteraction(interaction, { optionId: option.id })} class="question-option">{option.label}</button>
 								{/each}
 							</div>
 							{#if interaction.options_meta.allowCustom}
-								<div class="mt-2 flex gap-2">
-									<input aria-label="Custom answer" bind:value={customAnswer} maxlength="1000" class="min-w-0 flex-1 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-sm" />
-									<button type="button" disabled={agentBusy || !online || !customAnswer.trim()} onclick={() => answerAgentInteraction(interaction, { text: customAnswer.trim() })} class="rounded-lg bg-[var(--text-accent)] px-3 py-2 text-sm text-black disabled:opacity-50">Answer</button>
+								<div class="question-custom">
+									<input aria-label="Custom answer" placeholder="Or write your own answer…" bind:value={customAnswer} maxlength="1000" />
+									<button type="button" disabled={agentBusy || !online || !customAnswer.trim()} onclick={() => answerAgentInteraction(interaction, { text: customAnswer.trim() })} class="question-submit">Answer</button>
 								</div>
 							{/if}
 						{:else if interaction.status === 'answered'}
 							<div class="mt-1 text-xs text-[var(--text-secondary)]">Answered: {answeredQuestion(interaction)}</div>
+						{:else}<p class="question-closed">This question is {interaction.status}.</p>
 						{/if}
 					</section>
 				{:else if interaction.kind === 'roll'}
 					{#if interaction.status === 'pending'}
-						<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
-							<div class="text-sm font-medium text-[var(--text-primary)]">{interaction.prompt}</div>
+						<section class="turn-question" aria-label="Your dice roll">
+							<span class="question-eyebrow">Your dice roll</span>
+							<div class="question-prompt">{interaction.prompt}</div>
 							<div class="mt-1 text-xs text-[var(--text-muted)]">{interaction.options_meta.targetCharacterName ? `${String(interaction.options_meta.targetCharacterName)} · ` : ''}{interaction.options_meta.skillName ? `${String(interaction.options_meta.skillName)} · ` : ''}{String(interaction.options_meta.diceExpression ?? '')}</div>
-							<button type="button" disabled={agentBusy || !online} onclick={() => answerAgentInteraction(interaction, { roll: true })} class="mt-2 rounded-lg bg-[var(--text-accent)] px-4 py-2 text-sm font-medium text-black disabled:opacity-50">Roll dice</button>
+							<button type="button" disabled={agentBusy || !online} onclick={() => answerAgentInteraction(interaction, { roll: true })} class="question-submit mt-3">Roll dice</button>
 						</section>
 					{:else if interaction.status === 'answered' && readBackendDiceRoll(interaction.response)}
 						<DiceRollCard actor={readBackendDiceRoll(interaction.response)?.targetCharacterName ?? 'Player'} portrait={visibleRollPortrait(story.characters, readBackendDiceRoll(interaction.response)?.targetCharacterId)} roll={readBackendDiceRoll(interaction.response)!} />
@@ -1154,18 +1243,28 @@
 			{#each agentRun.research as item (item.call_id)}
 				<ResearchEvidenceCard research={item.result} projectId={story.currentStory?.shelfId} gameId={story.currentStory?.serverStoryId} />
 			{/each}
-			{#if agentRun.status === 'running' || agentRun.status === 'committing'}
-				<div class="flex items-center gap-2 text-xs text-[var(--text-muted)]" role="status"><Loader2 class="h-3.5 w-3.5 animate-spin" />Game Master is continuing this turn…</div>
-			{/if}
 		</div>
 	{/if}
+	{#if agentRun}
+		<details class="turn-activity" aria-label="Game Master activity">
+			<summary><span>Turn activity &amp; sources</span><span class="activity-count">{agentRun.activity.length} events</span></summary>
+			<div class="turn-activity-body">
+			<p class="activity-runtime">Runtime: {agentRun.continuation?.runtime ?? 'legacy'} · {agentRun.status}</p>
+			{#if agentRun.continuation?.budget}{@const budget = agentRun.continuation.budget}<p class="mt-2">{budget.modelRequests ?? 0} model requests · {budget.toolCalls ?? 0} tool calls · {budget.consumedTokens ?? 0} accounted tokens · {budget.unknownUsage ? 'some usage unknown' : 'usage accounted'}</p>{#if budget.stopReason}<p role="status">Stopped: {String(budget.stopReason)}</p>{/if}{/if}
+			{#if agentRun.activity.length}<ol class="mt-2 space-y-1" aria-label="Persisted tool activity">{#each agentRun.activity as event (event.seq)}<li>{agentActivityLabel(event)}</li>{/each}</ol>{/if}
+			{#if agentRun.continuation?.receipts?.length}<details class="mt-2"><summary>Model request receipts</summary>{#each agentRun.continuation.receipts as receipt}<p class="mt-1">{receipt.stage ?? 'agent'} · {receipt.model ?? 'configured model'} · {receipt.inputTokens ?? 'unknown'} input / {receipt.reservedOutputTokens ?? 'unknown'} output allowance · {receipt.requestBytes ?? 'unknown'} bytes</p>{#if receipt.requestHash}<code class="block break-all">{receipt.requestHash}</code>{/if}{/each}</details>{/if}
+			{#if agentRun.sources.length}<details class="mt-2"><summary>Observed public sources</summary>{#each agentRun.sources as source (source.callId)}<button type="button" onclick={() => openAgentSource(source)} class="mt-1 block text-left underline">{source.path} · lines {source.startLine}-{source.endLine} · revision {source.revision}</button>{/each}</details>{/if}
+			</div>
+		</details>
+	{/if}
+	{#if inspectedAgentSource}<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-xs text-[var(--text-secondary)]" aria-label="Observed source range"><strong>{inspectedAgentSource.source.path} · lines {inspectedAgentSource.source.startLine}–{inspectedAgentSource.source.endLine}</strong><p>Revision {inspectedAgentSource.source.revision}</p><pre class="max-h-64 overflow-auto whitespace-pre-wrap">{inspectedAgentSource.text}</pre><button type="button" onclick={() => { inspectedAgentSource = null; }} class="mt-2 underline">Close source</button></section>{/if}
 	{#if story.hydratingWorld}
-		<div class="flex items-center gap-2 px-1 text-[11px] text-[var(--text-muted)]">
+		<div class="composer-notice" role="status">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
 			<span>Loading memory and world state...</span>
 		</div>
 	{:else if story.worldHydrationError}
-		<div class="px-1 text-[11px] text-amber-300">
+		<div class="composer-notice" role="alert">
 			{#if terminalRuntimeUnavailable}
 				Terminal agent runtime required. Start the terminal process to use this campaign.
 			{:else}
@@ -1174,14 +1273,15 @@
 		</div>
 	{/if}
 	{#if turnError}
-		<div class="px-1 text-[11px] text-amber-300">{turnError}</div>
+		<div class="composer-notice" role="alert">{turnError}</div>
 	{/if}
 	{#if previewError}
-		<div class="px-1 text-[11px] text-amber-300">Context preview failed: {previewError}</div>
+		<div class="composer-notice" role="alert">Context preview failed: {previewError}</div>
 	{/if}
 	{#if !online}
-		<div class="flex items-center gap-1.5 px-1 text-[11px] text-[var(--color-crimson-400)]"><WifiOff class="h-3.5 w-3.5" />Offline — your draft is saved; reconnect to send.</div>
+		<div class="composer-notice" role="status"><WifiOff size={15} />Offline — your draft is saved; reconnect to send.</div>
 	{/if}
+	</div>
 
 	<div class="action-composer">
 		{#if !isCreativeMode}
@@ -1215,16 +1315,18 @@
 					<ModeIcon class="h-3.5 w-3.5" />{actionConfig[actionType].label}<ChevronDown class="h-3.5 w-3.5" />
 				</button>
 			{/if}
-			<div class="composer-hint" role="status">
-				{#if isGenerating}
+			<div class="composer-hint">
+				{#if activeAgentRun || agentRestoring}
+					<span>You can prepare your next move here.</span>
+				{:else if isGenerating}
 					<Loader2 class="h-3.5 w-3.5 animate-spin" /><span>Writing the next passage…</span>
 				{:else}
 					<span class="desktop-shortcut"><kbd>Enter</kbd> to send <span aria-hidden="true">·</span> <kbd>Shift + Enter</kbd> for a new line</span>
 					<span class="touch-shortcut">Your next move</span>
 				{/if}
 			</div>
-			{#if isGenerating && shouldUseBackendTurn()}
-				<div class="submit-button" role="status"><Loader2 class="h-3.5 w-3.5 animate-spin" /><span>Working</span></div>
+			{#if activeAgentRun || agentRestoring || startingAgentRun}
+				<button class="submit-button pending-button" disabled title={turnStatusTitle}>{#if agentRun?.status === 'awaiting_input'}<MessageSquare size={15} /><span>Answer above</span>{:else}<Loader2 size={15} class="animate-spin" /><span>{agentRestoring ? 'Restoring' : 'Working'}</span>{/if}</button>
 			{:else if isGenerating}
 				<button onclick={handleStop} class="submit-button stop-button" title="Stop generation" aria-label="Stop generation">
 					<Square class="h-3.5 w-3.5" /><span>Stop</span>
@@ -1250,7 +1352,45 @@
 </div>
 
 <style>
+	.turn-composer { display: flex; flex-direction: column; gap: .5rem; max-height: min(65dvh, calc(var(--visual-viewport-height, 100dvh) * .65)); }
+	.turn-status-strip { display: flex; align-items: center; gap: .7rem; flex-shrink: 0; padding: .7rem .85rem; border: 1px solid var(--border-secondary); border-radius: .75rem; background: var(--bg-secondary); }
+	.turn-status-icon { display: grid; place-items: center; width: 2rem; height: 2rem; flex-shrink: 0; border-radius: .6rem; color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 9%, transparent); }
+	.turn-status-copy { display: grid; gap: .15rem; min-width: 0; flex: 1; }
+	.turn-status-copy strong { font-size: .8rem; line-height: 1.35; font-weight: 600; color: var(--text-primary); }
+	.turn-status-copy > span { font-size: .69rem; line-height: 1.4; color: var(--text-muted); }
+	.needs-answer { border-color: color-mix(in srgb, var(--text-accent) 40%, var(--border-primary)); }
+	.needs-attention { border-color: color-mix(in srgb, var(--color-crimson-400) 40%, var(--border-primary)); }
+	.turn-stop { display: inline-flex; align-items: center; justify-content: center; gap: .45rem; flex-shrink: 0; min-height: 2.5rem; padding: 0 .8rem; border: 1px solid var(--border-primary); border-radius: .5rem; color: var(--text-primary); font-size: .75rem; }
+	.turn-stop:hover:not(:disabled) { border-color: var(--color-crimson-400); color: var(--color-crimson-400); }
+	.turn-stop:disabled { opacity: .45; cursor: not-allowed; }
+	.turn-support { min-height: 0; max-height: min(28dvh, 18rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border-radius: .75rem; }
+	.turn-support:empty { display: none; }
+	.turn-support > * + * { margin-top: .5rem; }
+	.turn-interactions { display: grid; gap: .5rem; }
+	.turn-interactions:empty { display: none; }
+	.turn-question { padding: .9rem 1rem; border: 1px solid color-mix(in srgb, var(--text-accent) 30%, var(--border-primary)); border-radius: .75rem; background: color-mix(in srgb, var(--text-accent) 5%, var(--bg-secondary)); }
+	.question-eyebrow { display: block; margin-bottom: .4rem; color: var(--text-accent); font-size: .6rem; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
+	.question-prompt { font-size: .9rem; font-weight: 500; line-height: 1.55; color: var(--text-primary); overflow-wrap: anywhere; }
+	.question-options { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+	.question-option { min-height: 2.75rem; padding: .55rem .85rem; border: 1px solid var(--border-primary); border-radius: .5rem; background: var(--bg-secondary); color: var(--text-primary); font-size: .8rem; line-height: 1.45; text-align: left; overflow-wrap: anywhere; }
+	.question-option:hover:not(:disabled) { border-color: var(--text-accent); background: var(--bg-tertiary); }
+	.question-custom { display: flex; gap: .5rem; margin-top: .65rem; }
+	.question-custom input { min-width: 0; flex: 1; padding: .65rem .8rem; border: 1px solid var(--border-primary); border-radius: .5rem; background: var(--bg-primary); color: var(--text-primary); font-size: .8rem; }
+	.question-submit { min-height: 2.75rem; padding: .55rem .9rem; border-radius: .5rem; background: var(--text-accent); color: var(--bg-primary); font-size: .8rem; font-weight: 600; }
+	.question-option:disabled, .question-submit:disabled { opacity: .45; cursor: not-allowed; }
+	.question-closed { margin-top: .4rem; font-size: .75rem; color: var(--text-muted); }
+	.turn-activity { border: 1px solid var(--border-secondary); border-radius: .65rem; color: var(--text-secondary); background: var(--bg-secondary); font-size: .75rem; }
+	.turn-activity > summary { min-height: 2.65rem; padding: .7rem .85rem; cursor: pointer; color: var(--text-secondary); }
+	.activity-count { margin-left: .5rem; color: var(--text-muted); font-size: .65rem; }
+	.turn-activity-body { padding: 0 .9rem .9rem; overflow-wrap: anywhere; line-height: 1.6; }
+	.turn-activity-body :global(summary) { cursor: pointer; padding-block: .25rem; }
+	.turn-activity-body ol { border-left: 1px solid var(--border-primary); padding-left: .85rem; }
+	.activity-runtime { color: var(--text-muted); font-size: .68rem; }
+	.composer-notice { display: flex; align-items: flex-start; gap: .5rem; padding: .6rem .85rem; border: 1px solid var(--border-primary); border-radius: .6rem; color: var(--text-secondary); background: var(--bg-secondary); font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+	.composer-notice[role='alert'] { color: var(--text-accent); border-color: color-mix(in srgb, var(--text-accent) 35%, var(--border-primary)); }
+	.turn-composer :is(button, summary, input):focus-visible { outline: 2px solid var(--text-accent); outline-offset: 3px; }
 	.action-composer {
+		flex-shrink: 0;
 		overflow: hidden;
 		border: 1px solid var(--border-primary);
 		border-radius: 1rem;
@@ -1268,7 +1408,7 @@
 	.mode-button[aria-pressed='true'] { color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 12%, transparent); }
 	.plan-button { margin-left: auto; border-left: 1px solid var(--border-secondary); border-radius: 0; padding-left: 0.85rem; }
 	.plan-button:disabled { opacity: 0.4; }
-	.composer-input { display: block; width: 100%; min-height: 4.75rem; max-height: 10rem; resize: none; overflow-y: auto; field-sizing: content; padding: 1rem 1.1rem 0.5rem; background: transparent; color: var(--text-primary); font-size: 1rem; line-height: 1.65; outline: none; }
+	.composer-input { display: block; width: 100%; min-height: 4.5rem; max-height: min(9rem, 18dvh); resize: none; overflow-y: auto; field-sizing: content; padding: 1rem 1.1rem 0.5rem; background: transparent; color: var(--text-primary); font-size: 1rem; line-height: 1.65; outline: none; }
 	.composer-input::placeholder { color: var(--text-muted); }
 	.composer-footer { display: flex; align-items: center; gap: 0.5rem; padding: 0.15rem 0.65rem 0.65rem; }
 	.mobile-mode-button { min-height: 2.75rem; color: var(--text-accent); }
@@ -1279,6 +1419,9 @@
 	.submit-button:hover:not(:disabled) { filter: brightness(1.08); }
 	.submit-button:active:not(:disabled) { transform: scale(0.97); }
 	.submit-button:disabled { opacity: 0.32; cursor: not-allowed; }
+	.preview-button { margin-left: auto; padding-inline: .75rem; border-color: var(--border-primary); background: transparent; color: var(--text-secondary); font-weight: 500; }
+	.preview-button + .submit-button { margin-left: 0; }
+	.pending-button:disabled { opacity: .65; background: var(--bg-tertiary); color: var(--text-secondary); cursor: default; }
 	.stop-button { background: color-mix(in srgb, var(--color-crimson-400) 10%, transparent); border-color: color-mix(in srgb, var(--color-crimson-400) 25%, transparent); color: var(--color-crimson-400); }
 	@media (min-width: 640px) {
 		.composer-modes { display: flex; }
@@ -1292,5 +1435,21 @@
 		.mode-button { min-height: 2.75rem; }
 		.touch-shortcut { display: inline; }
 	}
-	@media (max-width: 639px) { .composer-hint { font-size: 0.6rem; } .touch-shortcut { display: none; } }
+	@media (max-width: 639px) {
+		.turn-status-strip { padding: .6rem .7rem; gap: .55rem; }
+		.turn-status-copy strong { font-size: .75rem; }
+		.turn-status-copy > span { font-size: .65rem; }
+		.turn-stop { min-height: 2.75rem; }
+		.question-options { display: grid; }
+		.question-custom input { font-size: 1rem; }
+		.composer-hint, .touch-shortcut, .preview-button span { display: none; }
+		.preview-button { min-width: 2.75rem; padding-inline: .5rem; }
+	}
+	@media (max-height: 600px) {
+		.turn-status-copy > span { display: none; }
+		.turn-status-strip { padding-block: .35rem; }
+		.composer-input { min-height: 2.75rem; max-height: 5rem; padding-top: .5rem; }
+		.composer-modes { padding-block: .2rem; }
+	}
+	@media (prefers-reduced-motion: reduce) { .turn-composer :global(.animate-spin) { animation: none; } }
 </style>

@@ -315,12 +315,15 @@ describe('WorldExplorer character creation', () => {
 		expect(page.runEngineCommand).toHaveBeenCalledWith('story_a', 'patchProposal.review', { proposalId: 'candidate_mara', decision: 'approved', reviewer: 'human', expectedProposalVersion: 7 });
 	});
 
-	it('does not approve a source placeholder before it contains a quoted draft', async () => {
+	it('does not approve an unpopulated source placeholder', async () => {
 		const page = sourceCandidate();
 		page.runEngineCommand = vi.fn();
+		expect(page.candidateReady).toBe(false);
 		await page.reviewPatchProposal('approved');
 		expect(page.runEngineCommand).not.toHaveBeenCalled();
-		expect(page.status).toContain('Build this candidate');
+		expect(page.openRecord).not.toHaveBeenCalled();
+		expect(page.status).toContain('biography');
+		expect(page.status).toContain('story sources');
 	});
 
 	it.each(['story', 'record'])('ignores a late source draft after switching %s', async (scope) => {
@@ -348,6 +351,21 @@ describe('WorldExplorer character creation', () => {
 		page.loadSection = vi.fn().mockResolvedValue(true);
 		return page;
 	}
+
+	it.each(['newCharacterName', 'newCharacterRole', 'newCharacterBackstory', 'newCharacterPurpose'])('does not generate a character preview when %s is empty', async (missingField) => {
+		const page = explorer();
+		page.newCharacterName = 'Tala Venn';
+		page.newCharacterRole = 'Courier';
+		page.newCharacterBackstory = 'Raised among the harbor pilots.';
+		page.newCharacterPurpose = 'Connect the player to the harbor dispute.';
+		page[missingField] = '  ';
+		page.runEngineCommand = vi.fn();
+		page.openRecord = vi.fn();
+		await page.createCharacterDraft();
+		expect(page.runEngineCommand).not.toHaveBeenCalled();
+		expect(page.openRecord).not.toHaveBeenCalled();
+		expect(page.status).toContain('before preparing the character');
+	});
 
 	it('prepares a reviewable preview without automatically approving or creating canon', async () => {
 		const page = explorer();

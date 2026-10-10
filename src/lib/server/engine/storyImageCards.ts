@@ -5,6 +5,7 @@ import { storyImageExportSchema } from '$lib/contracts/worldDatabase';
 import { getDb } from '$lib/server/db/client';
 import { importImageAsset, readImageAsset } from './imageAssets';
 import { MutationError } from './mutationSafety';
+import { currentServerProviderHooks } from '$lib/server/turn/provider';
 
 type Db = ReturnType<typeof getDb>;
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -14,15 +15,24 @@ export async function recordStoryImageCard(input: {
   tool: 'generateImage' | 'generateFileImage'; assetId: string; applied: boolean;
 }) {
   const db = getDb();
-  const [origin] = await db.execute(sql`select r.client_turn_id,r.status from agent_runs r
-    join agent_tool_calls t on t.run_id=r.id and t.call_id=${input.callId}
-    where r.id=${input.runId} and r.project_id=${input.projectId} and r.game_id=${input.gameId}
-      and t.tool=${input.tool} and t.status='completed' and t.result->>'jobId'=${input.jobId}`);
-  if (!origin) throw new MutationError('SCOPE_DENIED', 'Image job no longer matches its GM tool call.');
-  if (origin.status === 'failed' || origin.status === 'cancelled') return;
-  await db.execute(sql`insert into story_image_cards(id,project_id,game_id,client_turn_id,call_id,tool,asset_id,applied)
-    values(${`story_image_${randomUUID()}`},${input.projectId},${input.gameId},${origin.client_turn_id},${input.callId},${input.tool},${input.assetId},${input.applied})
-    on conflict (game_id,client_turn_id,call_id) do nothing`);
+  await db.transaction(async tx => {
+    const signal = currentServerProviderHooks()?.signal;
+    signal?.throwIfAborted();
+    const [origin] = await tx.execute(sql`select r.client_turn_id,r.status,r.continuation->'state'->'budget'->>'stopReason' as stop_reason from agent_runs r
+      join agent_tool_calls t on t.run_id=r.id and t.call_id=${input.callId}
+      join backend_jobs j on j.id=${input.jobId} and j.project_id=r.project_id and j.story_id=r.game_id
+      join assets a on a.id=${input.assetId} and a.origin_job_id=j.id and a.project_id=r.project_id and a.game_id=r.game_id
+      where r.id=${input.runId} and r.project_id=${input.projectId} and r.game_id=${input.gameId}
+        and t.tool=${input.tool} and j.payload->'origin'->>'role'='gm'
+        and j.payload->'origin'->>'runId'=r.id and j.payload->'origin'->>'callId'=t.call_id
+        and ((t.status='completed' and t.result->>'jobId'=j.id) or t.status='reserved') for update of r`);
+    if (!origin) throw new MutationError('SCOPE_DENIED', 'Image job no longer matches its GM tool call.');
+    if (origin.status === 'failed' || origin.status === 'cancelled' || origin.stop_reason) return;
+    signal?.throwIfAborted();
+    await tx.execute(sql`insert into story_image_cards(id,project_id,game_id,client_turn_id,call_id,tool,asset_id,applied)
+      values(${`story_image_${randomUUID()}`},${input.projectId},${input.gameId},${origin.client_turn_id},${input.callId},${input.tool},${input.assetId},${input.applied})
+      on conflict (game_id,client_turn_id,call_id) do nothing`);
+  });
 }
 
 export async function recordManualStoryImageCard(input: { projectId: string; gameId: string; clientTurnId: string; callId: string; assetId: string }) {

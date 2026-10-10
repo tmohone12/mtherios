@@ -4,7 +4,7 @@ import { MutationError } from './mutationSafety';
 
 const roleTools: Record<AgentRole, readonly AgentTool[]> = {
 	gm: ['read', 'search', 'list', 'write', 'update', 'bash', 'map', 'askUserQuestion', 'askPlayerToRoll', 'gmRollDice', 'askJev', 'generateNames', 'research', 'recall', 'generateImage', 'generateFileImage'],
-	assistant: ['read', 'search', 'list', 'write', 'update', 'saveType', 'folder', 'bash', 'map', 'askUserQuestion', 'generateImage', 'revert', 'clearLayout', 'subagent'],
+	assistant: ['read', 'search', 'list', 'write', 'update', 'saveType', 'folder', 'bash', 'map', 'askUserQuestion', 'generateImage', 'revert', 'clearLayout', 'subagent', 'storyContent'],
 	research: ['read', 'search', 'list'], batch: ['read', 'search', 'list', 'write', 'update'],
 };
 

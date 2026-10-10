@@ -639,6 +639,8 @@ export const livingMemoryCommandResponseSchema = z.object({
 });
 
 export const memoryRetrieveRequestSchema = z.object({
+	anchor: z.enum(['player', 'actor']).optional(),
+	actorEntityId: z.string().optional(),
 	storyId: z.string(),
 	query: z.string().default(''),
 	includeHistorical: z.boolean().optional(),
@@ -1137,3 +1139,10 @@ export type TurnActionType = z.infer<typeof turnActionTypeSchema>;
 export type TurnRequest = z.infer<typeof turnRequestSchema>;
 export type TurnPerformanceSummary = z.infer<typeof turnPerformanceSummarySchema>;
 export type TurnResponse = z.infer<typeof turnResponseSchema>;
+export const pendingTurnResponseSchema = z.object({
+	status: z.enum(['running', 'awaiting_input', 'committing']),
+	runId: z.string(), storyId: z.string(), clientTurnId: z.string(),
+	interactions: z.array(jsonObjectSchema),
+}).strict();
+export const turnSubmissionResponseSchema = z.union([turnResponseSchema, pendingTurnResponseSchema]);
+export type TurnSubmissionResponse = z.infer<typeof turnSubmissionResponseSchema>;

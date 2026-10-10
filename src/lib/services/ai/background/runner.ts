@@ -12,6 +12,7 @@
  */
 
 import { ai } from '$lib/services/ai';
+import { automaticCharacterUpdate, retainAutomaticCharacterIdentity } from '$lib/contracts/automaticCharacterUpdate';
 import { story } from '$lib/stores/story.svelte';
 import { settings } from '$lib/stores/settings.svelte';
 import { CHAPTERS_PER_ARC, selectNextChapterWindow } from '$lib/services/chapterCadence';
@@ -287,8 +288,23 @@ async function runLoreManagement(chapters: Chapter[]): Promise<void> {
 
 	const newEntries: Entry[] = [];
 	const updatedEntries = new Map<string, Partial<Entry>>();
+	const blockedCharacterChanges: string[] = [];
 
 	for (const update of result.updates) {
+		const identityTarget = update.entryId ? story.lorebookEntries.find(entry => entry.id === update.entryId) : undefined;
+		if ((update.type === 'character' || identityTarget?.type === 'character') && ['merge', 'archive'].includes(update.action)) {
+			blockedCharacterChanges.push(`${update.name}: automatic character ${update.action} requires review.`);
+			continue;
+		}
+		if (update.type === 'character' || identityTarget?.type === 'character') {
+			const needle = update.name.trim().toLowerCase();
+			const matches = story.lorebookEntries.filter(entry => entry.type === 'character' && (entry.name.trim().toLowerCase() === needle || entry.aliases?.some(alias => alias.trim().toLowerCase() === needle)));
+			if (update.action === 'create' && matches.length === 0) continue;
+			if (update.type !== 'character' || matches.length !== 1 || (update.entryId && matches[0].id !== update.entryId)) {
+				blockedCharacterChanges.push(`${update.name}: character identity is missing, ambiguous or does not match the supplied ID.`);
+				continue;
+			}
+		}
 		if (update.action === 'create') {
 			const existing = findMatchingLoreEntry(story.lorebookEntries, {
 				name: update.name,
@@ -312,7 +328,7 @@ async function runLoreManagement(chapters: Chapter[]): Promise<void> {
 				applyCurrentStoryServerVersion(await saveCanonicalLorebookEntry(entry, 'create'));
 				newEntries.push(entry);
 			} else {
-				const updatePayload = buildLoreUpdatePayload(existing, update.description, update.keywords, update);
+				const updatePayload = buildLoreUpdatePayload(existing, update.description, update.keywords, update, chapters.flatMap(chapter => chapter.sourceEntryIds ?? []));
 				const result = await patchCanonicalLorebookEntry(existing.id, updatePayload);
 				applyCurrentStoryServerVersion(result.serverVersion);
 				updatedEntries.set(existing.id, updatePayload);
@@ -320,7 +336,7 @@ async function runLoreManagement(chapters: Chapter[]): Promise<void> {
 		} else if (update.action === 'update' && update.entryId) {
 			const existing = story.lorebookEntries.find(e => e.id === update.entryId);
 			const updatePayload = existing
-				? buildLoreUpdatePayload(existing, update.description, update.keywords, update)
+				? buildLoreUpdatePayload(existing, update.description, update.keywords, update, chapters.flatMap(chapter => chapter.sourceEntryIds ?? []))
 				: {
 						description: update.description,
 						injection: { mode: 'keyword', keywords: update.keywords, priority: 0 },
@@ -377,6 +393,7 @@ async function runLoreManagement(chapters: Chapter[]): Promise<void> {
 			return patch ? { ...e, ...patch } : e;
 		});
 	}
+	if (blockedCharacterChanges.length) throw new Error(blockedCharacterChanges.join(' '));
 }
 
 function buildLoreUpdatePayload(
@@ -393,6 +410,7 @@ function buildLoreUpdatePayload(
 		disposition?: FactionEntryState['disposition'] | null;
 		territory?: string[] | null;
 	},
+	sourceEntryIds: string[] = [],
 ): Partial<Entry> {
 	const updatePayload: Partial<Entry> = {
 		description: mergeLoreDescription(existing.description, description),
@@ -411,6 +429,13 @@ function buildLoreUpdatePayload(
 	} else if (existing.type === 'faction') {
 		const fState = { ...(existing.state as FactionEntryState) };
 		if (applyFactionUpdateState(fState, update)) updatePayload.state = fState;
+	}
+	if (existing.type === 'character') {
+		const current = existing.state as unknown as Record<string, unknown>;
+		const proposed = updatePayload.state as unknown as Record<string, unknown> ?? current;
+		updatePayload.metadata = { ...existing.metadata, automaticCharacterUpdate: automaticCharacterUpdate({ ...current, description: existing.description }, { ...proposed, description }, sourceEntryIds) };
+		updatePayload.state = retainAutomaticCharacterIdentity(current, proposed) as unknown as Entry['state'];
+		updatePayload.description = existing.description;
 	}
 	return updatePayload;
 }

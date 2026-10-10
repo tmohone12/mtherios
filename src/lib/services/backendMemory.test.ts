@@ -54,6 +54,27 @@ describe('backend memory turn client', () => {
 		vi.restoreAllMocks();
 	});
 
+	const pendingTurn = { status: 'awaiting_input', runId: 'run_pending', storyId: 'story_alpha', clientTurnId: 'turn_1',
+		interactions: [{ id: 'question_1', kind: 'question', prompt: 'Which passage?', revision: 1 }] };
+
+	it('returns typed pending IDs from JSON and successful command envelopes', async () => {
+		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(pendingTurn)).mockResolvedValueOnce(jsonResponse({
+			commandId: 'turn_1', clientCommandId: 'turn_1', storyId: 'story_alpha', command: 'turn.submit', status: 'succeeded',
+			result: pendingTurn, projectionChanges: {}, error: null, createdAt: '2026-10-02T00:00:00.000Z', updatedAt: '2026-10-02T00:00:00.000Z',
+		}));
+		await expect(processBackendTurn(turnRequest)).resolves.toEqual(pendingTurn);
+		await expect(processBackendTurn(turnRequest)).resolves.toEqual(pendingTurn);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([false, true])('preserves a pending SSE response with a final done frame: %s', async withDone => {
+		const payload = `event: pending\ndata: ${JSON.stringify(pendingTurn)}\n\n${withDone ? `event: done\ndata: ${JSON.stringify(pendingTurn)}\n\n` : ''}`;
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(payload, { headers: { 'Content-Type': 'text/event-stream' } }));
+		const narration = vi.fn();
+		await expect(processBackendTurn(turnRequest, { onNarrationChunk: narration })).resolves.toEqual(pendingTurn);
+		expect(narration).not.toHaveBeenCalled();
+	});
+
 	it('routes turn submissions through the streaming turn endpoint', async () => {
 		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
 			commandId: 'turn_1',

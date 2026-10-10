@@ -29,6 +29,7 @@
 			await app.init();
 		})();
 		return () => {
+			app.disposeNavigation();
 			viewport?.removeEventListener('resize', syncViewport);
 			viewport?.removeEventListener('scroll', syncViewport);
 			window.removeEventListener('resize', syncViewport);
@@ -38,10 +39,11 @@
 	// Load story when currentStoryId changes
 	$effect(() => {
 		const id = app.currentStoryId;
+		if (!id && (story.currentStory || story.loading)) { story.clear(); return; }
 		if (id && (!story.currentStory || story.currentStory.id !== id)) {
 			story.loadStory(id).catch(() => {
 				// Story doesn't exist (deleted or DB cleared) — clear stale reference
-				app.closeStory();
+				if (app.currentStoryId === id) app.closeStory({ replace: true });
 			});
 		}
 	});
@@ -53,11 +55,13 @@
 
 {#if app.loading}
 	<!-- Loading splash -->
-	<div class="app-shell flex items-center justify-center bg-[var(--bg-primary)]">
+	<div class="app-shell flex flex-col items-center justify-center gap-5 bg-[var(--bg-primary)]" role="status" aria-live="polite">
 		<svg viewBox="0 0 48 48" fill="none" class="h-12 w-12 animate-pulse text-[var(--text-accent)]">
 			<path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="currentColor" stroke-width="1.5" fill="none"/>
 			<circle cx="24" cy="24" r="5" fill="currentColor" opacity="0.6"/>
 		</svg>
+		<p class="font-display text-2xl text-[var(--text-primary)]">Opening your workspace</p>
+		<p class="text-sm text-[var(--text-muted)]">Gathering your stories and saved settings…</p>
 	</div>
 {:else if app.showWizard}
 	<OnboardingWizard
@@ -70,15 +74,17 @@
 			app.onboardingComplete = true;
 		}}
 	/>
-{:else if app.currentStoryId && story.currentStory}
-	<StoryView />
-{:else if app.currentStoryId && story.loading}
+{:else if app.currentStoryId && story.currentStory?.id === app.currentStoryId}
+	{#key app.currentStoryId}<StoryView />{/key}
+{:else if app.currentStoryId}
 	<!-- Story is loading from DB — show loading state instead of flashing AppShell -->
-	<div class="app-shell flex items-center justify-center bg-[var(--bg-primary)]">
+	<div class="app-shell flex flex-col items-center justify-center gap-5 bg-[var(--bg-primary)]" role="status" aria-live="polite">
 		<svg viewBox="0 0 48 48" fill="none" class="h-12 w-12 animate-pulse text-[var(--text-accent)]">
 			<path d="M24 4L6 14v20l18 10 18-10V14L24 4z" stroke="currentColor" stroke-width="1.5" fill="none"/>
 			<circle cx="24" cy="24" r="5" fill="currentColor" opacity="0.6"/>
 		</svg>
+		<p class="font-display text-2xl text-[var(--text-primary)]">Returning to your story</p>
+		<p class="text-sm text-[var(--text-muted)]">Loading the latest saved chapter…</p>
 	</div>
 {:else}
 	{@render children()}

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import CharacterContinuityReview from './CharacterContinuityReview.svelte';
 	import {
 		AlertTriangle,
 		BookOpen,
@@ -68,6 +69,8 @@
 	let proposalQuery = $state('');
 	let proposalRows = $state<JsonRecord[]>([]);
 	let selectedProposal = $state<JsonRecord | null>(null);
+	let identityReviewNotes = $state('');
+	$effect(() => { selectedProposal?.id; identityReviewNotes = ''; });
 
 	let resolverId = $state('');
 	let resolverType = $state('character');
@@ -382,9 +385,9 @@
 		busy = true;
 		status = '';
 		try {
-			await reviewPatchProposal(selectedStoryId, String(selectedProposal.id), decision, 'human', decision === 'approved'
+			await reviewPatchProposal(selectedStoryId, String(selectedProposal.id), decision, 'human', identityReviewNotes.trim() || (decision === 'approved'
 				? 'Approved in the repair cockpit.'
-				: 'Rejected in the repair cockpit.');
+				: 'Rejected in the repair cockpit.'), typeof selectedProposal.serverVersion === 'number' ? selectedProposal.serverVersion : undefined);
 			status = `Patch proposal ${decision}.`;
 			await loadProposals();
 		} catch (error) {
@@ -709,6 +712,7 @@
 								<span class="rounded border border-[var(--border-secondary)] px-2 py-1">{preview(selectedProposal.proposalType)}</span>
 								<span class="rounded border border-[var(--border-secondary)] px-2 py-1">{preview(selectedProposal.targetTable)}/{preview(selectedProposal.targetRecordId)}</span>
 							</div>
+							<CharacterContinuityReview metadata={asRecord(selectedProposal.metadata)} bind:notes={identityReviewNotes} />
 							<div class="mt-3 flex flex-wrap gap-2">
 								<button class="rounded-md border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)]" onclick={() => reviewProposal('approved')} disabled={!selectedProposal?.id}>
 									<Check class="mr-1 inline h-4 w-4" /> Approve

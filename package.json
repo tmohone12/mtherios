@@ -3,6 +3,7 @@
 	"private": true,
 	"version": "0.0.1",
 	"type": "module",
+	"engines": { "node": ">=22.19.0" },
 	"scripts": {
 		"start": "node server.js",
 		"app": "npm run app:dev",
@@ -64,6 +65,8 @@
 		"vitest": "^4.1.2"
 	},
 	"dependencies": {
+		"@earendil-works/pi-agent-core": "1.0.0",
+		"@earendil-works/pi-ai": "1.0.0",
 		"@tailwindcss/vite": "^4.2.1",
 		"dexie": "^4.3.0",
 		"dompurify": "^3.4.1",

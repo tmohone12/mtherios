@@ -41,3 +41,6 @@ vite.config.ts.timestamp-*
 
 # MythEngine local configuration
 mythengine.config.json
+
+# Local test transform cache
+/.vite-test-cache/

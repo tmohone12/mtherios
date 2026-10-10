@@ -15,21 +15,27 @@ describe('WorldExplorer control-surface boundary', () => {
 
 	it('exposes only lorebook character-state fields and draft-first context updates', () => {
 		const source = readFileSync(resolve('src/lib/components/database/WorldExplorer.svelte'), 'utf8');
+		const characterStart = source.indexOf("{#if editMode && editorRecord?.type === 'character'}");
+		const conceptStart = source.indexOf("{#if editMode && editorRecord?.type === 'concept'}", characterStart);
+		expect(characterStart).toBeGreaterThan(-1);
+		expect(conceptStart).toBeGreaterThan(characterStart);
+		// Candidate authoring has its own Role label; these restrictions apply to the canonical state editor.
+		const characterEditor = source.slice(characterStart, conceptStart);
 
-		expect(source).toContain('Character State');
+		expect(characterEditor).toContain('Character State');
 		for (const label of ['Bio', 'Appearance (stable features)', 'Personality', 'Rank', 'Disposition', 'Affinity', 'Goals', 'Faction Tags', 'Known Facts', 'Current presentation (clothing / injuries)', 'Voice / speech style']) {
-			expect(source).toContain(`<span>${label}</span>`);
+			expect(characterEditor).toContain(`<span>${label}</span>`);
 		}
-		expect(source).toContain('factionTags');
-		expect(source).toContain('AI Refinement');
+		expect(characterEditor).toContain('factionTags');
+		expect(characterEditor).toContain('AI Refinement');
 		for (const label of ['Voice', 'Role', 'Species', 'Personal Opinion', 'Mannerisms', 'Conversation Topics', 'Revealed Secrets', 'Visibility Note', 'Player Prompt']) {
-			expect(source).not.toContain(`<span>${label}</span>`);
+			expect(characterEditor).not.toContain(`<span>${label}</span>`);
 		}
 		expect(source).not.toContain('accept="image/*"');
 		expect(source).not.toContain('photoUrl');
 		expect(source).not.toContain('promptTemplate');
 		expect(source).not.toContain('eventMemory');
-		expect(source).not.toContain('currentLocation');
+		expect(characterEditor).not.toContain('currentLocation');
 		expect(source).not.toContain('currentAction');
 		expect(source).not.toContain('emotionalState');
 		expect(source).toContain('world.character.draftUpdate');
@@ -99,15 +105,23 @@ describe('WorldExplorer control-surface boundary', () => {
 		expect(source).toContain('Evidence receipt');
 	});
 
-	it('requires the human character seeds and sends creation to review instead of canon', () => {
+	it('labels the required preview seeds and sends generated creation to review instead of canon', () => {
 		const source = readFileSync(resolve('src/lib/components/database/WorldExplorer.svelte'), 'utf8');
+		const previewStart = source.indexOf('async function createCharacterDraft()');
+		const directStart = source.indexOf('async function createCharacterDirect()', previewStart);
+		expect(previewStart).toBeGreaterThan(-1);
+		expect(directStart).toBeGreaterThan(previewStart);
+		const previewHandler = source.slice(previewStart, directStart);
 
-		expect(source).toContain("'world.character.draftCreate'");
-		expect(source).toContain('Narrative purpose *');
-		expect(source).toContain("body.status === 'existing'");
-		expect(source).toContain("await openRecord('characters', body.recordId)");
-		expect(source).toContain("await openRecord('patchProposals', proposalId)");
-		expect(source).toContain('Characters established during play are saved automatically after validation');
-		expect(source).toContain('Preview and approve it here.');
+		expect(previewHandler).toContain("'world.character.draftCreate'");
+		expect(source).toContain('Narrative purpose (preview required)');
+		expect(previewHandler).toContain("body.status === 'existing'");
+		expect(previewHandler).toContain("await openRecord('characters', body.recordId)");
+		expect(previewHandler).toContain("await openRecord('patchProposals', proposalId)");
+		expect(previewHandler).toContain('Choose Create character to add them to this story.');
+		expect(previewHandler).not.toContain('patchProposal.review');
+		expect(previewHandler).not.toContain('world.record.patch');
+		expect(previewHandler).not.toContain('content.item.create');
+		expect(source).toContain('Review the result before saving canon.');
 	});
 });

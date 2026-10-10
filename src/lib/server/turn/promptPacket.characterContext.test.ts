@@ -116,6 +116,20 @@ function context(): TurnContext {
 }
 
 describe('server turn prompt character context', () => {
+	it('places one sourced faction intention in the dynamic tail without moving cached history or forecasts into canon', () => {
+		const ctx = context();
+		ctx.story.metadata = { factionWorkflow: { version: 1, attempts: [{ id: 'grateful_offer', status: 'intended', factionName: 'Belaerys household', actorEntityIds: ['npc_maera'], locationId: 'loc_study', intention: { action: 'Offer shelter to an old ally.', motive: 'PRIVATE_GRATITUDE', manner: 'Warm and wry.', basis: ['old_kindness'], limits: ['The ally may decline.'], opposition: 'Consent is unresolved.' } }], forecasts: [{ development: 'FORECAST_IS_NOT_CANON' }] } };
+		const prepared = buildServerTurnPrompt(ctx, packet('I ask Maera about the offer.'), 'entry_current', { playerAction: 'I ask Maera about the offer.', presentNpcIds: ['npc_maera'] });
+		expect(prepared.dynamicPrompt).toContain('PRIVATE_GRATITUDE');
+		expect(prepared.stableContext).not.toContain('PRIVATE_GRATITUDE');
+		expect(prepared.dynamicPrompt).not.toContain('FORECAST_IS_NOT_CANON');
+		expect(prepared.factionCueSelection).toMatchObject({ sourceKey: 'intent:grateful_offer', cardId: 'grateful_offer', mode: 'direct' });
+		expect(prepared.dynamicContextRecords.filter(row => row.kind === 'factionCue')).toHaveLength(1);
+		const prefix = prepared.stableContext;
+		(ctx.story.metadata.factionWorkflow as any).attempts[0].intention.motive = 'CHANGED_PRIVATE_MOTIVE';
+		const changed = buildServerTurnPrompt(ctx, packet('I ask Maera about the offer.'), 'entry_current', { playerAction: 'I ask Maera about the offer.', presentNpcIds: ['npc_maera'] });
+		expect(changed.stableContext).toBe(prefix);
+	});
 	it('keeps a scene bystander available to dialogue without sending their full card to the narrator', () => {
 		const ctx = context();
 		ctx.recentEntries[1].content += ' Addam Velaryon sits near the door.';
@@ -223,7 +237,7 @@ describe('server turn prompt character context', () => {
 		ctx.chapters[0].metadata = { endPosition: 40 };
 		expect(unchapteredDialogueEntries(ctx).map(entry => entry.position)).toEqual(Array.from({ length: 10 }, (_, index) => index + 41));
 	});
-	it('appends complete dialogue until a chapter boundary resets it', () => {
+	it('retains two complete exchanges across a chapter boundary within the configured dialogue allowance', () => {
 		const ctx = context();
 		const exchange = (turn: number) => [
 			row({ id: `entry_${turn}`, storyId: ctx.story.id, type: 'user_action', content: `Action ${turn}`,
@@ -243,8 +257,27 @@ describe('server turn prompt character context', () => {
 			irreversibleChanges: [], npcKnowledgeChanges: [], promisesDebtsOaths: [], discoveredClues: [],
 			relationshipChanges: [], factionChanges: [], openThreads: [], sourceEntryIds: ['narration_12'],
 			sourceEventIds: [], metadata: { endPosition: 24 } })] as TurnContext['chapters'];
+		ctx.recentEntries = ctx.recentEntries.filter(entry => entry.position <= 24);
 		expect(buildServerTurnPrompt(ctx, packet(), 'entry_current', options).messages.map(message => message.content))
+			.toEqual(['Action 11', 'Narration 11', 'Action 12', 'Narration 12']);
+		ctx.recentEntries.push(...(exchange(13) as TurnContext['recentEntries']));
+		expect(buildServerTurnPrompt(ctx, packet(), 'entry_current', options).messages.map(message => message.content))
+			.toEqual(['Action 11', 'Narration 11', 'Action 12', 'Narration 12', 'Action 13', 'Narration 13']);
+		expect(buildServerTurnPrompt(ctx, packet(), 'entry_current', { recentDialogueTurns: 1 }).messages.map(message => message.content))
 			.toEqual(['Action 13', 'Narration 13']);
+	});
+	it('keeps an earlier player action paired with its reply after the chapter boundary', () => {
+		const ctx = context();
+		ctx.recentEntries = [
+			row({ id: 'late_action', storyId: ctx.story.id, type: 'user_action', content: 'I ask Mira about the promise.', position: 5, parentId: null, branchId: null, metadata: {} }),
+			row({ id: 'late_reply', storyId: ctx.story.id, type: 'narration', content: 'Mira confirms the promise was kept.', position: 21, parentId: 'late_action', branchId: null, metadata: {} }),
+		] as TurnContext['recentEntries'];
+		ctx.chapters = [row({ id: 'chapter_1', storyId: ctx.story.id, number: 1, title: 'Boundary', sceneOutcome: 'Earlier events.',
+			irreversibleChanges: [], npcKnowledgeChanges: [], promisesDebtsOaths: [], discoveredClues: [],
+			relationshipChanges: [], factionChanges: [], openThreads: [], sourceEntryIds: [],
+			sourceEventIds: [], metadata: { endPosition: 20 } })] as TurnContext['chapters'];
+		expect(buildServerTurnPrompt(ctx, packet(), 'entry_current', { recentDialogueTurns: 2 }).messages.map(message => message.content))
+			.toEqual(['I ask Mira about the promise.', 'Mira confirms the promise was kept.']);
 	});
 	it('keeps a called NPC profile and their own remembered belief', () => {
 		const ctx = context();
@@ -395,7 +428,8 @@ describe('server turn prompt character context', () => {
 		expect(prompt.prompt).not.toContain('- Chapter 1:');
 		expect(prompt.prompt).toContain('The silver chapel key must stay hidden from the harbor watch.');
 		expect(prompt.prompt).toContain('Maera trusts Aurion because he rescued her daughter at the bridge.');
-		expect(prompt.prompt).toContain('[chapters:chapter_1]');
+		expect(prompt.prompt).toContain('[source chapters: 1]');
+		expect(ctx.arcs[0].metadata.characterArcs).toEqual(fields.characterArcs);
 		const records = prompt.contextRecords.filter(record => record.kind === 'arcs' || record.kind === 'chapters');
 		const arcRecord = records.find(record => record.kind === 'arcs')!;
 		const fullArc = prompt.prompt.slice(arcRecord.start, arcRecord.end);

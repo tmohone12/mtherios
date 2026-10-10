@@ -21,6 +21,7 @@ export async function embedText(text, config = embeddingConfig()) {
 
 export async function embedMany(texts, config = embeddingConfig()) {
 	if (texts.length === 0) return [];
+	if (process.env.MYTHENGINE_WIKI_EMBED_MAX_REQUESTS === '0' && (config.customUrl || !['local', 'local-hash'].includes(config.provider))) throw new Error('Scoped wiki query has no external embedding request allowance.');
 	if (config.customUrl) return embedCustom(texts, config);
 	if (config.provider === 'local' || config.provider === 'local-hash') return texts.map((text) => localHashEmbedding(text, config.dimensions));
 	if (config.provider === 'openai' || config.provider === 'openai-compatible' || config.provider === 'openrouter') return embedOpenAi(texts, config);

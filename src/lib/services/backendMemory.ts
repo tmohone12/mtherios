@@ -1,3 +1,4 @@
+import { chatgptCsrfHeaders } from './chatgptBrowser';
 import {
 	memoryRetrieveRequestSchema,
 	retrievedMemoryPacketSchema,
@@ -5,7 +6,7 @@ import {
 	syncPushResponseSchema,
 	storyEntriesAroundResponseSchema,
 	turnPreviewResponseSchema,
-	turnResponseSchema,
+	turnSubmissionResponseSchema,
 	type MemoryRetrieveRequest,
 	type RetrievedMemoryPacket,
 	type SyncChange,
@@ -13,7 +14,7 @@ import {
 	type StoryEntriesAroundResponse,
 	type TurnRequest,
 	type TurnPreviewResponse,
-	type TurnResponse,
+	type TurnSubmissionResponse,
 } from '$lib/contracts/memory';
 import { engineCommandResponseSchema } from '$lib/contracts/engine';
 import { importStoryBundleToBackend } from '$lib/services/backendImport';
@@ -49,7 +50,7 @@ export function isTerminalReachabilityError(error: unknown): boolean {
 async function postJson(url: string, payload: unknown): Promise<unknown> {
 	const response = await fetch(url, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: { 'Content-Type': 'application/json', ...chatgptCsrfHeaders() },
 		body: JSON.stringify(payload),
 	});
 	if (!response.ok) {
@@ -107,7 +108,7 @@ export interface ProcessBackendTurnOptions {
 export async function processBackendTurn(
 	request: TurnRequest,
 	options: ProcessBackendTurnOptions = {},
-): Promise<TurnResponse> {
+): Promise<TurnSubmissionResponse> {
 	const response = await fetch('/api/turn/stream', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -133,16 +134,16 @@ export async function processBackendTurn(
 					'ENGINE_COMMAND_FAILED',
 				);
 			}
-			return turnResponseSchema.parse(commandResponse.data.result);
+			return turnSubmissionResponseSchema.parse(commandResponse.data.result);
 		}
-		return turnResponseSchema.parse(raw);
+		return turnSubmissionResponseSchema.parse(raw);
 	}
 	if (!response.body) throw new TerminalRequestError('Terminal turn stream returned no response body.', 502, 'EMPTY_TURN_STREAM');
 
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';
-	let completed: TurnResponse | null = null;
+	let completed: TurnSubmissionResponse | null = null;
 	const handleFrame = async (frame: string) => {
 		let event = 'message';
 		const data: string[] = [];
@@ -154,8 +155,8 @@ export async function processBackendTurn(
 		const payload = JSON.parse(data.join('\n')) as Record<string, unknown>;
 		if (event === 'narration.chunk' && typeof payload.text === 'string') {
 			await options.onNarrationChunk?.(payload.text);
-		} else if (event === 'done') {
-			completed = turnResponseSchema.parse(payload);
+		} else if (event === 'done' || event === 'pending') {
+			completed = turnSubmissionResponseSchema.parse(payload);
 		} else if (event === 'error') {
 			throw new TerminalRequestError(
 				typeof payload.error === 'string' ? payload.error : 'Terminal turn stream failed.',

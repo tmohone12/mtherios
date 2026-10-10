@@ -476,7 +476,7 @@ describe('refineChapterCharacterUpdates', () => {
 	it('accepts one quoted evidence string after validating it against supplied context', async () => {
 		const text = JSON.stringify({ updates: [{ entityId: 'mira', patch: { appearance: 'Grey eyes' }, confidence: 0.9, evidence: 'She has grey eyes.' }] });
 		mocks.generateServerTextWithMetrics.mockResolvedValueOnce({ text, model: 'test', endpoint: 'mock', durationMs: 1, promptChars: 20, responseChars: text.length, usage: {} });
-		const result = await refineChapterCharacterUpdates({ storyId: 'story_alpha', chapterWindow: [1, 2], candidates: [{ entityId: 'mira', name: 'Mira', description: 'She has grey eyes.', state: {} }] });
+		const result = await refineChapterCharacterUpdates({ storyId: 'story_alpha', chapterWindow: [1, 2], sourceEvidence: [{ id: 'original', content: 'Mira stands at the quay. She has grey eyes.' }], candidates: [{ entityId: 'mira', name: 'Mira', description: 'She has grey eyes.', state: {} }] });
 		expect(result.updates[0]).toMatchObject({ evidence: ['She has grey eyes.'], state: { appearance: 'Grey eyes' } });
 	});
 	it.each(['', 'null', '[]', '{}', '{"updates":"wrong shape"}'])('rejects blank or wrong-shaped responses: %s', async text => {
@@ -495,7 +495,7 @@ describe('refineChapterCharacterUpdates', () => {
 	it('includes canonical description and legacy fields and retains quoted enrichment evidence', async () => {
 		const text = JSON.stringify({ updates: [{ entityId: 'mira', patch: { appearance: 'Grey eyes', speechStyle: 'Measured diction' }, confidence: 0.9, evidence: ['She has grey eyes.'] }] });
 		mocks.generateServerTextWithMetrics.mockResolvedValueOnce({ text, model: 'test', endpoint: 'mock', durationMs: 1, promptChars: 20, responseChars: text.length, usage: {} });
-		const result = await refineChapterCharacterUpdates({ storyId: 'story_alpha', chapterWindow: [1, 2], candidates: [{ entityId: 'mira', name: 'Mira', description: 'She has grey eyes.', state: { background: 'A harbor broker.', traits: ['patient'], speechStyle: 'Measured diction' } }] });
+		const result = await refineChapterCharacterUpdates({ storyId: 'story_alpha', chapterWindow: [1, 2], sourceEvidence: [{ id: 'original', content: 'Mira stands at the quay. She has grey eyes.' }], candidates: [{ entityId: 'mira', name: 'Mira', description: 'She has grey eyes.', state: { background: 'A harbor broker.', traits: ['patient'], speechStyle: 'Measured diction' } }] });
 		const prompt = mocks.generateServerTextWithMetrics.mock.calls[0][0].prompt;
 		expect(prompt).toContain('She has grey eyes.');
 		expect(prompt).toContain('"bio":"A harbor broker."');
@@ -539,6 +539,7 @@ describe('refineChapterCharacterUpdates', () => {
 				title: 'The North Quay',
 				summary: 'Mira barred the quay and chose to protect the harbor witness.',
 			}],
+			sourceEvidence: [{ id: 'original', content: 'Mira barred the quay and chose to protect the harbor witness.' }],
 			candidates: [{
 				entityId: 'npc_mira',
 				name: 'Mira',

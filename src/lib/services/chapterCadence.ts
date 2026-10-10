@@ -4,6 +4,26 @@ import { isParallelPovEntry } from './ai/context/parallelPov';
 export const CHAPTER_TURN_COUNT = 20;
 export const CHAPTERS_PER_ARC = 10;
 
+/** Arc numbers label saved summaries; actual chapter coverage defines the next window.
+ * Reviewed backfills may contain fewer chapters than the normal cadence. */
+export function selectArcRollupBatches<T extends { id: string }>(
+	chapterRows: T[],
+	arcRows: Array<{ chapterIds: string[] }>,
+	chaptersPerArc: number = CHAPTERS_PER_ARC,
+): T[][] {
+	if (!Number.isInteger(chaptersPerArc) || chaptersPerArc < 1) return [];
+	const covered = new Set(arcRows.flatMap(arc => arc.chapterIds));
+	const uncovered = chapterRows.filter(chapter => !covered.has(chapter.id));
+	const batches: T[][] = [];
+	for (let index = 0; index + chaptersPerArc <= uncovered.length; index += chaptersPerArc) {
+		const batch = uncovered.slice(index, index + chaptersPerArc);
+		const numbers = batch.map(chapter => (chapter as T & { number?: unknown }).number);
+		if (numbers.every(number => typeof number === 'number') && numbers.some((number, offset) => offset > 0 && Number(number) !== Number(numbers[offset - 1]) + 1)) break;
+		batches.push(batch);
+	}
+	return batches;
+}
+
 // Retain the wire keys for older clients; their former entry counts are no longer configurable.
 export const FIXED_CHAPTER_SETTINGS = {
 	chapterThreshold: CHAPTER_TURN_COUNT,

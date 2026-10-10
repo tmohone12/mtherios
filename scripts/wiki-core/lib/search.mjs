@@ -1,6 +1,8 @@
 import { embedText, embeddingConfig } from './embeddings.mjs';
 import { qdrantConfig, searchPoints } from './qdrant.mjs';
 import { exactSearch, followGraph, stripMarkdown } from './vault.mjs';
+import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 
 export async function searchVault(vault, query, {
 	limit = 8,
@@ -19,7 +21,7 @@ export async function searchVault(vault, query, {
 
 	if (!exact) {
 		try {
-			const vector = await embedText(query, embeddingConfig({ provider, model }));
+			const vector = await queryEmbedding(query, embeddingConfig({ provider, model }));
 			semanticRows = await searchPoints(vector, qdrantConfig({ collection }), { limit, layer });
 		} catch (error) {
 			semanticError = error instanceof Error ? error.message : String(error);
@@ -50,6 +52,18 @@ export async function searchVault(vault, query, {
 		semanticError,
 		results,
 	};
+}
+
+async function queryEmbedding(query, config) {
+	const file = process.env.MYTHENGINE_WIKI_QUERY_EMBEDDING_FILE;
+	if (!file) return embedText(query, config);
+	// Scoped server queries may consume only the parent's bounded query-bound embedding.
+	if ((await fs.stat(file)).size > 2_000_000) throw new Error('Query embedding receipt exceeds its limit.');
+	const receipt = JSON.parse(await fs.readFile(file, 'utf8'));
+	if (receipt.queryHash !== createHash('sha256').update(query).digest('hex')) throw new Error('Query embedding receipt does not match this query.');
+	if (receipt.error) throw new Error(String(receipt.error).slice(0, 200));
+	if (!Array.isArray(receipt.vector) || !receipt.vector.length || receipt.vector.length > 65_536 || receipt.vector.some(value => typeof value !== 'number' || !Number.isFinite(value))) throw new Error('Query embedding receipt has no valid vector.');
+	return receipt.vector;
 }
 
 export function mergeResults(vault, semanticRows, exactRows, limit) {

@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { selectCompletedChapterTurns, selectNextChapterWindow, type ChapterSourceEntry } from './chapterCadence';
+import { selectArcRollupBatches, selectCompletedChapterTurns, selectNextChapterWindow, type ChapterSourceEntry } from './chapterCadence';
+
+describe('arcs after historical backfills', () => {
+	const chapters = Array.from({ length: 106 }, (_, index) => ({ id: `chapter_${index + 1}`, number: index + 1 }));
+	const arcs = Array.from({ length: 9 }, (_, index) => ({ number: index + 1,
+		chapterIds: chapters.slice(index * 10, Math.min((index + 1) * 10, 86)).map(chapter => chapter.id) }));
+
+	it('continues after actual six-chapter arc 9 coverage without skipping chapters 87 through 90', () => {
+		expect(arcs[8].chapterIds).toHaveLength(6);
+		const batches = selectArcRollupBatches(chapters, arcs);
+		expect(batches.map(batch => batch.map(chapter => chapter.number))).toEqual([
+			Array.from({ length: 10 }, (_, index) => 87 + index),
+			Array.from({ length: 10 }, (_, index) => 97 + index),
+		]);
+	});
+
+	it('waits for ten uncovered chapters and refuses a gap in their chronology', () => {
+		expect(selectArcRollupBatches(chapters.slice(0, 90), arcs)).toEqual([]);
+		expect(selectArcRollupBatches(chapters.filter(chapter => chapter.number !== 89), arcs)).toEqual([]);
+	});
+});
 
 function turns(count: number, start = 1, branchId: string | null = null): ChapterSourceEntry[] {
 	return Array.from({ length: count }, (_, index) => {

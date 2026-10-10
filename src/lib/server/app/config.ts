@@ -19,6 +19,8 @@ export interface MtheriosAppConfig {
 	wikiEmbedApiKey: string;
 	wikiAutoIndexStoryVaults: boolean;
 	jobWorkerEnabled: boolean;
+	chapterRunnerEnabled: boolean;
+	chapterRunnerStoryId: string;
 	jobWorkerScope: 'all' | 'faction';
 	jobIntervalMs: number;
 }
@@ -34,6 +36,7 @@ export function getMtheriosAppConfig(): MtheriosAppConfig {
 		wikiEmbedBaseUrl: options.wikiEmbedBaseUrl, wikiEmbedApiKey: options.wikiEmbedApiKey,
 		wikiAutoIndexStoryVaults: options.wikiAutoIndexStoryVaults,
 		jobWorkerEnabled: options.jobWorker, jobWorkerScope: options.jobWorkerScope === 'faction' ? 'faction' : 'all', jobIntervalMs: options.jobIntervalMs,
+		chapterRunnerEnabled: options.chapterRunnerEnabled, chapterRunnerStoryId: options.chapterRunnerStoryId,
 	};
 }
 

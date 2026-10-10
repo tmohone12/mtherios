@@ -93,3 +93,12 @@ export function currentJevObservations(rows: readonly unknown[]): { rows: unknow
 	return { playerIntervened: lastPlayerInteraction >= 0,
 		rows: rows.filter((row, index) => index > lastPlayerInteraction || (row as { tool?: string })?.tool !== 'askJev') };
 }
+
+/** Public completion receives selected source ranges, never raw private research packets. */
+export function formatPiNarratorObservations(rows: readonly unknown[]): string {
+	return rows.filter(value => {
+		const row = value as { tool?: string; result?: { sourceRef?: string; visibility?: string } };
+		if (row.tool === 'read') return Boolean(row.result?.sourceRef && ['public', 'player_known'].includes(row.result.visibility ?? ''));
+		return !['recall', 'list', 'search'].includes(row.tool ?? '');
+	}).map(value => JSON.stringify(value)).join('\n');
+}

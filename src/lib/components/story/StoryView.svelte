@@ -6,6 +6,7 @@
 	import { uuid } from '$lib/utils/uuid';
 	import { imageUsageCostLabel } from '$lib/utils/imageUsage';
 	import ActionInput from './ActionInput.svelte';
+	import SettingsModal from '$lib/components/settings/SettingsModal.svelte';
 	import AssistantPanel from '$lib/components/content/AssistantPanel.svelte';
 	import PrivateImagePreview from '$lib/components/content/PrivateImagePreview.svelte';
 	import DiceRollCard from './DiceRollCard.svelte';
@@ -20,7 +21,7 @@
 	import { deleteStoryEverywhere } from '$lib/services/serverStories';
 	import { formatNarrative } from '$lib/utils/narrativeHtml';
 	import { gmTurnReceiptSchema, turnContextReceiptSchema, type GmTurnReceipt } from '$lib/contracts/memory';
-	import { ArrowLeft, ArrowDown, Database, Loader2, Users, BookOpen, Image, AlertTriangle, Download, Trash2, MoreVertical, X, ScrollText, Scissors, Wifi, WifiOff, MapPin, Feather } from 'lucide-svelte';
+	import { ArrowLeft, ArrowDown, Database, Loader2, Users, BookOpen, Image, AlertTriangle, Download, Trash2, MoreVertical, X, ScrollText, Scissors, Wifi, WifiOff, MapPin, Feather, Settings, PanelLeftClose, PanelLeftOpen } from 'lucide-svelte';
 	import { tick, onMount } from 'svelte';
 	import type { Suggestion } from '$lib/services/ai/sdk/schemas/suggestions';
 	import type { StoryEntry } from '$lib/types';
@@ -60,6 +61,10 @@
 	let navigationNotice = $state('');
 	let fabOpen = $state(false);
 	let assistantOpen = $state(false);
+	let settingsOpen = $state(false);
+	let focusMode = $state(false);
+	let actionsTrigger = $state<HTMLButtonElement>();
+	let actionsMenu = $state<HTMLDivElement>();
 	let confirmingDelete = $state(false);
 	let headerEditorOpen = $state(false);
 	let headerDraft = $state('');
@@ -72,10 +77,10 @@
 	let reputationDraft = $state('');
 	const transcriptDeleteNotice = 'This only removes transcript text. World state, memories, and plot plans are not rewound. Use a saved context checkpoint to restore earlier state.';
 	let messageControlError = $state<string | null>(null);
-	let workspaceTab = $state<'play' | 'lore' | 'chapters'>('play');
+	let workspaceTab = $derived(app.storyTab);
 	async function focusStorySource(entryId: string) {
 		const gameId = story.currentStory?.serverStoryId;
-		workspaceTab = 'play';
+		if (!app.selectStoryTab('play')) return;
 		while (gameId && story.currentStory?.serverStoryId === gameId && !story.entries.some(entry => entry.id === entryId) && story.hasOlderEntries) {
 			const oldestPosition = story.entries[0]?.position;
 			await story.loadOlderEntries();
@@ -99,6 +104,28 @@
 	let online = $state(true);
 	let headerTitleInput = $state<HTMLInputElement | null>(null);
 	let headerReturnFocus: HTMLElement | null = null;
+	function openStorySettings() { assistantOpen = false; settingsOpen = true; }
+	function openPlayerMenu() { assistantOpen = false; playerMenuOpen = true; }
+	function openGmTools() { assistantOpen = false; drawerOpen = true; }
+	function closeActions() {
+		fabOpen = false;
+		confirmingDelete = false;
+		actionsTrigger?.focus();
+	}
+	function dismissActions(event: PointerEvent) {
+		if (fabOpen && event.target instanceof Node && !actionsMenu?.contains(event.target) && !actionsTrigger?.contains(event.target)) fabOpen = false;
+	}
+	function handleHeaderKeys(event: KeyboardEvent) {
+		if (event.key === 'Escape' && fabOpen) { event.preventDefault(); closeActions(); }
+	}
+	function handleEditorKeys(event: KeyboardEvent) {
+		if (event.key === 'Escape') { event.stopPropagation(); closeHeaderEditor(); }
+		if (event.key !== 'Tab') return;
+		const nodes = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('button:not(:disabled), input, textarea, select, [tabindex="0"]')].filter(node => node.getClientRects().length);
+		if (!nodes.length) return;
+		if (event.shiftKey && document.activeElement === nodes[0]) { event.preventDefault(); nodes.at(-1)?.focus(); }
+		else if (!event.shiftKey && document.activeElement === nodes.at(-1)) { event.preventDefault(); nodes[0].focus(); }
+	}
 
 	function invalidateEnrichments(): void {
 		enrichmentRequestId += 1;
@@ -126,6 +153,7 @@
 	}
 
 	function openHeaderEditor() {
+		assistantOpen = false;
 		headerError = '';
 		headerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		titleDraft = story.currentStory?.title ?? '';
@@ -445,8 +473,8 @@
 
 	function goBack() {
 		if (!canLeaveLore() || headerSaving) return;
+		if (!app.closeStory()) return;
 		story.clear();
-		app.closeStory();
 	}
 
 	function canLeaveLore() {
@@ -457,7 +485,7 @@
 
 	function selectWorkspaceTab(tab: 'play' | 'lore' | 'chapters') {
 		if (tab !== workspaceTab && !canLeaveLore()) return;
-		workspaceTab = tab;
+		app.selectStoryTab(tab);
 	}
 
 	function updateLoreDirty(dirty: boolean) {
@@ -466,11 +494,20 @@
 	}
 
 	onMount(() => {
+		const releaseNavigationGuard = app.registerNavigationGuard(() => {
+			if (headerSaving) return false;
+			if (headerEditorOpen && (titleDraft !== (story.currentStory?.title ?? '') || headerDraft !== (story.currentStory?.headerPrompt ?? '') || descriptionDraft !== (story.currentStory?.description ?? ''))) {
+				headerError = 'Save or cancel your story controls before leaving.';
+				return false;
+			}
+			return canLeaveLore();
+		});
 		online = navigator.onLine;
 		const updateOnline = () => online = navigator.onLine;
 		window.addEventListener('online', updateOnline);
 		window.addEventListener('offline', updateOnline);
 		return () => {
+			releaseNavigationGuard();
 			story.clearGmActivity();
 			window.removeEventListener('online', updateOnline);
 			window.removeEventListener('offline', updateOnline);
@@ -491,13 +528,30 @@
 
 	$effect(() => {
 		const entryId = app.pendingStoryEntryId;
-		if (!entryId || story.loading || story.currentStory?.serverStoryId !== app.currentStoryId) return;
+		if (!entryId || story.loading || story.currentStory?.id !== app.currentStoryId) return;
 		app.pendingStoryEntryId = null;
 		void focusStorySource(entryId);
 	});
 </script>
 
-<div class="reader-workspace app-shell flex min-h-0 flex-col overflow-hidden bg-[var(--bg-reader)]">
+<svelte:window onpointerdown={dismissActions} onkeydown={handleHeaderKeys} />
+<svelte:head><title>{story.currentStory?.title ?? 'Story'} · MythEngine</title></svelte:head>
+
+<div class="reader-workspace app-shell flex min-h-0 overflow-hidden bg-[var(--bg-reader)]" class:focus-mode={focusMode} class:assistant-visible={assistantOpen}>
+	<a class="reader-skip" href="#story-reading-area">Skip to story</a>
+	<aside class="reader-rail" aria-label="Story navigation">
+		<button class="rail-brand" onclick={goBack} title="Back to library" aria-label="Back to library"><Feather size={24} strokeWidth={1.3} /><span>MythEngine</span></button>
+		<nav aria-label="Story tools">
+			<button class:active={workspaceTab === 'play'} onclick={() => selectWorkspaceTab('play')} aria-current={workspaceTab === 'play' ? 'page' : undefined}><BookOpen size={21} strokeWidth={1.5} /><span>Story</span></button>
+			<button class:active={workspaceTab === 'lore'} onclick={() => selectWorkspaceTab('lore')} aria-current={workspaceTab === 'lore' ? 'page' : undefined}><Database size={21} strokeWidth={1.5} /><span>World lore</span></button>
+			<button class:active={workspaceTab === 'chapters'} onclick={() => selectWorkspaceTab('chapters')} aria-current={workspaceTab === 'chapters' ? 'page' : undefined}><ScrollText size={21} strokeWidth={1.5} /><span>Chapters</span></button>
+			<span class="rail-divider"></span>
+			<button onclick={openPlayerMenu}><Users size={21} strokeWidth={1.5} /><span>Characters</span></button>
+			{#if story.currentStory?.serverStoryId && story.currentStory?.shelfId}<button class:active={assistantOpen} onclick={() => assistantOpen = !assistantOpen} aria-expanded={assistantOpen}><Feather size={21} strokeWidth={1.5} /><span>Assistant</span></button>{/if}
+		</nav>
+		<div class="rail-bottom"><button onclick={openStorySettings}><Settings size={20} strokeWidth={1.5} /><span>Settings</span></button><button onclick={goBack}><ArrowLeft size={20} strokeWidth={1.5} /><span>Library</span></button></div>
+	</aside>
+	<div class="reader-frame">
 	<!-- Header -->
 	<div class="reader-header">
 		<button onclick={goBack} class="reader-back" title="Back to library" aria-label="Back to library">
@@ -525,14 +579,19 @@
 			</button>
 			<button onclick={() => selectWorkspaceTab('chapters')} aria-pressed={workspaceTab === 'chapters'}><ScrollText class="h-3.5 w-3.5" /> Chapters</button>
 		</div>
-		<button onclick={() => playerMenuOpen = true} class="reader-tool reader-world" title="Player menu" aria-label="Open player menu">
-			<Users class="h-4 w-4" /><span>Player</span>
+		<button onclick={() => focusMode = !focusMode} class="reader-tool reader-focus" title={focusMode ? 'Show story navigation' : 'Focus on the story'} aria-label={focusMode ? 'Exit focus mode' : 'Enter focus mode'} aria-pressed={focusMode}>
+			{#if focusMode}<PanelLeftOpen size={18} />{:else}<PanelLeftClose size={18} />{/if}<span>{focusMode ? 'Show tools' : 'Focus'}</span>
 		</button>
-		<button onclick={() => drawerOpen = true} class="reader-tool reader-connection" title="GM tools and connection state" aria-label="Open GM tools and connection state">
+		{#if story.currentStory?.serverStoryId && story.currentStory?.shelfId}<button onclick={() => assistantOpen = !assistantOpen} class="reader-tool reader-assistant" aria-label="Open Assistant" aria-expanded={assistantOpen}><Feather size={17} /><span>Assistant</span></button>{/if}
+		<button onclick={openPlayerMenu} class="reader-tool reader-world" title="Characters and world" aria-label="Open player menu">
+			<Users class="h-4 w-4" /><span>Characters</span>
+		</button>
+		<button onclick={openGmTools} class="reader-tool reader-connection" title="GM tools and connection state" aria-label="Open GM tools and connection state">
 			{#if online}<Wifi class="h-4 w-4 {story.engineStreamStatus.connected ? 'text-[var(--success)]' : ''}" />{:else}<WifiOff class="h-4 w-4 text-[var(--color-crimson-400)]" />{/if}
 		</button>
 		<div class="relative shrink-0">
 			<button
+				bind:this={actionsTrigger}
 				onclick={() => { fabOpen = !fabOpen; confirmingDelete = false; }}
 				class="reader-tool"
 				title={fabOpen ? 'Close story actions' : 'Open story actions'}
@@ -547,12 +606,13 @@
 			</button>
 
 			{#if fabOpen}
-				<div class="story-actions-menu absolute right-0 top-12 z-30 flex min-w-[210px] flex-col gap-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 shadow-2xl">
+				<div bind:this={actionsMenu} class="story-actions-menu absolute right-0 top-12 z-30 flex min-w-[210px] flex-col gap-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 shadow-2xl">
+					<button onclick={() => { openStorySettings(); fabOpen = false; }} class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs hover:bg-[var(--bg-tertiary)]"><Settings size={16} /><span>Settings</span></button>
 					{#if story.currentStory?.serverStoryId && story.currentStory?.shelfId}
 						<button onclick={() => { assistantOpen = true; fabOpen = false; }} class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"><Feather class="h-4 w-4 text-[var(--text-accent)]" /><span class="text-xs font-medium text-[var(--text-primary)]">Assistant</span></button>
 					{/if}
 					<button
-				onclick={() => { playerMenuOpen = true; fabOpen = false; }}
+				onclick={() => { openPlayerMenu(); fabOpen = false; }}
 						class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
 					>
 						<Users class="h-4 w-4 text-[var(--text-accent)]" />
@@ -569,7 +629,7 @@
 						<span class="text-xs font-medium text-[var(--text-primary)]">Lore</span>
 					</button>
 					<button
-						onclick={() => { drawerOpen = true; fabOpen = false; }}
+						onclick={() => { openGmTools(); fabOpen = false; }}
 						class="flex items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)] sm:hidden"
 					>
 						{#if online}<Wifi class="h-4 w-4 text-[var(--text-accent)]" />{:else}<WifiOff class="h-4 w-4 text-[var(--color-crimson-400)]" />{/if}
@@ -685,7 +745,7 @@
 	{:else}
 	<!-- Story entries -->
 	<div class="relative min-h-0 flex-1">
-	<div bind:this={scrollContainer} onscroll={updateReaderPosition} class="reader-scroll h-full overflow-y-auto overscroll-contain pb-4">
+	<div id="story-reading-area" tabindex="-1" role="region" aria-label="Story transcript" bind:this={scrollContainer} onscroll={updateReaderPosition} class="reader-scroll h-full overflow-y-auto overscroll-contain pb-4">
 		{#if story.loading}
 			<div class="flex items-center justify-center py-20">
 				<Loader2 class="h-6 w-6 animate-spin text-[var(--text-accent)]" />
@@ -1011,8 +1071,10 @@
 		</div>
 	</div>
 	{/if}
+	</div>
 </div>
-	{#if assistantOpen && story.currentStory?.serverStoryId && story.currentStory?.shelfId}<AssistantPanel projectId={story.currentStory.shelfId} gameId={story.currentStory.serverStoryId} onClose={() => assistantOpen = false} onOpenStoryEntry={openAssistantStorySource} />{/if}
+	{#if assistantOpen && story.currentStory?.serverStoryId && story.currentStory?.shelfId}<AssistantPanel authoringDirty={loreDirty} selectedStoryTitle={story.currentStory.title} projectId={story.currentStory.shelfId} gameId={story.currentStory.serverStoryId} onClose={() => assistantOpen = false} onOpenStoryEntry={openAssistantStorySource} onStoryChanged={() => story.refreshCampaignProjection()} />{/if}
+	<SettingsModal open={settingsOpen} onClose={() => settingsOpen = false} />
 
 
 <!-- World State Drawer -->
@@ -1040,7 +1102,7 @@
 			aria-modal="true"
 			aria-labelledby="story-controls-title"
 			tabindex="-1"
-			onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); closeHeaderEditor(); } }}
+			onkeydown={handleEditorKeys}
 		>
 			<!-- Header -->
 			<div class="flex items-center justify-between border-b border-[var(--border-primary)] px-5 py-4">
@@ -1201,6 +1263,12 @@
 {/if}
 
 <style>
+	.reader-frame { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+	.reader-rail { display: none; }
+	.reader-skip { position: fixed; top: -80px; left: 20px; z-index: 80; background: var(--text-accent); color: var(--bg-primary); padding: 12px 20px; border-radius: 8px; }
+	.reader-skip:focus { top: 12px; }
+	.reader-assistant { color: var(--text-accent); border: 1px solid var(--border-primary); }
+	.reader-focus[aria-pressed='true'] { color: var(--text-accent); background: var(--bg-tertiary); }
 	.reader-workspace { background-image: radial-gradient(ellipse at 50% 15%, color-mix(in srgb, var(--text-accent) 3%, transparent), transparent 65%); }
 	.reader-header { position: relative; z-index: 20; display: flex; align-items: center; gap: 0.75rem; min-height: 5.25rem; flex-shrink: 0; padding: 0.85rem 1.75rem; border-bottom: 1px solid var(--border-secondary); background: var(--bg-secondary); }
 	.reader-back, .reader-tool { display: inline-flex; align-items: center; justify-content: center; gap: 0.6rem; min-width: 2.75rem; min-height: 2.75rem; flex-shrink: 0; border-radius: 0.65rem; padding: 0 0.7rem; color: var(--text-muted); font-size: 0.75rem; transition: color 150ms ease, background 150ms ease; }
@@ -1221,7 +1289,7 @@
 	.mobile-reader-navigation { display: none; }
 	.reader-meters { padding-left: 2rem; padding-right: 2rem; }
 	.reader-scroll { scrollbar-gutter: stable both-edges; }
-	.reader-pages { padding-bottom: 1.5rem; }
+	.reader-pages { padding-bottom: 1.5rem; width: 100%; }
 	.reader-opening { padding-top: 3rem; padding-bottom: 3rem; }
 	.opening-mark { display: flex; align-items: center; justify-content: center; width: 4rem; height: 4rem; border: 1px solid color-mix(in srgb, var(--text-accent) 28%, transparent); border-radius: 50%; color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 5%, transparent); }
 	.player-turn { margin-left: 1.5rem; }
@@ -1260,4 +1328,39 @@
 		.turn-receipt summary { flex-wrap: wrap; gap: 0.25rem; }
 	}
 	@media (hover: none) and (pointer: coarse) { .reader-navigation button { min-height: 2.75rem; } }
+	@media (min-width: 1100px) {
+		.reader-rail { display: flex; flex-direction: column; width: 104px; flex-shrink: 0; padding: 22px 10px 12px; background: var(--bg-primary); border-right: 1px solid var(--border-primary); }
+		.reader-rail button { display: flex; width: 100%; min-height: 64px; flex-direction: column; align-items: center; justify-content: center; gap: 9px; border-radius: 10px; color: var(--text-muted); font-size: 10px; font-weight: 500; transition: background 150ms, color 150ms; }
+		.reader-rail button:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+		.reader-rail button.active { background: color-mix(in srgb, var(--text-accent) 10%, transparent); color: var(--text-accent); box-shadow: inset 2px 0 var(--text-accent); }
+		.reader-rail .rail-brand { color: var(--text-accent); margin-bottom: 34px; }
+		.rail-brand span { font-family: var(--font-display); font-size: 12px; color: var(--text-primary); }
+		.reader-rail nav { display: grid; gap: 7px; }
+		.rail-divider { height: 1px; margin: 12px 16px; background: var(--border-primary); }
+		.rail-bottom { margin-top: auto; padding-top: 22px; }
+		.reader-header { min-height: 96px; padding: 18px 36px; background: transparent; }
+		.reader-header > .reader-back, .reader-header > .reader-navigation, .reader-header > .reader-world { display: none; }
+		.reader-title h1 { font-size: 1.65rem; margin-top: 5px; }
+		.reader-eyebrow { font-size: 10px; }
+		.reader-context { padding-inline: 36px; min-height: 45px; font-size: 12px; background: color-mix(in srgb, var(--bg-secondary) 45%, transparent); }
+		.reader-pages { padding-top: 44px; padding-inline: 42px; }
+		.narration-passage { padding-bottom: 18px; }
+		.player-turn { margin-left: 0; }
+		.player-turn-card { border-left-width: 1px; border-radius: 0 12px 12px 0; padding: 18px 24px; }
+		.turn-label { font-size: 10px; }
+		.focus-mode .reader-rail { display: none; }
+		.focus-mode .reader-header > .reader-back { display: flex; }
+	}
+	.focus-mode .reader-context, .focus-mode .reader-meters { display: none; }
+	@media (min-width: 1400px) { .assistant-visible { width: calc(100% - 480px); right: auto; } }
+	@media (max-width: 1099px) { .reader-focus span, .reader-assistant span { display: none; } }
+	@media (max-width: 639px) {
+		.reader-header { gap: 2px; }
+		.reader-world { display: none; }
+		.reader-focus { display: none; }
+		.reader-assistant { min-width: 40px; min-height: 40px; padding: 0; border: 0; }
+		.reader-context { flex-wrap: wrap; gap: 0; padding-right: 8px; }
+		.scene-location { max-width: 27%; }
+		.reader-pages { padding-top: 24px; }
+	}
 </style>

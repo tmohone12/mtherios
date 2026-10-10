@@ -8,6 +8,7 @@
 	import ContextWindow from '../story/ContextWindow.svelte';
 	import MemoryProcessingStatus from '../story/MemoryProcessingStatus.svelte';
 	import { story } from '$lib/stores/story.svelte';
+	import { app } from '$lib/stores/app.svelte';
 	import { settings, SERVICE_DEFINITIONS, SERVICE_PROFILES } from '$lib/stores/settings.svelte';
 	import { PROVIDERS, getProviderList } from '$lib/services/ai/sdk/providers/config';
 	import {
@@ -61,9 +62,17 @@
 	}
 
 	let activeTab = $state<Tab>('providers');
+	let settingsBody = $state<HTMLDivElement>();
 
 	// Provider editing
 	let editingProvider = $state<ProviderType | null>(null);
+	$effect(() => {
+		if (open && editingProvider) return app.registerNavigationGuard(() => {
+			testStatus = 'error';
+			testMessage = 'Save or close this provider editor before leaving settings.';
+			return false;
+		});
+	});
 	let apiKey = $state('');
 	let terminalApiKeyRef = $state('');
 	let customUrl = $state('');
@@ -485,15 +494,15 @@
 	const topProviders: ProviderType[] = ['anthropic', 'openrouter', 'nanogpt', 'openai'];
 	const otherProviders = getProviderList().filter(p => !topProviders.includes(p.value));
 
-	const tabs: Array<{ id: Tab; label: string; shortLabel: string; description: string; icon: typeof Globe }> = [
-		{ id: 'providers', label: 'Providers & Models', shortLabel: 'Providers', description: 'Connect your providers and choose the voice behind your stories.', icon: Globe },
-		{ id: 'agents', label: 'Agent Tools', shortLabel: 'Tools', description: 'Set separate project and game preferences for GM and Assistant tools.', icon: Wrench },
-		{ id: 'services', label: 'AI Services', shortLabel: 'Services', description: 'Choose the models that help write, remember, and build your world.', icon: Wrench },
-		{ id: 'prompts', label: 'Prompts', shortLabel: 'Prompts', description: 'Shape the instructions behind your narrator and creative tools.', icon: FileText },
-		{ id: 'memory', label: 'Memory', shortLabel: 'Memory', description: 'Give each scene the right balance of recent events and lasting history.', icon: Brain },
-		{ id: 'images', label: 'Image Generation', shortLabel: 'Images', description: 'Set an art direction for the people and places in your story.', icon: ImageIcon },
-		{ id: 'interface', label: 'Interface', shortLabel: 'Interface', description: 'Make room for the way you like to read and write.', icon: Palette },
-		{ id: 'inspector', label: 'Inspector', shortLabel: 'Inspector', description: 'Look inside the context and instructions sent to your narrator.', icon: ScrollText },
+	const tabs: Array<{ id: Tab; group: string; label: string; shortLabel: string; description: string; icon: typeof Globe }> = [
+		{ id: 'providers', group: 'AI & tools', label: 'Providers & Models', shortLabel: 'Providers', description: 'Connect your providers and choose the voice behind your stories.', icon: Globe },
+		{ id: 'agents', group: 'AI & tools', label: 'Agent Tools', shortLabel: 'Tools', description: 'Choose how the GM and Assistant work, with separate project defaults and game overrides.', icon: Wrench },
+		{ id: 'services', group: 'AI & tools', label: 'AI Services', shortLabel: 'Services', description: 'Choose the models that help write, remember, and build your world.', icon: Cpu },
+		{ id: 'prompts', group: 'Story experience', label: 'Prompts', shortLabel: 'Prompts', description: 'Shape the instructions behind your narrator and creative tools.', icon: FileText },
+		{ id: 'memory', group: 'Story experience', label: 'Memory', shortLabel: 'Memory', description: 'Give each scene the right balance of recent events and lasting history.', icon: Brain },
+		{ id: 'images', group: 'Story experience', label: 'Image Generation', shortLabel: 'Images', description: 'Set an art direction for the people and places in your story.', icon: ImageIcon },
+		{ id: 'interface', group: 'Story experience', label: 'Interface', shortLabel: 'Interface', description: 'Make room for the way you like to read and write.', icon: Palette },
+		{ id: 'inspector', group: 'Advanced', label: 'Inspector', shortLabel: 'Inspector', description: 'Look inside the context and instructions sent to your narrator.', icon: ScrollText },
 	];
 
 	function focusDialog(node: HTMLElement) {
@@ -548,7 +557,6 @@
 
 	<!-- Modal: wider, taller -->
 	<div class="settings-modal-shell" class:settings-wide={activeTab === 'prompts'} role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1" use:focusDialog>
-		{#if terminalSettingsError}<p role="alert" class="p-3 text-sm text-red-400">Terminal settings could not refresh: {terminalSettingsError}</p>{/if}
 
 		<!-- Sidebar -->
 		<aside class="settings-sidebar">
@@ -557,12 +565,15 @@
 				<h2>Settings</h2>
 			</div>
 			<nav class="settings-navigation" aria-label="Settings sections">
-				{#each tabs as tab}
+				{#each tabs as tab, index}
+					{#if index === 0 || tabs[index - 1].group !== tab.group}<span class="settings-nav-group">{tab.group}</span>{/if}
 					<button
 						class="settings-nav-item"
 						class:active={activeTab === tab.id}
 						aria-current={activeTab === tab.id ? 'page' : undefined}
-						onclick={() => activeTab = tab.id}
+						aria-label={tab.label}
+						title={tab.label}
+						onclick={() => { activeTab = tab.id; settingsBody?.scrollTo({ top: 0 }); }}
 					>
 						<tab.icon class="h-4 w-4 shrink-0" />
 						<span class="settings-nav-label">{tab.label}</span>
@@ -578,7 +589,7 @@
 			<!-- Header -->
 			<header class="settings-header">
 				<div>
-					<span class="settings-eyebrow">Preferences / {tabs.findIndex(t => t.id === activeTab) + 1 < 10 ? '0' : ''}{tabs.findIndex(t => t.id === activeTab) + 1}</span>
+					<span class="settings-eyebrow">Settings / {tabs.find(t => t.id === activeTab)?.group}</span>
 					<h3 id="settings-section-title">{tabs.find(t => t.id === activeTab)?.label ?? 'Settings'}</h3>
 					<p>{tabs.find(t => t.id === activeTab)?.description}</p>
 				</div>
@@ -588,7 +599,8 @@
 			</header>
 
 			<!-- Scrollable content -->
-			<div class="settings-body" aria-labelledby="settings-section-title">
+			<div class="settings-body" bind:this={settingsBody} aria-labelledby="settings-section-title">
+				{#if terminalSettingsError}<p role="alert" class="settings-error">Server settings could not refresh: {terminalSettingsError}</p>{/if}
 
 				<!-- ═══ TAB: PROVIDERS & MODELS ═══ -->
 				{#if activeTab === 'providers'}
@@ -1221,6 +1233,8 @@
 	.settings-eyebrow { display: block; color: var(--text-muted); font: 10px/1.5 var(--font-ui); font-weight: 600; text-transform: uppercase; letter-spacing: .17em; }
 	.settings-brand h2 { margin-top: 7px; font: 30px/1.2 var(--font-display); color: var(--text-primary); }
 	.settings-navigation { display: flex; flex-direction: column; gap: 5px; padding: 0 13px; }
+	.settings-nav-group { padding: 18px 12px 6px; color: var(--text-muted); font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+	.settings-nav-group:first-child { padding-top: 0; }
 	.settings-nav-item { display: flex; align-items: center; gap: 11px; min-height: 46px; padding: 12px; border: 1px solid transparent; border-radius: 9px; color: var(--text-muted); text-align: left; font-size: 12px; transition: color 150ms, background 150ms, border-color 150ms; }
 	.settings-nav-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
 	.settings-nav-item.active { border-color: color-mix(in srgb, var(--text-accent) 20%, transparent); color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 9%, transparent); }
@@ -1233,6 +1247,8 @@
 	.settings-header p { max-width: 550px; margin-top: 10px; color: var(--text-muted); font-size: 12px; line-height: 1.7; }
 	.settings-close { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 38px; height: 38px; border: 1px solid var(--border-primary); border-radius: 10px; color: var(--text-muted); }
 	.settings-close:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+	.settings-close:focus-visible, .settings-nav-item:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
+	.settings-error { margin-bottom: 20px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--text-accent) 40%, transparent); border-radius: 8px; color: var(--text-primary); background: var(--bg-primary); font-size: 12px; overflow-wrap: anywhere; }
 	.settings-body { min-height: 0; min-width: 0; flex: 1; overflow: auto; overscroll-behavior: contain; padding: 30px 36px 42px; scrollbar-gutter: stable; }
 	.settings-body > :global(div) { max-width: 900px; margin-inline: auto; }
 	.settings-wide .settings-body > :global(div) { max-width: none; }
@@ -1265,7 +1281,7 @@
 		.settings-overlay { padding: 0; }
 		.settings-modal-shell { display: flex; flex-direction: column; height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; }
 		.settings-sidebar { flex-shrink: 0; border-right: 0; border-bottom: 1px solid var(--border-primary); }
-		.settings-brand, .settings-sidebar-note, .settings-nav-label { display: none; }
+		.settings-brand, .settings-sidebar-note, .settings-nav-label, .settings-nav-group { display: none; }
 		.settings-navigation { flex-direction: row; gap: 5px; padding: 12px 16px; overflow-x: auto; }
 		.settings-nav-item { flex-shrink: 0; min-height: 42px; font-size: 11px; padding: 10px 12px; }
 		.settings-nav-short { display: inline; }

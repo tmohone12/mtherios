@@ -42,7 +42,6 @@ import {
 	chapterMemoryEntityIds,
 	buildChapterMemoryDigest,
 	buildChapterSummary,
-	chapterSourceForArc,
 	isNarrativeChapterEvent,
 	canonicalArcOpenThreadIds,
 	classifyBackendJobFailure,
@@ -1097,24 +1096,6 @@ describe('job status stream events', () => {
 });
 
 describe('transcript chapter generation', () => {
-	it('rolls up complete turn accounts instead of lossy prose or extracted event interpretations', () => {
-		const chapter = { id: 'chapter_1', number: 1, title: 'The crossing', sceneOutcome: 'A short synopsis omitting the fare.',
-			sourceEntryIds: Array.from({ length: 20 }, (_, index) => `turn_${index + 1}`),
-			metadata: { sourceAccounts: Array.from({ length: 20 }, (_, index) => ({ sourceId: `turn_${index + 1}`, summary: `Outcome ${index + 1}: passage costs ${index + 1} coins, only after boarding.` })) },
-			irreversibleChanges: ['INVENTED_CORONATION'], promisesDebtsOaths: ['INVENTED_PROMISE'] } as Parameters<typeof chapterSourceForArc>[0];
-		const source = chapterSourceForArc(chapter);
-		for (const account of chapter.metadata.sourceAccounts as Array<{ summary: string }>) expect(source.text).toContain(account.summary);
-		expect(source.text).not.toMatch(/short synopsis|INVENTED_/);
-		const legacy = chapterSourceForArc({ ...chapter, metadata: {} });
-		expect(legacy.text).toContain(chapter.sceneOutcome);
-		expect(legacy.text).not.toMatch(/INVENTED_/);
-		const incomplete = { ...chapter, metadata: { sourceAccounts: [{ sourceId: 'turn_1', summary: 'Missing nineteen turns.' }] } };
-		expect(() => chapterSourceForArc(incomplete)).toThrow('incomplete source accounts');
-		const reversed = { ...chapter, metadata: { sourceAccounts: [...chapter.metadata.sourceAccounts as unknown[]].reverse() } };
-		expect(() => chapterSourceForArc(reversed)).toThrow('invalid source accounts');
-		expect(chapterSourceForArc({ ...chapter, sourceEntryIds: ['legacy_turn'], metadata: { turnCount: 1,
-			sourceAccounts: [{ sourceId: 'legacy_turn', summary: 'A reviewed historical backfill.' }] } }).text).toContain('A reviewed historical backfill.');
-	});
 	it('sends complete turns and event provenance without extracted prose or fallback keywords', async () => {
 		const entries = Array.from({ length: 20 }, (_, index) => [
 			{ id: `player-${index}`, storyId: 'story', type: 'user_action', content: `I ask question ${index} and require a conditional answer.`, position: index * 2 + 1, parentId: null, metadata: {} },

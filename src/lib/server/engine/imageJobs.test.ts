@@ -1,12 +1,12 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  execute: vi.fn(), settings: vi.fn(), service: vi.fn(), find: vi.fn(), store: vi.fn(), generate: vi.fn(), select: vi.fn(), record: vi.fn(), recordManual: vi.fn(), patch: vi.fn(), scene: vi.fn(),
+  execute: vi.fn(), settings: vi.fn(), service: vi.fn(), find: vi.fn(), store: vi.fn(), generate: vi.fn(), select: vi.fn(), record: vi.fn(), recordManual: vi.fn(), patch: vi.fn(), scene: vi.fn(), assertOrigin: vi.fn(),
 }));
 vi.mock('$lib/server/db/client', () => ({ getDb: () => ({ execute: mocks.execute }) }));
 vi.mock('./agentSettings', () => ({ getAgentSettings: mocks.settings }));
 vi.mock('./llmSettings', () => ({ resolveServiceGeneration: mocks.service }));
-vi.mock('./imageAssets', () => ({ findImageAssetForJob: mocks.find, storeImageAsset: mocks.store, selectContentCover: mocks.select }));
+vi.mock('./imageAssets', () => ({ assertImageOriginActive: mocks.assertOrigin, findImageAssetForJob: mocks.find, storeImageAsset: mocks.store, selectContentCover: mocks.select }));
 vi.mock('./imageProvider', () => ({ generateOpenAiImage: mocks.generate }));
 vi.mock('./storyImageCards', () => ({ recordStoryImageCard: mocks.record, recordManualStoryImageCard: mocks.recordManual }));
 vi.mock('./worldRecords', () => ({ patchWorldRecord: mocks.patch }));

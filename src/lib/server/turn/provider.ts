@@ -1,5 +1,6 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getMtheriosAppConfig } from '$lib/server/app/config';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isJevModel } from './jev';
 import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 import type { TurnRequest } from '$lib/contracts/memory';
@@ -30,8 +31,39 @@ export interface ResponseSchemaOptions {
 export interface NativeToolDefinition { name: string; description: string; parameters: Record<string, unknown> }
 export interface NativeToolCall { id: string; name: string; arguments: Record<string, unknown> }
 
+/** Ordered native history. Continuation fields are private provider protocol data. */
+export type ServerGenerationMessage =
+	| { role: 'user'; content: string }
+	| { role: 'assistant'; content: string; toolCalls?: NativeToolCall[]; providerContinuation?: Record<string, unknown> }
+	| { role: 'tool'; content: string; toolCallId: string; toolName?: string; isError?: boolean };
+
+export interface ServerGenerationRequest {
+	body: Record<string, unknown>;
+	serializedBody: string;
+	inputTokens: number;
+	reservedOutputTokens: number;
+	contextWindowTokens: number;
+	/** Verified conservative price, when the transport can provide one (e.g. image catalog). */
+	reservedCostUsd?: number;
+}
+
+export interface ServerProviderRequestHooks {
+	signal?: AbortSignal;
+	beforeRequest: (options: ServerGenerationOptions, request: ServerGenerationRequest) => Promise<(result: ServerGenerationResult) => Promise<void>>;
+}
+const providerRequestScope = new AsyncLocalStorage<ServerProviderRequestHooks>();
+/** Carries one run's durable budget through existing specialist/provider transports. */
+export function withServerProviderHooks<T>(hooks: ServerProviderRequestHooks, work: () => Promise<T>): Promise<T> {
+	return providerRequestScope.run(hooks, work);
+}
+export function currentServerProviderHooks(): ServerProviderRequestHooks | undefined { return providerRequestScope.getStore(); }
+
 export interface ServerGenerationOptions {
 	profile: ProviderProfile;
+	/** Explicit bounded operations can pin one OpenRouter endpoint and prices. */
+	nanoGptProvider?: { only: string[]; order: string[]; quantizations?: string[]; allow_fallbacks: false; require_parameters: true; max_price: { prompt: number; completion: number } };
+	openRouterProvider?: { only: string[]; order: string[]; allow_fallbacks: false; require_parameters: true;
+		max_price: { prompt: number; completion: number; request: number } };
 	model?: string;
 	temperature?: number;
 	maxTokens?: number;
@@ -46,8 +78,10 @@ export interface ServerGenerationOptions {
 	contextAfterDialogue?: boolean;
 	/** Character offset where a second, shorter-lived system cache segment begins. */
 	systemCacheBoundary?: number;
-	messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+	messages?: ServerGenerationMessage[];
 	prompt: string;
+	/** Native agent history already includes the current user message. */
+	appendPrompt?: boolean;
 	responseFormat?: 'json_object';
 	responseSchema?: ResponseSchemaOptions;
 	tools?: NativeToolDefinition[];
@@ -56,6 +90,14 @@ export interface ServerGenerationOptions {
 	cache?: PromptCacheOptions;
 	onTextDelta?: (chunk: string) => void | Promise<void>;
 	signal?: AbortSignal;
+	/** Awaited before HTTP dispatch; durable runtimes reserve budgets here. No credentials. */
+	onBeforeRequest?: (request: ServerGenerationRequest) => void | Promise<void>;
+	/** Awaited before reading the response body; lets bounded callers retain billing correlation durably. */
+	onResponseHeaders?: (headers: ServerGenerationResponseHeaders) => void | Promise<void>;
+	/** One receipt for each actual HTTP dispatch, including failed attempts. Never contains credentials or request text. */
+	onAttempt?: (attempt: ServerGenerationAttempt) => void | Promise<void>;
+	/** The Pi bridge already reserves this request in its durable budget. */
+	agentBudgetManaged?: boolean;
 }
 
 export interface ServerGenerationUsage {
@@ -71,8 +113,38 @@ export interface ServerGenerationUsage {
 	providerCostUsd: number | null;
 }
 
+export interface ServerGenerationAttempt {
+	attemptId: string;
+	/** Header correlation when available, otherwise the legacy completion-ID fallback. */
+	providerRequestId: string | null;
+	/** Only the response X-Request-ID header is valid for NanoGPT Request Billing. */
+	billingRequestId?: string | null;
+	completionId?: string | null;
+	requestHash: string;
+	attempt: number;
+	startedAt: string;
+	model: string;
+	endpoint: string;
+	status: 'success' | 'error';
+	statusCode: number | null;
+	durationMs: number;
+	promptChars: number;
+	responseChars: number | null;
+	finishReason: string | null;
+	usage: ServerGenerationUsage;
+	error: string | null;
+}
+
+export interface ServerGenerationResponseHeaders {
+	attemptId: string;
+	requestHash: string;
+	billingRequestId: string | null;
+	statusCode: number;
+}
+
 export interface ServerGenerationResult {
 	text: string;
+	message?: Extract<ServerGenerationMessage, { role: 'assistant' }>;
 	toolCalls?: NativeToolCall[];
 	model: string;
 	endpoint: string;
@@ -83,6 +155,10 @@ export interface ServerGenerationResult {
 	promptChars: number;
 	responseChars: number;
 	usage: ServerGenerationUsage;
+	/** Provider usage is per attempt, never silently summed over retries. */
+	attempts?: ServerGenerationAttempt[];
+	/** This text was already accounted for by the named operation. */
+	accounting?: { kind: 'reuse'; sourceOperation: string; sourceRunId?: string; attemptIds: string[] };
 }
 
 export class ServerGenerationError extends Error {
@@ -226,18 +302,57 @@ function promptChars(options: ServerGenerationOptions): number {
 	return options.system.length
 		+ (options.systemDynamic?.length ?? 0)
 		+ options.prompt.length
-		+ (options.messages ?? []).reduce((total, message) => total + message.content.length, 0);
+		+ (options.messages ?? []).reduce((total, message) => total + JSON.stringify(message).length, 0);
 }
 
 function combinedSystem(system: string, systemDynamic?: string): string {
 	return systemDynamic ? `${system}\n\n${systemDynamic}` : system;
 }
 
-function wellFormedMessages(messages: Array<{ role: 'user' | 'assistant'; content: string }>): Array<{ role: 'user' | 'assistant'; content: string }> {
+function wellFormedMessages(messages: ServerGenerationMessage[]): ServerGenerationMessage[] {
 	return messages.map((message) => ({
 		...message,
 		content: toWellFormedText(message.content),
 	}));
+}
+
+function openAiNativeMessages(messages: ServerGenerationMessage[]): Array<Record<string, unknown>> {
+	return messages.map(message => {
+		if (message.role === 'tool') {
+			if (!message.toolCallId) throw new Error('Native tool result requires a tool call ID.');
+			return { role: 'tool', content: message.content, tool_call_id: message.toolCallId };
+		}
+		if (message.role === 'user') return { role: message.role, content: message.content };
+		const continuation = message.providerContinuation ?? {};
+		return {
+			role: 'assistant', content: message.content || null,
+			...Object.fromEntries(['reasoning_content', 'reasoning', 'reasoning_details'].filter(key => continuation[key] != null).map(key => [key, continuation[key]])),
+			...(message.toolCalls?.length ? { tool_calls: message.toolCalls.map(call => ({ id: call.id, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) } : {}),
+		};
+	});
+}
+
+function anthropicNativeMessages(messages: ServerGenerationMessage[]): Array<Record<string, unknown>> {
+	if (!messages.some(message => message.role === 'tool' || (message.role === 'assistant' && (message.toolCalls?.length || message.providerContinuation)))) {
+		return messages.map(message => ({ role: message.role, content: message.content }));
+	}
+	const output: Array<{ role: 'user' | 'assistant'; content: Array<Record<string, unknown>> }> = [];
+	for (const message of messages) {
+		const role = message.role === 'assistant' ? 'assistant' : 'user';
+		const content: Array<Record<string, unknown>> = message.role === 'tool'
+			? [{ type: 'tool_result', tool_use_id: message.toolCallId, content: message.content, ...(message.isError ? { is_error: true } : {}) }]
+			: message.role === 'assistant' && Array.isArray(message.providerContinuation?.anthropicContent)
+				? message.providerContinuation.anthropicContent as Array<Record<string, unknown>>
+				: [
+					...(message.content ? [{ type: 'text', text: message.content }] : []),
+					...(message.role === 'assistant' ? (message.toolCalls ?? []).map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.arguments })) : []),
+				];
+		if (message.role === 'tool' && !message.toolCallId) throw new Error('Native tool result requires a tool call ID.');
+		const previous = output.at(-1);
+		if (previous?.role === role) previous.content.push(...content);
+		else output.push({ role, content });
+	}
+	return output;
 }
 
 function cachedSystemBlocks(system: string, systemDynamic: string, boundary?: number): Array<Record<string, unknown>> {
@@ -394,7 +509,7 @@ function finishReasonFromResponse(data: unknown, useAnthropic: boolean): string 
 	return optionalString(firstChoice.finish_reason);
 }
 
-function emptyUsage(): ServerGenerationUsage {
+export function emptyServerGenerationUsage(): ServerGenerationUsage {
 	return {
 		requestTokens: null,
 		responseTokens: null,
@@ -414,16 +529,18 @@ async function readStreamingText(
 	useAnthropic: boolean,
 	onTextDelta: (chunk: string) => void | Promise<void>,
 	startTime: number,
-): Promise<{ text: string; usage: ServerGenerationUsage; finishReason: string | null; timeToFirstTokenMs: number | null }> {
+	onProgress?: (state: { text: string; usage: ServerGenerationUsage; finishReason: string | null; providerRequestId: string | null }) => void,
+): Promise<{ text: string; usage: ServerGenerationUsage; finishReason: string | null; timeToFirstTokenMs: number | null; providerRequestId: string | null }> {
 	if (!response.body) throw new Error('Provider streaming response had no body.');
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';
 	let text = '';
-	let usage = emptyUsage();
+	let usage = emptyServerGenerationUsage();
 	let anthropicUsage: Record<string, unknown> = {};
 	let finishReason: string | null = null;
 	let timeToFirstTokenMs: number | null = null;
+	let providerRequestId: string | null = null;
 
 	const consumeData = async (dataText: string) => {
 		if (!dataText || dataText === '[DONE]') return;
@@ -434,6 +551,7 @@ async function readStreamingText(
 			return;
 		}
 		const record = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+		providerRequestId = optionalString(record.id) ?? optionalString(asRecord(record.message).id) ?? providerRequestId;
 		let chunk = '';
 		if (useAnthropic) {
 			const delta = record.delta && typeof record.delta === 'object' ? record.delta as Record<string, unknown> : {};
@@ -455,8 +573,10 @@ async function readStreamingText(
 		if (chunk) {
 			timeToFirstTokenMs ??= Math.max(0, Date.now() - startTime);
 			text += chunk;
+			onProgress?.({ text, usage, finishReason, providerRequestId });
 			await onTextDelta(chunk);
 		}
+		onProgress?.({ text, usage, finishReason, providerRequestId });
 	};
 
 	const consumeEvent = async (eventText: string) => {
@@ -484,7 +604,7 @@ async function readStreamingText(
 	}
 	buffer += decoder.decode();
 	if (buffer.trim()) await consumeEvent(buffer);
-	return { text, usage, finishReason, timeToFirstTokenMs };
+	return { text, usage, finishReason, timeToFirstTokenMs, providerRequestId };
 }
 
 function generationTimeoutMs(value: unknown): number {
@@ -533,6 +653,10 @@ function generationErrorMessage(error: unknown, timeoutMs: number): string {
 
 export async function generateServerTextWithMetrics(options: ServerGenerationOptions): Promise<ServerGenerationResult> {
 	if (options.profile.providerType === 'ollama' && !getMtheriosAppConfig().localEmbeddingsEnabled) throw new Error('Ollama is off for this session. Enable Ollama/local embeddings at startup to use it.');
+ if (process.env.MYTHENGINE_TEST_LOCAL_ONLY === 'true') {
+  const url = new URL(options.profile.baseUrl || 'http://127.0.0.1:11434');
+  if (!['ollama', 'openai-compatible'].includes(options.profile.providerType) || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) throw new Error('Isolated test copy permits local inference only.');
+ }
 	if (isJevModel(options.model)) throw new Error('Decision models use the Decisions API and are unavailable for text generation.');
 	if (requiresApiKey(options.profile) && !options.profile.apiKey?.trim()) {
 		throw new Error('Server turn generation requires an API profile with an API key.');
@@ -561,6 +685,9 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 				: { thinking: { type: 'enabled' }, reasoning_effort: requestedReasoningEffort === 'max' ? 'max' : 'high' }
 			: {};
 	const useAnthropic = isAnthropicProvider(options.profile);
+	const anthropicThinking = useAnthropic && requestedReasoningEffort && !['off', 'none'].includes(requestedReasoningEffort);
+	const anthropicAdaptive = anthropicThinking && /claude-(?:opus|sonnet)-4[.-]6/i.test(model);
+	if (anthropicThinking && !anthropicAdaptive && maxTokens <= 1024) throw new Error('Anthropic thinking requires an output allowance above 1024 tokens.');
 	const useGoogleAgentPlatform = isGoogleAgentPlatformProvider(options.profile);
 	const baseUrl = useGoogleAgentPlatform
 		? await getGoogleAgentPlatformBaseUrl()
@@ -575,24 +702,28 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 		: options.prompt);
 	const timeoutMs = generationTimeoutMs(options.timeoutMs);
 	const maxRetries = generationRetryLimit(options.maxRetries);
+	const scopedHooks = options.agentBudgetManaged ? undefined : currentServerProviderHooks();
+	const scopedSignal = currentServerProviderHooks()?.signal;
+	const requestSignal = scopedSignal && options.signal ? AbortSignal.any([scopedSignal, options.signal]) : scopedSignal ?? options.signal;
 
 	const endpoint = useAnthropic
 		? `${baseUrl || 'https://api.anthropic.com'}/v1/messages`
 		: `${baseUrl}/chat/completions`;
 	const inputChars = promptChars({ ...options, systemDynamic, prompt });
 	const shouldStream = Boolean(options.onTextDelta) && options.responseFormat !== 'json_object' && !options.responseSchema && !options.tools?.length;
+	const dialogue = [...messages, ...(options.appendPrompt === false ? [] : [{ role: 'user' as const, content: prompt }])];
 
 	const body = useAnthropic
 		? {
 			model,
 			max_tokens: maxTokens,
-			temperature,
+			...(anthropicAdaptive ? {} : { temperature: anthropicThinking ? 1 : temperature }),
+			...(anthropicAdaptive
+				? { thinking: { type: 'adaptive' }, output_config: { effort: ['minimal', 'low'].includes(requestedReasoningEffort!) ? 'low' : requestedReasoningEffort === 'medium' ? 'medium' : requestedReasoningEffort === 'max' ? 'max' : 'high' } }
+				: anthropicThinking ? { thinking: { type: 'enabled', budget_tokens: Math.min(maxTokens - 1, Math.max(1024, maxTokens - 1024), requestedReasoningEffort === 'low' || requestedReasoningEffort === 'minimal' ? 1024 : requestedReasoningEffort === 'medium' ? 2048 : 4096) } } : {}),
 			...(shouldStream ? { stream: true } : {}),
 			system: buildAnthropicSystem(system, systemDynamic, options.systemCacheBoundary),
-			messages: [
-				...messages,
-				{ role: 'user', content: prompt },
-			],
+			messages: anthropicNativeMessages(dialogue),
 			...(options.tools?.length ? { tools: options.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
 		}
 		: {
@@ -601,13 +732,15 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			...(options.providerOutputLimit ? {} : { max_tokens: maxTokens }),
 			messages: [
 				buildOpenAiSystemMessage(options.profile, system, systemDynamic, options.systemCacheBoundary, contextAfterDialogue),
-				...messages,
-				{ role: 'user', content: prompt },
+				...openAiNativeMessages(dialogue),
 			],
 			...buildOpenAiPromptCacheFields(options.profile, options.cache),
 			...(options.profile.providerType === 'openrouter' && options.cache?.key
 				? { session_id: options.cache.key.slice(0, 256) } : {}),
 			...reasoningControl,
+			...(options.profile.providerType === 'openrouter' && options.openRouterProvider ? { provider: options.openRouterProvider } : {}),
+			...(options.profile.providerType === 'nanogpt' && options.nanoGptProvider ? { provider: options.nanoGptProvider } : {}),
+			...(options.profile.providerType === 'nanogpt' && !shouldStream ? { include_usage: true } : {}),
 			...(shouldStream ? { stream: true, stream_options: { include_usage: true } } : {}),
 			...buildOpenAiResponseFormat(options),
 			...(options.tools?.length ? { tools: options.tools.map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } })), parallel_tool_calls: options.parallelToolCalls === true } : {}),
@@ -623,7 +756,7 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 	const reservedOutput = options.providerOutputLimit && !useAnthropic ? 0 : maxTokens;
 	if (requestTokens + reservedOutput + 512 > contextWindow) {
 		throw new ServerGenerationError(`Request exceeds the model context allowance: approximately ${requestTokens} input tokens + ${reservedOutput} reserved output + 512 framing reserve > ${contextWindow}. Reduce Recent Dialogue or the scene and memory budget.`, {
-			model, endpoint, durationMs: Date.now() - startTime, promptChars: inputChars, statusCode: 413, retryCount: 0,
+			model, endpoint, durationMs: Date.now() - startTime, promptChars: inputChars, statusCode: 413, retryCount: 0, attempts: [],
 		});
 	}
 	const headers = useAnthropic
@@ -632,98 +765,118 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			? { 'Content-Type': 'application/json', ...await getGoogleAgentPlatformHeaders() }
 			: openAiHeaders(options.profile);
 	const cooldownKey = providerCooldownKey(options.profile, endpoint);
-	let lastError: unknown;
+	const attempts: ServerGenerationAttempt[] = [];
 	for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+		const errorResult = () => ({ model, endpoint, durationMs: Date.now() - startTime, promptChars: inputChars, retryCount: attempt, attempts: [...attempts] });
+		if (requestSignal?.aborted) throw new ServerGenerationError('Server LLM request cancelled.', errorResult());
 		const coolingUntil = providerCooldowns.get(cooldownKey) ?? 0;
-		if (coolingUntil > Date.now()) {
-			throw new ServerGenerationError('Provider cooling down after a rate limit; retry later.', {
-				model, endpoint, durationMs: Date.now() - startTime, promptChars: inputChars,
-				statusCode: 429, retryCount: attempt, retryAfterMs: coolingUntil - Date.now(),
-			});
-		}
-		const abort = makeGenerationAbortSignal(timeoutMs, options.signal);
-		try {
-		const response = await fetch(endpoint, {
-			method: 'POST',
-			headers,
-			body: serializedBody,
-			signal: abort.signal,
+		if (coolingUntil > Date.now()) throw new ServerGenerationError('Provider cooling down after a rate limit; retry later.', {
+			...errorResult(), statusCode: 429, retryAfterMs: coolingUntil - Date.now(),
 		});
-
-		if (!response.ok) {
-			const text = await response.text().catch(() => '');
-			const retryDelay = (response.status === 429 || response.headers.has('Retry-After'))
-				? retryAfterMs(response.headers.get('Retry-After'), response.status) : 0;
-			if (retryDelay) providerCooldowns.set(cooldownKey, Date.now() + retryDelay);
-			const error = new ServerGenerationError(`Server LLM request failed (${response.status}): ${text || response.statusText}`, {
-				model,
-				endpoint,
-				durationMs: Date.now() - startTime,
-				promptChars: inputChars,
-				statusCode: response.status,
-				retryCount: attempt,
-				...(retryDelay ? { retryAfterMs: retryDelay } : {}),
-			});
-			if (!retryDelay && attempt < maxRetries && isTransientStatus(response.status)) {
-				lastError = error;
-				continue;
+		const abort = makeGenerationAbortSignal(timeoutMs, requestSignal);
+		let receipt: ServerGenerationAttempt | undefined;
+		let responseReceived = false;
+		let receiptCompleted = false;
+		const finishAttempt = async (status: 'success' | 'error', error?: unknown) => {
+			if (!receipt || receiptCompleted) return;
+			receiptCompleted = true;
+			receipt.status = status;
+			receipt.error = error == null ? null : generationErrorMessage(error, timeoutMs);
+			receipt.durationMs = Math.max(0, Date.now() - Date.parse(receipt.startedAt));
+			attempts.push(structuredClone(receipt));
+			try { await options.onAttempt?.(structuredClone(receipt)); } catch (error) {
+				throw new ServerGenerationError(`Provider attempt receipt could not be persisted: ${generationErrorMessage(error, timeoutMs)}`, { ...errorResult(), usage: receipt.usage, responseChars: receipt.responseChars ?? undefined, finishReason: receipt.finishReason });
 			}
-			throw error;
-		}
-
-		const streamed = shouldStream && options.onTextDelta
-			? await readStreamingText(response, useAnthropic, options.onTextDelta, startTime)
-			: null;
-		const data = streamed ? null : await response.json();
-		const text = streamed
-			? streamed.text.trim()
-			: useAnthropic
+		};
+		try {
+			const request = { body, serializedBody, inputTokens: requestTokens, reservedOutputTokens: reservedOutput, contextWindowTokens: contextWindow };
+			const scopedComplete = scopedHooks ? await scopedHooks.beforeRequest(options, request) : undefined;
+			if (options.onBeforeRequest) await options.onBeforeRequest(request);
+			if (abort.signal.aborted) throw abort.signal.reason ?? new Error('Server LLM request cancelled.');
+			receipt = { attemptId: `provider_attempt_${randomUUID()}`, providerRequestId: null, billingRequestId: null, completionId: null,
+				requestHash: createHash('sha256').update(serializedBody).digest('hex'), attempt, startedAt: new Date().toISOString(),
+				model, endpoint: (() => { const clean = new URL(endpoint); clean.username = ''; clean.password = ''; clean.search = ''; clean.hash = ''; return clean.toString(); })(), status: 'error', statusCode: null, durationMs: 0, promptChars: inputChars,
+				responseChars: null, finishReason: null, usage: emptyServerGenerationUsage(), error: null };
+			const response = await fetch(endpoint, { method: 'POST', headers, body: serializedBody, signal: abort.signal });
+			responseReceived = true;
+			receipt.statusCode = response.status;
+			receipt.billingRequestId = response.headers.get('x-request-id');
+			receipt.providerRequestId = receipt.billingRequestId ?? response.headers.get('request-id');
+			try {
+				await options.onResponseHeaders?.({attemptId:receipt.attemptId,requestHash:receipt.requestHash,billingRequestId:receipt.billingRequestId,statusCode:response.status});
+			} catch (error) {
+				throw new ServerGenerationError(`Provider response headers could not be persisted: ${generationErrorMessage(error, timeoutMs)}`, errorResult());
+			}
+			if (!response.ok) {
+				const text = await response.text().catch(() => '');
+				try {
+					const data = JSON.parse(text);
+					receipt.usage = usageFromResponse(data, useAnthropic);
+					receipt.completionId = optionalString(asRecord(data).id);
+					receipt.providerRequestId = receipt.billingRequestId ?? receipt.completionId ?? receipt.providerRequestId;
+				} catch { /* The provider may return plain text and no usage. */ }
+				const retryDelay = (response.status === 429 || response.headers.has('Retry-After'))
+					? retryAfterMs(response.headers.get('Retry-After'), response.status) : 0;
+				if (retryDelay) providerCooldowns.set(cooldownKey, Date.now() + retryDelay);
+				throw new ServerGenerationError(`Server LLM request failed (${response.status}): ${text || response.statusText}`, {
+					...errorResult(), statusCode: response.status, ...(retryDelay ? { retryAfterMs: retryDelay } : {}),
+				});
+			}
+			const streamed = shouldStream && options.onTextDelta
+				? await readStreamingText(response, useAnthropic, options.onTextDelta, startTime, state => {
+					receipt!.usage = state.usage; receipt!.finishReason = state.finishReason;
+					receipt!.responseChars = state.text.length;
+					receipt!.completionId = state.providerRequestId ?? receipt!.completionId;
+					receipt!.providerRequestId = receipt!.billingRequestId ?? receipt!.completionId ?? receipt!.providerRequestId;
+				}) : null;
+			const data = streamed ? null : await response.json();
+			// Preserve returned accounting before parsing/validating tool arguments.
+			receipt.usage = streamed ? streamed.usage : usageFromResponse(data, useAnthropic);
+			receipt.finishReason = streamed ? streamed.finishReason : finishReasonFromResponse(data, useAnthropic);
+			receipt.completionId = (streamed ? streamed.providerRequestId : optionalString(asRecord(data).id)) ?? receipt.completionId;
+			receipt.providerRequestId = receipt.billingRequestId ?? receipt.completionId ?? receipt.providerRequestId;
+			const text = streamed ? streamed.text.trim() : useAnthropic
 				? (data.content ?? []).map((block: { text?: string }) => block.text ?? '').join('').trim()
 				: String(data.choices?.[0]?.message?.content ?? '').trim();
-		const toolCalls: NativeToolCall[] = streamed ? [] : useAnthropic
-			? (data.content ?? []).filter((block: { type?: string }) => block.type === 'tool_use').map((block: { id: string; name: string; input: Record<string, unknown> }) => ({ id: block.id, name: block.name, arguments: block.input }))
-			: (data.choices?.[0]?.message?.tool_calls ?? []).map((call: { id: string; function: { name: string; arguments: string } }) => ({ id: call.id, name: call.function.name, arguments: JSON.parse(call.function.arguments) }));
-		if (toolCalls.some(call => !call.id || !call.name || !call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments))) throw new Error('Provider returned an invalid tool call.');
-		return {
-			text,
-			...(toolCalls.length ? { toolCalls } : {}),
-			model,
-			endpoint,
-			finishReason: streamed ? streamed.finishReason : finishReasonFromResponse(data, useAnthropic),
-			durationMs: Date.now() - startTime,
-			timeToFirstTokenMs: streamed?.timeToFirstTokenMs ?? null,
-			retryCount: attempt,
-			promptChars: inputChars,
-			responseChars: text.length,
-			usage: streamed ? streamed.usage : usageFromResponse(data, useAnthropic),
-		};
-	} catch (error) {
-		if (error instanceof ServerGenerationError) throw error;
-		const wrapped = new ServerGenerationError(generationErrorMessage(error, timeoutMs), {
-			model,
-			endpoint,
-			durationMs: Date.now() - startTime,
-			promptChars: inputChars,
-			retryCount: attempt,
-		});
-		if (attempt < maxRetries && !isTimeoutError(error)) {
-			lastError = wrapped;
-			continue;
-		}
-		throw wrapped;
-	} finally {
-		abort.cleanup();
+			receipt.responseChars = text.length;
+			const toolCalls: NativeToolCall[] = streamed ? [] : useAnthropic
+				? (data.content ?? []).filter((block: { type?: string }) => block.type === 'tool_use').map((block: { id: string; name: string; input: Record<string, unknown> }) => ({ id: block.id, name: block.name, arguments: block.input }))
+				: (data.choices?.[0]?.message?.tool_calls ?? []).map((call: { id: string; function: { name: string; arguments: string } }) => ({ id: call.id, name: call.function.name, arguments: JSON.parse(call.function.arguments) }));
+			if (toolCalls.some(call => !call.id || !call.name || !call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments))) throw new Error('Provider returned an invalid tool call.');
+			const native = streamed || useAnthropic ? {} : asRecord(data.choices?.[0]?.message);
+			const providerContinuation = useAnthropic && !streamed ? { anthropicContent: data.content ?? [] }
+				: Object.fromEntries(['reasoning_content', 'reasoning', 'reasoning_details'].filter(key => native[key] != null).map(key => [key, native[key]]));
+			await finishAttempt('success');
+			const result: ServerGenerationResult = {
+				text, message: { role: 'assistant', content: text, ...(toolCalls.length ? { toolCalls } : {}), ...(Object.keys(providerContinuation).length ? { providerContinuation } : {}) },
+				...(toolCalls.length ? { toolCalls } : {}), ...errorResult(), finishReason: receipt.finishReason,
+				timeToFirstTokenMs: streamed?.timeToFirstTokenMs ?? null, responseChars: text.length, usage: receipt.usage,
+			};
+			if (abort.signal.aborted) throw abort.signal.reason ?? new Error('Server LLM request cancelled.');
+			await scopedComplete?.(result);
+			return result;
+		} catch (error) {
+			await finishAttempt('error', error);
+			const wrapped = new ServerGenerationError(generationErrorMessage(error, timeoutMs), {
+				...(error instanceof ServerGenerationError ? error.result : {}), ...errorResult(),
+				...(receipt ? { usage: receipt.usage, responseChars: receipt.responseChars ?? undefined, finishReason: receipt.finishReason } : {}),
+			});
+			// Retry known transient HTTP failures or a failed network dispatch. A malformed
+			// completed response / validation or receipt failure must not buy another call.
+			const transient = error instanceof ServerGenerationError
+				? isTransientStatus(error.result.statusCode) && !error.result.retryAfterMs
+				: false;
+			const networkFailure = Boolean(receipt && !responseReceived && !isTimeoutError(error));
+			if (attempt < maxRetries && !requestSignal?.aborted && !abort.signal.aborted && (transient || networkFailure)) continue;
+			throw wrapped;
+		} finally { abort.cleanup(); }
 	}
-	}
-	if (lastError instanceof ServerGenerationError) throw lastError;
 	throw new ServerGenerationError('Server LLM request failed without a provider response.', {
-		model,
-		endpoint,
-		durationMs: Date.now() - startTime,
-		promptChars: inputChars,
-		retryCount: maxRetries,
+		model, endpoint, durationMs: Date.now() - startTime, promptChars: inputChars, retryCount: maxRetries, attempts,
 	});
 }
+
+export { usageFromResponse as normalizeServerProviderUsage };
 
 export async function generateServerText(options: ServerGenerationOptions): Promise<string> {
 	return (await generateServerTextWithMetrics(options)).text;

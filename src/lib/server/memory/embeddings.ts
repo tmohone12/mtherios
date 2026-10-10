@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { getMtheriosAppConfig } from '$lib/server/app/config';
+import { reuseQueryEmbedding } from '$lib/server/engine/queryEmbeddingReuse';
 import { getServerMemoryConfig } from '$lib/server/env';
+import { currentServerProviderHooks, normalizeServerProviderUsage } from '$lib/server/turn/provider';
+import { countTokens } from '$lib/utils/tokens';
 
 const MEMORY_EMBEDDING_TEXT_CHAR_LIMIT = 6000;
 const MEMORY_EMBEDDING_SUMMARY_CHAR_LIMIT = 2200;
@@ -14,6 +17,8 @@ export interface MemoryEmbeddingConfig {
 	customUrl: string;
 	batchSize: number;
 	dimensions: number;
+	/** Wiki collections historically select dimensions through their model, not a request field. */
+	requestDimensions?: boolean;
 }
 
 export function memoryEmbeddingConfig(): MemoryEmbeddingConfig | null {
@@ -66,6 +71,11 @@ export async function embedMemoryTexts(
 	signal?.throwIfAborted();
 	if (!config) throw new Error('Memory embeddings are not configured.');
 	if (texts.length === 0) return [];
+	return reuseQueryEmbedding({ texts, config, ollamaGpu: process.env.OLLAMA_EMBED_NUM_GPU ?? null },
+		signal ?? currentServerProviderHooks()?.signal, () => dispatchMemoryTexts(texts, config, signal));
+}
+
+async function dispatchMemoryTexts(texts: string[], config: MemoryEmbeddingConfig, signal?: AbortSignal): Promise<number[][]> {
 	if (config.customUrl) return embedCustom(texts, config, signal);
 	if (config.provider === 'local' || config.provider === 'local-hash') {
 		return texts.map((text) => localHashEmbedding(text, config.dimensions));
@@ -118,39 +128,22 @@ export function validateMemoryEmbeddingVector(vector: number[], dimensions: numb
 }
 
 async function embedCustom(texts: string[], config: MemoryEmbeddingConfig, signal?: AbortSignal): Promise<number[][]> {
-	const response = await fetch(config.customUrl, {
-		signal,
-		method: 'POST',
-		headers: headers(config),
-		body: JSON.stringify({ model: config.model, input: texts.length === 1 ? texts[0] : texts }),
-	});
-	return parseEmbeddingResponse(await parseJsonResponse(response, 'custom memory embedding'), texts.length);
+	const data = await requestEmbedding(config.customUrl, { model: config.model, input: texts.length === 1 ? texts[0] : texts }, config, signal);
+	return parseEmbeddingResponse(data, texts.length);
 }
 
 async function embedOpenAiCompatible(texts: string[], config: MemoryEmbeddingConfig, signal?: AbortSignal): Promise<number[][]> {
 	const url = `${config.baseUrl.replace(/\/$/, '')}/embeddings`;
-	const response = await fetch(url, {
-		signal,
-		method: 'POST',
-		headers: headers(config),
-		body: JSON.stringify({ model: config.model, input: texts.length === 1 ? texts[0] : texts, dimensions: config.dimensions }),
-	});
-	return parseEmbeddingResponse(await parseJsonResponse(response, 'OpenAI-compatible memory embedding'), texts.length);
+	const data = await requestEmbedding(url, { model: config.model, input: texts.length === 1 ? texts[0] : texts,
+		...(config.requestDimensions === false ? {} : { dimensions: config.dimensions }) }, config, signal);
+	return parseEmbeddingResponse(data, texts.length);
 }
 
 async function embedOllama(texts: string[], config: MemoryEmbeddingConfig, signal?: AbortSignal): Promise<number[][]> {
 	const base = config.baseUrl.replace(/\/$/, '');
-	const embedResponse = await fetch(`${base}/api/embed`, {
-		signal,
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ model: config.model, input: texts.length === 1 ? texts[0] : texts,
-			...(process.env.OLLAMA_EMBED_NUM_GPU ? { options: { num_gpu: Number(process.env.OLLAMA_EMBED_NUM_GPU) } } : {}) }),
-	});
-
-	if (embedResponse.ok) {
-		return parseEmbeddingResponse(await embedResponse.json(), texts.length);
-	}
+	const embedded = await requestEmbedding(`${base}/api/embed`, { model: config.model, input: texts.length === 1 ? texts[0] : texts,
+		...(process.env.OLLAMA_EMBED_NUM_GPU ? { options: { num_gpu: Number(process.env.OLLAMA_EMBED_NUM_GPU) } } : {}) }, config, signal, true);
+	if (embedded) return parseEmbeddingResponse(embedded, texts.length);
 
 	if (texts.length > 1) {
 		const vectors: number[][] = [];
@@ -158,13 +151,32 @@ async function embedOllama(texts: string[], config: MemoryEmbeddingConfig, signa
 		return vectors;
 	}
 
-	const legacyResponse = await fetch(`${base}/api/embeddings`, {
-		signal,
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ model: config.model, prompt: texts[0] }),
-	});
-	return parseEmbeddingResponse(await parseJsonResponse(legacyResponse, 'Ollama memory embedding'), 1);
+	return parseEmbeddingResponse(await requestEmbedding(`${base}/api/embeddings`, { model: config.model, prompt: texts[0] }, config, signal), 1);
+}
+
+/** Query embeddings share the active run's durable reservation; background indexing has no run scope. */
+async function requestEmbedding(url: string, body: Record<string, unknown>, config: MemoryEmbeddingConfig, inputSignal?: AbortSignal, allowHttpFallback = false): Promise<unknown> {
+	const hooks = currentServerProviderHooks();
+	const signal = AbortSignal.any([AbortSignal.timeout(30_000), ...(inputSignal ? [inputSignal] : []), ...(hooks?.signal ? [hooks.signal] : [])]);
+	const serializedBody = JSON.stringify(body), startedAt = Date.now();
+	const complete = hooks ? await hooks.beforeRequest({
+		profile: { providerType: 'openai-compatible', apiKey: config.apiKey, baseUrl: config.baseUrl,
+			customModels: [], fetchedModels: [], reasoningModels: [], hiddenModels: [], favoriteModels: [] },
+		model: config.model, system: 'Evidence retrieval query embedding.', prompt: typeof body.input === 'string' ? body.input : typeof body.prompt === 'string' ? body.prompt : '', signal, maxRetries: 0,
+	}, { body, serializedBody, inputTokens: countTokens(serializedBody), reservedOutputTokens: 0, contextWindowTokens: 32_000 }) : undefined;
+	signal.throwIfAborted();
+	const response = await fetch(url, { method: 'POST', headers: config.provider === 'ollama' && !config.customUrl ? { 'Content-Type': 'application/json' } : headers(config), body: serializedBody, signal });
+	if (!response.ok && allowHttpFallback) return null;
+	const data = await parseJsonResponse(response, 'Memory embedding');
+	signal.throwIfAborted();
+	const record = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+	const usage = normalizeServerProviderUsage(record, false);
+	if (usage.totalTokens == null && typeof record.prompt_eval_count === 'number' && record.prompt_eval_count >= 0) {
+		usage.requestTokens = record.prompt_eval_count; usage.inputTokens = record.prompt_eval_count; usage.responseTokens = 0; usage.totalTokens = record.prompt_eval_count;
+	}
+	await complete?.({ text: 'Query embedded.', model: config.model, endpoint: url, durationMs: Date.now() - startedAt,
+		promptChars: serializedBody.length, responseChars: 0, finishReason: 'stop', usage });
+	return data;
 }
 
 function headers(config: MemoryEmbeddingConfig): Record<string, string> {

@@ -1,4 +1,5 @@
 import { playerCapabilitiesSchema } from '$lib/contracts/playerCapabilities';
+import { automaticCharacterUpdate } from '$lib/contracts/automaticCharacterUpdate';
 import {
 	deleteLorebookEntry,
 	deleteArc,
@@ -113,6 +114,7 @@ function entryWithResolvedEntity(entry: Entry, entity: Record<string, unknown> |
 	if (!resolvedId && !resolvedName && !resolvedDescription) return entry;
 	return {
 		...entry,
+		...(entry.metadata?.automaticCharacterUpdate ? { state: entity.state as Entry['state'], metadata: { ...entry.metadata, automaticCharacterUpdate: undefined, identityReviewProposalId: (entity.metadata as Record<string, unknown> | undefined)?.identityReviewProposalId } } : {}),
 		id: resolvedId ?? entry.id,
 		name: resolvedName ?? entry.name,
 		description: resolvedDescription ?? entry.description,
@@ -379,9 +381,17 @@ export async function deleteCanonicalLorebookEntry(storyId: string, entryId: str
 	return serverVersion;
 }
 
-export async function saveCanonicalCharacter(character: Character, mode: CanonicalWriteMode = 'update'): Promise<{ serverVersion: number | null; entry: Entry; character: Character; resolvedCharacterReferences?: ResolvedCharacterReference[] }> {
+export async function saveCanonicalCharacter(character: Character, mode: CanonicalWriteMode = 'update', automatic?: { changes: Record<string, unknown>; sourceEntryIds: string[] }): Promise<{ serverVersion: number | null; entry: Entry; character: Character; resolvedCharacterReferences?: ResolvedCharacterReference[] }> {
 	const existing = await getLorebookEntry(character.id);
 	const entry = characterToEntry(character, existing);
+	if (automatic) {
+		if (!existing) throw new Error('Automatic character update requires an existing canonical entry.');
+		const baseline = { ...existing.state as unknown as Record<string, unknown>, description: existing.description };
+		entry.state = { ...existing.state, ...automatic.changes } as Entry['state'];
+		delete (entry.state as unknown as Record<string, unknown>).description;
+		entry.description = existing.description;
+		entry.metadata = { ...existing.metadata, automaticCharacterUpdate: automaticCharacterUpdate(baseline, { ...baseline, ...automatic.changes }, automatic.sourceEntryIds) };
+	}
 	const result = await writeCanonicalLorebookEntry(entry, mode);
 	const canonicalCharacter = characterWithResolvedEntry(character, result.entry);
 	await putCharacter(canonicalCharacter);

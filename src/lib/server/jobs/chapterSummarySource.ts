@@ -27,4 +27,3 @@ export function chapterSourceForArc(chapter: Pick<ChapterRow, 'id' | 'number' | 
 		? accounts.map((raw, index) => `Turn ${index + 1}: ${(raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}).summary}`).join('\n\n')
 		: summarizeMtheriosMemoryForRollup(chapter.sceneOutcome)}` };
 }
-

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { availablePlannerTools, currentJevObservations, formatAgentObservations, formatNarratorObservations, isRetryablePlannerError, MAX_AGENT_TOOL_CALLS, sameAgentQuestion, selectPlannerToolCalls } from './agentRunPlanner';
+import { availablePlannerTools, currentJevObservations, formatAgentObservations, formatNarratorObservations, formatPiNarratorObservations, isRetryablePlannerError, MAX_AGENT_TOOL_CALLS, sameAgentQuestion, selectPlannerToolCalls } from './agentRunPlanner';
 import { actorBriefArgsSchema } from './gmTools';
 
 describe('GM planner tool budget', () => {
+	it('hands public source ranges to final narration while withholding private packets', () => {
+		const source = { tool: 'read', result: { sourceRef: 'content:rule', visibility: 'public', startLine: 1, endLine: 3, text: 'Current rule' } };
+		expect(formatPiNarratorObservations([source, { tool: 'read', result: { sourceRef: 'content:secret', visibility: 'gm', text: 'Secret' } }, { tool: 'recall', result: { text: 'Private history' } }, { tool: 'search', result: { privateName: 'Hidden' } }])).toBe(JSON.stringify(source));
+	});
 	it('stops repeated lookups while preserving player interactions and the final turn', () => {
 		const tools = ['read', 'list', 'search', 'research', 'askUserQuestion', 'askPlayerToRoll', 'gmRollDice'] as const;
 		expect(availablePlannerTools(tools, ['search', 'read'])).toContain('research');

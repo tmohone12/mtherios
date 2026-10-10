@@ -71,7 +71,8 @@
 	--sage: #a6b598;
 	--text-on-accent: #171b13;
 	--font-ui: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-	--bg-reader: #141813;
+	--bg-reader: #151a16;
+	--text-reader: #d6d8cc;
 	--danger: #a94a5a;
 	--success: #6f9c7b;
 	/* Semantic tokens shared by every workspace */
@@ -283,9 +284,9 @@
 
 	.prose-mtherios {
 		font-family: var(--font-story);
-		font-size: 1.125rem;
+		font-size: 1.2rem;
 		line-height: 1.8;
-		color: var(--text-secondary);
+		color: var(--text-reader);
 		text-wrap: pretty;
 		font-weight: 400;
 	}

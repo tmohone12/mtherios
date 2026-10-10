@@ -57,6 +57,8 @@ export async function getAppStatus(input: AppStatusInput = {}) {
 			wikiEmbedModel: config.wikiEmbedModel,
 			wikiAutoIndexStoryVaults: config.wikiAutoIndexStoryVaults,
 			jobWorkerEnabled: config.jobWorkerEnabled,
+			chapterRunnerEnabled: config.chapterRunnerEnabled,
+			chapterRunnerStoryId: config.chapterRunnerStoryId,
 			jobWorkerScope: config.jobWorkerScope,
 			jobIntervalMs: config.jobIntervalMs,
 			chapterThreshold: memory.chapterThreshold,

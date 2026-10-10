@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { withServerProviderHooks } from './provider';
 import { chooseJevOption, generateJevReaction, reviewJevContinuityCandidates, verifyJevTurnMemory } from './jev';
 
 vi.mock('$env/dynamic/private', () => ({ env: process.env }));
@@ -12,6 +13,12 @@ function answer(choice = 'refuse', confidence = 0.96) {
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 describe('Jev NPC decisions', () => {
+ it('reports the selected decision model context to the shared request budget', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Response.json(answer())));
+  const beforeRequest=vi.fn().mockResolvedValue(undefined);
+  await withServerProviderHooks({beforeRequest}, () => generateJevReaction({ ...input, model:'cloudflare/clef', profile:{...input.profile,providerType:'nanogpt'} }));
+  expect(beforeRequest).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({contextWindowTokens:1800}));
+ });
 	it.each([
 		['openrouter', 'openai/gpt-6-luna-decisions'], ['openrouter', 'cloudflare/clef'], ['openrouter', 'cloudflare/clef-flash'],
 		['openrouter', 'inception/mercury-decide:free'], ['openrouter', 'upstage/solar-decide'], ['openrouter', 'jaredpalmer/kev-4b'],
@@ -146,6 +153,23 @@ describe('Jev NPC decisions', () => {
 
 describe('Jev bounded world choices', () => {
 	const options = [{ id: 'hold', description: 'Wait for stronger evidence.' }, { id: 'diplomatic:none', description: 'Send envoys.' }];
+	it.each([
+		[.7,.85,true],[.6999,.85,false],[.9,.6999,false],[.9,.7,true],
+	])('applies independent inclusive gates confidence %s / probability %s',async(confidence,p,accepted)=>{
+		vi.stubGlobal('fetch',vi.fn().mockImplementation(() => Response.json({model:'kev-latest',answers:{selection:{type:'choice',choice:'hold',confidence,probabilities:{hold:p,'diplomatic:none':1-p}}}})));
+		const result=await chooseJevOption({profile:input.profile,model:input.model,evidence:{},sourceIds:['known'],options});
+		expect(result!==null).toBe(accepted);
+	});
+	it.each([
+		[{id:'hold',description:'Wait.'},{id:'hold',description:'Duplicate.'}],
+		[{id:'hold',description:'Wait.'},{id:'INVALID ID',description:'Bad ID.'}],
+		[{id:'hold',description:'Only choice.'}],
+		Array.from({length:9},(_,i)=>({id:'option_'+i,description:'Too many.'})),
+	])('rejects malformed bounded sets before any request',async(...args)=>{
+		const fetchMock=vi.fn();vi.stubGlobal('fetch',fetchMock);
+		await expect(chooseJevOption({profile:input.profile,model:input.model,evidence:{},sourceIds:['known'],options:args as Array<{id:string;description:string}>})).rejects.toThrow();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
 	it('accepts only a confident, supplied option with source receipts', async () => {
 		vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Response.json({ model: 'typesafe/jev-1.13',
 			answers: { selection: { type: 'choice', choice: 'diplomatic:none', confidence: 0.92, probabilities: { 'diplomatic:none': 0.92 } } } })));

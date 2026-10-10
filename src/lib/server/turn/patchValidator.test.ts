@@ -17,11 +17,12 @@ import {
 	storyEvents,
 } from '$lib/server/db/schema';
 import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
-import { applyValidatedTurnUpdate } from './patchValidator';
+import { applyValidatedTurnUpdate, parseTurnUpdate } from './patchValidator';
 
 const dbMocks = vi.hoisted(() => ({
 	getDb: vi.fn(),
 	enqueueTurnProjectionJobs: vi.fn(),
+	enqueueFactionCadenceJob: vi.fn(),
 }));
 
 vi.mock('$lib/server/db/client', () => ({
@@ -30,6 +31,7 @@ vi.mock('$lib/server/db/client', () => ({
 
 vi.mock('$lib/server/jobs/outbox', () => ({
 	enqueueTurnProjectionJobs: dbMocks.enqueueTurnProjectionJobs,
+	enqueueFactionCadenceJob: dbMocks.enqueueFactionCadenceJob,
 }));
 
 const storyRow = {
@@ -169,9 +171,18 @@ beforeEach(() => {
 	dbMocks.getDb.mockReset();
 	dbMocks.enqueueTurnProjectionJobs.mockReset();
 	dbMocks.enqueueTurnProjectionJobs.mockResolvedValue(undefined);
+	dbMocks.enqueueFactionCadenceJob.mockReset();
+	dbMocks.enqueueFactionCadenceJob.mockResolvedValue(null);
 });
 
 describe('applyValidatedTurnUpdate', () => {
+	it('retains the same compact deltas with or without the extraction envelope', () => {
+		const update = { timeline_events: [{ title: 'A refusal heard', type: 'reveal', status: 'committed', actor_claims: [{ text: 'Mira heard the refusal.', known_by: ['Mira'], kind: 'learned', evidence: 'Mira heard the refusal.' }] }] };
+		expect(parseTurnUpdate(update)).toEqual(parseTurnUpdate({ update }));
+		expect(parseTurnUpdate(update).update.timeline_events[0].actor_claims).toHaveLength(1);
+		expect(parseTurnUpdate({ timeline_events: 'invalid' }).warnings.length).toBeGreaterThan(0);
+		expect(parseTurnUpdate({ update: { timeline_events: 'invalid' } }).warnings.length).toBeGreaterThan(0);
+	});
 	it.each([
 		['canonical', {}, true],
 		['noncanon', { nonCanon: true }, false],
@@ -730,14 +741,11 @@ describe('applyValidatedTurnUpdate', () => {
 		const memory = state.eventMemory as Record<string, string[]>;
 
 		expect(state).toMatchObject({
-			aliases: ['The Harbor Broker'],
 			isPresent: true,
 			present: true,
-			bio: 'A former captain.\nraised around harbor ledgers and old smuggling routes',
+			bio: 'A former captain.',
 			appearance: 'Grey eyes',
 			presentation: 'salt-stained blue cloak and ink-dark fingertips',
-			personality: 'Patient and exacting',
-			background: 'A former captain.\nraised around harbor ledgers and old smuggling routes',
 			currentLocation: 'Ash Bridge counting room',
 			currentAction: 'holding the bridge bargain together while watching Valen',
 			emotionalState: 'controlled fear under professional calm',
@@ -750,7 +758,6 @@ describe('applyValidatedTurnUpdate', () => {
 				}),
 			motivations: ['keep the bridge bargain alive'],
 			goals: ['keep the bridge bargain alive'],
-			speechStyle: 'quiet, exact, with clipped harbor idioms',
 		});
 		const relationship = state.relationship as Record<string, unknown>;
 		expect(relationship.history).toEqual([

@@ -3,6 +3,7 @@
 	import { NPC_AGENCY_FIELDS } from '$lib/contracts/npcAgency';
 	import { onMount, onDestroy } from 'svelte';
 	import LoreEntryPreview from './LoreEntryPreview.svelte';
+	import CharacterContinuityReview from '$lib/components/canon/CharacterContinuityReview.svelte';
 	import FactionProfileEditor from '$lib/components/content/FactionProfileEditor.svelte';
 	import LocationWorkspace from './LocationWorkspace.svelte';
 	import {
@@ -142,6 +143,8 @@
 	let isMobile = $state(false);
 	let draftingCharacter = $state(false);
 	let reviewingProposal = $state(false);
+	let identityReviewNotes = $state('');
+	$effect(() => { selectedRecord?.id; identityReviewNotes = ''; });
 	let newDatabaseTitle = $state('');
 	let creatingDatabase = $state(false);
 	let characterDraftInstructions = $state('Update this NPC from recent story context.');
@@ -946,6 +949,7 @@
 				proposalId,
 				decision,
 				reviewer: 'human',
+				notes: identityReviewNotes.trim() || undefined,
 				...(typeof expectedProposalVersion === 'number' ? { expectedProposalVersion } : {}),
 			});
 			if (storyId !== selectedStoryId || selectedRecord?.id !== proposalId) return;
@@ -1352,6 +1356,7 @@
 								<section class="creation-review" aria-label="Review Proposal">
 									<div><h3>{isCharacterCreationProposal ? sourceCharacterBefore ? 'Review this character update' : 'Ready to create this character?' : 'Review Proposal'}</h3><p>{isSourceCharacterCandidate ? 'Add and save character details yourself, or build details from story evidence. Review the result before saving canon.' : isCharacterCreationProposal ? 'Review the biography and traits below. Create character saves this draft to your story’s characters.' : 'Review the proposed changes before applying them to this story.'}</p></div>
 									<div class="creation-review-actions">
+										<CharacterContinuityReview metadata={asRecord(selectedRecord.metadata)} bind:notes={identityReviewNotes} />
 										{#if isSourceCharacterCandidate && !editMode}<button class="lore-button" onclick={() => { editMode = true; }} disabled={Boolean(draftingCandidateId) || reviewingProposal || saving}><Pencil size={15} /> Edit details</button>{/if}
 										{#if isSourceCharacterCandidate}<button class="lore-button" onclick={draftCandidateFromSources} disabled={Boolean(draftingCandidateId) || reviewingProposal || hasUnsavedChanges || saving || isDetailLoading}><Sparkles size={15} />{draftingCandidateId ? 'Reading sources…' : 'Build from story'}</button>{/if}
 										<button class="lore-button primary" onclick={() => reviewPatchProposal('approved')} disabled={(isSourceCharacterCandidate && !candidateReady) || Boolean(draftingCandidateId) || reviewingProposal || hasUnsavedChanges || saving || isDetailLoading}><Check size={15} />{reviewingProposal ? 'Applying…' : sourceCharacterBefore ? 'Update character' : isCharacterCreationProposal ? 'Create character' : 'Approve'}</button>

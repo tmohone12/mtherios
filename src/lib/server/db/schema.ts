@@ -693,6 +693,29 @@ export const engineCacheEntries = pgTable('engine_cache_entries', {
 	hashIdx: index('engine_cache_entries_content_hash_idx').on(table.contentHash),
 }));
 
+export const summaryGenerationCheckpoints = pgTable('summary_generation_checkpoints', {
+	fingerprint: text('fingerprint').primaryKey(),
+	failureFingerprint: text('failure_fingerprint').notNull(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	kind: text('kind').notNull(),
+	stage: text('stage').notNull(),
+	dispatchesProvider: boolean('dispatches_provider').notNull().default(true),
+	status: text('status').notNull(),
+	leaseOwner: text('lease_owner'),
+	leaseUntil: timestamp('lease_until', { withTimezone: true, mode: 'string' }),
+	result: jsonb('result'),
+	failure: jsonb('failure'),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+	updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, table => ({
+	storyUpdatedIdx: index('summary_generation_checkpoints_story_idx').on(table.storyId, table.updatedAt),
+	failureIdx: index('summary_generation_checkpoints_failure_idx').on(table.storyId, table.failureFingerprint),
+	statusCheck: check('summary_generation_checkpoints_status_check', sql`${table.status} in ('running','complete','failed')`),
+	stateCheck: check('summary_checkpoint_state', sql`(${table.status}='running' and ${table.leaseOwner} is not null and ${table.leaseUntil} is not null and ${table.result} is null)
+		or (${table.status}='complete' and ${table.leaseOwner} is null and ${table.leaseUntil} is null and ${table.result} is not null and ${table.failure} is null)
+		or (${table.status}='failed' and ${table.leaseOwner} is null and ${table.leaseUntil} is null and ${table.result} is null and ${table.failure} is not null)`),
+}));
+
 export const apiCallLogs = pgTable('api_call_logs', {
 	id: text('id').primaryKey(),
 	storyId: text('story_id').references(() => stories.id, { onDelete: 'cascade' }),
@@ -776,7 +799,13 @@ export const contentFolders=pgTable('content_folders',{
   archivedAt:timestamp('archived_at',{withTimezone:true,mode:'string'}),archiveReceipt:jsonb('archive_receipt'),
   id:text('id').primaryKey(),projectId:text('project_id').notNull().references(()=>shelves.id,{onDelete:'cascade'}),gameId:text('game_id'),path:text('path').notNull(),revision:integer('revision').notNull().default(1),createdAt:timestamp('created_at',{withTimezone:true,mode:'string'}).notNull().defaultNow(),updatedAt:timestamp('updated_at',{withTimezone:true,mode:'string'}).notNull().defaultNow(),
 },t=>({scope:foreignKey({columns:[t.projectId,t.gameId],foreignColumns:[stories.shelfId,stories.id]}).onDelete('cascade'),path:uniqueIndex('content_folders_path_unique').on(t.projectId,sql`coalesce(${t.gameId},'')`,t.path),pathLength:check('content_folders_path_check',sql`length(${t.path})>0 and length(${t.path})<=500`),revision:check('content_folders_revision_check',sql`${t.revision}>0`)}));
+export const sourceMounts = pgTable('source_mounts', {
+  id: text('id').primaryKey(), projectId: text('project_id').notNull().references(() => shelves.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(), rootPath: text('root_path').notNull(), roles: jsonb('roles').$type<string[]>().notNull().default(sql`'["gm","assistant"]'::jsonb`),
+  revision: integer('revision').notNull().default(1), createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(), updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, t => ({ path: unique('source_mounts_project_id_root_path_key').on(t.projectId, t.rootPath), project: index('source_mounts_project_idx').on(t.projectId), revision: check('source_mounts_revision_check', sql`${t.revision}>0`) }));
 export const schema = {
+  sourceMounts,
   locationMaps, locationMapRevisions,
   contentFolders,
   canonicalTypeSettings,canonicalTypeHistory,
@@ -814,5 +843,6 @@ export const schema = {
 	searchIndexRecords,
 	campaignFiles,
 	engineCacheEntries,
+	summaryGenerationCheckpoints,
 	apiCallLogs,
 };

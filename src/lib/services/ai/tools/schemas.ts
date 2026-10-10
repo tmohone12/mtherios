@@ -99,7 +99,19 @@ export const worldStateConversationSchema = z.object({
 	emotionalShift: z.string().nullable().optional().default(null),
 });
 
+const knowledgeAudience = {
+	known_by: z.array(z.string().trim().min(1)).min(1).max(4).optional(),
+	evidence: z.string().trim().min(12).max(1200).optional(),
+};
+export const worldStateActorClaimSchema = z.object({
+	text: z.string().trim().min(1).max(360),
+	known_by: z.array(z.string().trim().min(1)).min(1).max(4),
+	kind: z.enum(['learned', 'witnessed', 'shared']),
+	evidence: z.string().trim().min(12).max(1200),
+}).strict();
+
 export const worldStateRelationshipSchema = z.object({
+	...knowledgeAudience,
 	sourceName: z.string(),
 	targetName: z.string(),
 	type: z.enum([
@@ -119,6 +131,7 @@ export const worldStateStoryBeatSchema = z.object({
 });
 
 export const worldStateTimelineEventSchema = z.object({
+	actor_claims: z.array(worldStateActorClaimSchema).max(3).optional(),
 	title: z.string(),
 	description: z.string().optional().default(''),
 	type: z.enum([
@@ -164,6 +177,7 @@ export const worldStateMeterChangeSchema = z.object({
 });
 
 export const worldStateAgreementChangeSchema = z.object({
+	...knowledgeAudience,
 	action: z.enum(['create', 'update', 'break', 'fulfill', 'expire', 'annul', 'supersede']),
 	// Identify existing agreement: by id (preferred for update/break/fulfill) or
 	// by parties+category (fallback for retroactive updates when GM didn't track the id).

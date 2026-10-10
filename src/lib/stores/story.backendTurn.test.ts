@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	deleteArc: vi.fn(),
 	deleteSaga: vi.fn(),
 	updateStory: vi.fn(),
+	getStory: vi.fn(),
 }));
 
 vi.mock('$lib/services/backendMemory', async (importOriginal) => ({
@@ -29,6 +30,7 @@ vi.mock('$lib/services/database', async (importOriginal) => ({
 	deleteArc: mocks.deleteArc,
 	deleteSaga: mocks.deleteSaga,
 	updateStory: mocks.updateStory,
+	getStory: mocks.getStory,
 	getChapters: vi.fn().mockResolvedValue([]),
 	getArcs: vi.fn().mockResolvedValue([]),
 	getSagas: vi.fn().mockResolvedValue([]),
@@ -105,13 +107,66 @@ describe('backend turn local mirroring', () => {
 		mocks.pullBackendChanges.mockResolvedValue(null);
 		mocks.putStoryEntry.mockRejectedValueOnce(new Error('IndexedDB write failed'));
 		mocks.updateStory.mockResolvedValue(undefined);
+		mocks.getStory.mockResolvedValue({ ...currentStory });
 		story.currentStory = { ...currentStory };
 	});
 
 	afterEach(() => {
 		story.clear();
 		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
 		vi.useRealTimers();
+	});
+
+	it.each(['local', 'backend-error', 'missing-binding'] as const)('ignores a stale %s load after another story is selected', async phase => {
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		let finish!: () => void;
+		let reached!: () => void;
+		const suspended = new Promise<void>(resolve => { reached = resolve; });
+		if (phase === 'local') {
+			mocks.getStory.mockImplementationOnce(() => new Promise<Story>(resolve => {
+				finish = () => resolve({ ...currentStory, serverStoryId: null });
+				reached();
+			}));
+		} else if (phase === 'backend-error') {
+			mocks.pushPendingBackendOps.mockImplementationOnce(() => new Promise((_, reject) => {
+				finish = () => reject(new Error('Delayed terminal failure'));
+				reached();
+			}));
+		} else {
+			mocks.pushPendingBackendOps.mockRejectedValueOnce(new Error('Story not found'));
+			mocks.updateStory.mockImplementationOnce(() => new Promise<void>(resolve => {
+				finish = resolve;
+				reached();
+			}));
+		}
+		const loading = story.loadStory(currentStory.id);
+		await suspended;
+		story.clear();
+		const selected = { ...currentStory, id: 'selected_story', serverStoryId: 'selected_server' };
+		story.currentStory = selected;
+		story.entries = [{ id: 'selected_entry', content: 'Keep this transcript.' }] as never;
+		mocks.updateStory.mockClear();
+		finish();
+		await loading;
+		expect(story.currentStory).toEqual(selected);
+		expect(story.entries).toEqual([{ id: 'selected_entry', content: 'Keep this transcript.' }]);
+		expect(story.worldHydrationError).toBeNull();
+		expect(mocks.updateStory).not.toHaveBeenCalled();
+	});
+
+	it('preserves a pending agent run for reload without applying a completed turn', async () => {
+		const pending = { status: 'awaiting_input', runId: 'run_pending', storyId: 'story_server', clientTurnId: 'pending_turn', interactions: [{ id: 'question' }] };
+		mocks.processBackendTurn.mockResolvedValue(pending);
+		const setItem = vi.fn();
+		vi.stubGlobal('localStorage', { setItem });
+		const apply = vi.spyOn(story, 'applyBackendTurnResponse');
+		const returned = await story.submitBackendTurn({ clientTurnId: 'pending_turn', playerText: 'Open the gate.', localVersion: 7 } as never);
+		expect(returned).toEqual(pending);
+		expect(setItem).toHaveBeenCalledWith('mythengine:agent-run:story_server', 'run_pending');
+		expect(apply).not.toHaveBeenCalled();
+		expect(mocks.putStoryEntry).not.toHaveBeenCalled();
+		expect(story.currentStory?.serverVersion).toBe(7);
 	});
 
 	it('does not resurrect an imported party role after the server clears it', () => {
@@ -186,6 +241,7 @@ describe('backend turn local mirroring', () => {
 			actionType: 'do',
 		});
 
+		if ('status' in result) throw new Error('Expected a completed turn.');
 		expect(result.narration).toBe(response.narration);
 		expect(story.entries).toContainEqual(expect.objectContaining({
 			id: 'narration_turn_1',

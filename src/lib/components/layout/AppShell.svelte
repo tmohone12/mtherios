@@ -10,27 +10,28 @@
 	import TerminalPanel from '$lib/components/system/TerminalPanel.svelte';
 
 	type Panel = 'content' | 'library' | 'database' | 'engine' | 'terminal';
-	let activePanel = $state<Panel>('library');
-	onMount(() => { if (new URLSearchParams(window.location.search).has('source')) activePanel = 'content'; });
+	let activePanel = $derived(app.workspacePanel);
+	onMount(() => app.registerNavigationGuard(canLeaveLore));
 	let libraryVisit = $state(0);
 	let settingsOpen = $state(false);
 	let mobileToolsOpen = $state(false);
 	let loreDirty = $state(false);
 	let navigationNotice = $state('');
 	const workspaceItems = [
-		{ id: 'content' as const, icon: Feather, label: 'Project content', shortLabel: 'Content' },
-		{ id: 'library' as const, icon: Library, label: 'Shelves', shortLabel: 'Shelves' },
+		{ id: 'library' as const, icon: Library, label: 'Stories & shelves', shortLabel: 'Library' },
+		{ id: 'content' as const, icon: Feather, label: 'Lore studio', shortLabel: 'Lore studio' },
 	];
 	const systemItems = [
 		{ id: 'database' as const, icon: Compass, label: 'World explorer' },
-		{ id: 'engine' as const, icon: Server, label: 'Engine core' },
+		{ id: 'engine' as const, icon: Server, label: 'Runtime status' },
 		{ id: 'terminal' as const, icon: Cpu, label: 'Terminal sync' },
 	];
 	const activeLabel = $derived([...workspaceItems, ...systemItems].find(item => item.id === activePanel)?.label ?? 'Story library');
 	function selectPanel(id: Panel) {
 		if (id !== activePanel && !canLeaveLore()) return;
-		if (id === 'library' && activePanel === 'library') libraryVisit += 1;
-		activePanel = id;
+		const revisitLibrary = id === 'library' && activePanel === 'library';
+		if (!app.selectWorkspace(id)) return;
+		if (revisitLibrary) libraryVisit += 1;
 		mobileToolsOpen = false;
 	}
 	function canLeaveLore() {
@@ -46,6 +47,8 @@
 		if (!dirty) navigationNotice = '';
 	}
 </script>
+
+<svelte:head><title>{activeLabel} · MythEngine</title></svelte:head>
 
 <div class="app-shell workspace-shell">
 	<a class="skip-link" href="#workspace-content">Skip to content</a>
@@ -63,7 +66,7 @@
 					{#if activePanel === item.id}<span class="active-dot" aria-hidden="true"></span>{/if}
 				</button>
 			{/each}
-			<p class="nav-eyebrow system-eyebrow">Behind the story</p>
+			<p class="nav-eyebrow system-eyebrow">World & tools</p>
 			{#each systemItems as item}
 				<button class="sidebar-link" class:active={activePanel === item.id} aria-current={activePanel === item.id ? 'page' : undefined} onclick={() => selectPanel(item.id)} title={item.label}>
 					<item.icon size={18} strokeWidth={1.6} /><span>{item.label}</span>
@@ -72,14 +75,14 @@
 			{/each}
 		</nav>
 		<div class="sidebar-footer">
-			<div class="sidebar-note"><Feather size={19} strokeWidth={1.2} /><p>A world of possibilities.<br /><span>One story at a time.</span></p></div>
+			<div class="sidebar-note"><Feather size={19} strokeWidth={1.2} /><p>Your next chapter<br /><span>starts here.</span></p></div>
 			<button class="sidebar-link" onclick={() => settingsOpen = true} title="Settings"><Settings size={18} strokeWidth={1.6} /><span>Settings</span></button>
 		</div>
 	</aside>
 	<div class="workspace-body">
 		<header class="workspace-topbar">
 			<div class="workspace-breadcrumb"><span class="desktop-crumb">Workspace</span><ChevronRight class="desktop-crumb" size={13} /><span class="mobile-wordmark">MythEngine<span>/</span></span><strong>{activeLabel}</strong></div>
-			<div class="topbar-actions"><span class="workspace-edition">A place for living stories</span><button class="topbar-settings" onclick={() => settingsOpen = true} aria-label="Open settings"><Settings size={18} strokeWidth={1.6} /></button></div>
+			<div class="topbar-actions"><span class="workspace-edition">The story workspace</span><button class="topbar-settings" onclick={() => settingsOpen = true} aria-label="Open settings"><Settings size={18} strokeWidth={1.6} /></button></div>
 		</header>
 		{#if navigationNotice}<p class="navigation-notice" role="alert">{navigationNotice}</p>{/if}
 		<main id="workspace-content" class="workspace-content" tabindex="-1">
@@ -111,7 +114,7 @@
 	.workspace-shell { display: flex; width: 100%; overflow: hidden; background: var(--bg-primary); }
 	.skip-link { position: fixed; left: 16px; top: -60px; z-index: 100; padding: 12px 20px; background: var(--primary); color: var(--primary-foreground); border-radius: 8px; }
 	.skip-link:focus { top: 12px; }
-	.workspace-sidebar { width: 232px; flex-shrink: 0; display: flex; flex-direction: column; padding: 28px 16px 16px; background: var(--bg-secondary); border-right: 1px solid var(--border-secondary); }
+	.workspace-sidebar { width: 248px; flex-shrink: 0; display: flex; flex-direction: column; padding: 32px 18px 20px; background: var(--bg-secondary); border-right: 1px solid var(--border-secondary); }
 	.workspace-brand { display: flex; align-items: center; gap: 12px; padding: 0 10px; text-align: left; }
 	.brand-mark { display: grid; place-items: center; width: 36px; height: 42px; color: var(--text-accent); border: 1px solid color-mix(in srgb, var(--primary) 32%, transparent); border-radius: 16px 16px 5px 5px; }
 	.brand-wordmark { font-family: var(--font-display); font-size: 25px; line-height: 1; letter-spacing: -.035em; color: var(--text-primary); }
@@ -121,10 +124,10 @@
 	.sidebar-navigation { flex: 1; overflow-y: auto; }
 	.nav-eyebrow { padding: 0 12px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .15em; font-size: 9px; font-weight: 600; color: var(--text-muted); }
 	.system-eyebrow { margin-top: 35px; }
-	.sidebar-link { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 43px; margin: 3px 0; padding: 10px 12px; border-radius: 6px; font-size: 12px; text-align: left; color: var(--text-secondary); transition: background 150ms, color 150ms; }
+	.sidebar-link { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; margin: 5px 0; padding: 12px; border-radius: 8px; font-size: 13px; text-align: left; color: var(--text-secondary); transition: background 150ms, color 150ms; }
 	.sidebar-link > :global(svg) { color: var(--text-muted); flex-shrink: 0; }
 	.sidebar-link:hover { background: var(--bg-tertiary); color: var(--text-primary); }
-	.sidebar-link.active { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--text-accent); }
+	.sidebar-link.active { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--text-accent); box-shadow: inset 2px 0 var(--text-accent); }
 	.sidebar-link.active > :global(svg) { color: var(--text-accent); }
 	.active-dot { margin-left: auto; width: 5px; height: 5px; border-radius: 50%; background: var(--primary); }
 	.sidebar-footer { margin-top: 24px; border-top: 1px solid var(--border-secondary); padding-top: 14px; }
@@ -137,7 +140,7 @@
 	.workspace-breadcrumb strong { font-weight: 500; color: var(--text-secondary); }
 	.topbar-actions { display: flex; align-items: center; gap: 16px; }
 	.workspace-edition { font-family: var(--font-story); font-size: 12px; font-style: italic; color: var(--text-muted); }
-	.topbar-settings { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 6px; color: var(--text-secondary); }
+	.topbar-settings { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; color: var(--text-secondary); }
 	.topbar-settings:hover { background: var(--bg-tertiary); color: var(--text-accent); }
 	.workspace-content { position: relative; min-height: 0; flex: 1; overflow: hidden; }
 	.mobile-wordmark, .workspace-mobile-nav { display: none; }

@@ -9,6 +9,8 @@ import {
 	type MtheriosAppConfig,
 } from '$lib/server/app/config';
 import { markStoryVaultIndexed, resolveWikiTarget, withFreshStoryVault } from './storyVault';
+import { withWikiQueryEmbedding } from './wikiQueryEmbedding';
+import { currentServerProviderHooks } from '$lib/server/turn/provider';
 
 const execFileAsync = promisify(execFile);
 const MAX_BUFFER = 20 * 1024 * 1024;
@@ -416,13 +418,14 @@ async function runJsonScript(scriptName: string, args: string[], config: Mtherio
 async function runScript(scriptName: string, args: string[], config: MtheriosAppConfig, timeout: number): Promise<string> {
 	const scriptPath = path.resolve(process.cwd(), 'scripts', 'wiki-core', scriptName);
 	try {
-		const { stdout, stderr } = await execFileAsync(process.execPath, [scriptPath, ...args], {
+		const { stdout, stderr } = await withWikiQueryEmbedding(scriptName, args, wikiRuntimeEnv(config), env => execFileAsync(process.execPath, [scriptPath, ...args], {
 			cwd: process.cwd(),
-			env: wikiRuntimeEnv(config),
+			env,
+			signal: currentServerProviderHooks()?.signal,
 			maxBuffer: MAX_BUFFER,
 			timeout,
 			windowsHide: true,
-		});
+		}));
 		if (stderr.trim()) console.warn(`[wiki-core:${scriptName}] ${stderr.trim()}`);
 		return stdout.trim();
 	} catch (error) {

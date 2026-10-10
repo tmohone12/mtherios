@@ -25,6 +25,9 @@ const researchResult = z.object({ mode: z.literal('local_extract'), question: z.
   sourceUnavailable: z.boolean(),
 });
 const researchTool = z.object({ call_id: z.string(), result: researchResult });
+const activity = z.object({ seq: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), event_type: z.string(), data: z.record(z.string(), z.unknown()) });
+const source = z.object({ callId: z.string(), runId: z.string(), sourceRef: z.string(), path: z.string(), revision: z.string(), sha256: z.string(), startLine: z.number().int().positive(), endLine: z.number().int().positive(), truncated: z.boolean().default(false) });
+const requestReceipt = z.object({ index: z.number().optional(), stage: z.string().optional(), model: z.string().nullable().optional(), inputTokens: z.number().optional(), reservedOutputTokens: z.number().optional(), requestHash: z.string().optional(), requestBytes: z.number().optional() }).passthrough();
 const run = z.object({
   id: z.string(), gameId: z.string(), clientTurnId: z.string(),
   status: z.enum(['running', 'awaiting_input', 'committing', 'completed', 'failed', 'cancelled']),
@@ -33,12 +36,18 @@ const run = z.object({
   rolls: z.array(z.object({ call_id: z.string(), result: roll })),
   images: z.array(imageJob).default([]),
   research: z.array(researchTool).default([]),
+  projectId: z.string().optional(),
+  activity: z.array(activity).default([]),
+  sources: z.array(source).default([]),
+  continuation: z.object({ runtime: z.string().optional(), budget: z.record(z.string(), z.unknown()).nullable().default(null), receipts: z.array(requestReceipt).default([]) }).passthrough().nullable().optional(),
 });
 export type BackendAgentRun = z.infer<typeof run>;
 export type BackendAgentInteraction = z.infer<typeof interaction>;
 export type BackendDiceRoll = z.infer<typeof roll>;
 export type BackendImageJob = z.infer<typeof imageJob>;
 export type BackendResearchTool = z.infer<typeof researchTool>;
+export type BackendAgentActivity = z.infer<typeof activity>;
+export type BackendAgentSource = z.infer<typeof source>;
 export const readBackendDiceRoll = (value: unknown): BackendDiceRoll | null => roll.safeParse(value).data ?? null;
 export function visibleRollPortrait(characters: readonly Character[], characterId: string | null | undefined): string | null {
   const character = characters.find(item => item.id === characterId);
@@ -109,7 +118,7 @@ export async function readBackendPortraitImageStatus(input: { projectId: string;
 
 export async function startBackendAgentRun(turn: TurnRequest): Promise<BackendAgentRun> {
   const parsed = turnRequestSchema.parse(turn);
-  return run.parse(await postEngineCommand(parsed.storyId, 'agent.run.start', { turn: parsed }, parsed.clientTurnId));
+  return run.parse(await postEngineCommand(parsed.storyId, 'agent.run.start', { turn: parsed, wait: false }, parsed.clientTurnId));
 }
 
 export async function currentBackendAgentRun(storyId: string): Promise<BackendAgentRun | null> {
@@ -122,7 +131,36 @@ export async function getBackendAgentRun(storyId: string, runId: string): Promis
 }
 
 export async function respondBackendAgentRun(storyId: string, runId: string, interactionId: string, expectedRevision: number, response: { optionId?: string; text?: string; roll?: true }): Promise<BackendAgentRun> {
-  return run.parse(await postEngineCommand(storyId, 'agent.run.respond', { runId, interactionId, expectedRevision, response }));
+  return run.parse(await postEngineCommand(storyId, 'agent.run.respond', { runId, interactionId, expectedRevision, response, wait: false }));
+}
+
+export async function cancelBackendAgentRun(storyId: string, runId: string): Promise<BackendAgentRun> {
+  return run.parse(await postEngineCommand(storyId, 'agent.run.cancel', { runId }));
+}
+
+export async function readBackendAgentSource(projectId: string, gameId: string, observed: BackendAgentSource) {
+  const value = await postEngineCommand(gameId, 'source.file.read', { projectId, gameId, runId: observed.runId,
+    sourceRef: observed.sourceRef, startLine: observed.startLine, lineCount: observed.endLine - observed.startLine + 1,
+    expectedHash: observed.sha256, expectedRevision: observed.revision });
+  return z.object({ text: z.string(), sourceRef: z.string(), revision: z.string(), sha256: z.string(), startLine: z.number(), endLine: z.number() }).parse(value);
+}
+
+const activityEvents = ['run.started', 'run.committing', 'run.completed', 'run.failed', 'run.cancelled', 'run.retried',
+  'tool.reserved', 'tool.completed', 'provider.requested', 'provider.completed', 'context.compacted', 'runtime.checkpoint',
+  'interaction.pending', 'interaction.answered', 'interaction.reused'] as const;
+
+export function openBackendAgentRunStream(storyId: string, runId: string, after: number, onActivity: (event: BackendAgentActivity) => void, onRefresh: () => void) {
+  const params = new URLSearchParams({ storyId, runId, after: String(Number.isSafeInteger(after) && after >= 0 ? after : 0) });
+  const stream = new EventSource(`/api/engine/run-stream?${params}`);
+  for (const type of activityEvents) stream.addEventListener(type, event => {
+    if (!(event instanceof MessageEvent)) return;
+    try {
+      const parsed = activity.parse({ seq: event.lastEventId, event_type: type, data: JSON.parse(event.data) });
+      onActivity(parsed);
+      if (type.startsWith('run.') || type.startsWith('interaction.')) onRefresh();
+    } catch { /* The persisted status poll remains available if an event is malformed. */ }
+  });
+  return stream;
 }
 
 export function completedBackendAgentTurn(runSnapshot: BackendAgentRun): TurnResponse | null {

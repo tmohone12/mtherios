@@ -27,15 +27,15 @@ const SUMMARY_SOURCE_TYPES = ['terminal_chapter_job', 'terminal_arc_job', 'termi
 const unique = (values: string[]) => [...new Set(values)];
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 
-function reusableAccounts(row: Chapter | undefined, sourceEntryIds: string[], accountIds: string[], fingerprint: string) {
-	if (!row || row.metadata.projectionFingerprint !== fingerprint || row.sourceEntryIds.length !== sourceEntryIds.length || row.sourceEntryIds.some((id, index) => id !== sourceEntryIds[index])) return null;
+function reusableAccounts(row: Chapter | undefined, sourceEntryIds: string[], accountIds: string[]) {
+	if (!row || row.sourceEntryIds.length !== sourceEntryIds.length || row.sourceEntryIds.some((id, index) => id !== sourceEntryIds[index])) return null;
 	const accounts = row.metadata.sourceAccounts;
 	if (!Array.isArray(accounts) || accounts.length !== accountIds.length || accounts.some((account, index) => !account || account.sourceId !== accountIds[index] || typeof account.summary !== 'string' || !account.summary.trim())) return null;
 	return accounts;
 }
 
-function reusableArcAccounts(row: Arc | undefined, chapterIds: string[], fingerprint: string) {
-	if (!row || row.metadata.projectionFingerprint !== fingerprint || row.chapterIds.length !== chapterIds.length || row.chapterIds.some((id, index) => id !== chapterIds[index])) return null;
+function reusableArcAccounts(row: Arc | undefined, chapterIds: string[]) {
+	if (!row || row.chapterIds.length !== chapterIds.length || row.chapterIds.some((id, index) => id !== chapterIds[index])) return null;
 	const accounts = row.metadata.sourceAccounts;
 	if (!Array.isArray(accounts) || accounts.length !== chapterIds.length || accounts.some((account, index) => !account || account.sourceId !== chapterIds[index] || typeof account.summary !== 'string' || !account.summary.trim())) return null;
 	return accounts;
@@ -225,7 +225,7 @@ export async function rebuildStorySummaries(job: Job): Promise<Record<string, un
 				return reused;
 			}
 			const previous = snapshot.chapters.find(chapter => chapter.number === number);
-			const accounts = reusableAccounts(previous, sourceEntryIds, window.turns.map(turn => turn.narration.id), sourceFingerprint);
+			const accounts = reusableAccounts(previous, sourceEntryIds, window.turns.map(turn => turn.narration.id));
 			// Existing validated accounts are the factual record. Reword only their reader-facing chapter narrative.
 			const digest = accounts && previous
 				? await (async () => {
@@ -281,8 +281,8 @@ export async function rebuildStorySummaries(job: Job): Promise<Record<string, un
 				reusedArcs++;
 				return reused;
 			}
-			const previous = snapshot.arcs.find(arc => reusableArcAccounts(arc, chapterIds, sourceFingerprint));
-			const accounts = reusableArcAccounts(previous, chapterIds, sourceFingerprint);
+			const previous = snapshot.arcs.find(arc => reusableArcAccounts(arc, chapterIds));
+			const accounts = reusableArcAccounts(previous, chapterIds);
 			const generated = accounts && previous
 				? await (async () => {
 					const readable = await generateReadableNarrative({ storyId: job.storyId, kind: 'arc', sources: accounts.map(account => ({ id: account.sourceId, text: account.summary })) });

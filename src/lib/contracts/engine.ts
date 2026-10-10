@@ -166,7 +166,7 @@ export const engineMemoryRecoveryArgsSchema = z.object({
 	order: z.enum(['oldest', 'recent']).optional(),
 });
 
-export const SUMMARY_REBUILD_GENERATION_POLICY = 'historical-transcript-only-v5';
+export const SUMMARY_REBUILD_GENERATION_POLICY = 'historical-transcript-only-v4';
 
 export const engineRebuildSummariesArgsSchema = z.object({
 	dryRun: z.boolean().default(true),

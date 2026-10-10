@@ -28,11 +28,9 @@ export const backendJobTypes = [
 
 export type BackendJobType = typeof backendJobTypes[number];
 export const factionWorkerJobTypes = [
-	'generate_image',
-	'summarize_chapter',
 	'update_faction_pressure',
 	'evaluate_world_sim_tick',
-	'evaluate_npc_background_action',
+	'plan_plot_brain',
 ] as const satisfies readonly BackendJobType[];
 
 // These handlers upsert stable record IDs, or commit canon and an apply receipt
@@ -117,9 +115,9 @@ export const backendJobClaimPriorityOrder = sql<number>`case
 	when ${backendJobs.type} = 'refresh_scene_checkpoint' then 0
 	when ${backendJobs.type} = 'extract_turn_state' then 1
 	when ${backendJobs.type} = 'continuity_audit' then 2
-	when ${backendJobs.type} = 'evaluate_world_sim_tick' then 2
+	when ${backendJobs.type} = 'evaluate_world_sim_tick' then 5
 	when ${backendJobs.type} = 'plan_plot_brain'
-		and ${backendJobs.payload}->>'trigger' = 'scheduled_refresh' then 4
+		and ${backendJobs.payload}->>'trigger' = 'scheduled_refresh' then 5
 	else 3
 end`;
 
@@ -182,7 +180,7 @@ export function stableJobId(storyId: string, type: BackendJobType, dedupeKey: st
 
 export async function enqueueBackendJob(
 	input: EnqueueBackendJobInput,
-	db: OutboxDb | OutboxTx = getDb(),
+	db: Pick<OutboxDb, 'insert'> = getDb(),
 ): Promise<string> {
 	if (input.type === 'validate_agent_settings' || input.type === 'assistant_batch_child' ? (!input.projectId || !!input.storyId) : input.type === 'generate_image' ? !input.projectId : !input.storyId) throw new Error('Invalid project/game scope for job type.');
 	const createdAt = nowIso();
@@ -346,13 +344,13 @@ export function factionCadenceDue(currentTurn: number): boolean {
 	return Number.isInteger(currentTurn) && currentTurn > 0 && currentTurn % FACTION_TICK_TURN_INTERVAL === 0;
 }
 
-export async function enqueueFactionCadenceJob(input: { storyId: string; currentTurn: number },
-	db: OutboxDb | OutboxTx = getDb()): Promise<string | null> {
-	if (!factionCadenceDue(input.currentTurn)) return null;
+export async function enqueueFactionCadenceJob(input: { storyId: string; currentTurn: number; worldTimeJump?: boolean; worldTime?: string | null },
+	db: Pick<OutboxDb, 'insert'> = getDb()): Promise<string | null> {
+	if (!factionCadenceDue(input.currentTurn) && !input.worldTimeJump) return null;
 	return enqueueBackendJob({
 		storyId: input.storyId,
 		type: 'evaluate_world_sim_tick',
-		dedupeKey: `world-sim-turn-${input.currentTurn}`,
+		dedupeKey: input.worldTimeJump ? `faction-world-time-${input.worldTime}` : `world-sim-turn-${input.currentTurn}`,
 		payload: { ambient: true, force: false, scheduledForTurn: input.currentTurn },
 		requeueExisting: false,
 	}, db);
@@ -365,9 +363,12 @@ export async function enqueuePlotBrainJob(input: {
 	skipIfPlanned?: boolean;
 }): Promise<string> {
 	const [story] = input.trigger === 'scheduled_refresh'
-		? await getDb().select({ currentTurn: stories.currentTurn }).from(stories).where(eq(stories.id, input.storyId)).limit(1)
+		? await getDb().select({ currentTurn: stories.currentTurn, metadata: stories.metadata }).from(stories).where(eq(stories.id, input.storyId)).limit(1)
 		: [];
-	const scopeId = story
+	const workflow = story?.metadata?.factionWorkflow as Record<string, unknown> | undefined;
+ const gardener = workflow?.gardener as Record<string, unknown> | undefined;
+ if (story && typeof gardener?.lastTurn === 'number' && story.currentTurn - gardener.lastTurn < 8) return '';
+ const scopeId = story
 		? `${input.storyId}-turn-${Math.max(0, Math.floor(story.currentTurn))}`
 		: input.scopeId;
 	return enqueueBackendJob({
@@ -392,7 +393,10 @@ export function backendJobFailureIsRetryable(error: unknown): boolean {
 		if (retryable === true) return true;
 	}
 	const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
-	return !manualRetryBlockCause(classifyBackendJobFailure(message).cause);
+	// Automatic retries follow the classifier's decision. Manual recovery has a
+	// separate policy; treating everything outside its blocklist as transient
+	// repeatedly dispatches unknown/deterministic summary failures.
+	return classifyBackendJobFailure(message).retryable;
 }
 
 export async function enqueueContinuityAuditJob(input: {
@@ -438,6 +442,12 @@ export async function enqueueTurnProjectionJobs(input: {
 	const jobs: Promise<string>[] = [];
 	const memorySettings = input.memorySettings ?? {};
 	if (input.eventIds.length > 0) {
+  const material = await db.execute(sql`select id, faction_ids from story_events where story_id=${input.storyId} and id in (${sql.join(input.eventIds.map(id => sql`${id}`), sql`,`)}) and status='committed' and (type in ('agreement','death','faction_move') or metadata->>'material'='true' or (jsonb_typeof(metadata->'actorClaims')='array' and metadata->'actorClaims'<>'[]'::jsonb))`);
+  if (material.length) {
+   const factionIds = [...new Set(material.flatMap(row => Array.isArray(row.faction_ids) ? row.faction_ids as string[] : []))].slice(0, 2);
+   jobs.push(enqueueBackendJob({ storyId: input.storyId, type: 'evaluate_world_sim_tick', dedupeKey: `faction-material-${input.serverVersion}`, payload: { materialFactionIds: factionIds }, requeueExisting: false, maxAttempts: 2 }, db));
+   jobs.push(enqueueBackendJob({ storyId: input.storyId, type: 'plan_plot_brain', dedupeKey: `gardener-material-${input.serverVersion}`, payload: { trigger: 'faction_shock' }, requeueExisting: false, maxAttempts: 2 }, db));
+  }
 		jobs.push(enqueueBackendJob({
 			storyId: input.storyId,
 			type: 'create_memory_nodes_from_events',

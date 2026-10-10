@@ -4,7 +4,7 @@ import { parseActorPsychology, psychologyExamples, psychologyQuestions } from '.
 import { decisionModel, isDecisionModel, supportsDecisionModel } from '$lib/contracts/decisionModels';
 import { getMtheriosAppConfig } from '$lib/server/app/config';
 import { createHash } from 'node:crypto';
-import type { ServerGenerationOptions, ServerGenerationResult } from './provider';
+import { currentServerProviderHooks, normalizeServerProviderUsage, type ServerGenerationOptions, type ServerGenerationResult } from './provider';
 import { countTokens } from '$lib/utils/tokens';
 import type { TurnMemoryEnvelope } from './turnMemoryEnvelope';
 import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
@@ -42,6 +42,7 @@ async function requestDecision(input: {
 	storyId?: string; operation?: string;
 }) {
 	const provider = input.profile.providerType;
+	if (process.env.MYTHENGINE_TEST_LOCAL_ONLY === 'true' && !(provider === 'openai-compatible' && input.model === 'kev-latest')) throw new Error('Isolated test copy permits local Kev decisions only.');
 	const localKev = provider === 'openai-compatible' && input.model === 'kev-latest';
 	if (!supportsDecisionModel(provider, input.model)) {
 		throw new Error('Decision model and provider do not match.');
@@ -65,11 +66,16 @@ async function requestDecision(input: {
 	if (countTokens(body) > Math.min(30_000, contextWindow - 512)) throw new Error('Decision evidence exceeds the model context budget.');
 	const start = Date.now();
 	const timeout = AbortSignal.timeout(localKev ? 30_000 : 4_500);
-	const signal = input.signal ? AbortSignal.any([input.signal, timeout]) : timeout;
+	const scopedHooks = currentServerProviderHooks();
+	const signal = AbortSignal.any([timeout, ...(input.signal ? [input.signal] : []), ...(scopedHooks?.signal ? [scopedHooks.signal] : [])]);
 	let responseStatus: number | null = null;
 	let responseJson: unknown = null;
 	let failure: unknown = null;
 	try {
+		const completeScoped = scopedHooks ? await scopedHooks.beforeRequest({ profile: input.profile, model: input.model,
+			system: 'Typed actor-scoped Decisions request.', prompt: body, signal, maxTokens: 1024, maxRetries: 0 },
+			{ body: JSON.parse(body), serializedBody: body, inputTokens: countTokens(body), reservedOutputTokens: 1024, contextWindowTokens: contextWindow }) : undefined;
+		if (signal.aborted) throw signal.reason;
 		const response = await fetch(endpoint, { method: 'POST', signal,
 			headers: { 'Content-Type': 'application/json', ...(localKev ? {} : { Authorization: `Bearer ${input.profile.apiKey}` }) }, body });
 		responseStatus = response.status;
@@ -86,6 +92,10 @@ async function requestDecision(input: {
 			}
 			throw new Error(`Jev decision request failed (HTTP ${response.status}).`);
 		}
+		if (signal.aborted) throw signal.reason;
+		await completeScoped?.({ text: JSON.stringify(responseJson), model: input.model, endpoint,
+			durationMs: Date.now() - start, promptChars: body.length, responseChars: JSON.stringify(responseJson).length,
+			finishReason: 'stop', usage: normalizeServerProviderUsage(responseJson, false) });
 		return { json: responseJson, endpoint, durationMs: Date.now() - start, promptChars: body.length };
 	} catch (error) {
 		failure = error;

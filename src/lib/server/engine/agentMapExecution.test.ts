@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, expect, test, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { setTimeout as delay } from 'node:timers/promises';
 import { getDb, closeDb } from '$lib/server/db/client';
 import { emptyLocationMap } from '$lib/contracts/locationMap';
 
 vi.mock('$lib/server/turn/orchestrator', async (importOriginal) => ({
   ...await importOriginal<typeof import('$lib/server/turn/orchestrator')>(),
   prepareServerTurnContext: vi.fn(async () => ({
-    prompt: { prompt: '' }, narrativeSystemDynamic: '', narrativePrompt: '',
+    prompt: { prompt: '', messages: [], contextRecords: [], dialogueSourceIds: [] }, narrativeSystemDynamic: '', narrativePrompt: '',
     narrativeProfile: {}, narrativeGeneration: { model: null },
   })),
   processServerTurn: vi.fn(async () => ({ serverVersion: 2 })),
@@ -25,6 +26,15 @@ import { getLocationMap, saveLocationMap } from './locationMaps';
 import { generateServerTextWithMetrics } from '$lib/server/turn/provider';
 
 const integration = process.env.MYTHENGINE_AGENT_MAP_INTEGRATION === '1' ? test : test.skip;
+
+async function completedAgentRun(runId: string, storyId: string) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const run = await getAgentRun({ runId, storyId });
+    if (!['running', 'committing'].includes(String(run.status))) return run;
+    await delay(25);
+  }
+  throw new Error('The disposable map run did not finish recovery.');
+}
 
 integration('executes a pending GM map call and records its canonical revision and receipt', async () => {
   const db = getDb();
@@ -47,16 +57,19 @@ integration('executes a pending GM map call and records its canonical revision a
       values(${runId},${projectId},${gameId},'test-agent-map','running',${JSON.stringify({ storyId: gameId, clientTurnId: 'test-agent-map', playerText: 'Draw the crossroads.' })}::jsonb,
       ${JSON.stringify(decision)}::jsonb,now()-interval '1 minute',now()+interval '1 hour')`);
 
-    const run = await getAgentRun({ runId, storyId: gameId });
-    expect(run.status).toBe('completed');
+    const run = await completedAgentRun(runId, gameId);
+    expect(run.status, String(run.error)).toBe('completed');
     const saved = await getLocationMap(gameId, { locationId });
     expect(saved).toMatchObject({ revision: 1, map: { pins: [{ id: 'pin-1', label: 'Crossroads' }] } });
     const [receipt] = await db.execute(sql`select status,result from agent_tool_calls where run_id=${runId} and call_id=${callId}`);
     expect(receipt).toMatchObject({ status: 'completed', result: { revision: 1, unchanged: false } });
     const [revision] = await db.execute(sql`select actor from location_map_revisions where location_id=${locationId} and revision=1`);
     expect(revision.actor).toMatchObject({ kind: 'agent', runId, callId });
-    const replay = await saveLocationMap(gameId, { locationId, expectedRevision: 0, map, reason: 'Draw the crossroads.' }, { kind: 'agent', runId, callId });
-    expect(replay).toMatchObject({ revision: 1, unchanged: true });
+    await expect(saveLocationMap(gameId, { locationId, expectedRevision: 0, map, reason: 'Draw the crossroads.' }, { kind: 'agent', runId, callId }))
+      .rejects.toThrow('Agent run stopped');
+    const requests = vi.mocked(generateServerTextWithMetrics).mock.calls.length;
+    expect((await getAgentRun({ runId, storyId: gameId })).status).toBe('completed');
+    expect(vi.mocked(generateServerTextWithMetrics)).toHaveBeenCalledTimes(requests);
     const [count] = await db.execute(sql`select count(*)::integer as count from location_map_revisions where location_id=${locationId}`);
     expect(count.count).toBe(1);
   } finally {
@@ -81,13 +94,15 @@ integration('resumes and completes multiple pending native tool calls before the
     await db.execute(sql`insert into agent_runs(id,project_id,game_id,client_turn_id,status,request,pending_decision,lease_until,expires_at)
       values(${runId},${projectId},${gameId},'test-agent-batch','running',${JSON.stringify({ storyId: gameId, clientTurnId: 'test-agent-batch', playerText: 'Inspect the map.' })}::jsonb,
       ${JSON.stringify(decision)}::jsonb,now()-interval '1 minute',now()+interval '1 hour')`);
-    const run = await getAgentRun({ runId, storyId: gameId });
-    expect(run.status).toBe('completed');
+    const run = await completedAgentRun(runId, gameId);
+    expect(run.status, String(run.error)).toBe('completed');
     const rows = await db.execute(sql`select call_id,status from agent_tool_calls where run_id=${runId} order by created_at,call_id`);
     expect(rows.map(row => ({ callId: row.call_id, status: row.status }))).toEqual([
       { callId: 'map-first', status: 'completed' }, { callId: 'map-second', status: 'completed' },
     ]);
-    expect((run.continuation as Array<{ decision: { kind: string } }>).at(-1)?.decision.kind).toBe('final');
+    expect(run.continuation).toEqual({ runtime: 'legacy', budget: null, receipts: [] });
+    const [stored] = await db.execute(sql`select continuation->-1->'decision'->>'kind' as last_kind from agent_runs where id=${runId} and game_id=${gameId}`);
+    expect(stored.last_kind).toBe('final');
   } finally {
     await db.execute(sql`delete from shelves where id=${projectId}`);
   }
@@ -112,13 +127,15 @@ integration('runs two native calls returned together by the provider', async () 
         { id: 'native-second', name: 'map', arguments: { action: 'get', locationId } },
       ], model: 'deterministic-test', finishReason: 'tool_calls', durationMs: 0, usage: {},
     } as unknown as Awaited<ReturnType<typeof generateServerTextWithMetrics>>);
-    const run = await getAgentRun({ runId, storyId: gameId });
-    expect(run.status).toBe('completed');
+    const run = await completedAgentRun(runId, gameId);
+    expect(run.status, String(run.error)).toBe('completed');
     const rows = await db.execute(sql`select call_id,status from agent_tool_calls where run_id=${runId} order by created_at,call_id`);
     expect(rows.map(row => ({ callId: row.call_id, status: row.status }))).toEqual([
       { callId: 'native-first', status: 'completed' }, { callId: 'native-second', status: 'completed' },
     ]);
-    expect((run.continuation as Array<{ decision: { kind: string } }>)[0]?.decision.kind).toBe('tools');
+    expect(run.continuation).toEqual({ runtime: 'legacy', budget: null, receipts: [] });
+    const [stored] = await db.execute(sql`select continuation->0->'decision'->>'kind' as first_kind from agent_runs where id=${runId} and game_id=${gameId}`);
+    expect(stored.first_kind).toBe('tools');
   } finally {
     await db.execute(sql`delete from shelves where id=${projectId}`);
   }

@@ -10,14 +10,17 @@ import { eq, sql } from 'drizzle-orm';
 import { createServer } from 'vite';
 import { factText, fixture, observedFacts, observedState } from '../evals/replay/court-intrigue.mjs';
 import { harnessBuildId } from './harness-build-id.mjs';
+import { runPiAgentLoop } from './eval-pi-agent-loop.mjs';
+import { runFactionSettlement } from './eval-faction-settlement.mjs';
 
 // No database URL or live story option. Every execution owns its disposable DB.
-const { values } = parseArgs({ options: { mutation: { type: 'string', default: 'none' }, model: { type: 'string' }, provider: { type: 'string' }, scenario: { type: 'string' }, 'max-cost-usd': { type: 'string' }, 'prose-only': { type: 'boolean', default: false }, 'quiet-prose': { type: 'boolean', default: false }, 'jev-review-trial': { type: 'boolean', default: false }, 'jev-inline-trial': { type: 'boolean', default: false }, roll: { type: 'boolean', default: false }, 'agent-loop': { type: 'boolean', default: false } }, allowPositionals: false });
+const { values } = parseArgs({ options: { mutation: { type: 'string', default: 'none' }, model: { type: 'string' }, provider: { type: 'string' }, scenario: { type: 'string' }, 'max-cost-usd': { type: 'string' }, 'prose-only': { type: 'boolean', default: false }, 'quiet-prose': { type: 'boolean', default: false }, 'jev-review-trial': { type: 'boolean', default: false }, 'jev-inline-trial': { type: 'boolean', default: false }, roll: { type: 'boolean', default: false }, 'agent-loop': { type: 'boolean', default: false }, 'pi-only': { type: 'boolean', default: false } }, allowPositionals: false });
 assert(['none', 'missing-fact', 'secret-leak', 'wrong-state'].includes(values.mutation), 'Unknown mutation');
 assert(!values.provider || values.model, '--provider requires --model');
 assert(!values.model || (values.mutation === 'none' && process.env.REPLAY_MODEL_API_KEY?.trim()), 'Model mode requires REPLAY_MODEL_API_KEY and cannot run deliberate mutations');
 assert(!values.roll || !values.model, '--roll uses a synthetic roll response and is available only offline');
 assert(!values['agent-loop'] || !values.model, '--agent-loop is a deterministic offline fixture');
+assert(!values['pi-only'] || (values['agent-loop'] && !values['jev-inline-trial'] && !values.scenario), '--pi-only requires --agent-loop without Jev or a scenario');
 assert(!values['prose-only'] || values.model, '--prose-only requires --model');
 assert(!values['quiet-prose'] || (values.model && values['prose-only'] && !values.scenario), '--quiet-prose requires --model and --prose-only without --scenario');
 assert(!values['jev-review-trial'] || (values.model && /^~?typesafe\/jev-[\w.-]+$/.test(values.model) && !values['prose-only'] && !values.scenario), '--jev-review-trial requires a Jev --model without --scenario');
@@ -30,6 +33,163 @@ const scratch = await mkdtemp(resolve(tmpdir(), 'mtherios-turn-replay-'));
 const originalFetch = globalThis.fetch;
 let containerId, vite, client;
 const results = [];
+const replaySources = ['scripts/eval-turns.mjs', 'scripts/eval-pi-agent-loop.mjs', 'scripts/eval-faction-settlement.mjs', 'evals/replay/court-intrigue.mjs',
+	'src/lib/server/evals/replayRunner.ts', 'src/lib/server/turn/orchestrator.ts', 'src/lib/server/turn/promptPacket.ts',
+	'src/lib/server/turn/provider.ts', 'src/lib/server/turn/jev.ts', 'src/lib/server/turn/turnMemoryEnvelope.ts',
+	'src/lib/contracts/memory.ts', 'src/lib/contracts/sourceFiles.ts', 'src/lib/server/engine/agentRuns.ts',
+	'src/lib/server/engine/agentRuntime.ts', 'src/lib/server/engine/sourceFiles.ts', 'src/lib/server/engine/assistantConversations.ts',
+	'src/lib/server/engine/assistantTools.ts', 'src/lib/server/memory/retrieval.ts', 'src/lib/server/memory/ranking.ts',
+	'src/lib/server/jobs/memoryCoverage.ts', 'src/lib/server/jobs/processor.ts', 'src/lib/server/wiki/storyVault.ts'];
+async function waitForAgentRun(owner, input) {
+	const deadline = Date.now() + 30_000;
+	let run;
+	do {
+		run = await owner.getAgentRun(input);
+		if (!['running', 'committing'].includes(run.status)) return run;
+		await delay(25);
+	} while (Date.now() < deadline);
+	return run;
+}
+async function runMemoryHealthFault({ db, schema, load }) {
+	const storyId = 'replay_memory_health_fault', data = fixture(storyId);
+	const oldText = '[Great Hall]\nSTALE_RULE: the bridge remains closed.', newText = '[Great Hall]\nThe corrected bridge rule permits passage tomorrow.';
+	data.story.serverVersion = 2;
+	data.entries = [{ id: `${storyId}_player_old`, storyId, type: 'user_action', position: 1, content: 'I ask for the bridge rule.' },
+		{ id: `${storyId}_old`, storyId, type: 'narration', position: 2, parentId: `${storyId}_player_old`, content: oldText, metadata: { deadlineKey: 'bridge-rule' } },
+		{ id: `${storyId}_player_new`, storyId, type: 'user_action', position: 3, content: 'I ask the keeper to confirm the correction.' },
+		{ id: `${storyId}_new`, storyId, type: 'narration', position: 4, parentId: `${storyId}_player_new`, content: newText,
+			metadata: { deadlineKey: 'bridge-rule', isCorrection: true, supersedesEntryIds: [`${storyId}_old`] } }];
+	data.entries = data.entries.map(entry => ({ ...entry, createdAt: `2026-10-01T00:00:0${entry.position}.000Z`, updatedAt: `2026-10-01T00:00:0${entry.position}.000Z` }));
+	await db.insert(schema.stories).values(data.story);
+	await db.insert(schema.entities).values(data.entities);
+	await db.insert(schema.storyEntries).values(data.entries);
+	await db.insert(schema.memoryNodes).values({ id: `${storyId}_stale_summary`, storyId, type: 'episodic', title: 'Older bridge rule summary',
+		content: 'STALE_RULE: the bridge remains closed.', summary: 'STALE_RULE: the bridge remains closed.', importance: .9,
+		sourceEntryIds: [`${storyId}_old`], metadata: { deadlineKey: 'bridge-rule', layer: 'summary' }, createdAt: '2026-10-01T00:00:02.500Z', updatedAt: '2026-10-01T00:00:02.500Z' });
+	await db.insert(schema.backendJobs).values([
+		{ id: `${storyId}_extracted`, projectId: 'shelf_default', storyId, type: 'extract_turn_state', status: 'complete',
+			payload: { assistantEntryId: `${storyId}_old`, playerText: data.entries[0].content, narration: oldText, serverVersion: 2 } },
+		{ id: `${storyId}_checkpoint`, projectId: 'shelf_default', storyId, type: 'refresh_scene_checkpoint', status: 'complete', payload: { serverVersion: 3 } },
+		{ id: `${storyId}_summary`, projectId: 'shelf_default', storyId, type: 'summarize_chapter', status: 'failed', lastError: 'Synthetic summary projection is stale.', payload: { serverVersion: 2 } },
+		{ id: `${storyId}_index`, projectId: 'shelf_default', storyId, type: 'index_canonical_records', status: 'failed', lastError: 'Synthetic optional index is unavailable.', payload: { serverVersion: 2 } },
+	]);
+	const { materializeStoryVault, markStoryVaultIndexed, getStoryVaultStatus } = await load('wiki/storyVault');
+	const materialized = await materializeStoryVault({ storyId, clean: true });
+	await markStoryVaultIndexed({ storyId, collection: materialized.collection, provider: 'synthetic', model: 'replay-local-hash' });
+	await db.execute(sql`update stories set server_version=3 where id=${storyId}`);
+	const { getBackendJobStats } = await load('jobs/processor');
+	const before = await getBackendJobStats(storyId), vault = await getStoryVaultStatus(storyId);
+	assert.equal(before.memoryCoverage.missingSources, 1, 'Missing extraction was hidden by completed projections');
+	assert.equal(before.memoryCoverage.lastContiguousPosition, 2);
+	assert.equal(before.memoryCoverage.oldestUnresolvedPosition, 4);
+	assert.equal(before.memoryCoverage.oldestUnresolvedReason, 'missing');
+	assert.equal(before.memoryStageFreshness.checkpoint.status, 'current');
+	assert.equal(before.memoryStageFreshness.consolidation.status, 'attention');
+	assert.equal(before.memoryStageFreshness.consolidation.latestSourceVersion, 2);
+	assert.equal(before.memoryStageFreshness.optionalIndex.status, 'attention');
+	assert.equal(vault.serverVersion, 3);
+	assert.equal(vault.manifestVersion, 2);
+	assert.equal(vault.indexedVersion, 2);
+	assert.equal(vault.vaultFresh, false);
+	assert.equal(vault.indexFresh, false);
+	const previousFetch = globalThis.fetch, names = ['MEMORY_EMBEDDING_PROVIDER', 'MEMORY_EMBEDDING_MODEL', 'MEMORY_EMBEDDING_BASE_URL', 'MEMORY_EMBEDDING_API_KEY'];
+	const previousEnv = Object.fromEntries(names.map(name => [name, process.env[name]]));
+	let attempts = 0, packet;
+	try {
+		Object.assign(process.env, { MEMORY_EMBEDDING_PROVIDER: 'openai', MEMORY_EMBEDDING_MODEL: 'synthetic-unavailable', MEMORY_EMBEDDING_BASE_URL: 'http://replay.invalid/v1', MEMORY_EMBEDDING_API_KEY: 'synthetic-only' });
+		globalThis.fetch = async input => { assert.equal(String(input), 'http://replay.invalid/v1/embeddings'); attempts++; throw new Error('Synthetic optional vector outage'); };
+		const { retrieveMemoryPacket } = await load('memory/retrieval');
+		const query = { storyId, query: 'What is the corrected bridge rule?', includeSemantic: true, includeSecret: false, maxTokens: 3000 };
+		packet = await retrieveMemoryPacket(query);
+		const repeated = await retrieveMemoryPacket(query);
+		assert.deepEqual(repeated.nodes.map(node => node.id), packet.nodes.map(node => node.id), 'Degraded recall was not deterministic');
+		assert.equal(repeated.packet, packet.packet);
+		assert.equal(attempts, 2, 'Fault fixture did not exercise optional vector dispatch');
+		assert(packet.retrievalDebug.some(message => message.includes('Vector memory: unavailable')), 'Optional vector failure was not separately reported');
+		assert(packet.packet.includes('permits passage tomorrow'), `Missing extraction/stale summary/index prevented canonical transcript recall: ${JSON.stringify({ packet: packet.packet, nodes: packet.nodes.map(node => ({ id: node.id, metadata: node.metadata })), debug: packet.retrievalDebug })}`);
+		assert(!packet.packet.includes('STALE_RULE'), 'A stale source-linked summary overrode the correction');
+	} finally {
+		globalThis.fetch = previousFetch;
+		for (const name of names) if (previousEnv[name] === undefined) delete process.env[name]; else process.env[name] = previousEnv[name];
+	}
+	const after = await getBackendJobStats(storyId);
+	assert.deepEqual(after.memoryCoverage, before.memoryCoverage, 'Read-only degraded recall repaired or hid extraction gaps');
+	assert.deepEqual(after.memoryStageFreshness, before.memoryStageFreshness);
+	assert.equal((await getStoryVaultStatus(storyId)).indexedVersion, 2);
+	console.log('PASS memory-health-fault-001: missing extraction, stale summary/index, optional vector outage and deterministic corrected transcript fallback');
+	return { id: 'memory-health-fault-001', passed: true, providerCalls: 0, vectorFaultAttempts: attempts, missingExtraction: before.memoryCoverage,
+		stageFreshness: before.memoryStageFreshness, vaultFresh: vault.vaultFresh, indexFresh: vault.indexFresh, indexedVersion: vault.indexedVersion,
+		retainedSourceIds: packet.nodes.map(node => node.id), vectorFailureReported: true, deterministicFallback: true, noHealthMutation: true };
+}
+async function runAssistantApproval({ db, schema, load }) {
+	const previousFetch = globalThis.fetch, projectId = 'replay_assistant_approval', typeId = 'replay_approval_type', itemId = 'replay_approval_item';
+	await db.insert(schema.shelves).values({ id: projectId, name: 'Disposable approval project', slug: projectId,
+		settings: { agentTools: { schemaVersion: 1, revision: 1, overrides: { assistantPiRuntime: true } } } });
+	await db.insert(schema.llmServiceSettings).values({ serviceId: 'assistant', providerType: 'openai', baseUrl: 'http://replay.invalid/v1',
+		model: 'replay-assistant-approval', apiKeyRef: 'REPLAY_API_KEY', contextBudget: 12000, maxTokens: 1500, temperature: 0, enabled: true });
+	try {
+		const definition = { fields: { notes: { kind: 'longtext' } }, defaults: { notes: '' }, layout: [{ title: 'Notes', fields: ['notes'] }], gmContextMode: 'searchable' };
+		await db.insert(schema.contentTypes).values({ id: typeId, projectId, key: 'approval_notes', extension: 'md', name: 'Approval notes', definition });
+		await db.insert(schema.contentItems).values({ id: itemId, projectId, typeId, title: 'Retained approval document', slug: 'retained-approval', data: { notes: 'Retain this canonical content.' } });
+		const owner = await load('engine/assistantConversations'), scope = { projectId };
+		const initial = await owner.createAssistantConversation(scope);
+		const conversationId = String(initial.conversation.id), calls = [];
+		globalThis.fetch = async (input, init) => {
+			const url = input instanceof Request ? input.url : String(input);
+			assert.equal(url, 'http://replay.invalid/v1/chat/completions', 'Approval replay attempted an external provider');
+			const body = JSON.parse(init.body); assert.equal(body.model, 'replay-assistant-approval');
+			calls.push(body); assert(calls.length <= 2, 'Approval replay repeated provider dispatch');
+			let message;
+			if (calls.length === 1) message = { role: 'assistant', content: '', tool_calls: [
+				{ id: 'clear_layout', type: 'function', function: { name: 'clearLayout', arguments: JSON.stringify({ id: typeId, expectedRevision: 1 }) } },
+				{ id: 'forbidden_later_update', type: 'function', function: { name: 'update', arguments: JSON.stringify({ id: itemId, expectedRevision: 1, expectedTypeRevision: 1, changes: { data: { notes: 'UNAUTHORIZED_AFTER_PAUSE' } } }) } },
+			] };
+			else {
+				const accepted = body.messages.find(row => row.role === 'tool' && row.tool_call_id === 'clear_layout');
+				const skipped = body.messages.find(row => row.role === 'tool' && row.tool_call_id === 'forbidden_later_update');
+				assert(accepted, 'Resumed native history lost the accepted approval receipt');
+				const receipt = JSON.parse(accepted.content);
+				assert.equal(receipt.applied, true); assert.equal(receipt.afterRevision, 2); assert(receipt.approvalId);
+				assert(skipped?.content.includes('Skipped after an interaction paused this batch.'), 'Later native call was not explicitly skipped after approval');
+				message = { role: 'assistant', content: `Applied changes to ${typeId}, revision 2: its layout is cleared. Document content is retained.` };
+			}
+			return Response.json({ id: `approval_fake_${calls.length}`, model: body.model, choices: [{ message, finish_reason: message.tool_calls ? 'tool_calls' : 'stop' }],
+				usage: { prompt_tokens: 80, completion_tokens: 30, total_tokens: 110, cost: 0 } });
+		};
+		const paused = await owner.sendAssistantMessage({ ...scope, conversationId, clientMessageId: 'approval_native_message', content: 'Remove the type layout after I approve the preview. Retain its fields and document data.' });
+		assert.equal(paused.run?.status, 'awaiting_input', `Approval failed to pause: ${JSON.stringify(paused.run)}`);
+		assert.equal(paused.run.runtimeVersion, 'pi-v1'); assert.equal(paused.approvals.length, 1);
+		const approval = paused.approvals[0], runId = String(paused.run.id);
+		assert.equal(approval.kind, 'layout_clear'); assert.equal(approval.status, 'pending');
+		assert.equal(approval.preview.requiresClearConfirmation, true); assert.equal(approval.preview.impact.total, 1);
+		assert.deepEqual(approval.preview.changes, [{ field: 'definition.layout', from: definition.layout, to: [] }]);
+		let [currentType] = await db.execute(sql`select revision,definition from content_types where id=${typeId}`);
+		assert.equal(currentType.revision, 1); assert.deepEqual(currentType.definition.layout, definition.layout);
+		const pendingCalls = await db.execute(sql`select call_id,status from assistant_tool_calls where run_id=${runId}`);
+		assert.deepEqual([...pendingCalls], [{ call_id: 'clear_layout', status: 'reserved' }], 'Later native call was admitted before human review');
+		const review = { ...scope, conversationId, runId, approvalId: String(approval.id), expectedRevision: Number(approval.revision), decision: 'approve' };
+		const completed = await owner.reviewAssistantApproval(review);
+		assert.equal(completed.run?.status, 'completed', `Approved reply failed: ${JSON.stringify(completed.run)}`);
+		[currentType] = await db.execute(sql`select revision,definition from content_types where id=${typeId}`);
+		assert.equal(currentType.revision, 2); assert.deepEqual(currentType.definition, { ...definition, layout: [] });
+		const [item] = await db.execute(sql`select revision,data from content_items where id=${itemId}`);
+		assert.equal(item.revision, 1); assert.deepEqual(item.data, { notes: 'Retain this canonical content.' });
+		const ledger = await db.execute(sql`select call_id,status,result from assistant_tool_calls where run_id=${runId}`);
+		assert.equal(ledger.length, 1); assert.equal(ledger[0].status, 'completed'); assert.equal(ledger[0].result.afterRevision, 2);
+		const [history] = await db.execute(sql`select count(*)::integer as count from content_revisions where target_id=${typeId} and revision=2`);
+		assert.equal(history.count, 1, 'Approved canonical type revision was not admitted exactly once');
+		assert(completed.messages.some(message => message.role === 'assistant' && message.source_refs.some(ref => ref.kind === 'content_type' && ref.id === typeId && ref.revision === 2)), 'Published reply lost the applied revision source receipt');
+		await owner.reviewAssistantApproval(review);
+		assert.equal(calls.length, 2, 'Repeated accepted approval dispatched another provider request');
+		assert.equal((await db.execute(sql`select revision from content_types where id=${typeId}`))[0].revision, 2, 'Repeated accepted approval duplicated a canonical write');
+		console.log('PASS pi-assistant-approval-001: real preview and human approval, later native batch call skipped, one canonical revision and idempotent acceptance');
+		return { id: 'pi-assistant-approval-001', passed: true, runtime: 'pi-v1', providerCalls: 0, syntheticRequests: calls.length,
+			approvalKind: approval.kind, canonicalTypeRevision: 2, documentRevision: item.revision, laterBatchSkipped: true, canonicalWrites: history.count, acceptedReceipt: ledger[0].result };
+	} finally {
+		globalThis.fetch = previousFetch;
+		await db.execute(sql`delete from llm_service_settings where service_id='assistant' and model='replay-assistant-approval'`);
+	}
+}
 try {
 	containerId = docker('run', '--pull=never', '--rm', '-d', '--name', containerName, '--label', `mtherios.turn-replay=${runId}`,
 		'--tmpfs', '/var/lib/postgresql/data', '-e', 'POSTGRES_USER=replay', '-e', 'POSTGRES_PASSWORD=replay', '-e', 'POSTGRES_DB=replay',
@@ -45,7 +205,7 @@ try {
 		MTHERIOS_VAULT_ROOT: resolve(scratch, 'vaults'), MTHERIOS_DEFAULT_VAULT: resolve(scratch, 'vaults/default'),
 		MTHERIOS_ALLOW_EXTERNAL_VAULTS: 'false', MTHERIOS_JOB_WORKER: 'false', MTHERIOS_WIKI_AUTO_INDEX: 'false', MTHERIOS_WIKI_AUTO_LINT: 'false', MTHERIOS_GENERATION_TIMING: 'off',
 		MEMORY_EMBEDDING_PROVIDER: '', MEMORY_EMBEDDING_MODEL: '', MEMORY_EMBEDDING_BASE_URL: '', MEMORY_EMBEDDING_URL: '', MEMORY_EMBEDDING_API_KEY: '',
-		QDRANT_URL: 'http://replay.invalid/qdrant', OLLAMA_URL: 'http://replay.invalid/ollama', WIKI_EMBED_API_KEY: '', REPLAY_API_KEY: 'synthetic-only',
+		QDRANT_URL: 'http://replay.invalid/qdrant', OLLAMA_URL: 'http://replay.invalid/ollama', WIKI_EMBED_PROVIDER: 'local-hash', WIKI_EMBED_MODEL: 'replay-local-hash', WIKI_EMBED_API_KEY: '', WIKI_EMBED_URL: '', REPLAY_API_KEY: 'synthetic-only',
 	});
 	await writeFile(process.env.MTHERIOS_CONFIG, '{}\n');
 	globalThis.fetch = async () => { throw new Error('Replay network calls are disabled before fixture execution'); };
@@ -81,10 +241,12 @@ try {
 	const scenarios = (await Promise.all(scenarioFiles.map(async (file) => parseReplayScenarioJsonl(await readFile(resolve(root, 'evals/scenarios', file), 'utf8'), file)))).flat();
 	assert(scenarios.length > 0, 'No replay scenarios');
 	assert.equal(new Set(scenarios.map((item) => item.id)).size, scenarios.length, 'Duplicate scenario IDs');
-	const selectedScenarios = values['quiet-prose'] || values['jev-review-trial'] ? [] : values.scenario ? scenarios.filter((item) => item.id === values.scenario) : scenarios;
-	assert(values['quiet-prose'] || values['jev-review-trial'] || selectedScenarios.length, `Unknown replay scenario: ${values.scenario}`);
+	const selectedScenarios = values['pi-only'] || values['quiet-prose'] || values['jev-review-trial'] ? [] : values.scenario ? scenarios.filter((item) => item.id === values.scenario) : scenarios;
+	assert(values['pi-only'] || values['quiet-prose'] || values['jev-review-trial'] || selectedScenarios.length, `Unknown replay scenario: ${values.scenario}`);
 	await db.insert(schema.stories).values({ id: 'foreign_replay', title: 'Other story' });
 	await db.insert(schema.memoryNodes).values({ id: 'foreign_fact', storyId: 'foreign_replay', type: 'canonical', title: 'Mara sealed letter', content: 'FOREIGN_REPLAY_SENTINEL', importance: 1 });
+	// Qualify the background lane before foreground turn fixtures enqueue their priority checkpoint jobs.
+	if (values['agent-loop'] && !values['pi-only']) results.push(await runFactionSettlement({ db, schema, load }));
 	for (const [index, scenario] of selectedScenarios.entries()) {
 		assert(['court-intrigue', 'court-returning-npc', 'court-corrected-report'].includes(scenario.storyFixture), `No executable fixture for ${scenario.storyFixture}`);
 		for (const id of [...scenario.mustIncludeFactIds, ...scenario.mustNotRevealFactIds, ...(scenario.mustNotIncludeFactIds ?? [])]) assert(Object.hasOwn(factText, id), `No fact detector for ${id}`);
@@ -160,7 +322,7 @@ try {
 			const wireSystem = body.messages[0].content;
 			assert.equal(wireSystem.length, systemChars + dynamicChars + (dynamicChars ? 2 : 0), 'Provider system bytes do not match receipt segments');
 			const wireContext = dynamicChars ? wireSystem.slice(systemChars + 2) : '';
-			for (const span of summary.sourceSpans) assert(wireContext.slice(span.start, span.end).trim(), `Empty retained source span ${span.id}`);
+			for (const span of summary.sourceSpans) assert((span.section === 'system' ? wireSystem.slice(0, systemChars) : wireContext).slice(span.start, span.end).trim(), `Empty retained source span ${span.id}`);
 			const actualSummary = promptRequestSummary(summary.id, wireSystem.slice(0, systemChars), wireContext, body.messages.slice(1, -1), body.messages.at(-1).content, summary.sourceSpans);
 			assert.deepEqual(summary, actualSummary, 'Receipt does not match captured outgoing request text');
 		}
@@ -328,6 +490,13 @@ try {
 		console.log(`${passed ? 'PASS' : 'FAIL'} quiet-prose-model-001: quiet breakfast, relevant booking, two ordinary follow-ups, local danger`);
 	}
 	if (values['agent-loop']) {
+		// Historic classifier fixtures intentionally exercise rollback; the separate Pi cohort owns its new project.
+		await db.execute(sql`update shelves set settings=settings || jsonb_build_object('agentTools',jsonb_build_object('schemaVersion',1,'revision',1,'overrides',jsonb_build_object('gmPiRuntime',false)))`);
+		results.push(await runMemoryHealthFault({ db, schema, load }));
+		results.push(await runPiAgentLoop({ root, db, schema, load }));
+		results.push(await runAssistantApproval({ db, schema, load }));
+	}
+	if (values['agent-loop'] && !values['pi-only']) {
 		const { startAgentRun } = await load('engine/agentRuns');
 		const { enqueueBackendJob } = await load('jobs/outbox');
 		const { runBackendJobNow } = await load('jobs/processor');
@@ -596,15 +765,15 @@ try {
 		const rivalId = `${storyId}_blue`;
 		const projectId = `${storyId}_river_project`;
 		await db.insert(schema.factions).values([
-			{ id: factionId, storyId, name: 'Ash Court', pressure: 0, goals: ['Secure river trade with Blue Harbor'] },
+			{ id: factionId, storyId, name: 'Ash Court', pressure: 0, goals: ['Secure river trade with Blue Harbor'],
+				metadata: { currentStoryEvidence: true, worldSimEnabled: true, worldSimPromoted: true, factionType: 'commercial' } },
 			{ id: rivalId, storyId, name: 'Blue Harbor', pressure: 0 },
 		]);
 		await db.insert(schema.factionProjects).values({ id: projectId, storyId, factionId,
 			project: 'Secure river trade with Blue Harbor', status: 'active', progress: 0.1,
 			metadata: { sourceType: 'autonomous_faction_project', worldSimEnabled: true,
 				projectKind: 'trade_contract', actionType: 'economic', targetFactionId: rivalId, nextActionTurn: 2 } });
-		const moveIds = [];
-		for (let step = 0; step < 10; step++) {
+		for (let step = 0; step < 2; step++) {
 			const jobId = await enqueueBackendJob({ storyId, type: 'evaluate_world_sim_tick',
 				dedupeKey: `agent-loop-tick-${step}`, payload: { ambient: false }, maxAttempts: 2 });
 			const concurrentId = step === 0 ? await enqueueBackendJob({ storyId, type: 'evaluate_world_sim_tick',
@@ -613,21 +782,28 @@ try {
 				...(concurrentId ? [runBackendJobNow(concurrentId, 'agent-loop-worker-concurrent')] : [])]);
 			for (const run of runs) {
 				assert(run.completed, `Faction tick ${step} failed: ${run.error ?? 'unknown'}`);
-				const events = run.result?.events ?? [];
-				if (Array.isArray(events)) moveIds.push(...events.map(event => event.eventId));
+				assert.equal(run.result?.createdEvents, 0, 'Intention review fabricated a canonical consequence');
 			}
-			if (step === 0) assert.equal(runs.reduce((count, run) => count + Number(run.result?.createdEvents ?? 0), 0), 1, 'Concurrent faction ticks advanced the same project twice');
 			const [project] = await db.select().from(schema.factionProjects).where(eq(schema.factionProjects.id, projectId));
-			if (project.progress >= 1) break;
-			await advanceStoryTurn(storyId, 4);
+			assert.equal(project.progress, .1, 'World ticks implicitly progressed an unresolved project');
+			assert.equal(project.status, 'active', 'World ticks completed unaccepted intent');
 		}
-		const [project] = await db.select().from(schema.factionProjects).where(eq(schema.factionProjects.id, projectId));
-		assert.equal(project.status, 'completed', `Faction project stalled at ${project.progress}`);
-		assert.equal(new Set(moveIds).size, moveIds.length, 'Faction progression reused a move ID');
-		const lastMoveId = moveIds.at(-1);
+		// An explicitly accepted fixture consequence enters through canonical writers, independently of pending intent.
+		const { scheduleTimelineEvent } = await load('events/timeline');
+		const { patchWorldRecord } = await load('engine/worldRecords');
+		const [causalStory] = await db.select().from(schema.stories).where(eq(schema.stories.id, storyId));
+		const lastMoveId = `${storyId}_accepted_trade`, signalId = `${storyId}_accepted_trade_signal`;
+		const scheduledMove = await scheduleTimelineEvent({ id: lastMoveId, storyId, type: 'faction_move', title: 'Accepted Ash Court trade',
+			body: 'Ash Court and Blue Harbor sign the verified trade contract.', factionIds: [factionId,rivalId], visibility: 'player_known',
+			currentTurn: causalStory.currentTurn, delayTurns: 0, now: new Date().toISOString(), metadata: { publicSignalEventId: signalId, factionId, factionName: 'Ash Court', actionType: 'economic', target: 'Blue Harbor' } });
+		await patchWorldRecord(storyId, 'events', lastMoveId, { expectedVersion: scheduledMove.serverVersion,
+			updates: { status: 'committed', occurredTurn: causalStory.currentTurn, scheduledTurn: null }, reason: 'Accept deterministic replay trade evidence.' });
+		await scheduleTimelineEvent({ id: signalId, storyId, type: 'faction_signal', title: 'Harbor trade prices',
+			body: 'Ash Court prices, contracts, and credit shift at the harbor.', factionIds: [factionId], visibility: 'player_known',
+			currentTurn: causalStory.currentTurn, delayTurns: 4, now: new Date().toISOString(), metadata: { sourceEventId: lastMoveId } });
+		const moveIds = [lastMoveId];
 		const [lastMove] = await db.select().from(schema.storyEvents).where(eq(schema.storyEvents.id, lastMoveId));
 		assert.equal(lastMove.status, 'committed', 'The faction consequence was not accepted canon');
-		const signalId = lastMove.metadata.publicSignalEventId;
 		const [signal] = await db.select().from(schema.storyEvents).where(eq(schema.storyEvents.id, signalId));
 		assert(signal?.body && signal.sourceEntryIds.length === 0, 'The public signal was not linked to the accepted faction move');
 		const { runPlotBrainPlanCommand } = await load('engine/serviceCommands');
@@ -943,21 +1119,22 @@ try {
 			'Deferred length repair did not use the bounded larger output cap');
 		const jevStoryId = 'replay_jev_handoff';
 		const jevData = fixture(jevStoryId);
+		const jevEvidenceTime = new Date(Date.now() - 60_000).toISOString();
 		await db.insert(schema.stories).values(jevData.story);
 		await db.insert(schema.entities).values(jevData.entities);
 		await db.insert(schema.storyEntries).values(jevData.entries);
 		await db.insert(schema.npcBeliefs).values({ id: `${jevStoryId}_mara_offer`, storyId: jevStoryId,
 			believerEntityId: jevData.ids.mara, belief: 'Mara offered passage and intends to honor an accepted offer.',
-			confidence: 0.95, visibility: 'player_known', sourceEntryIds: [jevData.entries[0].id] });
+			confidence: 0.95, visibility: 'player_known', sourceEntryIds: [jevData.entries[0].id], createdAt: jevEvidenceTime, updatedAt: jevEvidenceTime });
 		const reviewAgreementId = `${jevStoryId}_review_agreement`;
 		await db.insert(schema.agreements).values({ id: reviewAgreementId, storyId: jevStoryId,
 			parties: ['Ilan', 'Mara'], category: 'passage', terms: 'Mara agreed only to discuss passage, not arrange it.',
-			status: 'active', sourceEntryIds: [jevData.entries[0].id] });
+			status: 'active', sourceEntryIds: [jevData.entries[0].id], createdAt: jevEvidenceTime, updatedAt: jevEvidenceTime });
 		const reviewFactId = `${jevStoryId}_review_fact`;
 		await db.insert(schema.memoryNodes).values({ id: reviewFactId, storyId: jevStoryId,
 			type: 'canonical', title: 'Corrected passage terms',
 			content: 'The agreement permits discussion, not completed booking.',
-			summary: 'Passage terms remain under discussion.', sourceEntryIds: [jevData.entries[0].id] });
+			summary: 'Passage terms remain under discussion.', sourceEntryIds: [jevData.entries[0].id], createdAt: jevEvidenceTime, updatedAt: jevEvidenceTime });
 		await db.update(schema.llmServiceSettings).set({ providerType: 'openrouter',
 			model: 'typesafe/jev-1.13', apiKeyRef: 'REPLAY_API_KEY', maxTokens: 700, temperature: 0,
 			metadata: { source: 'disposable_replay' }, enabled: true })
@@ -1095,7 +1272,7 @@ try {
 			values(${resumedJevRunId},${resumedStoryRow.shelf_id},${resumedJevStoryId},${resumedJevTurn.clientTurnId},'committing',
 			${JSON.stringify(resumedJevTurn)}::jsonb,${JSON.stringify([{ ...savedJevObservation, result: resumedJevDecision }])}::jsonb,
 			'{"plannerText":"done"}'::jsonb,now()-interval '1 second',now()+interval '24 hours')`);
-		const resumedJevRun = await (await load('engine/agentRuns')).getAgentRun({ runId: resumedJevRunId, storyId: resumedJevStoryId });
+		const resumedJevRun = await waitForAgentRun(await load('engine/agentRuns'), { runId: resumedJevRunId, storyId: resumedJevStoryId });
 		assert.equal(resumedJevRun.status, 'completed', `Committing Jev run failed to resume: ${resumedJevRun.error ?? 'unknown'}`);
 		assert.equal(jevRequestCount, 1, 'Resumed committing run requested Jev again');
 		assert(resumedJevRun.result?.turn?.gmTurnReceipt?.actorDecisions?.some(decision =>
@@ -1128,7 +1305,7 @@ try {
 				{ tool: 'askJev', callId: 'old_choice', result: staleDecision },
 				{ tool: 'askUserQuestion', callId: 'player_choice', result: { optionId: 'decline' } },
 			])}::jsonb,'{"plannerText":"done"}'::jsonb,now()-interval '1 second',now()+interval '24 hours')`);
-		const changedRun = await (await load('engine/agentRuns')).getAgentRun({ runId: changedRunId, storyId: changedStoryId });
+		const changedRun = await waitForAgentRun(await load('engine/agentRuns'), { runId: changedRunId, storyId: changedStoryId });
 		assert.equal(changedRun.status, 'completed', `Player-changed Jev run failed: ${changedRun.error ?? 'unknown'}`);
 		assert.equal(jevRequestCount, 1, 'Player answer caused an automatic Jev request for the old action');
 		assert.equal(changedRun.result?.turn?.gmTurnReceipt?.actorDecisions?.length, 0,
@@ -1204,7 +1381,7 @@ try {
 		await db.execute(sql`insert into agent_tool_calls(run_id,call_id,tool,args_hash,args,status,result)
 			values(${interruptedRunId},'jev_interrupted_call','askJev',${agentRunHash({ tool: 'askJev', args: interruptedCall })},
 			${JSON.stringify(interruptedCall)}::jsonb,'reserved',${JSON.stringify(attemptMarker)}::jsonb)`);
-		const interruptedRun = await (await load('engine/agentRuns')).getAgentRun({ runId: interruptedRunId, storyId: interruptedJevStoryId });
+		const interruptedRun = await waitForAgentRun(await load('engine/agentRuns'), { runId: interruptedRunId, storyId: interruptedJevStoryId });
 		assert.equal(interruptedRun.status, 'completed', `Interrupted Jev run failed to recover: ${interruptedRun.error ?? 'unknown'}`);
 		assert.equal(jevRequestCount, decisionsBeforeAnswer + 1, 'Interrupted Jev request was sent again during recovery or automatic actor fallback');
 		const [interruptedCallRow] = await db.execute(sql`select status,result from agent_tool_calls where run_id=${interruptedRunId} and call_id='jev_interrupted_call'`);
@@ -1452,17 +1629,27 @@ try {
 			payload: { assistantEntryId: 'narration_jev_handoff_turn' }, maxAttempts: 2 });
 		const backgroundRun = await runBackendJobNow(backgroundJobId, 'replay-serra-worker');
 		assert(backgroundRun.completed, `Background actor job failed: ${backgroundRun.error ?? 'unknown'}`);
-		assert.equal(backgroundRun.result?.status, 'applied', 'Known off-scene opportunity did not produce an attempted step');
+		assert.deepEqual(backgroundRun.result, { status: 'held', reason: 'individual_portrayal_owned_by_main_gm' }, 'Background job bypassed present actor ownership');
 		const duplicateJobId = await enqueueBackendJob({ storyId: jevStoryId,
 			type: 'evaluate_npc_background_action', dedupeKey: 'replay-serra-background-duplicate',
 			payload: { assistantEntryId: 'narration_jev_handoff_turn' }, maxAttempts: 2 });
 		const duplicateRun = await runBackendJobNow(duplicateJobId, 'replay-serra-worker-retry');
 		assert(duplicateRun.completed && duplicateRun.result?.status !== 'applied', 'Background job retry duplicated the step');
-		assert.equal(backgroundDecisionRequests, 1, 'Background retry made an unnecessary second Jev request');
+		assert.equal(backgroundDecisionRequests, 0, 'Held background portrayal spent a Jev request');
+		assert.equal((await db.select().from(schema.storyEvents).where(eq(schema.storyEvents.storyId, jevStoryId)))
+			.filter(event => event.metadata.sourceType === 'npc_independent_action').length, 0, 'Held NPC plan became implicit canon');
+		const [npcStory] = await db.select().from(schema.stories).where(eq(schema.stories.id, jevStoryId));
+		const acceptedNpcEventId = `${jevStoryId}_accepted_serra_question`;
+		const scheduledNpc = await scheduleTimelineEvent({ id: acceptedNpcEventId, storyId: jevStoryId, type: 'reveal',
+			title: 'Accepted Serra attempt', body: 'Serra asks the night watch about the north harbor route. No answer is yet established.',
+			actorEntityIds: [backgroundActorId], locationId: 'north_gate', sourceEntryIds: [jevData.entries[0].id],
+			currentTurn: npcStory.currentTurn, delayTurns: 0, now: new Date().toISOString(), visibility: 'player_known', metadata: { sourceType: 'npc_independent_action' } });
+		await patchWorldRecord(jevStoryId, 'events', acceptedNpcEventId, { expectedVersion: scheduledNpc.serverVersion,
+			updates: { status: 'committed', occurredTurn: npcStory.currentTurn, scheduledTurn: null }, reason: 'Accept deterministic replay NPC attempt evidence.' });
 		let directorSawNpcAttempt = false;
 		const npcDirector = await runPlotBrainPlanCommand({ storyId: jevStoryId, trigger: 'manual', execute: true }, {
 			planner: { plan: async strategicInput => {
-				directorSawNpcAttempt = strategicInput.worldEvents.some(event => event.id === backgroundRun.result.eventId);
+				directorSawNpcAttempt = strategicInput.worldEvents.some(event => event.id === acceptedNpcEventId);
 				assert(directorSawNpcAttempt, 'Director input lost the off-scene NPC attempt');
 				return strategicWorldFrameSchema.parse({ id: 'replay_npc_quiet_frame', storyId: jevStoryId,
 					trigger: 'manual', activationPlan: { activateNow: [] } });
@@ -1483,7 +1670,7 @@ try {
 			dialogue: { speakerRequests: dialoguePackets.length, distinctSpeakerIsolation: true, fallbackTurns: 1,
 				selectiveRequests: selectiveRequests.filter(request => request.model === 'replay-dialogue').length },
 			jev: { decisionRequests: jevRequestCount, failedDecisionRequests: failedJevRequests, plannerDecisionReused: true,
-				backgroundDecisionRequests, backgroundRetrySkipped: true, directorSawNpcAttempt, npcAttemptStayedQuiet: true },
+				backgroundDecisionRequests, backgroundStatus: 'held', acceptedNpcConsequence: true, backgroundRetrySkipped: true, directorSawNpcAttempt, npcAttemptStayedQuiet: true },
 			verification: { continuityReviewRequests: shadowRequests + canonicalReviewRequests,
 				selfCitedWarningsRejected: 2, retainedCanonicalEvidenceReviewed: true },
 			extraction: { deferredTurns: 2, laterRealizationPreserved: true, retryReceiptPreserved: true,
@@ -1491,7 +1678,7 @@ try {
 			causalLoop: { directorSawMove, directorFrameId: directorResult.frameId, signalId,
 				actorLearnedSignal: true, nextSceneRealizedSignal: true, followingTurnExcludedDueSignal: true }, requestsByRole,
 			retainedSourceSpanCount: agentResults.reduce((sum, run) => sum + (run.result?.turn?.contextReceipt?.selection?.requests?.[0]?.sourceSpans?.length ?? 0), 0) });
-		console.log(`PASS agent-loop-001: five agent turns, Director consequence, actor memory, source-linked feedback, ${moveIds.length} faction advances`);
+		console.log(`PASS agent-loop-001: five agent turns, Director consequence, actor memory, source-linked feedback, ${moveIds.length} explicitly accepted faction consequence`);
 		const ambientStoryId = 'replay_imported_project_ambient';
 		const ambientData = fixture(ambientStoryId);
 		ambientData.story.currentTurn = 37;
@@ -1518,13 +1705,10 @@ try {
 			payload: { ambient: true }, maxAttempts: 2 });
 		const ambientRun = await runBackendJobNow(ambientJobId, 'replay-ambient-worker');
 		assert(ambientRun.completed, `Imported-project ambient tick failed: ${ambientRun.error ?? 'unknown'}`);
-		assert.equal(ambientRun.result?.createdEvents, 1, 'An imported project blocked an independent faction move');
-		const [ambientMove] = await db.select().from(schema.storyEvents)
-			.where(eq(schema.storyEvents.id, ambientRun.result.events[0].eventId));
+		assert.equal(ambientRun.result?.createdEvents, 0, 'Ambient intention review fabricated an accepted move');
 		const [unchangedProject] = await db.select().from(schema.factionProjects)
 			.where(eq(schema.factionProjects.id, importedProjectId));
-		assert(ambientMove.factionIds.includes(spicersId), 'The recently active high-pressure faction displaced Spicers');
-		assert(!ambientMove.body.includes('useful counterpart'), 'The faction move invented an external target');
+		assert.equal((await db.select().from(schema.storyEvents).where(eq(schema.storyEvents.storyId, ambientStoryId))).length, 0, 'Ambient review invented an event or external target');
 		assert.equal(unchangedProject.progress, 0, 'Ambient movement advanced imported project intent');
 		await db.update(schema.factions).set({ metadata: { worldSimEnabled: false } })
 			.where(eq(schema.factions.id, purebornId));
@@ -1539,9 +1723,9 @@ try {
 		assert(repeatRun.completed, `Repeated ambient tick failed: ${repeatRun.error ?? 'unknown'}`);
 		assert.equal(repeatRun.result?.createdEvents, 0, 'A repeated faction action created another canonical event');
 		assert.equal(duplicateDecisionCalls, 0, 'Known repeated move spent a Jev request');
-		results.push({ id: 'imported-project-ambient-001', passed: true, moveId: ambientMove.id,
+		results.push({ id: 'imported-project-ambient-001', passed: true, createdEvents: 0,
 			factionId: spicersId, importedProjectProgress: unchangedProject.progress, duplicateDecisionCalls });
-		console.log('PASS imported-project-ambient-001: Spicers moves independently; imported project and duplicate Jev call stay untouched');
+		console.log('PASS imported-project-ambient-001: imported intent stays pending; ambient review creates no canon or duplicate Jev call');
 		const quietStoryId = 'replay_quiet_faction_scene';
 		const quietData = fixture(quietStoryId);
 		const quietRoadId = `${quietStoryId}_road`;
@@ -1718,11 +1902,15 @@ try {
 		const checkpointStoryId = 'replay_checkpoint_refresh';
 		const checkpointData = fixture(checkpointStoryId);
 		checkpointData.story.currentTurn = 25;
-		checkpointData.entries = Array.from({ length: 25 }, (_, index) => ({
-			id: `${checkpointStoryId}_scene_${index + 1}`, storyId: checkpointStoryId, type: 'narration', position: index + 1,
+		checkpointData.entries = Array.from({ length: 25 }, (_, index) => [{
+			id: `${checkpointStoryId}_player_${index + 1}`, storyId: checkpointStoryId, type: 'user_action', position: index * 2 + 1,
+			content: 'I ask the clerk about another ordinary delivery.',
+		}, {
+			id: `${checkpointStoryId}_scene_${index + 1}`, storyId: checkpointStoryId, type: 'narration', position: index * 2 + 2,
+			parentId: `${checkpointStoryId}_player_${index + 1}`,
 			content: index === 0 ? '[Great Hall]\nThe harbor master promised the old route would stay open.'
 				: `[Great Hall]\nThe clerk records an ordinary delivery at the hall, day ${index + 1}.`,
-		}));
+		}]).flat();
 		await db.insert(schema.stories).values(checkpointData.story);
 		await db.insert(schema.entities).values(checkpointData.entities);
 		await db.insert(schema.storyEntries).values(checkpointData.entries);
@@ -1776,7 +1964,7 @@ try {
 		const { executeEngineCommand } = await load('engine/command');
 		const directToolCalls = [];
 		const checkpointResponse = await processServerTurn(checkpointTurn, {
-			agentRunObservations: Array.from({ length: 220 }, (_, index) =>
+			agentRunObservations: Array.from({ length: 200 }, (_, index) =>
 				`Verified ledger observation ${index + 1}: harbor access and route permissions remain subject to the current scene.`).join('\n'),
 			runGmTool: async (call) => {
 				directToolCalls.push(call.command);
@@ -1807,13 +1995,13 @@ try {
 		const checkpointWireContext = checkpointWireSystem.slice(checkpointSystemChars + 2);
 		assert.equal(checkpointWireContext.length, checkpointDynamicChars, 'Final context receipt differs from provider payload');
 		assert(checkpointSummary.sourceSpans.length > 0, 'Observation-heavy request retained no source spans');
-		for (const span of checkpointSummary.sourceSpans) assert(checkpointWireContext.slice(span.start, span.end).trim(),
+		for (const span of checkpointSummary.sourceSpans) assert((span.section === 'system' ? checkpointWireSystem.slice(0, checkpointSystemChars) : checkpointWireContext).slice(span.start, span.end).trim(),
 			`Observation-heavy request has an empty source span: ${span.id}`);
 		const { countTokens } = await vite.ssrLoadModule('/src/lib/utils/tokens.ts');
 		assert(countTokens(checkpointNarration.messages.map(message => String(message.content)).join('\n\n'))
 			+ 2048 + 512 <= 9000, 'Final serialized request exceeded the configured model capacity');
 		assert(checkpointResponse.warnings.some(warning => warning.includes('Final narration context budget applied')),
-			'Observation-heavy request did not exercise the final context rebudget');
+			`Observation-heavy request did not exercise the final context rebudget: ${JSON.stringify({ totalTokens: checkpointSummary.totalTokens, sections: checkpointSummary.sections, warnings: checkpointResponse.warnings })}`);
 		const recoveryTurn = { ...checkpointTurn, clientTurnId: 'checkpoint_recover_1',
 			playerText: 'Ask the clerk to confirm the route.', localVersion: 1 };
 		const recoveryRunId = 'run_replay_checkpoint_commit_recovery';
@@ -1821,7 +2009,7 @@ try {
 			values(${recoveryRunId},${afterCheckpointRefresh.shelfId},${checkpointStoryId},${recoveryTurn.clientTurnId},'committing',
 			${JSON.stringify(recoveryTurn)}::jsonb,'{"plannerText":"done"}'::jsonb,now()-interval '1 second',now()+interval '24 hours')`);
 		const { getAgentRun } = await load('engine/agentRuns');
-		const recovered = await getAgentRun({ runId: recoveryRunId, storyId: checkpointStoryId });
+		const recovered = await waitForAgentRun({ getAgentRun }, { runId: recoveryRunId, storyId: checkpointStoryId });
 		assert.equal(recovered.status, 'completed', `Expired committing run did not resume: ${recovered.error ?? 'unknown'}`);
 		const recoveredAgain = await getAgentRun({ runId: recoveryRunId, storyId: checkpointStoryId });
 		assert.equal(recoveredAgain.status, 'completed', 'Recovered run did not remain completed');
@@ -1842,7 +2030,7 @@ try {
 		}) });
 		const streamEvents = (await streamResponse.text()).split('\n\n');
 		assert(streamEvents.some((event) => event.startsWith('event: gm.activity\n') && event.includes('campaign.entriesAround')),
-			'Direct SSE turn did not stream the historical read activity');
+			`Direct SSE turn did not stream the historical read activity: ${streamEvents.filter(event => event.startsWith('event: error\n') || event.startsWith('event: gm.activity\n')).join('\n')}`);
 		const doneEvent = streamEvents.find((event) => event.startsWith('event: done\n'));
 		assert(doneEvent, `Direct SSE turn produced no completion event: ${streamEvents.at(-2)}`);
 		const streamTurnResult = JSON.parse(doneEvent.split('\n').find((line) => line.startsWith('data: ')).slice(6));
@@ -1921,10 +2109,11 @@ try {
 		const adaptiveRequests = checkpointRequests.slice(requestsBeforeResearch);
 		assert(adaptiveRequests.some(request => request.messages.some(message => String(message.content).includes('bounded, read-only recall planner'))),
 			`Open-ended direct GM research did not call the bounded planner: ${JSON.stringify({ receipt: adaptiveTurn.gmTurnReceipt?.activeRecall, tools: adaptiveTurn.gmTurnReceipt?.tools?.map(tool => tool.command), requests: adaptiveRequests.map(request => request.model) })}`);
-		assert(adaptiveRequests.every(request => request.model !== 'replay-active-recall'),
-			'Retired Active Recall model made a provider request');
-		assert(adaptiveTurn.generationTimings?.some(timing => timing.serviceId === 'narrative'
-			&& timing.operation.includes('gm_research.plan')), 'GM research planner was not attributed to the GameMaster service');
+		assert.equal(adaptiveRequests.filter(request => request.model === 'replay-active-recall'
+			&& request.messages.some(message => String(message.content).includes('bounded, read-only recall planner'))).length, 1,
+			'Legacy rollback did not make exactly one plan through its explicitly saved Active Recall profile');
+		assert(adaptiveTurn.generationTimings?.some(timing => timing.serviceId === 'activeRecall'
+			&& timing.operation.includes('gm_research.plan')), 'Legacy research planner was not attributed to its saved service');
 		await saveAgentSettings({ projectId: afterCheckpointRefresh.shelfId,
 			expectedRevision: inheritedResearch.project.revision, changes: { gmAdaptiveResearch: false } });
 		const requestsBeforeDisabled = checkpointRequests.length;
@@ -2056,7 +2245,7 @@ try {
 			secondCheckpointId: secondCheckpoint.checkpointId, serverVersionUnchanged: true,
 			oldNoteExcluded: true, newNoteSent: true, finalRequestRebudgeted: true,
 			finalRequestTokens: checkpointSummary.totalTokens, retainedSourceSpans: checkpointSummary.sourceSpans.length,
-			commitStageRecovery: true, directWikiPageRead: true, adaptiveResearchUsesNarrative: true, retiredServiceRequests: 0,
+			commitStageRecovery: true, directWikiPageRead: true, legacyAdaptiveResearchUsesSavedProfile: true, legacyActiveRecallRequests: 1,
 			explicitAdaptiveDisablePreserved: true, researchOffSseCompleted: true, emptyInlineMemorySkippedClassifier: true,
 			inlineBeliefAndPromiseSkippedClassifier: true, inlineOfferRetainedClassifier: true });
 		console.log('PASS checkpoint-refresh-001: fresh checkpoint, observation-heavy request, persisted commit recovery');
@@ -2143,11 +2332,11 @@ try {
 	}
 	const directory = resolve(root, 'evals/replay/results');
 	await mkdir(directory, { recursive: true });
-	const report = { createdAt: new Date().toISOString(), mode: values['jev-inline-trial'] ? 'jev-inline-trial' : values['jev-review-trial'] ? 'jev-review-trial' : modelConfig ? values['prose-only'] ? 'model-prose-synthetic-classifier' : 'model' : 'deterministic', model: modelConfig?.model ?? (values['jev-inline-trial'] ? 'typesafe/jev-1.13' : null), provider: modelConfig?.provider ?? (values['jev-inline-trial'] ? 'openrouter' : null), mutation: values.mutation, roll: values.roll,
+	const report = { createdAt: new Date().toISOString(), mode: values['jev-inline-trial'] ? 'jev-inline-trial' : values['jev-review-trial'] ? 'jev-review-trial' : modelConfig ? values['prose-only'] ? 'model-prose-synthetic-classifier' : 'model' : 'deterministic', model: modelConfig?.model ?? (values['jev-inline-trial'] ? 'typesafe/jev-1.13' : null), provider: modelConfig?.provider ?? (values['jev-inline-trial'] ? 'openrouter' : null), mutation: values.mutation, roll: values.roll, agentLoop: values['agent-loop'], piOnly: values['pi-only'],
 		providerSpend: { capUsd: spendCapUsd, reportedUsd: modelConfig || values['jev-inline-trial'] ? providerSpendUsd : 0, enforcement: modelConfig || values['jev-inline-trial'] ? 'pre-request remaining-spend guard, one Jev attempt per trial turn, and stop when reported usage reaches cap' : 'no provider calls' },
-		build: await harnessBuildId(root, ['scripts/eval-turns.mjs', 'evals/replay/court-intrigue.mjs', 'src/lib/server/evals/replayRunner.ts', 'src/lib/server/turn/orchestrator.ts', 'src/lib/server/turn/promptPacket.ts', 'src/lib/server/turn/provider.ts', 'src/lib/server/turn/jev.ts', 'src/lib/server/turn/turnMemoryEnvelope.ts', 'src/lib/contracts/memory.ts']),
+		build: await harnessBuildId(root, replaySources),
 		note: 'Real prompt, provider parsing, extraction validation, canonical writes and idempotency on a synthetic fixture. Deterministic mode uses fake output; opt-in model mode uses only the explicitly requested model/key. Phrase detectors are narrow, not general narrative or knowledge-quality evaluation. No live database/settings or workers used.',
-		sourceHashes: Object.fromEntries(await Promise.all(['scripts/eval-turns.mjs', 'evals/replay/court-intrigue.mjs', 'src/lib/server/evals/replayRunner.ts', 'src/lib/server/turn/orchestrator.ts', 'src/lib/server/turn/promptPacket.ts', 'src/lib/server/turn/provider.ts', 'src/lib/server/turn/jev.ts', 'src/lib/server/turn/turnMemoryEnvelope.ts', 'src/lib/contracts/memory.ts'].map(async (file) => [file, createHash('sha256').update(await readFile(resolve(root, file))).digest('hex')]))), results };
+		sourceHashes: Object.fromEntries(await Promise.all(replaySources.map(async (file) => [file, createHash('sha256').update(await readFile(resolve(root, file))).digest('hex')]))), results };
 	const reportPath = resolve(directory, `${report.createdAt.replace(/[:.]/g, '-')}.json`);
 	await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 	console.log(`Report: ${reportPath}`);

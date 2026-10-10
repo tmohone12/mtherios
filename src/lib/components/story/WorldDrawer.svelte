@@ -1941,31 +1941,6 @@
 			{/if}
 
 
-			<!-- World Tick -->
-			{#if story.currentStory}
-			<div>
-				<div class="mb-2 flex items-center gap-1.5">
-					<Play class="h-3.5 w-3.5 text-sky-400" />
-					<span class="font-display text-[10px] tracking-wider uppercase text-sky-400">World Tick</span>
-				</div>
-				<button
-					onclick={runWorldSimNow}
-					disabled={runningWorldSim || !backendWorldSim}
-					class="flex w-full items-center justify-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-1.5 text-xs text-sky-400 transition-colors hover:bg-sky-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
-					title={backendWorldSim ? 'Run a terminal-owned world tick now' : 'Connect this story to the terminal engine to run world ticks'}
-				>
-					{#if runningWorldSim}
-						<Loader2 class="h-3.5 w-3.5 animate-spin" />
-						<span>Running world sim…</span>
-					{:else}
-						<Play class="h-3.5 w-3.5" />
-						<span>{backendWorldSim ? 'Run terminal world tick' : 'World tick requires terminal sync'}</span>
-					{/if}
-				</button>
-				{#if worldSimError}<p role="alert" class="mt-1 text-xs text-red-400">{worldSimError}</p>{/if}
-			</div>
-			{/if}
-
 			<!-- Terminal engine projection -->
 			{#if backendWorldSim}
 			<div>

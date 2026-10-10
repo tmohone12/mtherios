@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 // @ts-ignore The CLI helper is a plain ESM script module exercised through Vitest.
 const {
@@ -28,6 +28,22 @@ const {
 };
 
 describe('app-story CLI turn command', () => {
+	it('prints a pending question and does not refresh the wiki before the turn completes', async () => {
+		// @ts-ignore CLI modules intentionally remain plain JavaScript.
+		const { runTurn, printTurn } = await import('../../../../scripts/app-story.mjs');
+		const pending = { status: 'awaiting_input', runId: 'run_cli', interactions: [{ id: 'question_cli', revision: 1, prompt: 'Cross the bridge?', options: [{ id: 'yes', label: 'Cross' }] }] };
+		const request = vi.fn(async () => ({ status: 'succeeded', result: pending }));
+		const result = await runTurn('http://fixture.invalid', { story: 'story_alpha', clientTurnId: 'turn_cli', text: 'Inspect the bridge.', wiki: true }, [], request);
+		expect(result).toEqual(pending);
+		expect(request).toHaveBeenCalledOnce();
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			printTurn(result, false);
+			expect(log.mock.calls.flat().join('\n')).toContain('Turn awaiting_input: run_cli');
+			expect(log.mock.calls.flat().join('\n')).toContain('Cross the bridge?');
+			expect(log.mock.calls.flat().join('\n')).not.toContain('Terminal turn complete');
+		} finally { log.mockRestore(); }
+	});
 	it('routes shell bootstrap reads through the shared engine command gateway', () => {
 		const request = buildStoryBootstrapCommandRequest({
 			storyId: 'story_alpha',

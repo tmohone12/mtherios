@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getDb } from '$lib/server/db/client';
 import { getAgentSettings } from './agentSettings';
 import { resolveServiceGeneration } from './llmSettings';
-import { findImageAssetForJob, selectContentCover, storeImageAsset } from './imageAssets';
+import { assertImageOriginActive, findImageAssetForJob, selectContentCover, storeImageAsset } from './imageAssets';
 import { generateOpenAiImage } from './imageProvider';
 import { MutationError } from './mutationSafety';
 import { recordManualStoryImageCard, recordStoryImageCard } from './storyImageCards';
@@ -108,6 +108,7 @@ export async function processImageJob(job: { id: string; projectId: string; stor
     visibility = item.visibility === 'public' ? 'public' : 'gm';
   }
   if (!asset) {
+    await assertImageOriginActive(getDb(), { ...scope, origin: payload.origin });
     const resolved = await resolveServiceGeneration('imageGeneration');
     if (resolved.missingReason || !resolved.profile || !resolved.setting?.model) throw new MutationError('IMAGE_UNAVAILABLE', resolved.missingReason ?? 'Configure an image generation model first.');
     if (!['openai', 'nanogpt', 'openrouter'].includes(resolved.profile.providerType)) throw new MutationError('IMAGE_UNAVAILABLE', 'The configured image service provider is unsupported.');
@@ -136,11 +137,11 @@ export async function processImageJob(job: { id: string; projectId: string; stor
     if (coverAlreadyApplied) applied = true;
     else {
       try {
-        await selectContentCover({ ...scope, itemId: payload.itemId!, assetId: asset.id, expectedCoverRevision: payload.expectedCoverRevision! });
+        await selectContentCover({ ...scope, itemId: payload.itemId!, assetId: asset.id, expectedCoverRevision: payload.expectedCoverRevision!, origin: payload.origin });
         applied = true;
       } catch (error) {
-        if (!(error instanceof MutationError) || !['REVISION_CONFLICT', 'SCOPE_DENIED'].includes(error.code)) throw error;
-        reason = 'cover_changed';
+        if (!(error instanceof MutationError) || !['REVISION_CONFLICT', 'SCOPE_DENIED', 'IMAGE_CANCELLED'].includes(error.code)) throw error;
+        reason = error.code === 'IMAGE_CANCELLED' ? 'run_stopped' : 'cover_changed';
       }
     }
   }

@@ -228,6 +228,14 @@ describe('runBackgroundJobs lore management', () => {
 		}), 'create');
 	});
 
+	it.each(['ambiguous', 'mismatched_id'])('does not merge lore into the wrong character (%s)', async scenario => {
+		storyMock.lorebookEntries = ['one', 'two'].map(id => ({ id, type: 'character', name: id, aliases: scenario === 'ambiguous' ? ['Shared Alias'] : [], state: { bio: 'Authored origin.' } }));
+		aiMock.loreManagement.manage.mockResolvedValue({ updates: [{ action: 'update', entryId: 'one', name: scenario === 'ambiguous' ? 'Shared Alias' : 'two', type: 'character', description: 'A new spy biography.', keywords: [] }] });
+		const errors = await runBackgroundJobs();
+		expect(canonicalMocks.patchCanonicalLorebookEntry).not.toHaveBeenCalled();
+		expect(errors.join(' ')).toContain('ambiguous or does not match');
+	});
+
 	it('skips automatic character creations while still creating non-character lore', async () => {
 		const errors = await runBackgroundJobs();
 

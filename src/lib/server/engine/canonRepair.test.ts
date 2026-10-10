@@ -3,12 +3,15 @@ import {
 	entities,
 	entityAliases,
 	factionProjects,
+	factionResources,
 	patchProposals,
 	sourceRefs,
 	storyEvents,
+	storyEntries,
 	stories,
 } from '$lib/server/db/schema';
 import { applyChapterScribeCharacterContextProposals, canonDriftSourceRefKey, isInvalidSourceRefForRepair, isUnsafeMemoryNodeForRepair, mergeCharacterReferenceState, mergeMergedFromHistory, mergeRecords, reviewPatchProposal, stripMergedIntoMetadata } from './canonRepair';
+import { dueFactionProjectFingerprint } from '$lib/server/factions/projects';
 
 const dbMocks = vi.hoisted(() => ({
 	getDb: vi.fn(),
@@ -171,11 +174,25 @@ const dueFactionProjectProposal: typeof patchProposals.$inferSelect = {
 	updatedAt: '2026-06-13T00:00:00.000Z',
 };
 
+const dueProject: typeof factionProjects.$inferSelect = { id: 'project_harbor_blockade', storyId: 'story_1', factionId: 'faction_harbor',
+	project: 'Blockade the harbor before the wedding fleet arrives', status: 'active', progress: 1, costs: { coin: 40 },
+	sourcePatchIds: ['patch_project'], sourceEntryIds: ['entry_order'], sourceEventIds: ['event_pact'], serverVersion: 4,
+	dueTurn: 10, worldTime: null, priority: 8, visibility: 'secret', gains: {}, risks: [], metadata: {},
+	createdAt: '2026-06-13T00:00:00.000Z', updatedAt: '2026-06-13T00:00:00.000Z',
+};
+const dueResources: Array<typeof factionResources.$inferSelect> = [{ id: 'res_coin', storyId: 'story_1', factionId: 'faction_harbor', kind: 'coin', name: 'Coin',
+	amount: 100, status: 'available', metadata: {}, serverVersion: 4, locationId: null, visibility: 'secret',
+	sourceEntryIds: [], sourceEventIds: [], sourcePatchIds: [], createdAt: '2026-06-13T00:00:00.000Z', updatedAt: '2026-06-13T00:00:00.000Z' }];
+dueFactionProjectProposal.metadata = { ...dueFactionProjectProposal.metadata, auditFingerprint: dueFactionProjectFingerprint(dueProject, dueResources) };
+
 function createDbMock(options: {
 	patchProposalRows?: Array<typeof patchProposals.$inferSelect>;
 	entityRows?: Array<typeof entities.$inferSelect>;
 	sequentialEntityRows?: Array<typeof entities.$inferSelect>;
 	aliasRows?: Array<typeof entityAliases.$inferSelect>;
+	entryRows?: Array<typeof storyEntries.$inferSelect>;
+	projectRows?: Array<typeof factionProjects.$inferSelect>;
+	resourceRows?: Array<typeof factionResources.$inferSelect>;
 } = {}) {
 	type DbSource = 'root' | 'tx';
 	const insertCalls: Array<{ source: DbSource; table: unknown; value: unknown }> = [];
@@ -188,6 +205,7 @@ function createDbMock(options: {
 		let selectedTable: unknown;
 
 		const selectChain = {
+			orderBy: () => selectChain,
 			from: vi.fn((table: unknown) => {
 				selectedTable = table;
 				return selectChain;
@@ -205,9 +223,11 @@ function createDbMock(options: {
 				if (selectedTable === entities) return Promise.resolve(options.entityRows ?? []);
 				return Promise.resolve([]);
 			}),
-			for: vi.fn(() => Promise.resolve(selectedTable === patchProposals
+			for: vi.fn(() => Promise.resolve(selectedTable === storyEntries ? options.entryRows ?? [] : selectedTable === patchProposals
 				? proposalRows.filter((row) => ['pending', 'needs_review'].includes(row.status))
-				: selectedTable === entities ? (options.entityRows ?? []).filter((row) => row.id === ((proposalRows[0].metadata as Record<string, unknown>).sourceDraft as Record<string, unknown>)?.targetEntityId) : [])),
+				: selectedTable === entities ? options.sequentialEntityRows ? [options.sequentialEntityRows[entitySelection++]].filter(Boolean) : (options.entityRows ?? [])
+				: selectedTable === factionProjects ? options.projectRows ?? [dueProject]
+				: selectedTable === factionResources ? options.resourceRows ?? dueResources : [])),
 			then: (resolve: (rows: unknown[]) => unknown) => Promise.resolve(selectedTable === entities ? options.entityRows ?? [] : []).then(resolve),
 		};
 		const select = vi.fn(() => selectChain);
@@ -918,7 +938,7 @@ describe('reviewPatchProposal', () => {
 				op: 'replace',
 				path: '/characters/entity_mira/state',
 				value: {
-					bio: 'Mira is a harbor broker who now guards the ledger at Yin.',
+					bio: 'A harbor broker. Mira now guards the ledger at Yin.',
 					currentLocation: 'Yin harbor counting room',
 					currentAction: 'guarding the ledger',
 					goals: ['protect Aurion'],
@@ -984,9 +1004,9 @@ describe('reviewPatchProposal', () => {
 		const proposalUpdate = updateCalls.find((call) => call.table === patchProposals)?.value;
 
 		expect(entityUpdate).toMatchObject({
-			description: 'Mira is a harbor broker who now guards the ledger at Yin.',
+			description: 'A harbor broker. Mira now guards the ledger at Yin.',
 			state: {
-				bio: 'Mira is a harbor broker who now guards the ledger at Yin.',
+				bio: 'A harbor broker. Mira now guards the ledger at Yin.',
 				currentLocation: 'Yin harbor counting room',
 				currentAction: 'guarding the ledger',
 				goals: ['keep the trading post open', 'protect Aurion'],
@@ -1116,6 +1136,7 @@ describe('reviewPatchProposal', () => {
 		const { db, updateCalls } = createDbMock({
 			patchProposalRows: [eligibleA, eligibleB, ineligible],
 			sequentialEntityRows: [character('entity_a'), character('entity_b')],
+			entryRows: eligibleA.sourceEntryIds.map(id => ({ id, storyId: 'story_1', type: 'narration', content: 'The original chapter events.', metadata: {} } as typeof storyEntries.$inferSelect)),
 		});
 		dbMocks.getDb.mockReturnValue(db);
 
@@ -1240,6 +1261,27 @@ describe('reviewPatchProposal', () => {
 		});
 	});
 
+	it.each(['cancelled', 'failed', 'completed', 'blocked'])('does not revive a %s project from an old due proposal', async status => {
+		const { db, insertCalls, updateCalls } = createDbMock({ patchProposalRows: [dueFactionProjectProposal],
+			projectRows: [{ ...dueProject, status }] });
+		dbMocks.getDb.mockReturnValue(db);
+		await expect(reviewPatchProposal({ storyId: 'story_1', proposalId: dueFactionProjectProposal.id, decision: 'approved' }))
+			.rejects.toThrow(/changed.*audit/i);
+		expect(updateCalls.filter(call => call.table === factionProjects)).toEqual([]);
+		expect(insertCalls.filter(call => call.table === storyEvents)).toEqual([]);
+	});
+	it('rejects changed resources and legacy due proposals without a reviewed snapshot', async () => {
+		for (const options of [
+			{ patchProposalRows: [dueFactionProjectProposal], resourceRows: [{ ...dueResources[0], amount: 1 }] },
+			{ patchProposalRows: [{ ...dueFactionProjectProposal, metadata: { sourceType: 'due_faction_project_audit' } }] },
+		]) {
+			const { db, insertCalls } = createDbMock(options);
+			dbMocks.getDb.mockReturnValue(db);
+			await expect(reviewPatchProposal({ storyId: 'story_1', proposalId: dueFactionProjectProposal.id, decision: 'approved' }))
+				.rejects.toThrow(/changed.*audit/i);
+			expect(insertCalls.filter(call => call.table === storyEvents)).toEqual([]);
+		}
+	});
 	it('applies approved due faction project proposals without losing audit context', async () => {
 		const { db, insertCalls, updateCalls } = createDbMock({
 			patchProposalRows: [dueFactionProjectProposal],

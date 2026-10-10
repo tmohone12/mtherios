@@ -1,4 +1,7 @@
 import { exportCanonicalWorkspace } from '$lib/server/engine/canonicalContent';
+import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { boundCharacterIdentity } from '$lib/server/engine/characterContinuity';
 import { exportContentSnapshot } from '$lib/server/engine/content';
 import { exportStoryImageCards } from '$lib/server/engine/storyImageCards';
 import { exportLocationMapAssets } from '$lib/server/engine/locationMapPortability';
@@ -826,6 +829,42 @@ function entityMetadataFromEntry(entry: JsonRecord, existing: JsonRecord = {}): 
 export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: unknown) {
 	const db = getDb();
 	const entry = asRecord(rawEntry);
+	const automatic = asRecord(asRecord(entry.metadata).automaticCharacterUpdate);
+	if (entry.type === 'character' && Object.keys(automatic).length) {
+		const result = await db.transaction(async tx => {
+			const [current] = await tx.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, asString(entry.id)), eq(entities.type, 'character'))).for('update').limit(1);
+			if (!current || normalizeAlias(current.name) !== normalizeAlias(asString(entry.name))) throw new Error('Automatic character update requires the exact same story, entity ID and canonical name.');
+			const patch = asRecord(automatic.patch), expected = asRecord(automatic.expected);
+			const baseline = { ...asRecord(current.state), description: current.description };
+			if (Object.keys(patch).some(key => !Object.hasOwn(expected, key) || !isDeepStrictEqual(expected[key], baseline[key as keyof typeof baseline] ?? null))) throw new Error('Character changed after automatic update preparation. Regenerate from current canon.');
+			if (!Object.keys(patch).length) return { storyId, serverVersion: current.serverVersion, entity: current, identityReviewProposalId: null };
+			const sourceIds = asStringArray(automatic.sourceEntryIds);
+			const sourceRows = sourceIds.length ? await tx.select().from(storyEntries).where(and(eq(storyEntries.storyId, storyId), inArray(storyEntries.id, sourceIds))).for('share') : [];
+			if (sourceRows.length !== sourceIds.length || !sourceRows.length) throw new Error('Automatic character updates require original sources from this story.');
+			if (sourceRows.some(row => ['user_action', 'system', 'ooc', 'chapter_summary'].includes(row.type) || asRecord(row.metadata).nonCanon || asRecord(row.metadata).non_canon || asRecord(row.metadata).superseded)) throw new Error('Automatic character updates require canonical narrative passages, not summaries or excluded sources.');
+			const bounded = boundCharacterIdentity({ storyId, entityId: current.id, names: [current.name, ...asStringArray(asRecord(current.state).aliases), ...asStringArray(asRecord(current.metadata).localAliases)], current: baseline, patch,
+				sources: sourceRows.map(row => ({ id: row.id, storyId: row.storyId, content: row.content, narrative: !asRecord(row.metadata).nonCanon && !asRecord(row.metadata).non_canon && !asRecord(row.metadata).superseded && row.type !== 'user_action' })) });
+			const proposalId = bounded.conflicts.length ? `character_identity_proposal_${createHash('sha256').update(JSON.stringify([storyId, current.id, sourceRows.map(row => [row.id, createHash('sha256').update(row.content).digest('hex')]).sort(), bounded.conflicts.map(conflict => [conflict.field, conflict.previous, conflict.proposed])])).digest('hex').slice(0, 32)}` : null;
+			if (proposalId && !Object.keys(bounded.patch).length) {
+				const [previous] = await tx.select().from(patchProposals).where(and(eq(patchProposals.storyId, storyId), eq(patchProposals.id, proposalId))).limit(1);
+				if (previous) return { storyId, serverVersion: current.serverVersion, entity: current, identityReviewProposalId: proposalId };
+			}
+			const now = nowIso(), serverVersion = await bumpStoryVersionTx(tx, storyId, now);
+			if (proposalId) await tx.insert(patchProposals).values({ id: proposalId, storyId, proposalType: 'character_context_update', targetTable: 'entities', targetRecordId: current.id, proposedBy: 'llm',
+				operations: [{ op: 'replace', path: `/characters/${current.id}/state`, value: Object.fromEntries(bounded.conflicts.map(conflict => [conflict.field, conflict.proposed])) }],
+				reason: 'Automatic client proposed enduring identity changes.', suggestion: 'Review original source passages and namesakes; unsupported changes require an explicit author retcon.', status: 'needs_review', confidence: 0,
+				affectedEntityIds: [current.id], sourceEntryIds: sourceIds, sourceEventIds: [], sourcePatchIds: [],
+				metadata: { sourceType: 'character_identity_conflict', identityConflicts: bounded.conflicts, characterUpdateBaseVersion: serverVersion,
+					identitySourceHashes: sourceRows.map(row => ({ id: row.id, type: row.type, sha256: createHash('sha256').update(row.content).digest('hex') })) }, serverVersion, createdAt: now, updatedAt: now }).onConflictDoNothing();
+			const [entity] = await tx.update(entities).set({ state: { ...asRecord(current.state), ...bounded.patch },
+				status: typeof bounded.patch.status === 'string' ? bounded.patch.status : current.status,
+				metadata: { ...asRecord(current.metadata), ...(proposalId ? { identityReviewProposalId: proposalId } : {}) },
+				sourceEntryIds: stringList(current.sourceEntryIds, sourceIds), serverVersion, updatedAt: now }).where(and(eq(entities.storyId, storyId), eq(entities.id, current.id))).returning();
+			return { storyId, serverVersion, entity, identityReviewProposalId: proposalId };
+		});
+		await queueStoryVaultSync(storyId, result.serverVersion, 'automatic-character-delta', { entityId: result.entity.id });
+		return result;
+	}
 	const incomingState = entityStateFromEntry(entry);
 	const requestedEntityId = asNullableString(entry.id);
 	const name = asString(entry.name).trim();

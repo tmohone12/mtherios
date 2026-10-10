@@ -1,5 +1,4 @@
-import { chapterSourceForArc } from './chapterSummarySource';
-export { chapterSourceForArc } from './chapterSummarySource';
+import { advanceNegotiation, reviewFactionIntentions, reviewGardener } from '$lib/server/factions/workflow';
 import { validateProjectAgentSettings } from '$lib/server/engine/agentSettings';
 import { processImageJob } from '$lib/server/engine/imageJobs';
 import { processAssistantBatchJob } from '$lib/server/engine/assistantBatchWorker';
@@ -12,8 +11,11 @@ import { agreements, arcs, backendJobs, chapters, continuityWarnings, entities, 
 import { gmTurnReceiptSchema, type MemoryNode } from '$lib/contracts/memory';
 import { applyChapterCampaignFactReview, campaignStateExtractionContext, readCampaignState, type CampaignStateFact, type ChapterCampaignFactAction } from '$lib/contracts/campaignState';
 import { getServerMemoryConfig } from '$lib/server/env';
-import { CHAPTER_TURN_COUNT, CHAPTERS_PER_ARC, selectCompletedChapterTurns, selectNextChapterWindow } from '$lib/services/chapterCadence';
+import { CHAPTER_TURN_COUNT, CHAPTERS_PER_ARC, selectArcRollupBatches, selectCompletedChapterTurns, selectNextChapterWindow } from '$lib/services/chapterCadence';
+export { selectArcRollupBatches } from '$lib/services/chapterCadence';
 import { generateChronologicalMemory } from './summaryGeneration';
+import { chapterSourceForArc } from './chapterSummarySource';
+export { chapterSourceForArc } from './chapterSummarySource';
 import {
 	embedMemoryTexts,
 	memoryEmbeddingConfig,
@@ -27,6 +29,7 @@ import { claimBackendJobs, enqueueBackendJob, enqueueChapterSummaryJob, enqueueP
 import { refreshSceneCheckpoint } from '$lib/server/memory/sceneCheckpoint';
 import { indexCanonicalRecords } from '$lib/server/engine/canonicalSearch';
 import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
+import { generationAttemptResult, recordGenerationApiCalls, reuseGenerationResult } from '$lib/server/engine/generationAccounting';
 import { publishEngineEvent } from '$lib/server/engine/events';
 import { resolveServiceGeneration } from '$lib/server/engine/llmSettings';
 import { getActorDecisionView } from '$lib/server/engine/gmTools';
@@ -64,6 +67,7 @@ import {
 	getProviderCooldownRemainingMs,
 	parseJsonFromGeneratedText,
 	type ServerGenerationResult,
+	type ServerGenerationAttempt,
 } from '$lib/server/turn/provider';
 import { extractMtheriosSummarySection, formatMtheriosMemorySummary, summarizeMtheriosMemoryForContext, summarizeMtheriosMemoryForRollup, type MtheriosCharacterState } from '$lib/services/ai/context/mtheriosSummaryFormat';
 import { plotBrainLifecycleState, type PlotBrainLifecycleState } from '$lib/server/plotBrain/lifecycle';
@@ -129,7 +133,8 @@ export const ARC_PROJECTION_COMPILER = 'arc-projection-v3';
 export const SAGA_PROJECTION_COMPILER = 'saga-projection-v1';
 const SAGA_ROLLUP_ARCS = 5;
 
-type ProjectionSourceRow = Pick<StoryEntryRow, 'id' | 'position' | 'content' | 'serverVersion'>;
+type ProjectionSourceRow = Pick<StoryEntryRow, 'id' | 'position' | 'content' | 'serverVersion'>
+	& Partial<Pick<StoryEntryRow, 'type' | 'parentId' | 'branchId' | 'metadata'>>;
 type ProjectionEventSourceRow = Pick<StoryEventRow, 'id' | 'status' | 'title' | 'body' | 'sourceEntryIds' | 'serverVersion'>;
 
 export function projectionSourceEntriesMatch(expected: ProjectionSourceRow[], actual: ProjectionSourceRow[]): boolean {
@@ -140,7 +145,11 @@ export function projectionSourceEntriesMatch(expected: ProjectionSourceRow[], ac
 		if (!current) return false;
 		return current.position === entry.position
 			&& current.content === entry.content
-			&& current.serverVersion === entry.serverVersion;
+			&& current.serverVersion === entry.serverVersion
+			&& (entry.type === undefined || current.type === entry.type)
+			&& (entry.parentId === undefined || current.parentId === entry.parentId)
+			&& (entry.branchId === undefined || current.branchId === entry.branchId)
+			&& (entry.metadata === undefined || JSON.stringify(current.metadata) === JSON.stringify(entry.metadata));
 	});
 }
 
@@ -162,19 +171,21 @@ async function projectionSourcesStillMatch(input: {
 	storyId: string;
 	entries?: ProjectionSourceRow[];
 	events?: ProjectionEventSourceRow[];
-}): Promise<boolean> {
-	const db = getDb();
+}, db: Pick<ProcessorDb, 'select'> | ProcessorTransaction = getDb(), lock = false): Promise<boolean> {
+	const entryQuery = input.entries?.length
+		? db.select({ id: storyEntries.id, position: storyEntries.position, content: storyEntries.content, serverVersion: storyEntries.serverVersion,
+			type: storyEntries.type, parentId: storyEntries.parentId, branchId: storyEntries.branchId, metadata: storyEntries.metadata })
+			.from(storyEntries)
+			.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, input.entries.map((entry) => entry.id))))
+		: null;
+	const eventQuery = input.events?.length
+		? db.select({ id: storyEvents.id, status: storyEvents.status, title: storyEvents.title, body: storyEvents.body, sourceEntryIds: storyEvents.sourceEntryIds, serverVersion: storyEvents.serverVersion })
+			.from(storyEvents)
+			.where(and(eq(storyEvents.storyId, input.storyId), inArray(storyEvents.id, input.events.map((event) => event.id))))
+		: null;
 	const [currentEntries, currentEvents] = await Promise.all([
-		input.entries?.length
-			? db.select({ id: storyEntries.id, position: storyEntries.position, content: storyEntries.content, serverVersion: storyEntries.serverVersion })
-				.from(storyEntries)
-				.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, input.entries.map((entry) => entry.id))))
-			: Promise.resolve([]),
-		input.events?.length
-			? db.select({ id: storyEvents.id, status: storyEvents.status, title: storyEvents.title, body: storyEvents.body, sourceEntryIds: storyEvents.sourceEntryIds, serverVersion: storyEvents.serverVersion })
-				.from(storyEvents)
-				.where(and(eq(storyEvents.storyId, input.storyId), inArray(storyEvents.id, input.events.map((event) => event.id))))
-			: Promise.resolve([]),
+		entryQuery ? lock ? entryQuery.for('share') : entryQuery : Promise.resolve([]),
+		eventQuery ? lock ? eventQuery.for('share') : eventQuery : Promise.resolve([]),
 	]);
 	return (!input.entries?.length || projectionSourceEntriesMatch(input.entries, currentEntries))
 		&& (!input.events?.length || projectionSourceEventsMatch(input.events, currentEvents));
@@ -1205,24 +1216,14 @@ async function logDeferredStateExtractionCall(options: {
 	error?: unknown;
 	metadata?: Record<string, unknown>;
 }): Promise<void> {
-	const usage = 'usage' in options.result ? options.result.usage : undefined;
-	await recordApiCallLog({
+	await recordGenerationApiCalls({
 		storyId: options.job.storyId,
 		serviceId: 'classifier',
 		operation: 'turn.state_extraction',
-		providerType: options.profile.providerType,
-		providerName: options.profile.name ?? null,
-		profileId: options.profile.id ?? null,
-		model: options.result.model,
-		endpoint: options.result.endpoint,
+		profile: options.profile,
+		result: options.result,
 		status: options.status,
-		durationMs: options.result.durationMs,
-		requestTokens: usage?.requestTokens ?? null,
-		responseTokens: usage?.responseTokens ?? null,
-		totalTokens: usage?.totalTokens ?? null,
-		promptChars: options.result.promptChars,
-		responseChars: 'responseChars' in options.result ? options.result.responseChars ?? null : null,
-		error: options.error ? (options.error instanceof Error ? options.error.message : String(options.error)) : null,
+		error: options.error,
 		metadata: {
 			jobId: options.job.id,
 			clientTurnId: options.clientTurnId,
@@ -2022,809 +2023,13 @@ export function eligibleNpcBackgroundActors(rows: EntityRow[], narration: string
 	}).sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function evaluateNpcBackgroundAction(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
-	const payload = asRecord(job.payload);
-	const assistantEntryId = typeof payload.assistantEntryId === 'string' ? payload.assistantEntryId : '';
-	if (!assistantEntryId) return { status: 'skipped', reason: 'missing_turn_source' };
-	const decisionService = await resolveServiceGeneration('actorDecision');
-	if (!decisionService.profile || !isJevModel(decisionService.generation.model)) return { status: 'skipped', reason: 'jev_not_enabled' };
-	const [story, narrationEntry] = await Promise.all([
-		getDb().select({ currentTurn: stories.currentTurn, currentWorldTime: stories.currentWorldTime, settings: stories.settings }).from(stories).where(eq(stories.id, job.storyId)).limit(1),
-		getDb().select({ content: storyEntries.content }).from(storyEntries).where(and(eq(storyEntries.storyId, job.storyId), eq(storyEntries.id, assistantEntryId))).limit(1),
-	]);
-	const storyRow = story[0];
-	if (!storyRow || !narrationEntry[0]) return { status: 'skipped', reason: 'missing_turn_source' };
-	const expectedTurn = typeof payload.expectedTurn === 'number' ? payload.expectedTurn : storyRow.currentTurn;
-	if (storyRow.currentTurn < expectedTurn || storyRow.currentTurn > expectedTurn + 1) return { status: 'skipped', reason: 'stale_turn' };
-	const playerEntityId = asRecord(storyRow.settings).playerEntityId;
-	const rows = await getDb().select().from(entities).where(and(eq(entities.storyId, job.storyId), eq(entities.type, 'character'))).limit(500);
-	const candidates = eligibleNpcBackgroundActors(rows, narrationEntry[0].content, storyRow.currentTurn, typeof playerEntityId === 'string' ? playerEntityId : undefined);
-	if (candidates.length === 0) return { status: 'skipped', reason: 'no_eligible_actor' };
-	const recentEvents = await getDb().select({ id: storyEvents.id }).from(storyEvents)
-		.where(and(eq(storyEvents.storyId, job.storyId), eq(storyEvents.status, 'committed')))
-		.orderBy(desc(storyEvents.updatedAt)).limit(16);
-	const recentIds = new Set(recentEvents.map(event => event.id));
-	const affected = candidates.filter(candidate => asStringArray(candidate.sourceEventIds).some(id => recentIds.has(id)));
-	const pool = affected.length ? affected : candidates;
-	const actor = pool[storyRow.currentTurn % pool.length];
-	const state = asRecord(actor.state);
-	const plan = String(state.currentPlan).replace(/\s+/g, ' ').trim().slice(0, 180);
-	const goal = typeof state.currentGoal === 'string' ? state.currentGoal.trim().slice(0, 180) : '';
-	const opportunity = typeof state.nextOpportunity === 'string' ? state.nextOpportunity.trim().slice(0, 180) : '';
-	const actorView = await getActorDecisionView(job.storyId, { actorId: actor.id, eventLimit: 6 });
-	if (actorView.unresolved.length) return { status: 'held', reason: 'actor_knowledge_insufficient', actorId: actor.id };
-	const sourceIds = uniqueStrings([actor.id, ...actorView.sourceIds]);
-	let decision: Awaited<ReturnType<typeof chooseJevOption>>;
-	try {
-		decision = await timePhase(recorder, 'job.evaluate_npc_background_action.jev_choice', { actorId: actor.id }, () => chooseJevOption({
-			storyId: job.storyId, operation: 'job.evaluate_npc_background_action.jev_choice',
-			profile: decisionService.profile!, model: decisionService.generation.model!, sourceIds,
-			evidence: { actorEvidence: actorView.data, currentGoal: goal || null,
-				currentPlan: plan, constraint: state.constraint ?? null, nextOpportunity: opportunity || null,
-				currentTurn: storyRow.currentTurn },
-			options: [
-				{ id: 'wait', description: 'Wait because the opportunity or actor knowledge is insufficient.' },
-				{ id: 'prepare', description: 'Begin concrete preparations toward the saved current plan, without claiming it succeeds.' },
-				...(opportunity ? [{ id: 'pursue_opportunity', description: `Attempt the saved next opportunity: ${opportunity}. Do not claim success, discovery, or agreement.` }] : []),
-				...(goal ? [{ id: 'investigate', description: 'Discreetly seek information relevant to the saved current goal, without claiming a discovery.' }] : []),
-			],
-		}));
-	} catch (error) {
-		return { status: 'skipped', reason: 'jev_failed', error: error instanceof Error ? error.message : String(error) };
-	}
-	if (!decision || decision.optionId === 'wait') return { status: 'held', decision };
-	const action = decision.optionId === 'prepare'
-		? `${actor.name} begins preparations toward: ${plan}.`
-		: decision.optionId === 'pursue_opportunity'
-			? `${actor.name} attempts the recorded next step: ${opportunity}. Its outcome remains unresolved.`
-			: `${actor.name} discreetly seeks information relevant to: ${goal}.`;
-	const eventId = stableId('event_npc_background', [job.storyId, actor.id, String(storyRow.currentTurn)]);
-	const now = nowIso();
-	const applied = await getDb().transaction(async (tx) => {
-		const [lockedStory] = await tx.select({ currentTurn: stories.currentTurn }).from(stories).where(eq(stories.id, job.storyId)).for('update').limit(1);
-		if (!lockedStory || lockedStory.currentTurn !== storyRow.currentTurn) return false;
-		const [lockedActor] = await tx.select().from(entities).where(and(eq(entities.storyId, job.storyId), eq(entities.id, actor.id))).for('update').limit(1);
-		if (!lockedActor || !eligibleNpcBackgroundActors([lockedActor], narrationEntry[0].content, lockedStory.currentTurn, typeof playerEntityId === 'string' ? playerEntityId : undefined).length
-			|| String(asRecord(lockedActor.state).currentPlan ?? '').replace(/\s+/g, ' ').trim().slice(0, 180) !== plan
-			|| String(asRecord(lockedActor.state).nextOpportunity ?? '').trim().slice(0, 180) !== opportunity) return false;
-		const [existing] = await tx.select({ id: storyEvents.id }).from(storyEvents).where(and(eq(storyEvents.storyId, job.storyId), eq(storyEvents.id, eventId))).limit(1);
-		if (existing) return false;
-		const [version] = await tx.update(stories).set({ serverVersion: sql`${stories.serverVersion} + 1`, updatedAt: now }).where(eq(stories.id, job.storyId)).returning({ serverVersion: stories.serverVersion });
-		const serverVersion = version.serverVersion;
-		await tx.insert(storyEvents).values({ id: eventId, storyId: job.storyId, type: 'scheme', status: 'committed',
-			title: `${actor.name}: independent preparation`, body: action, actorEntityIds: [actor.id], targetEntityIds: [],
-			locationId: null, locationIds: [], factionIds: [], threadIds: [], visibility: 'secret',
-			createdTurn: lockedStory.currentTurn, occurredTurn: lockedStory.currentTurn, worldTime: storyRow.currentWorldTime,
-			memoryImpact: { independentNpcAction: true }, sourceEntryIds: asStringArray(actor.sourceEntryIds),
-			sourcePatchIds: asStringArray(actor.sourcePatchIds),
-			metadata: { sourceType: 'npc_independent_action', sourceActorId: actor.id, sourceEventIds: asStringArray(actor.sourceEventIds),
-				jobId: job.id, decision, planSnapshot: plan }, serverVersion, createdAt: now, updatedAt: now });
-		await tx.insert(npcEventLinks).values({ id: stableId('npc_event_link', [eventId, actor.id]), storyId: job.storyId,
-			eventId, npcEntityId: actor.id, role: 'actor', visibility: 'secret', evidenceStrength: decision.confidence,
-			sourceEntryIds: asStringArray(actor.sourceEntryIds), sourcePatchIds: asStringArray(actor.sourcePatchIds),
-			serverVersion, createdAt: now, updatedAt: now });
-		await tx.update(entities).set({ state: { ...asRecord(lockedActor.state), lastIndependentAction: action,
-			lastIndependentActionTurn: lockedStory.currentTurn }, sourceEventIds: uniqueStrings([...asStringArray(lockedActor.sourceEventIds), eventId]),
-			serverVersion, updatedAt: now }).where(and(eq(entities.storyId, job.storyId), eq(entities.id, actor.id)));
-		await enqueueBackendJob({ storyId: job.storyId, type: 'create_memory_nodes_from_events',
-			dedupeKey: `npc-background-memory-${eventId}`, payload: { eventIds: [eventId], patchIds: [], serverVersion },
-			requeueExisting: false }, tx);
-		await enqueueStoryVaultSyncJob({ storyId: job.storyId, serverVersion, reason: 'npc-background', payload: { eventId } }, tx);
-		return serverVersion;
-	});
-	if (!applied) return { status: 'skipped', reason: 'stale_or_duplicate', eventId };
-	return { status: 'applied', actorId: actor.id, eventId, decision, serverVersion: applied };
-}
-
 async function evaluateWorldSimTick(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
-	const payload = asRecord(job.payload);
-	const force = payload.force === true;
-	const ambient = payload.ambient === true || payload.manual === true || force;
-	const planAfterTick = payload.planAfterTick === true;
-	const requestedPlotBrainTrigger = payload.plotBrainTrigger === 'arc_created' ? 'arc_created' : 'scheduled_refresh';
-	const requestedPlotBrainScopeId = typeof payload.plotBrainScopeId === 'string' && payload.plotBrainScopeId.trim()
-		? payload.plotBrainScopeId.trim()
-		: job.id;
-	const enqueueRequestedPlotBrain = (): Promise<string | null> => planAfterTick
-		? enqueuePlotBrainJob({
-			storyId: job.storyId,
-			trigger: requestedPlotBrainTrigger,
-			scopeId: requestedPlotBrainScopeId,
-			skipIfPlanned: requestedPlotBrainTrigger !== 'arc_created',
-		})
-		: Promise.resolve(null);
-	const minimumPressure = force ? 45 : 70;
-	const now = nowIso();
-	const [storyRow] = await getDb().select({
-		currentTurn: stories.currentTurn,
-		currentWorldTime: stories.currentWorldTime,
-	}).from(stories).where(eq(stories.id, job.storyId)).limit(1);
-	if (!storyRow) throw new Error(`Story not found: ${job.storyId}`);
-	const factionTagSync = await timePhase(recorder, 'job.evaluate_world_sim_tick.sync_character_faction_tags', {}, () => syncCharacterFactionTags(job.storyId, now));
-	const factionRows = await timePhase(recorder, 'job.evaluate_world_sim_tick.load_factions', { minimumPressure, force, ambient }, () => getDb()
-		.select()
-		.from(factions)
-		.where(eq(factions.storyId, job.storyId))
-		.orderBy(desc(factions.pressure), asc(factions.name))
-		.limit(500));
-	if (factionRows.length === 0) return {
-		createdEvents: 0,
-		reason: 'no_factions',
-		minimumPressure,
-		factionTagSync,
-		plotBrainJobId: await enqueueRequestedPlotBrain(),
-	};
-	const factionIds = factionRows.map((faction) => faction.id);
-	const [goalRows, projectRows, resourceRows, membershipRows, relationshipRows, agreementRows] = await Promise.all([
-		getDb().select().from(factionGoals).where(and(
-			eq(factionGoals.storyId, job.storyId),
-			inArray(factionGoals.factionId, factionIds),
-			inArray(factionGoals.status, ['active', 'in_progress']),
-		)),
-		getDb().select().from(factionProjects).where(and(
-			eq(factionProjects.storyId, job.storyId),
-			inArray(factionProjects.factionId, factionIds),
-			inArray(factionProjects.status, ['planned', 'active']),
-		)),
-		getDb().select().from(factionResources).where(and(
-			eq(factionResources.storyId, job.storyId),
-			inArray(factionResources.factionId, factionIds),
-		)),
-		getDb().select().from(factionMemberships).where(and(
-			eq(factionMemberships.storyId, job.storyId),
-			inArray(factionMemberships.factionId, factionIds),
-		)).limit(3000),
-		getDb().select().from(relationships).where(eq(relationships.storyId, job.storyId)).limit(3000),
-		getDb().select().from(agreements).where(eq(agreements.storyId, job.storyId)).limit(1000),
-	]);
-	const entityIds = uniqueStrings([
-		...factionRows.map((faction) => faction.entityId ?? ''),
-		...membershipRows.map((membership) => membership.entityId ?? ''),
-	]);
-	const entityRows = entityIds.length > 0
-		? await getDb().select().from(entities).where(and(eq(entities.storyId, job.storyId), inArray(entities.id, entityIds))).limit(3000)
-		: [];
-	const entityById = new Map(entityRows.map((entity) => [entity.id, entity]));
-	const recentFactionEvents = await getDb().select({
-		id: storyEvents.id, title: storyEvents.title, body: storyEvents.body,
-		factionIds: storyEvents.factionIds, visibility: storyEvents.visibility,
-		status: storyEvents.status, sourceEntryIds: storyEvents.sourceEntryIds, metadata: storyEvents.metadata,
-	}).from(storyEvents).where(and(
-		eq(storyEvents.storyId, job.storyId), eq(storyEvents.status, 'committed'),
-		gt(storyEvents.createdTurn, storyRow.currentTurn - 13),
-	)).orderBy(desc(storyEvents.createdTurn)).limit(200);
-	const doctrineByFactionId = new Map(factionRows.map((faction) => [faction.id, linkedFactionDoctrine(faction, entityById)]));
-	const normalizedAnchorIds = new Set([...goalRows, ...projectRows, ...resourceRows, ...membershipRows].map((row) => row.factionId));
-	const operationalFactions = factionRows.filter((faction) => factionIsCurrentEra(faction, entityById)
-		&& factionIsOperational(faction, normalizedAnchorIds.has(faction.id)));
-	const resourcesByFactionId = new Map<string, FactionResourceRow[]>();
-	for (const resource of resourceRows) {
-		const rows = resourcesByFactionId.get(resource.factionId) ?? [];
-		rows.push(resource);
-		resourcesByFactionId.set(resource.factionId, rows);
-	}
-	const readyProjects = projectRows.filter((project) => factionProjectIsReady(project, storyRow.currentTurn)
-		&& factionProjectCanPay(project, resourcesByFactionId.get(project.factionId) ?? []));
-	const readyProjectFactionIds = new Set(readyProjects.map((project) => project.factionId));
-	const pausedProjectFactionIds = new Set(projectRows
-		.filter((project) => factionProjectPausesAmbient(project, storyRow.currentTurn))
-		.map((project) => project.factionId));
-	const candidates = timePhaseSync(recorder, 'job.evaluate_world_sim_tick.select_candidates', {
-		factions: operationalFactions.length,
-		minimumPressure,
-		ambient,
-		readyProjects: readyProjects.length,
-	}, () => selectFactionWorldTickCandidates({
-		factions: operationalFactions,
-		minimumPressure,
-		readyProjectFactionIds,
-		pausedProjectFactionIds,
-		allowAmbient: ambient,
-		currentTurn: storyRow.currentTurn,
-		rotationKey: job.storyId,
-	}));
-	if (candidates.length === 0) {
-		const plotBrainJobId = await enqueueRequestedPlotBrain();
-		return {
-			createdEvents: 0,
-			reason: operationalFactions.length > 0 ? 'pressure_threshold_not_met' : 'no_operational_factions',
-			minimumPressure,
-			factionTagSync,
-			plotBrainJobId,
-		};
-	}
-	const goalByFactionId = new Map<string, FactionGoalRow>();
-	for (const goal of [...goalRows].sort((a, b) => b.priority - a.priority)) {
-		if (!goalByFactionId.has(goal.factionId)) goalByFactionId.set(goal.factionId, goal);
-	}
-	const projectByFactionId = new Map<string, FactionProjectRow>();
-	for (const project of [...readyProjects].sort((a, b) => b.priority - a.priority)) {
-		if (!projectByFactionId.has(project.factionId)) {
-			projectByFactionId.set(project.factionId, project);
-		}
-	}
-	const concurrency = readGenerationConcurrency();
-	const actorDecisionService = await resolveServiceGeneration('actorDecision');
-	const jevEnabled = Boolean(actorDecisionService.profile && isJevModel(actorDecisionService.generation.model));
-	const decisionByEventId = new Map<string, Awaited<ReturnType<typeof chooseJevOption>>>();
-	const reservedDynasticParticipants = new Set<string>();
-	const plannedCandidates: Array<{ faction: FactionRow; pressureBand: number; eventId: string; plan: FactionMovePlan }> = [];
-	for (const faction of candidates) {
-		const pressureBand = Math.floor(faction.pressure / 10);
-		const project = projectByFactionId.get(faction.id) ?? null;
-		const goal = goalByFactionId.get(faction.id) ?? null;
-		const factionKind = doctrineByFactionId.get(faction.id) ?? 'generic';
-		const projectMetadata = asRecord(project?.metadata);
-		const targetFaction = chooseFactionTarget({
-			faction,
-			factionKind,
-			factions: operationalFactions,
-			doctrineByFactionId,
-			entityById,
-			currentTurn: storyRow.currentTurn,
-			preferredFactionId: typeof projectMetadata.targetFactionId === 'string' ? projectMetadata.targetFactionId : null,
-			goalText: goal?.goal ?? asStringArray(faction.goals)[0] ?? '',
-			relationshipRows,
-			recentEvents: recentFactionEvents,
-		});
-		const allowProjectStart = factionCanStartAutonomousProject(projectRows, faction.id);
-		const variants = project ? [] : eligibleFactionMoveVariants(factionKind, allowProjectStart, Boolean(targetFaction))
-			.filter((variant) => variant.projectKind || !repeatsFactionMove(buildFactionMovePlan({
-				factionId: faction.id, factionName: faction.name, factionKind, pressure: faction.pressure,
-				currentTurn: storyRow.currentTurn, fallbackGoals: asStringArray(faction.goals), goal,
-				targetFaction, allowProjectStart, variant,
-			}), faction.id, faction.metadata, recentFactionEvents));
-		if (!project && variants.length === 0) continue;
-		let decision: Awaited<ReturnType<typeof chooseJevOption>> = null;
-		if (jevEnabled) {
-			const relevantFactionEvents = recentFactionEvents.filter(event =>
-				(event.factionIds.includes(faction.id) && (event.visibility === 'player_known' || asStringArray(faction.sourceEventIds).includes(event.id)))
-				|| (event.visibility === 'player_known' && targetFaction && event.factionIds.includes(targetFaction.id))).slice(0, 5);
-			const sourceIds = uniqueStrings([faction.id, goal?.id ?? '', project?.id ?? '',
-				...relevantFactionEvents.map(event => event.id),
-				...asStringArray(faction.sourceEntryIds), ...asStringArray(project?.sourceEntryIds)]);
-			try {
-				decision = await timePhase(recorder, 'job.evaluate_world_sim_tick.jev_choice', { factionId: faction.id }, () => chooseJevOption({
-					storyId: job.storyId, operation: 'job.evaluate_world_sim_tick.jev_choice',
-					profile: actorDecisionService.profile!, model: actorDecisionService.generation.model!, sourceIds,
-					evidence: { faction: { id: faction.id, name: faction.name, goals: asStringArray(faction.goals), pressure: faction.pressure },
-						goal: goal?.goal ?? null, project: project ? { id: project.id, name: project.project, progress: project.progress } : null,
-						resources: (resourcesByFactionId.get(faction.id) ?? []).map((row) => ({ kind: row.kind, name: row.name, amount: row.amount })),
-						recentEvents: relevantFactionEvents.map(event => ({ id: event.id, title: event.title, body: event.body.slice(0, 240), sourceEntryIds: event.sourceEntryIds.slice(0, 4) })),
-						target: targetFaction ? { id: targetFaction.id, name: targetFaction.name } : null, currentTurn: storyRow.currentTurn },
-					options: [{ id: 'hold', description: 'Hold position until a better opportunity appears.' },
-						...(project ? [{ id: 'advance', description: 'Advance the existing eligible project.' }]
-							: variants.map((variant) => ({ id: `${variant.actionType}:${variant.projectKind ?? 'none'}`, description: `Begin a ${variant.actionType} move${variant.projectKind ? ` for ${variant.projectKind}` : ''}.` })))],
-				}));
-			} catch (error) {
-				recorder?.record('job.evaluate_world_sim_tick.jev_fallback', 0, { factionId: faction.id, reason: error instanceof Error ? error.message : String(error) });
-			}
-		}
-		if (decision?.optionId === 'hold') continue;
-		let selectedVariant = variants.find((variant) => `${variant.actionType}:${variant.projectKind ?? 'none'}` === decision?.optionId);
-		if (!selectedVariant && !project) {
-			const preferred = buildFactionMovePlan({ factionId: faction.id, factionName: faction.name,
-				factionKind, pressure: faction.pressure, currentTurn: storyRow.currentTurn,
-				fallbackGoals: asStringArray(faction.goals), goal, targetFaction, allowProjectStart });
-			selectedVariant = variants.find((variant) => variant.actionType === preferred.actionType
-				&& variant.projectKind === preferred.projectKind) ?? variants[0];
-		}
-		const participantPair = factionKind === 'feudal_house'
-			? selectDynasticPair({
-				actingFactionId: faction.id,
-				targetFactionId: targetFaction?.id ?? null,
-				memberships: membershipRows,
-				entityById,
-				agreementRows,
-				relationshipRows,
-				currentTurn: storyRow.currentTurn,
-				preferredSubjectEntityId: typeof projectMetadata.subjectEntityId === 'string' ? projectMetadata.subjectEntityId : null,
-				preferredTargetEntityId: typeof projectMetadata.targetEntityId === 'string' ? projectMetadata.targetEntityId : null,
-				reservedEntityIds: reservedDynasticParticipants,
-			})
-			: null;
-		const plan = buildFactionMovePlan({
-			factionId: faction.id,
-			factionName: faction.name,
-			factionKind,
-			pressure: faction.pressure,
-			currentTurn: storyRow.currentTurn,
-			fallbackGoals: asStringArray(faction.goals),
-			goal,
-			project,
-			targetFaction,
-			participantPair,
-			allowProjectStart,
-			variant: selectedVariant,
-		});
-		if (repeatsFactionMove(plan, faction.id, faction.metadata, recentFactionEvents)) continue;
-		if (plan.projectKind === 'marriage_negotiation') {
-			for (const entityId of [...plan.actorEntityIds, ...plan.targetEntityIds]) reservedDynasticParticipants.add(entityId);
-		}
-		const eventId = worldTickEventId({
-			storyId: job.storyId, factionId: faction.id, currentTurn: storyRow.currentTurn,
-			pressureBand, jevEnabled, projectOrGoalId: project?.id ?? goal?.id ?? plan.objective, plan,
-		});
-		if (decision) decisionByEventId.set(eventId, decision);
-		plannedCandidates.push({
-			faction,
-			pressureBand,
-			plan,
-			eventId,
-		});
-	}
-	const cacheChecks = await timePhase(recorder, 'job.evaluate_world_sim_tick.cache_check', {
-		candidates: candidates.length,
-		concurrency,
-	}, () => mapWithConcurrency(plannedCandidates, concurrency, async ({ faction, pressureBand, eventId, plan }) => {
-		const [existing] = await getDb()
-			.select({ id: storyEvents.id })
-			.from(storyEvents)
-			.where(and(eq(storyEvents.storyId, job.storyId), eq(storyEvents.id, eventId)))
-			.limit(1);
-		return existing ? null : { faction, pressureBand, eventId, plan };
-	}));
-	const toCreate = cacheChecks.filter((item): item is {
-		faction: FactionRow;
-		pressureBand: number;
-		eventId: string;
-		plan: FactionMovePlan;
-	} => Boolean(item));
-	recorder?.record('job.evaluate_world_sim_tick.cache_summary', 0, {
-		hits: candidates.length - toCreate.length,
-		misses: toCreate.length,
-	});
-	if (toCreate.length === 0) {
-		const plotBrainJobId = await enqueueRequestedPlotBrain();
-		return {
-			createdEvents: 0,
-			minimumPressure,
-			events: [],
-			reason: 'no_new_pressure_bands',
-			plotBrainJobId,
-		};
-	}
-
-	const serverVersion = await timePhase(recorder, 'job.evaluate_world_sim_tick.bump_version', {}, () => bumpStoryVersion(job.storyId));
-	const created = await timePhase(recorder, 'job.evaluate_world_sim_tick.persist_ticks', {
-		createCount: toCreate.length,
-		concurrency: 1,
-	}, () => mapWithConcurrency(toCreate, 1, async ({ faction, pressureBand, eventId, plan: initialPlan }) => {
-		const metadata = asRecord(faction.metadata);
-		const reasons = recentPressureReasons(metadata);
-		const signalEventId = stableId('event_faction_signal', [eventId]);
-		return getDb().transaction(async (tx) => {
-			// Serialize decisions for a faction, then reject plans built from an old project snapshot.
-			await tx.select({ id: factions.id }).from(factions).where(and(
-				eq(factions.storyId, job.storyId), eq(factions.id, faction.id),
-			)).for('update');
-			const [alreadyApplied] = await tx.select({ id: storyEvents.id }).from(storyEvents).where(and(
-				eq(storyEvents.storyId, job.storyId), eq(storyEvents.id, eventId),
-			)).limit(1);
-			if (alreadyApplied) return null;
-			if (initialPlan.projectId && !initialPlan.startProject) {
-				const [currentProject] = await tx.select({
-					progress: factionProjects.progress, status: factionProjects.status,
-					metadata: factionProjects.metadata, dueTurn: factionProjects.dueTurn,
-				}).from(factionProjects).where(and(
-					eq(factionProjects.storyId, job.storyId), eq(factionProjects.id, initialPlan.projectId),
-				)).for('update').limit(1);
-				if (!currentProject || !['planned', 'active'].includes(currentProject.status)
-					|| initialPlan.projectProgressBefore == null
-					|| Math.abs(currentProject.progress - initialPlan.projectProgressBefore) > 0.00001
-					|| !factionProjectIsReady(currentProject, storyRow.currentTurn)) return null;
-			}
-		let plan = initialPlan;
-		const persistedEntityById = new Map(entityById);
-		const wouldCompleteMarriage = plan.projectKind === 'marriage_negotiation'
-			&& plan.projectProgressAfter === 1
-			&& plan.actorEntityIds.length === 1
-			&& plan.targetEntityIds.length === 1
-			&& plan.targetFactionIds.length === 1;
-		if (wouldCompleteMarriage) {
-			const participantEntityIds = [...plan.actorEntityIds, ...plan.targetEntityIds].sort();
-			const lockedEntities = await tx.select().from(entities).where(and(
-				eq(entities.storyId, job.storyId),
-				inArray(entities.id, participantEntityIds),
-			)).orderBy(asc(entities.id)).for('update');
-			for (const entity of lockedEntities) persistedEntityById.set(entity.id, entity);
-			const currentMembershipRows = await tx.select().from(factionMemberships).where(and(
-					eq(factionMemberships.storyId, job.storyId),
-					inArray(factionMemberships.factionId, [faction.id, plan.targetFactionIds[0]]),
-					inArray(factionMemberships.entityId, participantEntityIds),
-				)).for('update');
-			const currentRelationshipRows = await tx.select().from(relationships)
-				.where(eq(relationships.storyId, job.storyId)).limit(3000);
-			const currentAgreementRows = await tx.select().from(agreements)
-				.where(eq(agreements.storyId, job.storyId)).limit(1000);
-			const confirmedPair = selectDynasticPair({
-				actingFactionId: faction.id,
-				targetFactionId: plan.targetFactionIds[0],
-				memberships: currentMembershipRows,
-				entityById: persistedEntityById,
-				agreementRows: currentAgreementRows,
-				relationshipRows: currentRelationshipRows,
-				currentTurn: storyRow.currentTurn,
-				preferredSubjectEntityId: plan.actorEntityIds[0],
-				preferredTargetEntityId: plan.targetEntityIds[0],
-			});
-			if (!confirmedPair) {
-				const activeProject = projectByFactionId.get(faction.id) ?? null;
-				const targetFaction = factionRows.find((row) => row.id === plan.targetFactionIds[0]) ?? null;
-				plan = buildFactionMovePlan({
-					factionId: faction.id,
-					factionName: faction.name,
-					factionKind: doctrineByFactionId.get(faction.id) ?? 'generic',
-					pressure: faction.pressure,
-					currentTurn: storyRow.currentTurn,
-					fallbackGoals: asStringArray(faction.goals),
-					goal: goalByFactionId.get(faction.id) ?? null,
-					project: activeProject,
-					targetFaction,
-					participantPair: null,
-					allowProjectStart: false,
-				});
-			}
-		}
-		const title = `${faction.name}: ${plan.objective}`;
-		const body = worldTickBody(faction.pressure, plan, reasons);
-		const scheduledTurn = storyRow.currentTurn + plan.delayTurns;
-		await tx.update(storyEvents).set({
-			status: 'cancelled',
-			serverVersion,
-			updatedAt: now,
-		}).where(and(
-			eq(storyEvents.storyId, job.storyId),
-			eq(storyEvents.type, 'faction_signal'),
-			inArray(storyEvents.status, ['scheduled', 'due']),
-			sql`${storyEvents.metadata}->>'factionId' = ${faction.id}`,
-		));
-		await tx.insert(storyEvents).values({
-			id: eventId,
-			storyId: job.storyId,
-			type: 'faction_move',
-			title,
-			body,
-			actorEntityIds: uniqueStrings([faction.entityId ?? '', ...plan.actorEntityIds]),
-			targetEntityIds: plan.targetEntityIds,
-			locationId: null,
-			locationIds: asStringArray(faction.territoryIds),
-			factionIds: uniqueStrings([faction.id, ...plan.targetFactionIds]),
-			threadIds: [],
-			visibility: 'secret',
-			createdTurn: storyRow.currentTurn,
-			occurredTurn: storyRow.currentTurn,
-			worldTime: storyRow.currentWorldTime,
-			memoryImpact: { consequences: plan.consequences },
-			sourceEntryIds: [],
-			sourcePatchIds: [],
-			metadata: {
-				sourceType: 'terminal_world_sim_tick',
-				jobId: job.id,
-				factionId: faction.id,
-				factionName: faction.name,
-				pressure: faction.pressure,
-				pressureBand,
-				force,
-				action: plan.action,
-				actionType: plan.actionType,
-				factionKind: plan.factionKind,
-				projectKind: plan.projectKind,
-				target: plan.targetFactionNames[0] ?? null,
-				motivation: plan.motivation,
-				consequences: plan.consequences,
-				urgency: plan.urgency,
-				projectId: plan.projectId,
-				targetFactionIds: plan.targetFactionIds,
-				targetFactionNames: plan.targetFactionNames,
-				actorEntityIds: plan.actorEntityIds,
-				targetEntityIds: plan.targetEntityIds,
-				publicSignalEventId: signalEventId,
-				...(decisionByEventId.get(eventId) ? { jevDecision: decisionByEventId.get(eventId) } : {}),
-			},
-			serverVersion,
-			createdAt: now,
-			updatedAt: now,
-		});
-		await tx.insert(storyEvents).values({
-			id: signalEventId,
-			storyId: job.storyId,
-			type: 'faction_signal',
-			status: 'scheduled',
-			title: `Signs of ${faction.name} activity`,
-			body: plan.publicSignal,
-			actorEntityIds: [],
-			targetEntityIds: [],
-			locationId: asStringArray(faction.territoryIds)[0] ?? null,
-			locationIds: asStringArray(faction.territoryIds),
-			factionIds: uniqueStrings([faction.id, ...plan.targetFactionIds]),
-			threadIds: [],
-			visibility: 'player_known',
-			createdTurn: storyRow.currentTurn,
-			scheduledTurn,
-			worldTime: storyRow.currentWorldTime,
-			memoryImpact: { sourceFactionMoveEventId: eventId },
-			sourceEntryIds: [],
-			sourcePatchIds: [],
-			metadata: {
-				sourceType: 'terminal_world_sim_signal',
-				jobId: job.id,
-				factionId: faction.id,
-				factionName: faction.name,
-				actionType: plan.actionType,
-				factionKind: plan.factionKind,
-				projectKind: plan.projectKind,
-				targetFactionIds: plan.targetFactionIds,
-				targetFactionNames: plan.targetFactionNames,
-				sourceFactionMoveEventId: eventId,
-			},
-			serverVersion,
-			createdAt: now,
-			updatedAt: now,
-		});
-		await upsertWorldTickMemoryNode({
-			eventId,
-			faction,
-			title,
-			body,
-			pressure: faction.pressure,
-			plan,
-			publicSignalEventId: signalEventId,
-			serverVersion,
-			now,
-			jobId: job.id,
-			db: tx,
-		});
-		if (plan.startProject) {
-			await tx.insert(factionProjects).values({
-				id: plan.startProject.id,
-				storyId: job.storyId,
-				factionId: faction.id,
-				project: plan.startProject.project,
-				status: 'active',
-				progress: plan.startProject.progress,
-				priority: plan.urgency === 'critical' ? 9 : plan.urgency === 'high' ? 8 : 6,
-				dueTurn: null,
-				worldTime: storyRow.currentWorldTime,
-				costs: {},
-				gains: {},
-				risks: plan.projectKind === 'marriage_negotiation'
-					? ['Negotiations may fail, offend another house, or expose a succession dispute.']
-					: ['The project may be exposed, delayed, or provoke a counter-move.'],
-				visibility: 'secret',
-				metadata: {
-					sourceType: 'autonomous_faction_project',
-					actionType: plan.actionType,
-					factionKind: plan.factionKind,
-					projectKind: plan.startProject.projectKind,
-					targetFactionId: plan.startProject.targetFactionId,
-					subjectEntityId: plan.startProject.subjectEntityId,
-					targetEntityId: plan.startProject.targetEntityId,
-					participantValidation: plan.startProject.subjectEntityId && plan.startProject.targetEntityId ? 'verified' : 'required',
-					nextActionTurn: plan.startProject.nextActionTurn,
-					startedByJobId: job.id,
-					lastFactionMoveEventId: eventId,
-				},
-				sourceEntryIds: [],
-				sourceEventIds: [eventId],
-				sourcePatchIds: [],
-				serverVersion,
-				createdAt: now,
-				updatedAt: now,
-			}).onConflictDoNothing();
-		} else if (plan.projectId && plan.projectProgressAfter != null) {
-			const activeProject = projectByFactionId.get(faction.id) ?? null;
-			const activeProjectMetadata = asRecord(activeProject?.metadata);
-			const autonomousProject = activeProjectMetadata.sourceType === 'autonomous_faction_project';
-			await tx.update(factionProjects).set({
-				status: plan.projectProgressAfter >= 1 ? 'completed' : 'active',
-				progress: plan.projectProgressAfter,
-				dueTurn: autonomousProject ? null : plan.projectProgressAfter >= 1 ? null : scheduledTurn,
-				sourceEventIds: uniqueStrings([
-					...asStringArray(projectByFactionId.get(faction.id)?.sourceEventIds),
-					eventId,
-				]),
-				metadata: {
-					...activeProjectMetadata,
-					lastAdvancedAt: now,
-					lastAdvancedByJobId: job.id,
-					lastFactionMoveEventId: eventId,
-					actionType: plan.actionType,
-					factionKind: plan.factionKind,
-					projectKind: plan.projectKind,
-					targetFactionId: plan.targetFactionIds[0] ?? asRecord(projectByFactionId.get(faction.id)?.metadata).targetFactionId ?? null,
-					subjectEntityId: plan.actorEntityIds[0] ?? asRecord(projectByFactionId.get(faction.id)?.metadata).subjectEntityId ?? null,
-					targetEntityId: plan.targetEntityIds[0] ?? asRecord(projectByFactionId.get(faction.id)?.metadata).targetEntityId ?? null,
-					...(autonomousProject ? { nextActionTurn: plan.projectProgressAfter >= 1 ? null : scheduledTurn } : {}),
-				},
-				serverVersion,
-				updatedAt: now,
-			}).where(and(eq(factionProjects.storyId, job.storyId), eq(factionProjects.id, plan.projectId)));
-			if (plan.projectProgressAfter >= 1 && activeProject) {
-				const factionResourceRows = resourcesByFactionId.get(faction.id) ?? [];
-				const resourceDeltas = new Map<string, { label: string; amount: number }>();
-				for (const cost of numericFactionResourceEntries(activeProject.costs)) {
-					const key = normalizedFactionResourceKey(cost.key);
-					const current = resourceDeltas.get(key) ?? { label: cost.key, amount: 0 };
-					resourceDeltas.set(key, { ...current, amount: current.amount - cost.amount });
-				}
-				for (const gain of numericFactionResourceEntries(activeProject.gains)) {
-					const key = normalizedFactionResourceKey(gain.key);
-					const current = resourceDeltas.get(key) ?? { label: gain.key, amount: 0 };
-					resourceDeltas.set(key, { ...current, amount: current.amount + gain.amount });
-				}
-				for (const [key, delta] of resourceDeltas) {
-					const resource = factionResourceRows.find((row) => normalizedFactionResourceKey(row.kind) === key || normalizedFactionResourceKey(row.name) === key);
-					if (resource) {
-						await tx.update(factionResources).set({
-							amount: Math.max(0, (resource.amount ?? 0) + delta.amount),
-							sourceEventIds: uniqueStrings([...asStringArray(resource.sourceEventIds), eventId]),
-							serverVersion,
-							updatedAt: now,
-						}).where(and(eq(factionResources.storyId, job.storyId), eq(factionResources.id, resource.id)));
-					} else if (delta.amount > 0) {
-						await tx.insert(factionResources).values({
-							id: stableId('faction_resource', [job.storyId, faction.id, delta.label]),
-							storyId: job.storyId,
-							factionId: faction.id,
-							kind: delta.label,
-							name: delta.label,
-							amount: delta.amount,
-							status: 'available',
-							visibility: activeProject.visibility,
-							sourceEventIds: [eventId],
-							serverVersion,
-							createdAt: now,
-							updatedAt: now,
-						}).onConflictDoNothing();
-					}
-				}
-			}
-		}
-		const marriageCompleted = plan.projectKind === 'marriage_negotiation'
-			&& plan.projectProgressAfter === 1
-			&& plan.actorEntityIds.length === 1
-			&& plan.targetEntityIds.length === 1
-			&& plan.targetFactionIds.length === 1;
-		if (marriageCompleted) {
-			const subjectEntityId = plan.actorEntityIds[0];
-			const targetEntityId = plan.targetEntityIds[0];
-			const targetFactionId = plan.targetFactionIds[0];
-			const marriageRelationshipId = stableId('relationship_marriage', [job.storyId, subjectEntityId, targetEntityId]);
-			await tx.insert(relationships).values({
-				id: marriageRelationshipId,
-				storyId: job.storyId,
-				sourceEntityId: subjectEntityId,
-				targetEntityId,
-				type: 'spouse-of',
-				label: 'married',
-				strength: 0.75,
-				bidirectional: true,
-				metadata: { sourceType: 'autonomous_dynastic_project', factionProjectId: plan.projectId },
-				sourceEntryIds: [],
-				sourceEventIds: [eventId],
-				sourcePatchIds: [],
-				serverVersion,
-				createdAt: now,
-				updatedAt: now,
-			}).onConflictDoNothing();
-			await tx.insert(agreements).values({
-				id: stableId('agreement_marriage', [job.storyId, subjectEntityId, targetEntityId]),
-				storyId: job.storyId,
-				parties: [subjectEntityId, targetEntityId],
-				category: 'marriage',
-				terms: `Dynastic marriage concluded through ${plan.projectId ?? faction.name}.`,
-				status: 'active',
-				secrecy: 'secret',
-				consequences: [`${faction.name} and the allied house are now bound by marriage.`],
-				sourceEntryIds: [],
-				sourceEventIds: [eventId],
-				sourcePatchIds: [],
-				serverVersion,
-				createdAt: now,
-				updatedAt: now,
-			}).onConflictDoNothing();
-			for (const [entityId, spouseEntityId] of [[subjectEntityId, targetEntityId], [targetEntityId, subjectEntityId]]) {
-				const entity = persistedEntityById.get(entityId);
-				if (!entity) continue;
-				await tx.update(entities).set({
-					state: { ...asRecord(entity.state), maritalStatus: 'married', spouseEntityId },
-					sourceEventIds: uniqueStrings([...asStringArray(entity.sourceEventIds), eventId]),
-					serverVersion,
-					updatedAt: now,
-				}).where(and(eq(entities.storyId, job.storyId), eq(entities.id, entityId)));
-			}
-			const targetFaction = factionRows.find((row) => row.id === targetFactionId);
-			await tx.update(factions).set({
-				allies: uniqueStrings([...asStringArray(faction.allies), targetFactionId]),
-				serverVersion,
-				updatedAt: now,
-			}).where(and(eq(factions.storyId, job.storyId), eq(factions.id, faction.id)));
-			if (targetFaction) {
-				await tx.update(factions).set({
-					allies: uniqueStrings([...asStringArray(targetFaction.allies), faction.id]),
-					sourceEventIds: uniqueStrings([...asStringArray(targetFaction.sourceEventIds), eventId]),
-					serverVersion,
-					updatedAt: now,
-				}).where(and(eq(factions.storyId, job.storyId), eq(factions.id, targetFaction.id)));
-			}
-		}
-		const remainingPressure = clamp(faction.pressure - 18, 0, 100);
-		await tx.update(factions).set({
-			pressure: remainingPressure,
-			sourceEventIds: uniqueStrings([...asStringArray(faction.sourceEventIds), eventId]),
-			metadata: {
-				...metadata,
-				lastWorldSimTickAt: now,
-				lastWorldSimTickJobId: job.id,
-				lastWorldSimTickPressure: faction.pressure,
-				lastWorldSimTickTurn: storyRow.currentTurn,
-				lastWorldSimTickEventId: eventId,
-				lastWorldSimActionKey: worldTickActionKey(plan),
-				lastWorldSimSignalEventId: signalEventId,
-			},
-			serverVersion,
-			updatedAt: now,
-		}).where(and(eq(factions.storyId, job.storyId), eq(factions.id, faction.id)));
-		return {
-			eventId,
-			factionId: faction.id,
-			name: faction.name,
-			pressureBefore: faction.pressure,
-			pressureAfter: remainingPressure,
-			urgency: plan.urgency,
-			factionKind: plan.factionKind,
-			actionType: plan.actionType,
-			action: plan.action,
-			projectId: plan.projectId,
-			projectProgress: plan.projectProgressAfter,
-			autonomousProjectCompleted: plan.projectProgressAfter === 1
-				&& asRecord(projectByFactionId.get(faction.id)?.metadata).sourceType === 'autonomous_faction_project',
-			publicSignalEventId: signalEventId,
-			scheduledTurn,
-		};
-		});
-	}));
-	const accepted = created.filter((item): item is NonNullable<typeof item> => item !== null);
-	const worldTickMemoryNodeIds = accepted.map((item) => `mem_world_tick_${item.eventId}`);
-	const projectionJobIds = accepted.length > 0 ? await Promise.all([
-		enqueueBackendJob({
-			storyId: job.storyId,
-			type: 'embed_memory_nodes',
-			dedupeKey: `embed-world-tick-${job.id}`,
-			payload: { memoryNodeIds: worldTickMemoryNodeIds, sourceJobId: job.id },
-		}),
-		enqueueBackendJob({
-			storyId: job.storyId,
-			type: 'index_canonical_records',
-			dedupeKey: `index-world-tick-${job.id}`,
-			payload: {
-				recordTypes: ['entities', 'factions', 'factionMemberships', 'factionProjects', 'factionResources', 'agreements', 'events'],
-				sourceJobId: job.id,
-			},
-			maxAttempts: 3,
-		}),
-	]) : [];
-	const wakePlotDirector = accepted.some(factionMoveWakesPlotDirector);
-	const plotBrainJobId = accepted.length > 0
-		? await timePhase(recorder, 'job.evaluate_world_sim_tick.enqueue_plot_brain', {}, () => enqueuePlotBrainJob({
-			storyId: job.storyId,
-			trigger: wakePlotDirector ? 'faction_shock' : requestedPlotBrainTrigger,
-			scopeId: planAfterTick ? requestedPlotBrainScopeId : accepted.map((item) => item.eventId).join('_'),
-		}))
-		: null;
-
-	return {
-		createdEvents: accepted.length,
-		minimumPressure,
-		ambient,
-		factionTagSync,
-		events: accepted,
-		memoryNodeIds: worldTickMemoryNodeIds,
-		projectionJobIds,
-		plotBrainJobId,
-		wakePlotDirector,
-	};
+ const payload = asRecord(job.payload);
+ // Settlement uses an independent immutable step receipt; a GM cue never settles it.
+ const settlement = await advanceNegotiation(job.storyId, stableId('step', [job.id]).slice(0, 50));
+ const review = await reviewFactionIntentions(job.storyId, job.id, asStringArray(payload.materialFactionIds));
+ if (payload.planAfterTick === true) await enqueuePlotBrainJob({ storyId: job.storyId, trigger: 'scheduled_refresh', scopeId: job.id, skipIfPlanned: true });
+ return { ...review, settlement, createdEvents: 0 };
 }
 
 async function loadMemoryNodesForEmbedding(job: BackendJobRow, limit = 100) {
@@ -3706,7 +2911,28 @@ export async function findChapterCharacterCandidates(storyId: string, chapterLim
 	return { ...result, reason: result.namedChapters === 0 ? 'The saved chapters contain no named-character digest tags. No candidates were invented.' : result.candidates === 0 ? 'No recurring or sufficiently evidenced unresolved characters were found in these saved chapters.' : null };
 }
 
-async function autoApplyChapterCharacterContextUpdates(input: {
+export function selectChapterCharacterSourceEvidence(input: {
+	entries: Array<typeof storyEntries.$inferSelect>;
+	chapterSourceEntryIds: string[];
+	proposalSourceEntryIds: string[];
+	canonicalSourceEntryIds: string[];
+}): Array<{ id: string; content: string }> {
+	const chapterIds = new Set(input.chapterSourceEntryIds);
+	const proposalIds = new Set(input.proposalSourceEntryIds);
+	const canonicalIds = new Set(input.canonicalSourceEntryIds);
+	const priority = (id: string) => chapterIds.has(id) ? 0 : proposalIds.has(id) ? 1 : 2;
+	return filterNarrativeContextEntries(input.entries)
+		.filter(entry => ['user_action', 'narration'].includes(entry.type)
+			&& (chapterIds.has(entry.id) || proposalIds.has(entry.id) || canonicalIds.has(entry.id)))
+		// The bounded refinement must see the newest chapter evidence before older
+		// biography provenance; SQL row order must not choose which facts survive.
+		.sort((a, b) => priority(a.id) - priority(b.id) || b.position - a.position)
+		.slice(0, 32)
+		.sort((a, b) => a.position - b.position)
+		.map(entry => ({ id: entry.id, content: entry.content }));
+}
+
+export async function autoApplyChapterCharacterContextUpdates(input: {
 	storyId: string;
 	chapterNumber: number;
 }): Promise<Record<string, unknown>> {
@@ -3723,6 +2949,7 @@ async function autoApplyChapterCharacterContextUpdates(input: {
 		targetRecordId: patchProposals.targetRecordId,
 		operations: patchProposals.operations,
 		metadata: patchProposals.metadata,
+		sourceEntryIds: patchProposals.sourceEntryIds,
 	}).from(patchProposals).where(and(
 		eq(patchProposals.storyId, input.storyId),
 		eq(patchProposals.proposalType, 'character_context_update'),
@@ -3771,9 +2998,6 @@ async function autoApplyChapterCharacterContextUpdates(input: {
 
 	if (candidates.length > 0) {
 		try {
-			const sourceIds = [...new Set(canonicalRows.flatMap(row => [...(row.sourceEntryIds ?? []).slice(0, 2), ...(row.sourceEntryIds ?? []).slice(-2)]))].slice(0, 32);
-			const sourceEvidence = sourceIds.length ? await db.select({ id: storyEntries.id, content: storyEntries.content }).from(storyEntries)
-				.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, sourceIds))) : [];
 			const chapterRows = await db.select({
 				number: chapters.number,
 				title: chapters.title,
@@ -3782,10 +3006,26 @@ async function autoApplyChapterCharacterContextUpdates(input: {
 				npcKnowledgeChanges: chapters.npcKnowledgeChanges,
 				relationshipChanges: chapters.relationshipChanges,
 				openThreads: chapters.openThreads,
+				sourceEntryIds: chapters.sourceEntryIds,
 			}).from(chapters).where(and(
 				eq(chapters.storyId, input.storyId),
 				inArray(chapters.number, [windowStart, input.chapterNumber]),
 			)).orderBy(asc(chapters.number));
+			const chapterSourceEntryIds = uniqueStrings(chapterRows.flatMap(chapter => chapter.sourceEntryIds));
+			const proposalSourceEntryIds = uniqueStrings(eligibleProposals.flatMap(proposal => proposal.sourceEntryIds));
+			const canonicalSourceEntryIds = uniqueStrings(canonicalRows.flatMap(row => [...(row.sourceEntryIds ?? []).slice(0, 2), ...(row.sourceEntryIds ?? []).slice(-2)])).slice(0, 32);
+			const sourceIds = uniqueStrings([...chapterSourceEntryIds, ...proposalSourceEntryIds, ...canonicalSourceEntryIds]);
+			const sourceRows = sourceIds.length ? await db.select().from(storyEntries)
+				.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, sourceIds))) : [];
+			// Include linked actions in filtering even when only a narration is cited,
+			// so an OOC answer cannot become character evidence through its parent.
+			const loadedIds = new Set(sourceRows.map(entry => entry.id));
+			const missingParentIds = uniqueStrings(sourceRows.map(entry => entry.parentId).filter((id): id is string => !!id && !loadedIds.has(id)));
+			const parentRows = missingParentIds.length ? await db.select().from(storyEntries)
+				.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, missingParentIds))) : [];
+			const sourceEvidence = selectChapterCharacterSourceEvidence({
+				entries: [...sourceRows, ...parentRows], chapterSourceEntryIds, proposalSourceEntryIds, canonicalSourceEntryIds,
+			});
 			const refinement = await refineChapterCharacterUpdates({
 				sourceEvidence,
 				storyId: input.storyId,
@@ -4057,10 +3297,17 @@ export async function createChapterCheckpoint(job: BackendJobRow, recorder?: Tim
 	};
 
 	let arcJobId: string | null = null;
+	let sourceChangedBeforeCommit = false;
 	const [chapter] = await timePhase(recorder, 'job.summarize_chapter.persist_projection', {}, () => getDb().transaction(async (tx) => {
 		await tx.select({ id: stories.id }).from(stories).where(eq(stories.id, job.storyId)).for('update');
 		const [boundary] = await tx.select({ id: chapters.id }).from(chapters).where(eq(chapters.storyId, job.storyId)).orderBy(desc(chapters.number)).limit(1);
 		if ((boundary?.id ?? null) !== (previousChapter?.id ?? null)) return [];
+		// A checkpoint is derived evidence. Revalidate and hold the source rows until the
+		// canonical commit, including when a prior job supplied the generated digest.
+		if (!await projectionSourcesStillMatch({ storyId: job.storyId, entries: chapterEntries, events }, tx, true)) {
+			sourceChangedBeforeCommit = true;
+			return [];
+		}
 		const [savedChapter] = await tx.insert(chapters).values({
 			id: chapterId,
 			storyId: job.storyId,
@@ -4123,7 +3370,7 @@ export async function createChapterCheckpoint(job: BackendJobRow, recorder?: Tim
 		return [savedChapter];
 	}));
 	if (!chapter) {
-		return { created: false, reason: 'projection_superseded', chapterId };
+		return { created: false, reason: sourceChangedBeforeCommit ? 'projection_sources_changed' : 'projection_superseded', chapterId };
 	}
 
 	await timePhase(recorder, 'job.summarize_chapter.reconcile_threads', {
@@ -4392,23 +3639,6 @@ export async function summarizeArcMemoryWithLlm(storyId: string, arcChapters: Ch
 		generated.openThreads.length ? `Open threads:\n${generated.openThreads.map(thread => `- ${thread}`).join('\n')}` : '',
 	].filter(Boolean).join('\n\n');
 	return { title: generated.title, summary, model: generated.model, fields, sourceAccounts: generated.accounts };
-}
-
-export function selectArcRollupBatches<T extends { id: string }>(
-	chapterRows: T[],
-	arcRows: Array<{ chapterIds: string[] }>,
-	chaptersPerArc: number,
-): T[][] {
-	const covered = new Set(arcRows.flatMap((arc) => asStringArray(arc.chapterIds)));
-	const uncovered = chapterRows.filter((chapter) => !covered.has(chapter.id));
-	const batches: T[][] = [];
-	for (let index = 0; index + chaptersPerArc <= uncovered.length; index += chaptersPerArc) {
-		const batch = uncovered.slice(index, index + chaptersPerArc);
-		const numbers = batch.map(chapter => asRecord(chapter).number);
-		if (numbers.every(number => typeof number === 'number') && numbers.some((number, offset) => offset > 0 && Number(number) !== Number(numbers[offset - 1]) + 1)) break;
-		batches.push(batch);
-	}
-	return batches;
 }
 
 export async function upsertArcMemoryNode(input: {
@@ -4993,7 +4223,7 @@ async function indexCanonicalRecordsJob(job: BackendJobRow): Promise<Record<stri
 	return result;
 }
 
-async function prepareBatchTurnMemory(jobs: BackendJobRow[]): Promise<Map<string, ServerGenerationResult> | null> {
+export async function prepareBatchTurnMemory(jobs: BackendJobRow[]): Promise<Map<string, ServerGenerationResult> | null> {
 	if (jobs.length < 2 || jobs.length > 5 || jobs.some(job => job.type !== 'extract_turn_state' || job.attemptCount !== 1)) return null;
 	const storyId = jobs[0].storyId;
 	if (jobs.some(job => job.storyId !== storyId || deferredExtractionAppliedReceipt(job))) return null;
@@ -5041,38 +4271,30 @@ async function prepareBatchTurnMemory(jobs: BackendJobRow[]): Promise<Map<string
 			temperature: 0, maxTokens: Math.min(8192, classifierGenerationMaxTokens(generation) * sources.length),
 			reasoningEffort: generation.reasoningEffort ?? 'off',
 			system: 'You are Memory & Context. Return complete, source-separated strict JSON only.',
-			prompt, responseFormat: 'json_object', maxRetries: 0 });
+			prompt, responseFormat: 'json_object', maxRetries: 0,
+			onAttempt: attempt => recordGenerationApiCalls({ storyId, serviceId: 'classifier', operation: 'job.extract_turn_state.batch',
+				profile, result: generationAttemptResult(attempt), status: attempt.status, error: attempt.error ?? undefined,
+				metadata: { assistantEntryIds: sources.map(source => source.assistantEntryId), sourceCount: sources.length, parseOutcome: 'not_started' } }),
+		});
 		const parsed = parseBatchTurnMemoryResult(generated.text, sources.map(source => source.assistantEntryId));
-		await recordApiCallLog({ storyId, serviceId: 'classifier', operation: 'job.extract_turn_state.batch',
-			providerType: profile.providerType, model: generated.model, endpoint: generated.endpoint,
-			status: 'success', durationMs: generated.durationMs, requestTokens: generated.usage.requestTokens,
-			responseTokens: generated.usage.responseTokens, totalTokens: generated.usage.totalTokens,
-			promptChars: generated.promptChars, responseChars: generated.responseChars,
+		await recordGenerationApiCalls({ storyId, serviceId: 'classifier', operation: 'job.extract_turn_state.batch',
+			profile, result: generated, status: 'success',
 			metadata: { assistantEntryIds: sources.map(source => source.assistantEntryId), sourceCount: sources.length } });
 		return new Map(jobs.map(job => {
 			const assistantEntryId = String(asRecord(job.payload).assistantEntryId);
 			const text = parsed.get(assistantEntryId)!;
-			const usage: ServerGenerationResult['usage'] = {
-				requestTokens: null, responseTokens: null, totalTokens: null, inputTokens: null,
-				cachedInputTokens: null, cacheWriteTokens: null, outputTokens: null, reasoningTokens: null,
-				estimatedCostUsd: null, providerCostUsd: null,
-			};
-			return [job.id, { ...generated!, text, responseChars: text.length, promptChars: 0, durationMs: 0, usage }];
+			return [job.id, { ...reuseGenerationResult(generated!, { operation: 'job.extract_turn_state.batch' }), text, responseChars: text.length }];
 		}));
 	} catch (error) {
-		await recordApiCallLog({ storyId, serviceId: 'classifier', operation: 'job.extract_turn_state.batch',
-			providerType: profile.providerType, model: generated?.model ?? generation.model ?? null,
-			endpoint: generated?.endpoint ?? null, status: 'error', durationMs: generated?.durationMs ?? 0,
-			requestTokens: generated?.usage.requestTokens ?? null, responseTokens: generated?.usage.responseTokens ?? null,
-			totalTokens: generated?.usage.totalTokens ?? null, promptChars: generated?.promptChars ?? prompt.length,
-			responseChars: generated?.responseChars ?? null,
-			error: error instanceof Error ? error.message : String(error),
+		const failedResult = generationErrorResult(error) ?? generated;
+		if (failedResult) await recordGenerationApiCalls({ storyId, serviceId: 'classifier', operation: 'job.extract_turn_state.batch',
+			profile, result: failedResult, status: 'error', error,
 			metadata: { assistantEntryIds: sources.map(source => source.assistantEntryId), sourceCount: sources.length } });
 		throw error;
 	}
 }
 
-async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, prefetched?: ServerGenerationResult): Promise<Record<string, unknown>> {
+export async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, prefetched?: ServerGenerationResult): Promise<Record<string, unknown>> {
 	const payload = asRecord(job.payload);
 	const priorReceipt = deferredExtractionAppliedReceipt(job);
 	if (priorReceipt) {
@@ -5192,6 +4414,24 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, p
 		responseSchemaName: 'mtherios_state_patch',
 		compactRecovery: extractionPlan.compactRecovery,
 	};
+	let attemptNumber = 1;
+	let attemptLogged = false;
+	const logAttempt = async (options: Parameters<typeof logDeferredStateExtractionCall>[0]) => {
+		if (attemptLogged) return;
+		await logDeferredStateExtractionCall({ ...options, metadata: {
+			...options.metadata,
+			extractionAttempt: attemptNumber,
+			extractionAttemptKind: attemptNumber === 1 ? 'initial' : 'json_repair',
+		} });
+		attemptLogged = true;
+	};
+	const recordProviderAttempt = (attempt: ServerGenerationAttempt) => logDeferredStateExtractionCall({
+		job, clientTurnId, profile: classifierProfile, result: generationAttemptResult(attempt),
+		status: attempt.status, error: attempt.error ?? undefined,
+		metadata: { ...logMetadata, extractionAttempt: attemptNumber,
+			extractionAttemptKind: attemptNumber === 1 ? 'initial' : 'json_repair',
+			parseOutcome: 'not_started', applyOutcome: 'not_started' },
+	});
 	let extractionResult: ServerGenerationResult;
 	try {
 		extractionResult = prefetched ?? await timePhase(recorder, 'job.extract_turn_state.llm', {
@@ -5207,13 +4447,14 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, p
 			system: extractionSystem,
 			prompt: extractionPrompt,
 			responseSchema: stateExtractionResponseSchema,
+			onAttempt: recordProviderAttempt,
 		}));
 	} catch (error) {
 		const failedResult = generationErrorResult(error);
 		if (failedResult) {
 			await timePhase(recorder, 'job.extract_turn_state.log_error', {
 				statusCode: failedResult.statusCode ?? null,
-			}, () => logDeferredStateExtractionCall({
+			}, () => logAttempt({
 				job,
 				clientTurnId,
 				profile: classifierProfile,
@@ -5239,6 +4480,8 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, p
 	}
 	const postGenerationSources = await timePhase(recorder, 'job.extract_turn_state.revalidate_sources_after_generation', {}, validateSources);
 	if (postGenerationSources.error) {
+		await logAttempt({ job, clientTurnId, profile: classifierProfile, result: extractionResult,
+			status: 'success', metadata: { ...logMetadata, parseOutcome: 'not_started', applyOutcome: 'skipped_source_invalid', reason: postGenerationSources.error } });
 		return { status: 'skipped_source_invalid', reason: postGenerationSources.error, operationCount: 0, chapterSummaryJobId };
 	}
 
@@ -5250,6 +4493,12 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, p
 		} catch (validationError) {
 			if (prefetched) throw validationError;
 			if (extractionPlan.compactRecovery) throw validationError;
+			await logAttempt({ job, clientTurnId, profile: classifierProfile, result: extractionResult,
+				status: 'error', error: validationError, metadata: {
+					...logMetadata, parseOutcome: 'error', applyOutcome: 'not_started', repairPlanned: true,
+					debugSnapshot: buildTurnDebugSnapshot({ kind: 'state_extraction', playerText,
+						system: extractionSystem, prompt: extractionPrompt, output: extractionResult.text }),
+				} });
 			const repairSources = await timePhase(recorder, 'job.extract_turn_state.revalidate_sources_before_repair', {}, validateSources);
 			if (repairSources.error) {
 				return { status: 'skipped_source_invalid', reason: repairSources.error, operationCount: 0, chapterSummaryJobId };
@@ -5269,22 +4518,45 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, p
 			extractionSystem = `${classifierSystem}\nRepair invalid extraction JSON. Return strict JSON only.`;
 			const repairGeneration = classifierRepairGeneration(classifierGeneration, extractionResult);
 			logMetadata.maxOutputTokens = repairGeneration.maxTokens;
-			extractionResult = await timePhase(recorder, 'job.extract_turn_state.llm_repair', {
-				serviceId: 'classifier',
-				effectiveServiceId,
-				model: classifierGeneration.model ?? null,
-			}, () => generateServerTextWithMetrics({
-				profile: classifierProfile,
-				model: classifierGeneration.model,
-				temperature: 0,
-				maxTokens: repairGeneration.maxTokens,
-				maxRetries: 0,
-				reasoningEffort: repairGeneration.reasoningEffort,
-				system: extractionSystem,
-				prompt: extractionPrompt,
-				responseSchema: stateExtractionResponseSchema,
-			}));
 			logMetadata.compactRecovery = true;
+			attemptNumber += 1;
+			try {
+				extractionResult = await timePhase(recorder, 'job.extract_turn_state.llm_repair', {
+					serviceId: 'classifier',
+					effectiveServiceId,
+					model: classifierGeneration.model ?? null,
+				}, () => generateServerTextWithMetrics({
+					profile: classifierProfile,
+					model: classifierGeneration.model,
+					temperature: 0,
+					maxTokens: repairGeneration.maxTokens,
+					maxRetries: 0,
+					reasoningEffort: repairGeneration.reasoningEffort,
+					system: extractionSystem,
+					prompt: extractionPrompt,
+					responseSchema: stateExtractionResponseSchema,
+					onAttempt: recordProviderAttempt,
+				}));
+			} catch (repairError) {
+				const failedResult = generationErrorResult(repairError);
+				if (failedResult) {
+					attemptLogged = false;
+					await logAttempt({ job, clientTurnId, profile: classifierProfile, result: failedResult,
+						status: 'error', error: repairError, metadata: {
+							...logMetadata, parseOutcome: 'not_started', applyOutcome: 'not_started',
+							debugSnapshot: buildTurnDebugSnapshot({ kind: 'state_extraction', playerText,
+								system: extractionSystem, prompt: extractionPrompt }),
+						} });
+				}
+				throw repairError;
+			}
+			attemptLogged = false;
+			const repairedSources = await timePhase(recorder, 'job.extract_turn_state.revalidate_sources_after_repair', {}, validateSources);
+			if (repairedSources.error) {
+				await logAttempt({ job, clientTurnId, profile: classifierProfile, result: extractionResult,
+					status: 'success', metadata: { ...logMetadata, parseOutcome: 'not_started', applyOutcome: 'skipped_source_invalid', reason: repairedSources.error } });
+				return { status: 'skipped_source_invalid', reason: repairedSources.error, operationCount: 0, chapterSummaryJobId };
+			}
 			parsedUpdate = timePhaseSync(recorder, 'job.extract_turn_state.parse_repaired_update', {}, () => parseStateExtractionResult(extractionResult.text));
 		}
 		const realDueEventCandidates = dueEventCandidates.filter(candidate => !isFactionCueCandidate(candidate.id));
@@ -5298,7 +4570,7 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, p
 				sourceFingerprint, cue: factionCue.data, feedback: parsedUpdate.dueEventFeedback });
 		}
 		if (parsedUpdate.operationCount === 0) {
-			await timePhase(recorder, 'job.extract_turn_state.log_success', {}, () => logDeferredStateExtractionCall({
+			await timePhase(recorder, 'job.extract_turn_state.log_success', {}, () => logAttempt({
 				job,
 				clientTurnId,
 				profile: classifierProfile,
@@ -5480,6 +4752,8 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, p
 			} as const;
 		}));
 		if ('alreadyApplied' in serializedApply) {
+			await logAttempt({ job, clientTurnId, profile: classifierProfile, result: extractionResult,
+				status: 'success', metadata: { ...logMetadata, parseOutcome: 'valid', applyOutcome: 'already_applied' } });
 			return {
 				status: 'already_applied',
 				...serializedApply.alreadyApplied,
@@ -5487,10 +4761,12 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, p
 			};
 		}
 		if ('sourceError' in serializedApply) {
+			await logAttempt({ job, clientTurnId, profile: classifierProfile, result: extractionResult,
+				status: 'success', metadata: { ...logMetadata, parseOutcome: 'valid', applyOutcome: 'skipped_source_invalid', reason: serializedApply.sourceError } });
 			return { status: 'skipped_source_invalid', reason: serializedApply.sourceError, operationCount: 0, chapterSummaryJobId };
 		}
 		const { applied, serverVersion, suppressedTransientState, noChanges } = serializedApply;
-		await timePhase(recorder, 'job.extract_turn_state.log_success', {}, () => logDeferredStateExtractionCall({
+		await timePhase(recorder, 'job.extract_turn_state.log_success', {}, () => logAttempt({
 			job,
 			clientTurnId,
 			profile: classifierProfile,
@@ -5531,7 +4807,7 @@ async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, p
 			chapterSummaryJobId,
 		};
 	} catch (error) {
-		await timePhase(recorder, 'job.extract_turn_state.log_error', {}, () => logDeferredStateExtractionCall({
+		await timePhase(recorder, 'job.extract_turn_state.log_error', {}, () => logAttempt({
 			job,
 			clientTurnId,
 			profile: classifierProfile,
@@ -5820,48 +5096,7 @@ export function plotBrainJobIsSuperseded(
 }
 
 async function planPlotBrain(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
-	const payload = asRecord(job.payload);
-	const [story] = await getDb().select({
-		metadata: stories.metadata,
-		currentTurn: stories.currentTurn,
-		serverVersion: stories.serverVersion,
-	}).from(stories).where(eq(stories.id, job.storyId)).limit(1);
-	if (!story) throw new Error(`Story not found: ${job.storyId}`);
-	if (plotBrainJobIsSuperseded(job, story.currentTurn)) {
-		return { planned: false, reason: 'superseded_turn', currentTurn: story.currentTurn };
-	}
-	const lifecycle = plotBrainLifecycleState(story.metadata, story.currentTurn, undefined, story.serverVersion);
-	const skipReason = plotBrainJobSkipReason(
-		lifecycle,
-		payload.skipIfPlanned === true,
-		payload.trigger === 'faction_shock',
-	);
-	if (skipReason) return { planned: false, reason: skipReason };
-	const replacePendingFrameId = lifecycle.hasStoredPendingFrame
-		? stalePlotBrainPendingFrameId(story.metadata, story.serverVersion)
-		: null;
-	if (lifecycle.hasStoredPendingFrame && !replacePendingFrameId) {
-		return { planned: false, reason: 'pending_frame' };
-	}
-	// ponytail: dynamic import avoids the serviceCommands <-> processor static cycle; extract a leaf command if another worker needs it.
-	const { runPlotBrainPlanCommand } = await import('$lib/server/engine/serviceCommands');
-	const result = await timePhase(recorder, 'job.plan_plot_brain.execute', {}, () => runPlotBrainPlanCommand({
-		storyId: job.storyId,
-		trigger: typeof payload.trigger === 'string' ? payload.trigger : 'scheduled_refresh',
-		execute: true,
-		includeSecret: true,
-		...(replacePendingFrameId ? { replacePendingFrameId } : {}),
-	}));
-	return {
-		planned: true,
-		frameId: result.frameId,
-		plotCardCount: result.plotCardCount,
-		threadCount: result.threadCount,
-		eventCount: result.eventCount,
-		proposalCount: result.proposalCount,
-		warnings: result.warnings,
-		replacedPendingFrameId: replacePendingFrameId,
-	};
+ return reviewGardener(job.storyId);
 }
 
 async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder, prefetched?: ServerGenerationResult): Promise<Record<string, unknown>> {
@@ -5895,7 +5130,7 @@ async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder, 
 			case 'evaluate_world_sim_tick':
 				return evaluateWorldSimTick(job, recorder);
 			case 'evaluate_npc_background_action':
-				return evaluateNpcBackgroundAction(job, recorder);
+ return { status: 'held', reason: 'individual_portrayal_owned_by_main_gm' };
 			case 'index_canonical_records':
 				return indexCanonicalRecordsJob(job);
 			case 'sync_story_vault':

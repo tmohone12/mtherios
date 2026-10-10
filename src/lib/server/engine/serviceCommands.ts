@@ -919,7 +919,12 @@ export async function runPlotBrainPlanCommand(
 	const body = asRecord(input);
 	const storyId = optionalString(body.storyId) ?? '';
 	if (!storyId) throw new Error('storyId is required.');
-	const args = enginePlotBrainPlanArgsSchema.parse(body);
+	// Autonomous planning now gardens conditional forecasts; explicit supplied frame authoring remains compatible.
+ if (!body.frameId && !deps.planner && !deps.loadInput) {
+  const { reviewGardener } = await import('$lib/server/factions/workflow');
+  return { ok: true, storyId, eventCount: 0, proposalCount: 0, ...await reviewGardener(storyId) };
+ }
+ const args = enginePlotBrainPlanArgsSchema.parse(body);
 	const commandInput: PlotBrainPlanCommandInput = { ...args, storyId };
 	const now = deps.now?.() ?? new Date().toISOString();
 	let frame: StrategicWorldFrame;

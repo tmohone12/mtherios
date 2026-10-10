@@ -8,7 +8,7 @@ import {
 	sourceRefs,
 	stories,
 } from '$lib/server/db/schema';
-import { auditDueFactionProjects } from './projects';
+import { auditDueFactionProjects, dueFactionProjectFingerprint, evaluateProjectCosts } from './projects';
 
 type Table = unknown;
 
@@ -20,6 +20,7 @@ function createDbMock(options: {
 }) {
 	const insertCalls: Array<{ table: Table; value: unknown }> = [];
 	const updateCalls: Array<{ table: Table; value: unknown }> = [];
+	const insertedIds = new Set<string>();
 
 	function rowsFor(table: Table) {
 		if (table === stories) {
@@ -54,8 +55,11 @@ function createDbMock(options: {
 		select: () => createSelectChain(),
 		insert: (table: Table) => ({
 			values: (value: unknown) => ({
-				onConflictDoNothing: async () => {
+				onConflictDoNothing: () => {
 					insertCalls.push({ table, value });
+					const inserted = (value as Array<{ id: string }>).filter(row => !insertedIds.has(row.id));
+					for (const row of inserted) insertedIds.add(row.id);
+					return { returning: async () => inserted.map(row => ({ id: row.id })) };
 				},
 			}),
 		}),
@@ -72,6 +76,48 @@ function createDbMock(options: {
 }
 
 describe('auditDueFactionProjects', () => {
+	const resource: typeof factionResources.$inferSelect = { id: 'grain_1', storyId: 'story_1', factionId: 'faction_1', kind: 'grain', name: 'Granary',
+		amount: 10, status: 'available', locationId: null, visibility: 'public', sourceEntryIds: [], sourceEventIds: [], sourcePatchIds: [],
+		metadata: { reservedGrain: 4 }, serverVersion: 1, createdAt: '2026-10-03T00:00:00.000Z', updatedAt: '2026-10-03T00:00:00.000Z' };
+	const project: typeof factionProjects.$inferSelect = { id: 'aid_1', storyId: 'story_1', factionId: 'faction_1', project: 'Offer relief', status: 'active',
+		progress: 1, dueTurn: 1, costs: { grain: 7 }, gains: {}, risks: [], sourceEntryIds: [], sourceEventIds: [], sourcePatchIds: [],
+		priority: 5, worldTime: null, visibility: 'public', metadata: {},
+		serverVersion: 1, createdAt: '2026-10-03T00:00:00.000Z', updatedAt: '2026-10-03T00:00:00.000Z' };
+
+	it('keeps reserved inventory unavailable and sums aliases of the same resource', () => {
+		expect(evaluateProjectCosts(project, [resource])).toMatchObject({ ok: false, costs: [{ available: 6, required: 7 }] });
+		expect(evaluateProjectCosts({ ...project, costs: { grain: 4, Granary: 4 } }, [resource]).ok).toBe(false);
+		expect(evaluateProjectCosts({ ...project, costs: { grain_1: 6 } }, [resource]).ok).toBe(true);
+	});
+	it('holds ambiguous, unavailable and invalid resource pools', () => {
+		for (const resources of [
+			[resource, { ...resource, id: 'grain_2' }],
+			[{ ...resource, status: 'depleted' }],
+			[{ ...resource, metadata: { reservedGrain: 20 } }],
+		]) expect(evaluateProjectCosts({ ...project, costs: { grain: 1 } }, resources).ok).toBe(false);
+	});
+	it.each(['7', -1, Infinity, NaN])('does not treat invalid cost %s as free', amount => {
+		expect(evaluateProjectCosts({ ...project, costs: { grain: amount } }, [resource]).ok).toBe(false);
+	});
+	it('deduplicates identical audits and creates a fresh review when resources recover', async () => {
+		const resources = [{ ...resource }];
+		const { db, insertCalls } = createDbMock({ story: { currentTurn: 10 }, projects: [project], resources });
+		const first = await auditDueFactionProjects({ storyId: 'story_1', db: db as never });
+		expect(first).toMatchObject({ proposalCount: 1, warningCount: 1 });
+		expect(await auditDueFactionProjects({ storyId: 'story_1', db: db as never })).toMatchObject({ proposalCount: 0, warningCount: 0, proposalIds: [] });
+		resources[0] = { ...resource, metadata: { reservedGrain: 0 }, serverVersion: 2 };
+		const recovered = await auditDueFactionProjects({ storyId: 'story_1', db: db as never });
+		expect(recovered).toMatchObject({ proposalCount: 1, warningCount: 0 });
+		expect(recovered.proposalIds[0]).not.toBe(first.proposalIds[0]);
+		const last = insertCalls.filter(call => call.table === patchProposals).at(-1)?.value as Array<Record<string, unknown>>;
+		expect(last[0]).toMatchObject({ proposalType: 'faction_project_due_resolution', status: 'pending' });
+	});
+	it('binds review identity to the exact project and resource revisions', () => {
+		const initial = dueFactionProjectFingerprint(project, [resource]);
+		expect(dueFactionProjectFingerprint({ ...project, status: 'cancelled' }, [resource])).not.toBe(initial);
+		expect(dueFactionProjectFingerprint({ ...project, costs: { grain: 1 } }, [resource])).not.toBe(initial);
+		expect(dueFactionProjectFingerprint(project, [{ ...resource, serverVersion: 2 }])).not.toBe(initial);
+	});
 	it('keeps due faction project resolution proposal-first with complete review context', async () => {
 		const project = {
 			id: 'project_harbor_blockade',
@@ -100,8 +146,8 @@ describe('auditDueFactionProjects', () => {
 			projects: [project],
 			factions: [{ id: 'faction_harbor', storyId: 'story_1', name: 'Harbor Compact' }],
 			resources: [
-				{ id: 'res_coin', storyId: 'story_1', factionId: 'faction_harbor', kind: 'coin', name: 'Coin', amount: 100 },
-				{ id: 'res_ships', storyId: 'story_1', factionId: 'faction_harbor', kind: 'ships', name: 'Ships', amount: 4 },
+				{ id: 'res_coin', storyId: 'story_1', factionId: 'faction_harbor', kind: 'coin', name: 'Coin', amount: 100, status: 'available' },
+				{ id: 'res_ships', storyId: 'story_1', factionId: 'faction_harbor', kind: 'ships', name: 'Ships', amount: 4, status: 'available' },
 			],
 		});
 
@@ -119,10 +165,10 @@ describe('auditDueFactionProjects', () => {
 			dueProjectCount: 1,
 			proposalCount: 1,
 			warningCount: 1,
-			proposalIds: ['proposal_due_project_project_harbor_blockade'],
+			proposalIds: [expect.stringMatching(/^proposal_due_project_project_harbor_blockade_[a-f0-9]{24}$/)],
 		});
 		expect(proposal).toMatchObject({
-			id: 'proposal_due_project_project_harbor_blockade',
+			id: result.proposalIds[0],
 			storyId: 'story_1',
 			proposalType: 'faction_project_deadline_review',
 			targetTable: 'faction_projects',

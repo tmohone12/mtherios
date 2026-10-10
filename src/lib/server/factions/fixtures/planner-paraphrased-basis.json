@@ -1,0 +1,177 @@
+{
+  "description": "Synthetic real paid response; no credentials; regression only, never live inference.",
+  "actorPacket": {
+    "actor": {
+      "id": "fw_muqazyfo_4_league",
+      "name": "Granary League",
+      "goals": [
+        {
+          "id": "fw_muqazyfo_4_goal",
+          "goal": "Return our neighbor’s kindness"
+        }
+      ],
+      "decisionActorIds": [
+        "fw_muqazyfo_4_maera"
+      ],
+      "decisionMaker": {
+        "id": "fw_muqazyfo_4_maera",
+        "name": "Maera",
+        "personality": "Generous, with dry humor; firm about unkept promises.",
+        "goals": [],
+        "currentGoal": "",
+        "currentPlan": "",
+        "constraint": ""
+      },
+      "personality": [],
+      "resources": [
+        {
+          "id": "fw_muqazyfo_4_grain_a",
+          "name": "Relief grain",
+          "amount": 100,
+          "status": "available"
+        }
+      ],
+      "obligations": [
+        {
+          "id": "agreement_7665bd71-9975-4c28-8914-e33b30c73b54",
+          "terms": "The Mudlark invites Rowan to supper. Rowan declines politely; no grain moves.",
+          "status": "fulfilled"
+        }
+      ],
+      "relationships": [
+        {
+          "id": "rel_137c96bb-d431-4749-ae0d-9fd451088b28",
+          "target": "fw_muqazyfo_4_rowan",
+          "kind": "allied-with",
+          "description": "Gratitude for shelter freely given."
+        }
+      ],
+      "currentPlan": {
+        "id": "thank_neighbor",
+        "basis": [
+          "event_0e2695b2-e22d-4c76-ad2d-490726d56d04"
+        ],
+        "costs": [],
+        "action": "Offer relief in gratitude for past shelter.",
+        "family": "aid",
+        "limits": [
+          "Recipient consent required."
+        ],
+        "manner": "Warm and lightly humorous.",
+        "motive": "Return a kindness.",
+        "opposition": "The neighbor may refuse.",
+        "earliestWorldTime": null
+      },
+      "summary": ""
+    },
+    "evidence": [
+      {
+        "id": "event_timeline_a02746bd486e145c7cc028581c73c878",
+        "claim": "The Mudlark hears Rowan explain that he declined supper because he is tending the wounded. Rowan thanks The Mudlark for remembering Hillmarch and welcomes a discussion of relief, while promising no agreement.",
+        "kind": "learned",
+        "confidence": 1
+      },
+      {
+        "id": "event_timeline_674eb7ca8f6f7afefdcf8c6baa163662",
+        "claim": "The Mudlark invites Rowan to supper. Rowan declines politely; no grain moves.",
+        "kind": "learned",
+        "confidence": 1
+      },
+      {
+        "id": "event_0e2695b2-e22d-4c76-ad2d-490726d56d04",
+        "claim": "The Mudlark invites Rowan to supper. Rowan declines politely; no grain moves.",
+        "kind": "learned",
+        "confidence": 1
+      }
+    ],
+    "sourceIds": [
+      "fw_muqazyfo_4_league",
+      "fw_muqazyfo_4_goal",
+      "fw_muqazyfo_4_grain_a",
+      "event_timeline_a02746bd486e145c7cc028581c73c878",
+      "event_timeline_674eb7ca8f6f7afefdcf8c6baa163662",
+      "event_0e2695b2-e22d-4c76-ad2d-490726d56d04",
+      "agreement_7665bd71-9975-4c28-8914-e33b30c73b54",
+      "rel_137c96bb-d431-4749-ae0d-9fd451088b28"
+    ],
+    "knowledgeBoundary": "Personal learned/witnessed/shared claims only. Beliefs can be wrong. Rival private plans and public records not learned by this actor are unavailable.",
+    "worldTime": "Day 0"
+  },
+  "options": [
+    {
+      "id": "fw_muqazyfo_4_opt_offer_relief",
+      "action": "Send a modest consignment of relief grain to Rowan's people at Hillmarch as an unrepaid thank-you for the shelter freely given, with a note that no agreement or repayment is expected.",
+      "motive": "Return the neighbor's kindness; Rowan welcomed talk of relief even while promising no agreement, so a no-strings gift honors both his caution and the League's gratitude.",
+      "manner": "Warm and lightly humorous: 'Shelter was freely given, so grain is freely offered—no strings, no signatures, no supper required.'",
+      "family": "gift",
+      "basis": [
+        "Rowan thanked the Mudlark for remembering Hillmarch and welcomed a discussion of relief while promising no agreement.",
+        "Gratitude for shelter freely given (allied relationship with Rowan).",
+        "League goal: return our neighbor's kindness."
+      ],
+      "limits": [
+        "Recipient consent required; Rowan may refuse the grain.",
+        "Only 100 relief grain available, so the gift must be modest.",
+        "No agreement can be presumed—this is an offer, not a concluded deal."
+      ],
+      "costs": [
+        {
+          "resourceId": "fw_muqazyfo_4_grain_a",
+          "amount": 20
+        }
+      ],
+      "opposition": "Rowan may decline the gift outright or defer acceptance while he tends the wounded.",
+      "earliestWorldTime": "Day 0"
+    },
+    {
+      "id": "fw_muqazyfo_4_opt_relief_talk",
+      "action": "Call on Rowan at a time convenient to him to discuss what relief Hillmarch actually needs, bringing a small token of provisions for the wounded rather than pressing any bargain.",
+      "motive": "Rowan is tending the wounded and promised no agreement; a patient conversation respects that while still advancing the goal of returning his kindness.",
+      "manner": "Patient and considerate, with dry humor about the declined supper: 'Whenever the wounded allow you a spare hour, we'll talk—no table required.'",
+      "family": "diplomacy",
+      "basis": [
+        "Rowan welcomes a discussion of relief while promising no agreement.",
+        "Rowan declined supper because he is tending the wounded.",
+        "League goal: return our neighbor's kindness."
+      ],
+      "limits": [
+        "Rowan's availability is limited by his care for the wounded.",
+        "No grain moves and no terms are settled without his consent.",
+        "This is only an opening conversation, not a concluded relief plan."
+      ],
+      "costs": [
+        {
+          "resourceId": "fw_muqazyfo_4_grain_a",
+          "amount": 5
+        }
+      ],
+      "opposition": "Rowan may postpone or decline the discussion entirely.",
+      "earliestWorldTime": "Day 0"
+    },
+    {
+      "id": "fw_muqazyfo_4_opt_shelter_wounded",
+      "action": "Offer Rowan use of the League's stores and hands to help shelter and feed the wounded he is tending, asking nothing in return.",
+      "motive": "The neighbor's immediate burden is the wounded; helping shoulder it is the most direct way to repay the shelter he once gave freely.",
+      "manner": "Generous and practical, with a dry aside that the League is better with grain than with bandages.",
+      "family": "aid",
+      "basis": [
+        "Rowan declined supper because he is tending the wounded.",
+        "Gratitude for shelter freely given (allied relationship with Rowan).",
+        "League goal: return our neighbor's kindness."
+      ],
+      "limits": [
+        "The League's strength is grain and hands, not medicine.",
+        "Recipient consent required; Rowan may prefer to manage the wounded himself.",
+        "Draws on the same limited 100 relief grain as any future relief gift."
+      ],
+      "costs": [
+        {
+          "resourceId": "fw_muqazyfo_4_grain_a",
+          "amount": 10
+        }
+      ],
+      "opposition": "Rowan may refuse outside help while he is occupied with the wounded.",
+      "earliestWorldTime": "Day 0"
+    }
+  ]
+}

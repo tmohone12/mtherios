@@ -1,5 +1,6 @@
 import { AGREEMENT_ACTION_STATUS, AGREEMENT_STATUSES as AGREEMENT_STATUS_VALUES, isCurrentAgreement, resolveAgreementTarget } from '$lib/contracts/agreements';
 import { readCampaignState } from '$lib/contracts/campaignState';
+import { automaticCharacterUpdate } from '$lib/contracts/automaticCharacterUpdate';
 /**
  * Story Store — Mtherios
  * Manages the active story: entries, characters, locations, items, lorebook.
@@ -125,7 +126,7 @@ import { processBackendTurn, pullBackendChanges, pushPendingBackendOps, queueBac
 import { openEngineEventStream, type EngineStreamEvent, type EngineStreamSubscription } from '$lib/services/engineStream';
 import { cacheBackendStoryFromBootstrap, fetchBackendStoryBootstrap, fetchBackendStoryEntriesPage, fetchBackendStoryProjection, isRetryableEngineCommandFailure, resolveBackendStoryBootstrap } from '$lib/services/serverStories';
 import { settings } from '$lib/stores/settings.svelte';
-import type { BootstrapResponse, SyncChange, TurnContextReceipt, TurnPerformanceSummary, TurnRequest, TurnResponse } from '$lib/contracts/memory';
+import type { BootstrapResponse, SyncChange, TurnContextReceipt, TurnPerformanceSummary, TurnRequest, TurnResponse, TurnSubmissionResponse } from '$lib/contracts/memory';
 import type { CampaignProjection } from '$lib/contracts/engine';
 import {
 	DEFAULT_CONTROL_SURFACE_ENTRY_WINDOW,
@@ -517,6 +518,7 @@ class StoryStore {
 		this.worldHydrationError = null;
 		try {
 			let s = await getStory(storyId);
+			if (this._loadGeneration !== generation) return;
 			if (!s) {
 				try {
 					const bootstrap = await fetchBackendStoryBootstrap(storyId);
@@ -538,6 +540,7 @@ class StoryStore {
 					await this.applyBackendBootstrap(cachedStory, bootstrap, generation);
 					return;
 				} catch (error) {
+					if (this._loadGeneration !== generation) return;
 					if (!isMissingBackendStoryError(error)) {
 						if (isRetryableEngineCommandFailure(error)) {
 							console.warn('[Story] terminal runtime unavailable; refusing cached story fallback:', error);
@@ -554,6 +557,7 @@ class StoryStore {
 				}
 			}
 
+			if (this._loadGeneration !== generation) return;
 			this.currentStory = s;
 			this.resetLoadedCollections();
 			const branchId = s.currentBranchId ?? null;
@@ -925,6 +929,21 @@ class StoryStore {
 		if (this.currentStory?.id !== current.id) return null;
 		await this.applyCampaignProjection(projection);
 		return projection;
+	}
+
+	/** Add newly published chapter IDs without reconciling or overwriting any local
+	 * editor/outbox state, world projection, existing summary or sync cursor. */
+	async refreshNewChapters(): Promise<void> {
+		const current=this.currentStory;
+		if(!current?.serverStoryId)return;
+		const projection=await fetchBackendStoryProjection(current.serverStoryId,INITIAL_TRANSCRIPT_LOAD_LIMIT);
+		if(this.currentStory?.id!==current.id)return;
+		const localIds=new Set((await getChapters(current.id)).map(c=>c.id));
+		for(const row of projection.chapters) {
+			if(this.currentStory?.id!==current.id)return;
+			const chapter=this.serverChapterToLocal(row);
+			if(chapter&&!localIds.has(chapter.id))await putChapter(chapter);
+		}
 	}
 
 	private connectEngineStream(localStoryId: string, serverStoryId: string, generation: number): void {
@@ -2123,7 +2142,7 @@ class StoryStore {
 	async submitBackendTurn(
 		request: Omit<TurnRequest, 'storyId' | 'localVersion'>,
 		options: ProcessBackendTurnOptions = {},
-	): Promise<TurnResponse> {
+	): Promise<TurnSubmissionResponse> {
 		if (!this.currentStory?.serverStoryId) throw new Error('Story is not bound to the terminal world database.');
 		const current = await this.prepareBackendAgentTurn();
 		const response = await processBackendTurn({
@@ -2131,6 +2150,12 @@ class StoryStore {
 			storyId: current.serverStoryId!,
 			localVersion: current.serverVersion ?? 0,
 		}, options);
+		if ('status' in response) {
+			if (typeof localStorage !== 'undefined') {
+				localStorage.setItem(`mythengine:agent-run:${response.storyId}`, response.runId);
+			}
+			return response;
+		}
 		return this.applyBackendTurnResponse(response, current.id);
 	}
 
@@ -2344,7 +2369,8 @@ class StoryStore {
 	}
 
 	async updateCharacterFromClassification(name: string, updates: { description?: string | null; relationship?: string | null; status?: string; traits?: string[]; partyMember?: boolean; partyRole?: string | null }) {
-		const char = this.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
+		const candidates = this.characters.filter(c => c.name.toLowerCase() === name.toLowerCase());
+		const char = candidates.length === 1 ? candidates[0] : undefined;
 		if (!char) return;
 		const merged: Partial<Character> = {};
 		let metadata = { ...(char.metadata ?? {}) };
@@ -2383,7 +2409,12 @@ class StoryStore {
 		}
 		if (Object.keys(merged).length === 0 && !metadataChanged) return;
 		const updated = { ...char, ...merged, ...(metadataChanged ? { metadata } : {}) };
-		const result = await saveCanonicalCharacter(updated);
+		const result = await saveCanonicalCharacter(updated, 'update', { changes: {
+			...(merged.status ? { status: merged.status } : {}),
+			...(merged.relationship ? { currentDisposition: merged.relationship } : {}),
+			...(updates.partyMember !== undefined ? { partyMember: updates.partyMember } : {}),
+			...(updates.partyRole !== undefined ? { partyRole: updates.partyRole } : {}),
+		}, sourceEntryIds: this.entries.at(-1)?.id ? [this.entries.at(-1)!.id] : [] });
 		this.applyCanonicalVersion(result.serverVersion);
 		this.upsertProjectedLoreEntry(result.entry);
 		this.upsertProjectedCharacter(char.id, result.character);
@@ -2544,11 +2575,12 @@ class StoryStore {
 		// "Eddard Stark" with "Lord Stark" listed in aliases. Without alias
 		// matching, the lookup silently misses and isPresent never updates.
 		const needle = charName.toLowerCase();
-		const target = this.lorebookEntries.find(e => {
+		const matches = this.lorebookEntries.filter(e => {
 			if (e.type !== 'character') return false;
 			if (e.name?.toLowerCase() === needle) return true;
 			return (e.aliases ?? []).some(a => a?.toLowerCase() === needle);
 		});
+		const target = matches.length === 1 ? matches[0] : undefined;
 		if (!target) return;
 		const oldState = target.state as import('$lib/types').CharacterEntryState;
 		const newState: import('$lib/types').CharacterEntryState = {
@@ -2559,7 +2591,7 @@ class StoryStore {
 		};
 		const now = Date.now();
 		try {
-			const result = await patchCanonicalLorebookEntry(target.id, { state: newState, updatedAt: now });
+			const result = await patchCanonicalLorebookEntry(target.id, { state: newState, metadata: { ...target.metadata, automaticCharacterUpdate: automaticCharacterUpdate(oldState as unknown as Record<string, unknown>, newState as unknown as Record<string, unknown>, this.entries.at(-1)?.id ? [this.entries.at(-1)!.id] : []) }, updatedAt: now });
 			if (result.serverVersion && this.currentStory) {
 				this.currentStory = { ...this.currentStory, serverVersion: result.serverVersion, syncStatus: 'synced' };
 			}
@@ -2577,11 +2609,12 @@ class StoryStore {
 	 */
 	async updatePresence(characterNames: string[], locationName: string) {
 		for (const name of characterNames) {
-			const char = this.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
+			const candidates = this.characters.filter(c => c.name.toLowerCase() === name.toLowerCase());
+			const char = candidates.length === 1 ? candidates[0] : undefined;
 			if (!char) continue;
 			const meta = { ...(char.metadata ?? {}), lastSeenLocation: locationName };
 			const updated = { ...char, metadata: meta };
-			const result = await saveCanonicalCharacter(updated);
+			const result = await saveCanonicalCharacter(updated, 'update', { changes: { lastSeenLocation: locationName }, sourceEntryIds: this.entries.at(-1)?.id ? [this.entries.at(-1)!.id] : [] });
 			this.applyCanonicalVersion(result.serverVersion);
 			this.upsertProjectedLoreEntry(result.entry);
 			this.upsertProjectedCharacter(char.id, result.character);
@@ -2595,12 +2628,13 @@ class StoryStore {
 	 */
 	async clearPresenceForCharacters(characterNames: string[]) {
 		for (const name of characterNames) {
-			const char = this.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
+			const candidates = this.characters.filter(c => c.name.toLowerCase() === name.toLowerCase());
+			const char = candidates.length === 1 ? candidates[0] : undefined;
 			if (!char) continue;
 			const meta = { ...(char.metadata ?? {}) };
 			delete meta.lastSeenLocation;
 			const updated = { ...char, metadata: meta };
-			const result = await saveCanonicalCharacter(updated);
+			const result = await saveCanonicalCharacter(updated, 'update', { changes: { lastSeenLocation: null }, sourceEntryIds: this.entries.at(-1)?.id ? [this.entries.at(-1)!.id] : [] });
 			this.applyCanonicalVersion(result.serverVersion);
 			this.upsertProjectedLoreEntry(result.entry);
 			this.upsertProjectedCharacter(char.id, result.character);

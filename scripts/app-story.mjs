@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-nocheck
 
 import { resolveAppUrl } from './runtime-config.mjs';
 
@@ -355,6 +356,7 @@ async function runTurn(url, flags, positional, request = requestJson) {
 		body: JSON.stringify(commandRequest.body),
 		timeoutMs: 180_000,
 	}));
+	if (turn.runId && turn.status) return turn;
 	if (!shouldRefreshWiki(flags)) return turn;
 	return {
 		...turn,
@@ -609,6 +611,15 @@ function printDossier(payload, json) {
 
 function printTurn(payload, json) {
 	if (json) return printJson(payload);
+	if (payload.runId && payload.status) {
+		console.log(`Turn ${payload.status}: ${payload.runId}`);
+		for (const interaction of payload.interactions ?? []) {
+			console.log(`  ${interaction.prompt} (${interaction.id}, revision ${interaction.revision})`);
+			for (const option of interaction.options ?? []) console.log(`    ${option.id}: ${option.label}`);
+		}
+		console.log('Use agent.run.get, agent.run.respond or agent.run.cancel through app:engine with this run ID.');
+		return;
+	}
 	console.log('');
 	console.log(`Terminal turn complete: database v${payload.serverVersion ?? 0}`);
 	if (payload.warnings?.length) {
@@ -755,4 +766,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 export {
 	main,
 	runTurn,
+	printTurn,
 };

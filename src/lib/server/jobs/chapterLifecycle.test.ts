@@ -67,6 +67,51 @@ it('commits the tenth chapter and its arc job together before fallible thread wo
 	});
 });
 
+describe('chapter canonical commit guards', () => {
+	it.each(['content', 'metadata', 'boundary'] as const)('does not commit stale generated evidence when %s changes after preflight', async change => {
+		const entries = Array.from({ length: 20 }, (_, index) => [
+			{ id: `guard-player-${index}`, storyId: 'story', type: 'user_action', content: `Question ${index}`, position: index * 2 + 1, parentId: null, metadata: {}, serverVersion: 1, branchId: null },
+			{ id: `guard-answer-${index}`, storyId: 'story', type: 'narration', content: `Answer ${index}`, position: index * 2 + 2, parentId: `guard-player-${index}`, metadata: {}, serverVersion: 1, branchId: null },
+		]).flat();
+		let currentEntries = structuredClone(entries);
+		let boundary = { id: 'chapter-9', number: 9, metadata: { endPosition: 0 }, sourceEntryIds: [] };
+		let inTransaction = false;
+		let lockedSources = false;
+		const insert = vi.fn();
+		const db = {
+			transaction: async (callback: (tx: unknown) => Promise<unknown>) => {
+				inTransaction = true;
+				if (change === 'boundary') boundary = { ...boundary, id: 'competing-chapter-10', number: 10 };
+				else currentEntries = currentEntries.map((entry, index) => index === 1
+					? change === 'content' ? { ...entry, content: 'Edited after preflight' } : { ...entry, metadata: { nonCanon: true } }
+					: entry);
+				try { return await callback(db); } finally { inTransaction = false; }
+			},
+			select: () => {
+				let table: unknown;
+				const query = {
+					from: (value: unknown) => { table = value; return query; }, where: () => query, orderBy: () => query, limit: () => query,
+					for: (mode: string) => { if (table === storyEntries) { expect(inTransaction).toBe(true); expect(mode).toBe('share'); lockedSources = true; } return query; },
+					then: (resolve: (rows: unknown[]) => unknown) => Promise.resolve(table === storyEntries ? structuredClone(currentEntries)
+						: table === stories ? [{ id: 'story', serverVersion: 2 }] : table === chapters ? [structuredClone(boundary)] : []).then(resolve),
+				};
+				return query;
+			},
+			update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ serverVersion: 2 }] }) }) }),
+			insert,
+		};
+		mocks.getDb.mockReturnValue(db);
+		mocks.generate.mockResolvedValue({ title: 'Generated checkpoint', narrative: 'A complete account of twenty completed turns.',
+			accounts: entries.filter(entry => entry.type === 'narration').map(entry => ({ sourceId: entry.id, summary: entry.content })),
+			characters: [], openThreads: [], locations: [], keywords: [], model: 'fixture' });
+		const job = { id: 'guard-job', storyId: 'story', payload: {}, type: 'summarize_chapter' } as Parameters<typeof createChapterCheckpoint>[0];
+		await expect(createChapterCheckpoint(job)).resolves.toMatchObject({ created: false,
+			reason: change === 'boundary' ? 'projection_superseded' : 'projection_sources_changed' });
+		expect(insert).not.toHaveBeenCalled();
+		expect(lockedSources).toBe(change !== 'boundary');
+	});
+});
+
 describe('chapter sources after an existing boundary', () => {
 	it.each([true, false])('counts a late reply only if its earlier action is still uncovered (covered=%s)', async covered => {
 		const oldAction = { id: 'old-action', type: 'user_action', content: 'I ask the envoy.', position: 2, parentId: null };

@@ -38,7 +38,7 @@ async function typeRow(db: Db | Tx, projectId: string, id: string): Promise<Cont
   return row as unknown as ContentType;
 }
 async function itemRow(db: Db | Tx, request: Scope, id: string): Promise<ContentItem> {
-  const [row] = await db.execute(sql`select i.*, t.revision as type_revision from content_items i join content_types t on t.id = i.type_id where i.project_id = ${request.projectId} and i.id = ${id} and ${readable(request)}`);
+  const [row] = await db.execute(sql`select i.*, t.revision as type_revision, t.extension from content_items i join content_types t on t.id = i.type_id where i.project_id = ${request.projectId} and i.id = ${id} and ${readable(request)}`);
   if (!row) missing();
   return row as unknown as ContentItem;
 }

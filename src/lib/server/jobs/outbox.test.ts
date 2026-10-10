@@ -239,7 +239,7 @@ describe('job enqueue conflicts', () => {
 			onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
 			onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
 		}));
-		const tx = { insert: vi.fn(() => ({ values: txValues })) };
+		const tx = { insert: vi.fn(() => ({ values: txValues })), execute: vi.fn().mockResolvedValue([]) };
 
 		await enqueueTurnProjectionJobs({
 			storyId: 'story_1',
@@ -399,6 +399,29 @@ describe('job retry classification', () => {
 		expect(backendJobFailureIsRetryable(new Error('Request exceeds the model context allowance.'))).toBe(false);
 		expect(backendJobFailureIsRetryable(new Error('temporary provider outage'))).toBe(true);
 	});
+
+	it.each([
+		'Summary response did not contain a complete JSON object (finish_reason: length).',
+		'Accounts response did not contain a complete JSON object (finish_reason: stop).',
+		'Incomplete summary: accounts must cover every source exactly once in chronological order.',
+		'Unexpected summary compiler failure',
+	])('does not automatically repurchase a deterministic or unknown failure: %s', message => {
+		expect(backendJobFailureIsRetryable(new Error(message))).toBe(false);
+	});
+
+	it.each([
+		'Server LLM request failed (503): Service Unavailable',
+		'Server LLM request failed (429): Too Many Requests',
+		'read ECONNRESET',
+		'could not serialize access due to concurrent update',
+	])('preserves automatic retries for a transient failure: %s', message => {
+		expect(backendJobFailureIsRetryable(new Error(message))).toBe(true);
+	});
+
+	it('honors the explicit retry contract even when a wrapper message is ambiguous', () => {
+		expect(backendJobFailureIsRetryable(Object.assign(new Error('summary fallback failed'), { retryable: true }))).toBe(true);
+		expect(backendJobFailureIsRetryable(Object.assign(new Error('network result exhausted'), { retryable: false }))).toBe(false);
+	});
 });
 
 describe('claimed job order', () => {
@@ -407,7 +430,7 @@ describe('claimed job order', () => {
 		expect(order.sql).toContain('"backend_jobs"."type" = \'refresh_scene_checkpoint\'');
 		expect(order.sql).toContain('"backend_jobs"."type" = \'extract_turn_state\'');
 		expect(order.sql).toContain('"backend_jobs"."type" = \'continuity_audit\'');
-		expect(order.sql).toContain('"backend_jobs"."type" = \'evaluate_world_sim_tick\' then 2');
+		expect(order.sql).toContain('"backend_jobs"."type" = \'evaluate_world_sim_tick\' then 5');
 		expect(order.sql).toContain('"backend_jobs"."payload"->>\'trigger\' = \'scheduled_refresh\'');
 		expect(order.params).toEqual([]);
 	});

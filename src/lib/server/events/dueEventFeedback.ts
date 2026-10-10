@@ -94,7 +94,7 @@ export async function applyDueEventFeedback(input: {
 		if (!story) return [];
 		const [source] = await tx.select({ content: storyEntries.content, metadata: storyEntries.metadata })
 			.from(storyEntries).where(and(eq(storyEntries.storyId, input.storyId), eq(storyEntries.id, input.assistantEntryId)))
-			.limit(1);
+			.for('update').limit(1);
 		if (!source || source.content !== input.narration || source.metadata?.nonCanon === true
 			|| source.metadata?.narrativeMode === 'parallel_pov') return [];
 		const priorReceipt = source.metadata?.dueEventFeedbackReceipt;
@@ -109,9 +109,10 @@ export async function applyDueEventFeedback(input: {
 			const [current] = await tx.select().from(storyEvents).where(and(
 				eq(storyEvents.storyId, input.storyId), eq(storyEvents.id, item.id),
 			)).for('update').limit(1);
-			if (!current || current.serverVersion !== item.candidate.serverVersion
+			if (!current || !['scheduled', 'due'].includes(current.status) || current.serverVersion !== item.candidate.serverVersion
 				|| current.status !== item.candidate.status
 				|| current.title !== item.candidate.title || current.body !== item.candidate.body
+				|| (current.scheduledTurn ?? null) !== (item.candidate.scheduledTurn ?? null)
 				|| (current.status === 'scheduled' && (current.scheduledTurn == null || current.scheduledTurn > input.currentTurn))) continue;
 			await tx.update(storyEvents).set({
 				status: 'committed', occurredTurn: input.currentTurn,
@@ -144,13 +145,22 @@ function hasDirectNarrationEvidence(narration: string, span: string): boolean {
 		const previousBoundary = Math.max(narration.lastIndexOf('.', position - 1), narration.lastIndexOf('!', position - 1),
 			narration.lastIndexOf('?', position - 1), narration.lastIndexOf('\n', position - 1));
 		const leadIn = narration.slice(previousBoundary + 1, position);
-		const evidenceClause = `${leadIn}${span}`;
+		const spanEnd = position + span.length;
+		const following = narration.slice(spanEnd);
+		const nextBoundary = following.search(/[.!?\n]/);
+		const tail = /[.!?\n]$/.test(span) ? '' : following.slice(0, nextBoundary < 0 ? undefined : nextBoundary + 1);
+		// A shortened exact quote cannot omit a trailing condition or denial.
+		const evidenceClause = `${leadIn}${span}${tail}`;
 		// Explicit counterevidence makes a claimed realization ambiguous. The model's
 		// semantic verdict is still advisory and cannot prove causation by itself.
-		if (/\b(?:if|would|could|might|may|perhaps|suppose|rumou?r|alleged|claimed|imagined|remembered|previously|once|yesterday|formerly|earlier|not|never|no|didn'?t|doesn'?t|hadn'?t|reports?|says?|said|heard|told)\b/i.test(evidenceClause)) continue;
-		if ((leadIn.match(/“/g)?.length ?? 0) > (leadIn.match(/”/g)?.length ?? 0)
-			|| ((leadIn.match(/"/g)?.length ?? 0) % 2) === 1
-			|| narration[position - 1] === '“' || narration[position - 1] === '"') continue;
+		if (/\b(?:if|would|could|might|may|perhaps|suppose|rumou?r|alleged|claimed|imagined|remembered|previously|once|yesterday|formerly|earlier|not|never|no|didn['\u2019]?t|doesn['\u2019]?t|hadn['\u2019]?t|won['\u2019]?t|cannot|can['\u2019]?t|reports?|says?|said|heard|told|refus\w*|declin\w*|reject\w*|fail\w*|cancel\w*|den(?:y|ies|ied)|plans?|intends?|promises?|hopes?|will)\b/i.test(evidenceClause)) continue;
+		// Sentence boundaries inside dialogue do not close the quotation. Inspect
+		// the full prefix, including typographic quotes, before accepting a span.
+		const prefix = narration.slice(0, position);
+		if (((prefix.match(/"/g)?.length ?? 0) % 2) === 1
+			|| (prefix.match(/\u201c/g)?.length ?? 0) > (prefix.match(/\u201d/g)?.length ?? 0)
+			|| (prefix.match(/\u2018/g)?.length ?? 0) > (prefix.match(/\u2019(?=\s|[.,!?;:]|$)/g)?.length ?? 0)
+			|| /^["\u201c\u2018]/.test(span)) continue;
 		return true;
 	}
 	return false;

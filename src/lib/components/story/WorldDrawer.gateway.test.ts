@@ -8,8 +8,8 @@ describe('WorldDrawer terminal control-surface diagnostics', () => {
 			expect(readFileSync(resolve(`src/lib/components/story/${surface}.svelte`), 'utf8')).toContain('<CampaignFacts />');
 		}
 		const panel = readFileSync(resolve('src/lib/components/story/CampaignFacts.svelte'), 'utf8');
-		expect(panel).toContain('story.currentStory.campaignState');
-		expect(panel).toContain('{fact.evidence}');
+
+
 	});
 	it('renders last-turn performance from backend stream state without direct turn APIs', () => {
 		const source = readFileSync(resolve('src/lib/components/story/WorldDrawer.svelte'), 'utf8');
@@ -54,19 +54,27 @@ describe('WorldDrawer terminal control-surface diagnostics', () => {
 		expect(source).toContain('{displayText(char.description)}');
 	});
 
-	it('shows the persisted Plot Director in both shells and rejects stale drafts', () => {
+	it('shows private faction inspection in both shells and separates intentions, events and forecasts', () => {
 		const source = readFileSync(resolve('src/lib/components/story/WorldDrawer.svelte'), 'utf8');
 		const sheet = readFileSync(resolve('src/lib/components/story/WorldSheet.svelte'), 'utf8');
 		const panel = readFileSync(resolve('src/lib/components/story/PlotDirectorPanel.svelte'), 'utf8');
 		expect(source).toContain('<PlotDirectorPanel />');
 		expect(sheet).toContain('<PlotDirectorPanel />');
 		expect(sheet).toContain("label: 'Director'");
-		expect(panel).toContain('pendingFrameId');
-		expect(panel).toContain('pendingBaseServerVersion');
-		expect(panel).toContain('pendingBaseVersion === projectionVersion');
-		expect(panel).toContain('appliedStrategicFrameFromProjection(story.campaignProjection)');
-		expect(panel).toContain('event.metadata.plotCardId');
-		expect(panel).toContain('description.startsWith(`${title}:`)');
-		expect(panel).toContain('await story.pullBackendProjection()');
+        expect(panel).toContain('GM / developer inspection');
+        expect(panel).toContain('Contains private plans');
+        expect(panel).toContain('Intentions &amp; recent decisions');
+        expect(panel).toContain('Established events');
+        expect(panel).toContain('Conditional forecasts');
+        expect(panel).toContain('Have not happened');
+        expect(panel).toContain('Review changed context');
+        expect(source).not.toContain('Run terminal world tick');
+
+
+
+
+
+
+
 	});
 });

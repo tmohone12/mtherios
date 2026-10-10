@@ -1,16 +1,23 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ generate: vi.fn(), log: vi.fn() }));
+const mocks = vi.hoisted(() => ({ generate: vi.fn(), log: vi.fn(), modelVersion: '', reasoning: 'low', secret: 'test',
+	clearStore: () => {} }));
+vi.mock('./summaryCheckpoints', async importOriginal => {
+	const actual = await importOriginal<typeof import('./summaryCheckpoints')>();
+	const { memorySummaryCheckpointStore } = await import('./summaryCheckpoints.testSupport');
+	const memory = memorySummaryCheckpointStore(); mocks.clearStore = () => memory.rows.clear();
+	return { ...actual, withSummaryCheckpoint: <T>(input: Parameters<typeof actual.withSummaryCheckpoint<T>>[0], generate: () => Promise<T>) => actual.withSummaryCheckpoint(input, generate, memory.store) };
+});
 vi.mock('$lib/server/engine/llmSettings', () => ({
 	resolveServiceGeneration: vi.fn(async (id: string) => ({
-		profile: { providerType: 'nanogpt', baseUrl: 'https://example.invalid', apiKey: 'test' },
-		generation: { model: ['arcCondensation', 'memory'].includes(id) ? 'same-model' : id, reasoningEffort: 'low', temperature: 0.3 },
+		profile: { providerType: 'nanogpt', baseUrl: 'https://example.invalid', apiKey: mocks.secret },
+		generation: { model: (['arcCondensation', 'memory'].includes(id) ? 'same-model' : id) + mocks.modelVersion, reasoningEffort: mocks.reasoning, temperature: 0.3 },
 	})),
 }));
-vi.mock('$lib/server/engine/apiCallLogs', () => ({ recordApiCallLog: mocks.log }));
+vi.mock('$lib/server/engine/generationAccounting', () => ({ recordGenerationApiCalls: mocks.log, generationAttemptResult: (value: unknown) => value }));
 vi.mock('$lib/server/turn/provider', () => ({ generateServerTextWithMetrics: mocks.generate,
 	parseJsonFromGeneratedText: (text: string) => { try { return JSON.parse(text); } catch { return null; } } }));
 import { generateChronologicalMemory, generateReadableNarrative } from './summaryGeneration';
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => { vi.clearAllMocks(); mocks.generate.mockReset(); mocks.log.mockReset(); mocks.clearStore(); mocks.modelVersion = ''; mocks.reasoning = 'low'; mocks.secret = 'test'; });
 
 it.each(['chronological', 'readable'])('skips duplicate fallback endpoints and avoids nested retries for %s summaries', async kind => {
 	mocks.generate.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce({ model: 'classifier', text: JSON.stringify({ title: 'Crossing', narrative: 'The party crossed the river, negotiated passage, and reached the far bank with their agreement and companions intact.', accounts: [{ sourceId: '1', summary: 'The party crossed the river.' }] }) });
@@ -77,7 +84,7 @@ it('builds a long chapter from validated smaller account windows without losing 
 	expect(mocks.generate).toHaveBeenCalledTimes(3);
 	expect(mocks.generate.mock.calls.map(([call]) => (call.prompt.match(/^SOURCE \d+ \| sourceId:/gm) ?? []).length)).toEqual([10, 10, 2]);
 	expect(mocks.generate.mock.calls[2][0].prompt).not.toContain('source detail source detail');
-	expect(mocks.generate.mock.calls[2][0].prompt).toContain('first preserves the distinct outcome of source 5.');
+	expect(mocks.generate.mock.calls[2][0].prompt).toContain('first preserves the distinct outcome of source 10.');
 	expect(mocks.generate.mock.calls[2][0].prompt).toContain('second preserves the distinct outcome of source 10.');
 	expect(result.accounts.map(account => account.sourceId)).toEqual(sources.map(source => source.id));
 	expect(result.accounts[0].summary).toContain('first preserves');
@@ -89,7 +96,7 @@ it('recursively splits an oversized chapter and preserves all validated turn acc
 	mocks.generate.mockImplementation(async ({ prompt }: { prompt: string }) => {
 		const count = (prompt.match(/^SOURCE \d+ \| sourceId:/gm) ?? []).length;
 		return { model: 'same-model', finishReason: 'stop', text: JSON.stringify({
-			title: 'The continuing chapter',
+			title: `The continuing chapter ${prompt.match(/Turn (\d+):/)?.[1] ?? 'combined'}`,
 			narrative: 'The first decisions led to further consequences, and the later decisions changed the situation while preserving the established sequence of events.',
 			accounts: Array.from({ length: count }, (_, index) => ({ sourceId: String(index + 1), summary: `The distinct outcome of source ${index + 1} remains recorded.` })),
 		}) };
@@ -108,7 +115,18 @@ it('fails safely before inference when one source alone exceeds the chapter prom
 	expect(mocks.generate).not.toHaveBeenCalled();
 });
 
-it.each(['chapter', 'arc'] as const)('repairs missing %s prose from complete accounts without regenerating their facts', async kind => {
+it('rejects a length-limited response even when its JSON happens to parse', async () => {
+	const complete = JSON.stringify({ title: 'Crossing', narrative: 'The party crossed the river, negotiated passage, and reached the far bank with their agreement and companions intact.',
+		accounts: [{ sourceId: '1', summary: 'The party crossed the river.' }] });
+	mocks.generate.mockResolvedValueOnce({ model: 'memory', text: complete, finishReason: 'length' })
+		.mockRejectedValue(new Error('fallback unavailable'));
+	await expect(generateChronologicalMemory({ storyId: 'test', kind: 'chapter',
+		sources: [{ id: 'turn_1', text: 'The party crossed the river.' }] }))
+		.rejects.toThrow('history was not advanced');
+	expect(mocks.log.mock.calls[0][0]).toMatchObject({ status: 'error', metadata: { finishReason: 'length' } });
+});
+
+it.each(['chapter', 'arc'] as const)('repairs missing %s prose from complete accounts without regenerating facts', async kind => {
 	mocks.generate.mockResolvedValueOnce({ model: 'same-model', finishReason: 'stop', text: JSON.stringify({ title: 'Conditional passage',
 		accounts: [{ sourceId: '1', summary: 'The captain permits passage only after a fare of seven coins is paid.' }] }) })
 		.mockResolvedValueOnce({ model: 'same-model', finishReason: 'stop', text: JSON.stringify({ narrative: 'The captain permits passage only after a fare of seven coins is paid. The party waits at the river with that condition still unmet.' }) });
@@ -119,7 +137,25 @@ it.each(['chapter', 'arc'] as const)('repairs missing %s prose from complete acc
 	expect(mocks.generate.mock.calls[1][0].prompt).toContain('verified chronological accounts');
 });
 
-it('splits oversized arcs and carries complete accounts into the synthesis', async () => {
+it('reuses checkpointed factual accounts after a transient prose-only failure', async () => {
+	let recovering = false;
+	mocks.generate.mockImplementation(async ({ prompt }: { prompt: string }) => {
+		if (prompt.includes('verified chronological accounts')) {
+			if (!recovering) throw new Error('provider unavailable');
+			return { model: 'same-model', finishReason: 'stop', text: JSON.stringify({ narrative: 'The captain permits passage only after a fare of seven coins is paid. The party waits at the river with that condition still unmet.' }) };
+		}
+		return { model: 'same-model', finishReason: 'stop', text: JSON.stringify({ title: 'Conditional passage',
+			accounts: [{ sourceId: '1', summary: 'The captain permits passage only after a fare of seven coins is paid.' }] }) };
+	});
+	const input = { storyId: 'test', kind: 'chapter' as const, sources: [{ id: 'original_source', text: 'The captain requires seven coins.' }] };
+	await expect(generateChronologicalMemory(input)).rejects.toMatchObject({ retryable: true });
+	recovering = true;
+	const memory = await generateChronologicalMemory(input);
+	expect(memory.accounts[0].summary).toContain('seven coins');
+	expect(mocks.generate.mock.calls.filter(([call]) => !call.prompt.includes('verified chronological accounts'))).toHaveLength(1);
+});
+
+it('splits oversized arcs and carries complete accounts into synthesis', async () => {
 	const sources = Array.from({ length: 10 }, (_, index) => ({ id: `chapter_${index + 1}`, text: `Chapter ${index + 1}: ${'chapter evidence '.repeat(400)}` }));
 	mocks.generate.mockImplementation(async ({ prompt }: { prompt: string }) => {
 		const count = (prompt.match(/^SOURCE \d+ \| sourceId:/gm) ?? []).length;
@@ -134,13 +170,93 @@ it('splits oversized arcs and carries complete accounts into the synthesis', asy
 	for (const [call] of mocks.generate.mock.calls) expect(call.prompt.length).toBeLessThanOrEqual(50_000);
 });
 
-it('rejects a length-limited response even when its JSON happens to parse', async () => {
-	const complete = JSON.stringify({ title: 'Crossing', narrative: 'The party crossed the river, negotiated passage, and reached the far bank with their agreement and companions intact.',
-		accounts: [{ sourceId: '1', summary: 'The party crossed the river.' }] });
-	mocks.generate.mockResolvedValueOnce({ model: 'memory', text: complete, finishReason: 'length' })
-		.mockRejectedValue(new Error('fallback unavailable'));
-	await expect(generateChronologicalMemory({ storyId: 'test', kind: 'chapter',
-		sources: [{ id: 'turn_1', text: 'The party crossed the river.' }] }))
-		.rejects.toThrow('history was not advanced');
-	expect(mocks.log.mock.calls[0][0]).toMatchObject({ status: 'error', metadata: { finishReason: 'length' } });
+function completeResponse(prompt: string, model = 'same-model') {
+	const count = (prompt.match(/^SOURCE \d+ \| sourceId:/gm) ?? []).length;
+	return { model, finishReason: 'stop', text: JSON.stringify({ title: 'Verified journey',
+		narrative: 'The party made the recorded decisions, preserved their agreements, and reached the established ending situation after the consequences unfolded.',
+		accounts: Array.from({ length: count }, (_, index) => ({ sourceId: String(index + 1), summary: `Source ${index + 1} established a distinct consequence.` })) }) };
+}
+
+it('reuses validated subwindows after a later transient failure without repurchasing the successful half', async () => {
+	const sources = Array.from({ length: 20 }, (_, index) => ({ id: `turn_${index + 1}`, text: `Turn ${index + 1}: ${'source detail '.repeat(250)}` }));
+	let recovering = false;
+	mocks.generate.mockImplementation(async ({ prompt }: { prompt: string }) => {
+		if (prompt.includes('Turn 11:') && !recovering) throw new Error('provider unavailable');
+		return completeResponse(prompt);
+	});
+	await expect(generateChronologicalMemory({ storyId: 'test', kind: 'chapter', sources })).rejects.toMatchObject({ retryable: true });
+	expect(mocks.generate.mock.calls.filter(([call]) => call.prompt.includes('Turn 1:'))).toHaveLength(1);
+	recovering = true;
+	const result = await generateChronologicalMemory({ storyId: 'test', kind: 'chapter', sources });
+	expect(result.accounts.map(account => account.sourceId)).toEqual(sources.map(source => source.id));
+	expect(mocks.generate.mock.calls.filter(([call]) => call.prompt.includes('Turn 1:'))).toHaveLength(1);
+	expect(mocks.generate).toHaveBeenCalledTimes(6);
+});
+
+it('suppresses the same permanently failed source window across jobs and unrelated supporting-fact changes', async () => {
+	mocks.generate.mockResolvedValue({ model: 'same-model', text: '{"accounts":[', finishReason: 'length' });
+	const input = { storyId: 'test', kind: 'chapter' as const, sources: [{ id: 'turn_1', text: 'The party crossed the river.' }] };
+	await expect(generateChronologicalMemory(input)).rejects.toMatchObject({ retryable: false });
+	expect(mocks.generate).toHaveBeenCalledTimes(4);
+	await expect(generateChronologicalMemory(input)).rejects.toMatchObject({ retryable: false });
+	await expect(generateChronologicalMemory({ ...input, evidence: 'A new unrelated catalog item.' })).rejects.toMatchObject({ retryable: false });
+	expect(mocks.generate).toHaveBeenCalledTimes(4);
+	mocks.generate.mockImplementation(async ({ prompt }) => completeResponse(prompt));
+	mocks.modelVersion = '-corrected';
+	await expect(generateChronologicalMemory(input)).resolves.toMatchObject({ title: 'Verified journey' });
+	expect(mocks.generate).toHaveBeenCalledTimes(5);
+});
+
+it('retries a transient provider without reissuing permanently failed fallback calls despite changing timeout details', async () => {
+	let attempt = 0;
+	mocks.generate.mockImplementation(async ({ model }: { model: string }) => {
+		if (model === 'same-model') throw new Error(`provider unavailable at request-${++attempt}`);
+		return { model, text: '{"accounts":[', finishReason: 'length' };
+	});
+	const input = { storyId: 'test', kind: 'chapter' as const, sources: [{ id: 'turn_1', text: 'The party crossed the river.' }] };
+	await expect(generateChronologicalMemory(input)).rejects.toMatchObject({ retryable: true });
+	await expect(generateChronologicalMemory(input)).rejects.toMatchObject({ retryable: true });
+	expect(mocks.generate.mock.calls.map(([call]) => call.model)).toEqual(['same-model', 'classifier', 'narrative', 'narrative', 'same-model']);
+});
+
+it('invalidates completions for changed sources, supporting context, and generation settings but excludes credentials', async () => {
+	mocks.generate.mockImplementation(async ({ prompt }: { prompt: string }) => completeResponse(prompt));
+	const input = { storyId: 'test', kind: 'chapter' as const, sources: [{ id: 'turn_1', text: 'The party crossed the river.' }] };
+	await generateChronologicalMemory(input);
+	await generateChronologicalMemory(input);
+	mocks.secret = 'rotated-secret';
+	await generateChronologicalMemory(input);
+	expect(mocks.generate).toHaveBeenCalledTimes(1);
+	await generateChronologicalMemory({ ...input, evidence: 'A different supporting catalog.' });
+	expect(mocks.generate).toHaveBeenCalledTimes(2);
+	await generateChronologicalMemory({ ...input, sources: [{ ...input.sources[0], text: 'The party returned across the river.' }] });
+	mocks.reasoning = 'high';
+	await generateChronologicalMemory(input);
+	expect(mocks.generate).toHaveBeenCalledTimes(4);
+});
+
+it('freezes the provider settings for an invocation while a generation is in flight', async () => {
+	mocks.generate.mockImplementation(async ({ model, prompt }: { model: string; prompt: string }) => {
+		if (model === 'same-model') { mocks.modelVersion = '-changed-during-request'; throw new Error('provider unavailable'); }
+		return completeResponse(prompt, model);
+	});
+	await generateChronologicalMemory({ storyId: 'test', kind: 'chapter', sources: [{ id: 'turn_1', text: 'The party crossed the river.' }] });
+	expect(mocks.generate.mock.calls.map(([call]) => call.model)).toEqual(['same-model', 'classifier']);
+});
+
+it('halts provider fallbacks when accounting persistence fails', async () => {
+	mocks.generate.mockImplementation(async ({ prompt }: { prompt: string }) => completeResponse(prompt));
+	mocks.log.mockRejectedValue(new Error('Provider accounting receipt could not be saved; no provider retry was requested.'));
+	const input = { storyId: 'test', kind: 'chapter' as const, sources: [{ id: 'turn_1', text: 'The party crossed the river.' }] };
+	await expect(generateChronologicalMemory(input)).rejects.toMatchObject({ code: 'summary_checkpoint_accounting', retryable: false });
+	await expect(generateChronologicalMemory(input)).rejects.toMatchObject({ retryable: false });
+	expect(mocks.generate).toHaveBeenCalledTimes(1);
+});
+
+it('halts fallbacks for a wrapped transport receipt persistence failure without relying on its inner cause', async () => {
+	mocks.generate.mockRejectedValue(new Error('Provider attempt receipt could not be persisted: Unexpected receipt schema.'));
+	const input = { storyId: 'test', kind: 'chapter' as const, sources: [{ id: 'turn_1', text: 'The party crossed the river.' }] };
+	await expect(generateChronologicalMemory(input)).rejects.toMatchObject({ code: 'summary_checkpoint_accounting', retryable: false });
+	await expect(generateChronologicalMemory(input)).rejects.toMatchObject({ retryable: false });
+	expect(mocks.generate).toHaveBeenCalledTimes(1);
 });

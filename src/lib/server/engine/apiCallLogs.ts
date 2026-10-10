@@ -54,11 +54,11 @@ function normalizeApiCallLog(row: typeof apiCallLogs.$inferSelect) {
 	};
 }
 
-export async function recordApiCallLog(input: ApiCallLogCreate): Promise<Record<string, unknown> | null> {
+export async function recordApiCallLog(input: ApiCallLogCreate, options: { id?: string } = {}): Promise<Record<string, unknown> | null> {
 	const parsed = apiCallLogCreateSchema.parse(input);
 	try {
-		const [row] = await getDb().insert(apiCallLogs).values({
-			id: id(),
+		const values = {
+			id: options.id ?? id(),
 			storyId: parsed.storyId ?? null,
 			serviceId: cleanText(parsed.serviceId, 120),
 			operation: cleanText(parsed.operation, 180) ?? 'unknown',
@@ -76,8 +76,10 @@ export async function recordApiCallLog(input: ApiCallLogCreate): Promise<Record<
 			responseChars: optionalInt(parsed.responseChars),
 			error: cleanText(parsed.error, 2000),
 			metadata: parsed.metadata,
-		}).returning();
-		return row as Record<string, unknown>;
+		};
+		const [row] = await getDb().insert(apiCallLogs).values(values)
+			.onConflictDoUpdate({ target: apiCallLogs.id, set: values }).returning();
+		return row as Record<string, unknown> ?? null;
 	} catch (error) {
 		console.warn('[api-call-log] failed to persist log:', error);
 		return null;

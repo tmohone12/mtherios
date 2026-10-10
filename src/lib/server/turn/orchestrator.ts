@@ -25,7 +25,7 @@ import {
 	promoteDueTimelineEvents,
 } from '$lib/server/events/timeline';
 import { loadCanonicalCharacters, loadClassifierAgreements, loadClassifierLocations, loadClassifierFactions, loadTurnContext } from './context';
-import { buildCharacterCreationInstructions, buildClassifierLocationContext, type LocationIdentityRecord } from './promptPacket';
+import { ACTOR_KNOWLEDGE_EXTRACTION_INSTRUCTION, buildCharacterCreationInstructions, buildClassifierLocationContext, type LocationIdentityRecord } from './promptPacket';
 import { buildServerTurnPrompt, buildPromptSectionTrace, buildStateExtractionPrompt, buildClassifierCharacterContext, buildClassifierAgreementContext, chaptersForPromptContinuity, selectProtagonistEntity, type AgreementContextRecord, type PromptSectionTrace } from './promptPacket';
 import { sceneEvidenceExcerpt } from '$lib/utils/sceneEvidence';
 import type { CharacterContextRecord } from '$lib/utils/characterState';
@@ -38,16 +38,17 @@ import {
 	parseJsonFromGeneratedText,
 	type ResponseSchemaOptions,
 	type ServerGenerationResult,
+	type ServerGenerationOptions,
 } from './provider';
 import { applyValidatedTurnUpdate, turnUpdateOperationCount } from './patchValidator';
 import { playerRequestsPlotRetirement } from '$lib/server/plotBrain/lifecycle';
 import { retirePlotBrainFrame } from '$lib/server/plotBrain/reconciler';
 export { playerRequestsPlotRetirement } from '$lib/server/plotBrain/lifecycle';
 import { requireResolvedServiceProfile, resolveServiceGeneration } from '$lib/server/engine/llmSettings';
-import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
+import { generationAttemptResult, recordGenerationApiCalls } from '$lib/server/engine/generationAccounting';
 import { appendTurnEvidence } from '$lib/server/engine/campaignVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
-import { enqueueBackendJob, enqueueChapterSummaryJob, enqueueContinuityAuditJob, enqueueFactionCadenceJob, enqueuePlotBrainJob, enqueueTurnStateExtractionJob, recordCompletedInlineTurnMemory, turnStateSourceFingerprint } from '$lib/server/jobs/outbox';
+import { enqueueBackendJob, enqueueChapterSummaryJob, enqueueContinuityAuditJob, enqueuePlotBrainJob, enqueueTurnStateExtractionJob, recordCompletedInlineTurnMemory, turnStateSourceFingerprint } from '$lib/server/jobs/outbox';
 import {
 	buildEngineCacheKey,
 	engineCacheDependencyHash,
@@ -314,7 +315,7 @@ async function isPreparedTurnFresh(entry: PreparedCacheEntry): Promise<boolean> 
 	const db = getDb();
 	const [[story], [setting]] = await Promise.all([
 		db.select({ serverVersion: stories.serverVersion, metadata: stories.metadata,
-			currentLocationId: stories.currentLocationId, currentTurn: stories.currentTurn }).from(stories).where(eq(stories.id, entry.prepared.request.storyId)).limit(1),
+			currentLocationId: stories.currentLocationId, currentTurn: stories.currentTurn, currentWorldTime: stories.currentWorldTime }).from(stories).where(eq(stories.id, entry.prepared.request.storyId)).limit(1),
 		db.select().from(llmServiceSettings).where(eq(llmServiceSettings.serviceId, 'narrative')).limit(1),
 	]);
 	const authoredContext = await loadAuthoredGmContext(entry.prepared.ctxWithTimeline);
@@ -727,6 +728,7 @@ export function buildStateExtractionRepairPrompt(input: {
 		buildCharacterCreationInstructions(input.factions, input.narration),
 		campaignStateExtractionContext(input.campaignMetadata),
 		NPC_AGENCY_EXTRACTION_INSTRUCTION,
+		ACTOR_KNOWLEDGE_EXTRACTION_INSTRUCTION,
 		buildClassifierCharacterContext(input.characters ?? [], input.playerText, input.narration),
 		buildClassifierAgreementContext(input.agreements),
 		buildClassifierLocationContext(input.locations, input.narration),
@@ -740,7 +742,9 @@ export function buildStateExtractionRepairPrompt(input: {
 }
 
 export interface ProcessServerTurnOptions {
+	generateNarration?: (options: ServerGenerationOptions) => Promise<ServerGenerationResult>;
 	agentRunId?: string;
+	agentRunLeaseOwner?: string;
 	agentRunObservations?: string;
 	agentJevDecisions?: unknown[];
 	agentJevActionHash?: string;
@@ -2609,13 +2613,14 @@ function generationErrorResult(error: unknown): ServerGenerationError['result'] 
 	return error instanceof ServerGenerationError ? error.result : null;
 }
 
-function timingFromResult(
+export function timingFromResult(
 	operation: string,
 	serviceId: string,
 	result: ServerGenerationResult | ServerGenerationError['result'],
 	status: 'success' | 'error',
 ): GenerationTiming {
-	const usage = 'usage' in result ? result.usage : undefined;
+	// Turn timings describe the source generation; API ledger deduplication is separate.
+	const usage = result.usage;
 	const finishReason = 'finishReason' in result ? result.finishReason ?? null : null;
 	return {
 		operation,
@@ -2659,33 +2664,7 @@ async function logGenerationCall(options: {
 	error?: unknown;
 	metadata?: Record<string, unknown>;
 }): Promise<void> {
-	const usage = 'usage' in options.result ? options.result.usage : undefined;
-	await recordApiCallLog({
-		storyId: options.storyId,
-		serviceId: options.serviceId,
-		operation: options.operation,
-		providerType: options.profile.providerType,
-		providerName: options.profile.name ?? null,
-		profileId: options.profile.id ?? null,
-		model: options.result.model,
-		endpoint: options.result.endpoint,
-		status: options.status,
-		durationMs: options.result.durationMs,
-		requestTokens: usage?.requestTokens ?? null,
-		responseTokens: usage?.responseTokens ?? null,
-		totalTokens: usage?.totalTokens ?? null,
-		promptChars: options.result.promptChars,
-		responseChars: 'responseChars' in options.result ? options.result.responseChars ?? null : null,
-		error: options.error ? (options.error instanceof Error ? options.error.message : String(options.error)) : null,
-		metadata: {
-			clientTurnId: options.clientTurnId,
-			cachedInputTokens: usage?.cachedInputTokens ?? null,
-			cacheWriteTokens: usage?.cacheWriteTokens ?? null,
-			providerCostUsd: usage?.providerCostUsd ?? null,
-			costSource: usage?.providerCostUsd != null ? 'provider_reported' : 'unavailable',
-			...options.metadata,
-		},
-	});
+	await recordGenerationApiCalls({ ...options, metadata: { clientTurnId: options.clientTurnId, ...options.metadata } });
 }
 
 function extractServerWikiContext(result: unknown): ServerWikiContext {
@@ -3625,7 +3604,7 @@ export async function prepareServerTurn(input: unknown): Promise<PreparedServerT
 export async function processServerTurn(input: unknown, options: ProcessServerTurnOptions = {}): Promise<TurnResponse> {
 	const turnStartedAt = monotonicNow();
 	const request = turnRequestSchema.parse(input);
-	const { assertNoPendingAgentRun } = await import('$lib/server/engine/agentRunGuard');
+	const { assertNoPendingAgentRun, assertAgentRunCanCommit } = await import('$lib/server/engine/agentRunGuard');
 	await assertNoPendingAgentRun(request.storyId, options.agentRunId);
 	const parallelPov = parseParallelPovCommand(request.playerText);
 	const retireCurrentPlot = playerRequestsPlotRetirement(request.playerText);
@@ -4071,8 +4050,10 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		await assertAuthoredContextFresh(prepared);
 		const memoryStream = !dialogueEnabled && options.onNarrationChunk
 			? createTurnMemoryStream(options.onNarrationChunk) : null;
-		const result = await generateServerTextWithMetrics({
+		const result = await (options.generateNarration ?? generateServerTextWithMetrics)({
 			profile: narrativeProfile,
+			onAttempt: attempt => logGenerationCall({ storyId: request.storyId, clientTurnId: request.clientTurnId, serviceId: 'narrative',
+				operation: 'turn.narration', profile: narrativeProfile, result: generationAttemptResult(attempt), status: attempt.status, error: attempt.error ?? undefined }),
 			model: narrativeGeneration.model,
 			temperature: narrativeGeneration.temperature,
 			maxTokens: narrativeGeneration.maxTokens,
@@ -4202,7 +4183,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 			contextReceipt.selection?.requests?.push(promptRequestSummary('roll_continuation', narrativeSystem, continuationDynamic, continuationMessages, continuationPrompt, continuationSourceSpans, contextAfterDialogue));
 			try {
 				await assertAuthoredContextFresh(prepared);
-				const continuation = await generateServerTextWithMetrics({
+			const continuation = await (options.generateNarration ?? generateServerTextWithMetrics)({
 					profile: narrativeProfile,
 					model: narrativeGeneration.model,
 					temperature: narrativeGeneration.temperature,
@@ -4489,6 +4470,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		} : {}),
 	} : null;
 	const persistedTurn = await db.transaction(async (tx) => {
+		await assertAgentRunCanCommit(tx, request.storyId, options.agentRunId, options.signal, options.agentRunLeaseOwner);
 		const allocationStarted = monotonicNow();
 		const position = await allocateStoryEntryPosition(tx, request.storyId);
 		const [storyVersion] = await tx.update(stories).set({
@@ -4571,6 +4553,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		warnings: [] as string[],
 		operationCount: 0,
 	};
+	let classifierExtractionOperation = 'turn.state_extraction';
 	let classifierExtractionResult: ServerGenerationResult | null = null;
 	let classifierExtractionPrompt = '';
 	let classifierExtractionSystem = '';
@@ -4627,6 +4610,8 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		try {
 			let extractionResult = await generateServerTextWithMetrics({
 				profile: classifierProfile,
+				onAttempt: attempt => logGenerationCall({ storyId: request.storyId, clientTurnId: request.clientTurnId, serviceId: 'classifier',
+					operation: classifierExtractionOperation, profile: classifierProfile, result: generationAttemptResult(attempt), status: attempt.status, error: attempt.error ?? undefined }),
 				model: classifierGeneration.model,
 				temperature: classifierGeneration.temperature,
 				maxTokens: classifierGeneration.maxTokens,
@@ -4655,6 +4640,14 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 			try {
 				parsedUpdate = recorder.timeSync('turn.validation.parse_update', {}, () => parseStateExtractionResult(extractionResult.text));
 			} catch (validationError) {
+				await logGenerationCall({ storyId: request.storyId, clientTurnId: request.clientTurnId,
+					serviceId: 'classifier', operation: 'turn.state_extraction', profile: classifierProfile,
+					result: extractionResult, status: 'error', error: validationError,
+					metadata: { ...classifierLogMetadata, parseOutcome: 'error', applyOutcome: 'not_started', repairPlanned: true,
+						debugSnapshot: buildTurnDebugSnapshot({ kind: 'state_extraction', playerText: request.playerText,
+							system: classifierExtractionSystem, prompt: classifierExtractionPrompt, output: extractionResult.text }) } });
+				classifierExtractionResult = null;
+				classifierExtractionOperation = 'turn.state_extraction.repair';
 				const repairPrompt = buildStateExtractionRepairPrompt({
 					dueEventCandidates,
 					campaignMetadata: prepared.ctxWithTimeline.story.metadata,
@@ -4671,6 +4664,8 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				const repairGeneration = classifierRepairGeneration(classifierGeneration, extractionResult);
 				extractionResult = await generateServerTextWithMetrics({
 					profile: classifierProfile,
+					onAttempt: attempt => logGenerationCall({ storyId: request.storyId, clientTurnId: request.clientTurnId, serviceId: 'classifier',
+						operation: classifierExtractionOperation, profile: classifierProfile, result: generationAttemptResult(attempt), status: attempt.status, error: attempt.error ?? undefined }),
 					model: classifierGeneration.model,
 					temperature: 0,
 					maxTokens: repairGeneration.maxTokens,
@@ -4729,7 +4724,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 					storyId: request.storyId,
 					clientTurnId: request.clientTurnId,
 					serviceId: 'classifier',
-					operation: 'turn.state_extraction',
+					operation: classifierExtractionOperation,
 					profile: classifierProfile,
 					result: loggedResult,
 					status: 'error',
@@ -4785,7 +4780,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				storyId: request.storyId,
 				clientTurnId: request.clientTurnId,
 				serviceId: 'classifier',
-				operation: 'turn.state_extraction',
+				operation: classifierExtractionOperation,
 				profile: classifierProfile,
 				result: classifierExtractionResult,
 				status: 'error',
@@ -4818,7 +4813,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 			storyId: request.storyId,
 			clientTurnId: request.clientTurnId,
 			serviceId: 'classifier',
-			operation: 'turn.state_extraction',
+			operation: classifierExtractionOperation,
 			profile: classifierProfile,
 			result: classifierExtractionResult,
 			status: 'success',
@@ -4977,17 +4972,6 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 			warnings.push(`Chapter checkpoint queued independently of state extraction: ${chapterJobId}`);
 		} catch (error) {
 			warnings.push(`Chapter checkpoint enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
-		}
-	}
-	if (!oocMode && stateApplySucceeded) {
-		try {
-			const [advancedStory] = await db.select({ currentTurn: stories.currentTurn }).from(stories)
-				.where(eq(stories.id, request.storyId)).limit(1);
-			if (advancedStory) await recorder.time('turn.faction_cadence.enqueue', {
-				currentTurn: advancedStory.currentTurn,
-			}, () => enqueueFactionCadenceJob({ storyId: request.storyId, currentTurn: advancedStory.currentTurn }));
-		} catch (error) {
-			warnings.push(`Faction cadence enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 	const promotionMetadata: Record<string, unknown> = {
@@ -5176,18 +5160,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		} catch (error) {
 			warnings.push(`Continuity audit enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
-		try {
-			await enqueueBackendJob({
-				storyId: request.storyId,
-				type: 'evaluate_npc_background_action',
-				dedupeKey: `npc-background-${assistantEntryId}`,
-				payload: { assistantEntryId, expectedTurn: gmBrief.currentTurn },
-				requeueExisting: false,
-				maxAttempts: 2,
-			});
-		} catch (error) {
-			warnings.push(`NPC background action enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
-		}
+
 	}
 
 	return {

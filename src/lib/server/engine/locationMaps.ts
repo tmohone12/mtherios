@@ -5,6 +5,7 @@ import { emptyLocationMap, locationMapBodySchema, locationMapGetSchema, location
 import { getDb } from '$lib/server/db/client';
 import { assets, entities, locationMapRevisions, locationMaps, stories } from '$lib/server/db/schema';
 import { enqueueStoryVaultSyncJob } from '$lib/server/jobs/outbox';
+import { assertAgentRunCanCommit } from './agentRunGuard';
 
 async function requireLocation(db: ReturnType<typeof getDb>, storyId: string, locationId: string) {
   const [location] = await db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, locationId), eq(entities.type, 'location'))).limit(1);
@@ -46,6 +47,11 @@ export async function listLocationMapHistory(storyId: string, raw: z.input<typeo
 export async function saveLocationMap(storyId: string, raw: z.input<typeof locationMapSaveSchema>, actor: Record<string, unknown> = { kind: 'user' }) {
   const args = locationMapSaveSchema.parse(raw);
   return getDb().transaction(async tx => {
+    const assertAgentWriter = async () => {
+      if (typeof actor.runId === 'string') await assertAgentRunCanCommit(tx, storyId, actor.runId, undefined,
+          typeof actor.leaseOwner === 'string' ? actor.leaseOwner : undefined, 'running');
+    };
+    await assertAgentWriter();
     const [story] = await tx.select().from(stories).where(eq(stories.id, storyId)).for('update').limit(1);
     if (!story) throw new Error('Game not found.');
     await requireLocation(tx as ReturnType<typeof getDb>, storyId, args.locationId);
@@ -83,6 +89,8 @@ export async function saveLocationMap(storyId: string, raw: z.input<typeof locat
       }
     }
     if (current && isDeepStrictEqual(current.map, args.map)) return { locationId: args.locationId, revision: current.revision, map: args.map, unchanged: true };
+    // Waiting for the story lock and validating geometry can exhaust the active deadline.
+    await assertAgentWriter();
     const revision = (current?.revision ?? 0) + 1;
     const now = new Date().toISOString();
     if (current) await tx.update(locationMaps).set({ map: args.map, revision, updatedAt: now }).where(eq(locationMaps.locationId, args.locationId));
