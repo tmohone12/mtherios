@@ -7,7 +7,6 @@ import {
 	getArcs,
 	getLorebookEntry,
 	getStory,
-	bulkPutSchemes,
 	putArc,
 	putChapter,
 	putCharacter,
@@ -24,11 +23,9 @@ import {
 	deleteBackendLorebookEntry,
 	upsertBackendArc,
 	upsertBackendChapter,
-	upsertBackendLivingMemory,
 	upsertBackendLorebookEntry,
 } from '$lib/services/serverStories';
-import type { Arc, Chapter, Character, CharacterEntryState, Entry, Scheme, Story } from '$lib/types';
-import type { LivingMemoryKind } from '$lib/services/serverStories';
+import type { Arc, Chapter, Character, CharacterEntryState, Entry, Story } from '$lib/types';
 
 export type CanonicalWriteMode = 'create' | 'update';
 
@@ -50,28 +47,6 @@ async function applyBackendVersion(story: Story, serverVersion: number): Promise
 		serverVersion,
 		syncStatus: 'synced',
 	});
-}
-
-async function saveCanonicalLivingRecords<T extends { storyId: string }>(
-	storyId: string,
-	kind: LivingMemoryKind,
-	records: T[],
-	writeLocal: () => Promise<void>,
-): Promise<number | null> {
-	if (records.length === 0) return null;
-	const owner = await getStory(storyId);
-	let serverVersion: number | null = null;
-	if (owner?.serverStoryId) {
-		const result = await upsertBackendLivingMemory(
-			owner.serverStoryId,
-			kind,
-			records as Array<Record<string, unknown>>,
-		);
-		serverVersion = result.serverVersion;
-		await applyBackendVersion(owner, result.serverVersion);
-	}
-	await writeLocal();
-	return serverVersion;
 }
 
 function keywordsForName(name: string): string[] {
@@ -373,8 +348,4 @@ export async function deleteCanonicalArc(storyId: string, arcId: string): Promis
 	}
 	await deleteArc(arcId);
 	return serverVersion;
-}
-
-export async function saveCanonicalScheme(scheme: Scheme): Promise<number | null> {
-	return saveCanonicalLivingRecords(scheme.storyId, 'scheme', [scheme], () => bulkPutSchemes([scheme]));
 }

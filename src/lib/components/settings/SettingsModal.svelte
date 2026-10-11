@@ -501,7 +501,7 @@
 		{ id: 'memory', group: 'Story experience', label: 'Memory', shortLabel: 'Memory', description: 'Give each scene the right balance of recent events and lasting history.', icon: Brain },
 		{ id: 'images', group: 'Story experience', label: 'Image Generation', shortLabel: 'Images', description: 'Set an art direction for the people and places in your story.', icon: ImageIcon },
 		{ id: 'interface', group: 'Story experience', label: 'Interface', shortLabel: 'Interface', description: 'Make room for the way you like to read and write.', icon: Palette },
-		{ id: 'inspector', group: 'Advanced', label: 'Inspector', shortLabel: 'Inspector', description: 'Review this browser\'s own model calls: suggestions, story setup help and plan structuring. Turn requests are on each turn\'s receipt.', icon: ScrollText },
+		{ id: 'inspector', group: 'Advanced', label: 'Inspector', shortLabel: 'Inspector', description: 'Review this browser\'s own model calls: suggestions and story setup help. Turn requests are on each turn\'s receipt.', icon: ScrollText },
 	];
 
 	function focusDialog(node: HTMLElement) {

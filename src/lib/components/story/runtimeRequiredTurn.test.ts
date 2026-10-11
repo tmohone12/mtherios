@@ -32,12 +32,11 @@ describe('server-only turn submission', () => {
 		expect(source).toContain('isTerminalReachabilityError(outcome.error)');
 	});
 
-	it('keeps failed sends and plans out of the story transcript', () => {
+	it('keeps failed sends out of the story transcript', () => {
 		const serverTurn = block('async function submitServerTurn', 'function openModeSheet');
-		const plan = block('async function submitPlayerPlan', 'async function submitPlanFromModal');
 		expect(serverTurn).toContain('turnError =');
 		expect(serverTurn).not.toContain('story.addEntry');
-		expect(plan).not.toContain('Plan declaration failed');
+		expect(source).not.toContain('submitPlayerPlan');
 		expect(serverTurn).toContain('restoreSubmittedDraft(submittedStoryId, submittedDraftRevision, submittedInput, submittedActionType)');
 	});
 

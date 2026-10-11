@@ -23,7 +23,3 @@ If proposing canon changes, cite evidence from chapters, arcs, events, schemes, 
 
 If war is active or plausible, include a warPressureCard with current phase, main factions and war aims, fronts or theaters, important schemes, visible signs, hidden facts, next escalation if ignored, and player intervention points.`;
 }
-
-export function buildWarSchemeRulesBlock(): string {
-	return 'When war is present, schemes are the operational layer: secure supply roads, bribe commanders, starve cities, provoke treaty breaches, finance rebels, sabotage fleets, split coalitions, hide sponsors, or turn refugees into leverage. Do not create a war scheme unless it has an owner, target, trigger, visible signs, counterplay, and consequences.';
-}

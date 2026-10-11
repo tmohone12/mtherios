@@ -10,7 +10,7 @@ No `mtherios-server-cleanup.patch` was present in the checkout, so none was appl
 - **Browser-only save** (no `serverStoryId`): transcript and exports stay available; the composer keeps the draft and offers "Import and continue" (`story.importCurrentStoryToServer()` → existing `importLocalStoryToBackend`), then loads the server copy.
 - **Chapters, arcs, sagas:** server jobs only. The World drawer's "Write arc now" control appears only when `selectArcRollupBatches` finds the next 10 consecutive uncovered chapters and runs `jobs.rollupArc`; sagas come from the job the arc transaction queues.
 - **Context display:** the last recorded server receipt (labelled as recorded) beside the next-turn budget setting; "Preview context" runs `turn.preview`. No browser prompt estimate.
-- **Remaining browser model calls** (optional, never write a turn): player suggestions, story setup assistance, player-plan structuring.
+- **Remaining browser model calls** (optional, never write a turn): player suggestions and story setup assistance (Declare Plan was removed in the second follow-up).
 
 ## Inventory
 
@@ -23,7 +23,7 @@ No `mtherios-server-cleanup.patch` was present in the checkout, so none was appl
 | `services/ai/tools/executor.ts`, `generate-with-tools.ts`, `inline-extractor.ts`; `GM_TOOLS`, wiki/roll tool schemas, executor-only helpers | Browser tool application and classifier; the server validates `worldStateUpdateSchema` (kept) |
 | `services/ai/generation/MemoryService.ts`, `SagaCondensationService.ts`, `ArcCondensationService.ts`; `lorebook/LoreManagementService.ts`, `EntryRefinementService.ts`; schemas `memory`, `saga`, `arc`, `lorebook`, `entryRefinement` | Browser summarizers/lore management; `EntryRefinementService` had no caller at all |
 | `services/ai/embeddings/EmbeddingService.ts`, `retrieval/EntryRetrievalService.ts`, `context/ContextBudgetService.ts`; IndexedDB embedding-cache accessors | Browser semantic retrieval and prompt budgeting for the local prompt |
-| `sdk/generate.ts` `streamNarrative`, `continueAfterTools`; DeepSeek roleplay injection | Browser narrator transport; `generateNarrative`/`generateStructuredWithTools` stay for the remaining helpers |
+| `sdk/generate.ts` `streamNarrative`, `continueAfterTools`; DeepSeek roleplay injection | Browser narrator transport; `generateNarrative` stays for the remaining helpers (`generateStructuredWithTools` went with Declare Plan, below) |
 | `story.svelte.ts` prompt/snapshot/classifier builders (`buildSystemPrompt`, `buildStateSnapshot`, `buildOrchestratorSystemBlocks`, `serializeSnapshotForClassifier`, `buildConversationMessages`, `buildUserPrompt`, all `#section*`), local estimate fields, turn-only mutators, test-only `submitBackendTurn` | 4,252 → ~2,420 lines; only the local branch and the context estimate read them |
 | Client `processBackendTurn`, `retrieveBackendMemory`; canonical write wrappers used only by the executor/runner (`saveCanonicalLocation`, `Item`, `Saga`, `ConversationMemory`, `WorldEvent`, `FactionActions`, `Rumors`, `Schemes`) | Second, test-only submission path; executor/runner write path |
 | `SchemeService.injectSchemes`, `buildMtheriosSummaryInstruction`, unused war-doctrine blocks, `ai/core/config` constants | Browser prompt/summarizer text |
@@ -50,7 +50,6 @@ Client JS in the production build fell from 3.95 MB to 1.70 MB, mostly because t
 | Legacy agent-run branches in `agentRuns.ts` | Persisted legacy runs stay readable/resumable |
 | `worldsim` schema, `saga.*`/`arc.*` record commands, client saga wrappers | Old snapshots, CLI/MCP record edits |
 | Hidden "detached" saves (`syncStatus: 'local-only'` after the server copy was deleted) | Deliberate and tested in `refreshStoryCatalog`: server deletion must stick; never-bound saves stay visible |
-| Declare Plan browser model call | No server command structures plans yet (ownership gap, below) |
 
 ## Intentional behaviour changes
 
@@ -101,8 +100,33 @@ A second pass resolved four of the original follow-ups and removed further dead 
 
 Verification after this pass: `svelte-check` 0/0; production build succeeds; 2,375 tests passed, 0 failed, 297 skipped (4 new tests).
 
+## Second follow-up (2026-10-11): world time and Declare Plan
+
+**Correction.** The first follow-up listed "header time waits for extraction". That was wrong: `processServerTurn` applies the header's time and location at commit even when extraction is deferred. The runtime check saw no movement because the fake endpoint wrote an unlabelled header (`[Day 3 | 09:42 | Harbor]`), which the header parser read as time `Day 3` with no clock time.
+
+**Why time stopped in the live campaign** (read-only queries against the live database; nothing was changed):
+
+- The Veil narrator stopped writing the header line at 2026-10-11 01:47. With no header there is no proposal, so the clock stayed at `Day Eighth Moon 11, 301 AC | 09:50`.
+- The fallback, the classifier's `time_delta`, runs in background extraction. The live config has `jobWorker: false`; no job has completed since 2026-10-08 00:27 and 5,792 are queued.
+
+**Fix.**
+
+- Headers are read by content, not field position, so unlabelled headers carry their time and place.
+- When a saved turn has no usable header, the server writes one before saving: a new `sceneHeader` model task (Classifier role, one request, temperature 0.1) gets the previous header, the clock label, the location, the player action and up to 6,000 characters of the passage, and returns one line. The line is used only when it starts and ends with brackets and has a clock-readable time that the world clock accepts (no rewind or oversized jump). Any other result, a request error or a missing Classifier profile leaves the narration unchanged and adds a turn warning; a cancelled turn still cancels. OOC, thought and parallel-POV turns, and stories without a time label, make no request. The clock then advances through the existing commit path (`turn:<assistant entry>`, so repeats cannot re-advance).
+- The task can be switched off in the model-task settings; it costs one Classifier request only on turns whose narration has no header.
+
+**Declare Plan removed.** The `/plan` command, the Declare Plan dialog and both Plan buttons are gone, with `SchemeService` (player-plan structuring), its schema, `saveCanonicalScheme`, the browser `generateStructuredWithTools` call and its DeepSeek detection, `parseJsonFromText` and an unused war-scheme prompt block. A typed `/plan …` is now sent as an ordinary action. Existing scheme records, including older player schemes, stay readable and editable.
+
+Verification after this pass: `svelte-check` 0/0; production build succeeds; 2,366 tests passed, 0 failed, 297 skipped (8 new scene-header tests; removed tests covered only the deleted plan, DeepSeek-detection and JSON-extraction code). Runtime check on the worktree build against a disposable database (`mythengine_timecheck_20261011`, port 5199, jobs off, extraction deferred as the browser sends it, a local fake endpoint as GameMaster and Classifier; dropped afterwards), clock set to `Day 3 | 09:42`:
+
+- headerless narration: one scene-header request; header prepended; clock 09:42 → 10:05 (`turn:<entry>`, proposer `gm_header`), entry metadata `sceneHeader`;
+- a second headerless turn: 10:05 → 10:30;
+- a written header earlier than the clock: narration unchanged, warning `header_time_earlier_than_clock`, clock unchanged;
+- narration with its own header: no scene-header request, clock 10:30 → 11:15;
+- an OOC turn: no scene-header request, clock unchanged;
+- Settings → model tasks lists "Scene header" (Classifier, ready, enabled).
+
 ## Further work (prioritized)
 
-1. **Declare Plan still calls a model from the browser** with the Classifier settings. Move plan structuring behind a server command with a validated proposal.
-2. **Header time waits for extraction.** The narration header's time and location are applied with the validated state update (`applyValidatedTurnUpdate`), and browser turns defer extraction, so the clock and scene location move only after `extract_turn_state` succeeds. With the job worker off or a failed extraction they stay put (observed in the runtime check). Decide whether the header proposal should apply in the turn transaction independently of extraction.
-3. Unused per-table CRUD helpers in `services/database.ts` and command wrappers in `serverStories.ts` predate this work; trim with the IndexedDB compatibility review.
+1. **The live job worker is off.** See "Second follow-up". Turning it on runs the queued backlog through the configured providers.
+2. Unused per-table CRUD helpers in `services/database.ts` and command wrappers in `serverStories.ts` predate this work; trim with the IndexedDB compatibility review.

@@ -1,9 +1,8 @@
 <script lang="ts">
-	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, BookOpen, Square, Loader2, Target, X, ChevronDown, WifiOff, Upload } from 'lucide-svelte';
+	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, BookOpen, Square, Loader2, X, ChevronDown, WifiOff, Upload } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
-	import { declarePlayerScheme } from '$lib/services/ai/scheme/SchemeService';
 	import { fetchBackendEntriesAround, isTerminalReachabilityError, previewBackendTurn } from '$lib/services/backendMemory';
 	import { cancelBackendAgentRun, completedBackendAgentTurn, currentBackendAgentRun, getBackendAgentRun, openBackendAgentRunStream, readBackendAgentSource, readBackendDiceRoll, respondBackendAgentRun, startBackendAgentRun, visibleRollPortrait, type BackendAgentActivity, type BackendAgentRun, type BackendAgentInteraction, type BackendAgentSource } from '$lib/services/backendAgentRuns';
 	import type { TurnPreviewResponse } from '$lib/contracts/memory';
@@ -187,14 +186,6 @@
 			}
 		})();
 	});
-
-	// ── Player scheme declaration (Declare Plan modal) ──
-	let showPlanModal = $state(false);
-	let planText = $state('');
-	let planSubmitting = $state(false);
-	let planError = $state<string | null>(null);
-	let planInputElement = $state<HTMLTextAreaElement | null>(null);
-	let planReturnFocus: HTMLElement | null = null;
 
 	// Listen for injected text from suggestion/choice chips
 	$effect(() => {
@@ -535,16 +526,6 @@
 			return;
 		}
 
-		// /plan <free text> — declare a player scheme inline (no narrator turn).
-		const planMatch = rawInput.match(/^\/plan\s+([\s\S]+)$/i);
-		if (planMatch) {
-			if (!await submitPlayerPlan(planMatch[1].trim())) {
-				await restoreDraft();
-				if (draftStoryId === submittedStoryId) turnError = `Plan not declared: ${planError ?? 'try again.'}`;
-			}
-			return;
-		}
-
 		await submitServerTurn(buildSubmittedContent(rawInput, submittedActionType), submittedInput, submittedActionType, submittedStoryId, submittedDraftRevision);
 	}
 
@@ -641,57 +622,6 @@
 		}
 	}
 
-	/** Structures and saves a player plan. Failures stay in the composer, not the transcript. */
-	async function submitPlayerPlan(text: string): Promise<boolean> {
-		if (!text.trim() || !story.currentStory || !backendTurnEnabled) return false;
-		planSubmitting = true;
-		planError = null;
-		try {
-			const { scheme, error } = await declarePlayerScheme(text);
-			if (error || !scheme) {
-				planError = error ?? 'Failed to declare plan.';
-				return false;
-			}
-			const stageList = scheme.stages
-				.map((s, i) => `  ${i + 1}. ${s.label}`)
-				.join('\n');
-			await story.addEntry(
-				'system',
-				`Plan declared — "${scheme.goal}"\nStages:\n${stageList}`,
-			);
-			showPlanModal = false;
-			planText = '';
-			return true;
-		} catch (e) {
-			planError = e instanceof Error ? e.message : String(e);
-			return false;
-		} finally {
-			planSubmitting = false;
-		}
-	}
-
-	async function submitPlanFromModal() {
-		await submitPlayerPlan(planText);
-	}
-
-	function openPlanModal() {
-		planReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-		planError = null;
-		showPlanModal = true;
-		requestAnimationFrame(() => planInputElement?.focus());
-	}
-
-	function closePlanModal() {
-		if (planSubmitting) return;
-		showPlanModal = false;
-		planText = '';
-		planError = null;
-		requestAnimationFrame(() => {
-			const fallback = document.querySelector<HTMLButtonElement>('button[aria-label^="Choose action mode"]');
-			(planReturnFocus?.isConnected ? planReturnFocus : fallback)?.focus();
-		});
-	}
-
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.isComposing || e.keyCode === 229 || e.repeat) return;
 		// Coarse-pointer devices use Shift+Enter to avoid accidental mobile submits.
@@ -756,86 +686,6 @@
 	</div>
 {/if}
 
-{#if showPlanModal}
-	<div
-		class="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 backdrop-blur-sm sm:items-center sm:p-4"
-		onclick={closePlanModal}
-		onkeydown={(e) => e.key === 'Escape' && closePlanModal()}
-		role="presentation"
-	>
-		<div
-			class="max-h-[100dvh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-5 pb-[max(env(safe-area-inset-bottom),20px)] shadow-2xl sm:rounded-xl sm:pb-5"
-			onclick={(e) => e.stopPropagation()}
-			onkeydown={(e) => {
-				e.stopPropagation();
-				if (e.key === 'Escape') closePlanModal();
-			}}
-			role="dialog"
-			aria-modal="true"
-			aria-labelledby="plan-modal-title"
-			tabindex="-1"
-		>
-			<div class="mb-3 flex items-start justify-between gap-3">
-				<div>
-					<h2 id="plan-modal-title" class="flex items-center gap-2 font-display text-2xl font-medium text-[var(--text-primary)]">
-						<Target class="h-5 w-5 text-[var(--text-accent)]" />
-						Declare a Plan
-					</h2>
-					<p class="mt-1 text-xs text-[var(--text-muted)]">
-						Describe what you intend to do. The system breaks it into stages — obstacles
-						and opportunities the narrator will surface as you play. Plans are intent,
-						not guarantees.
-					</p>
-				</div>
-				<button
-					onclick={closePlanModal}
-					disabled={planSubmitting}
-					class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] transition-all hover:bg-[var(--color-surface-600)]/30 hover:text-[var(--text-primary)] disabled:opacity-30 sm:h-8 sm:w-8"
-					aria-label="Close"
-				>
-					<X class="h-4 w-4" />
-				</button>
-			</div>
-
-			<textarea
-				bind:this={planInputElement}
-				bind:value={planText}
-				placeholder="e.g. I plan to poison Lord Frey at the wedding feast — but I'll need to find an alchemist first, and bribe a serving girl to switch the cups…"
-				rows="5"
-				disabled={planSubmitting}
-				class="w-full resize-none rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--text-accent)] focus:outline-none disabled:opacity-50"
-			></textarea>
-
-			{#if planError}
-				<p class="mt-2 text-xs text-red-400">{planError}</p>
-			{/if}
-
-			<div class="mt-4 flex items-center justify-end gap-2">
-				<button
-					onclick={closePlanModal}
-					disabled={planSubmitting}
-					class="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--text-muted)] transition-all hover:text-[var(--text-primary)] disabled:opacity-30"
-				>
-					Cancel
-				</button>
-				<button
-					onclick={submitPlanFromModal}
-					disabled={!planText.trim() || planSubmitting}
-					class="flex items-center gap-1.5 rounded-lg bg-[var(--text-accent)]/15 px-3 py-1.5 text-xs font-medium text-[var(--text-accent)] transition-all hover:bg-[var(--text-accent)]/25 disabled:opacity-30"
-				>
-					{#if planSubmitting}
-						<Loader2 class="h-3.5 w-3.5 animate-spin" />
-						Structuring…
-					{:else}
-						<Target class="h-3.5 w-3.5" />
-						Declare
-					{/if}
-				</button>
-			</div>
-		</div>
-	</div>
-{/if}
-
 {#if modeSheetOpen}
 	<div class="fixed inset-0 z-50 flex items-end bg-black/55 sm:hidden" role="presentation">
 		<button class="absolute inset-0" onclick={() => closeModeSheet()} aria-label="Close action mode menu"></button>
@@ -849,9 +699,6 @@
 						<config.icon class="h-4 w-4" /><span><strong class="block text-sm">{config.label === 'Story' ? 'Narrate / Story' : config.label}</strong><small class="block opacity-70">{config.placeholder}</small></span>
 					</button>
 				{/each}
-				<button class="flex min-h-14 items-center gap-3 rounded-xl bg-[var(--bg-tertiary)] px-4 text-left text-[var(--text-primary)]" onclick={() => { closeModeSheet(false); openPlanModal(); }} disabled={startingTurn || planSubmitting || localOnlyStory}>
-					<Target class="h-4 w-4 text-[var(--text-accent)]" /><span><strong class="block text-sm">Declare Plan</strong><small class="block text-[var(--text-muted)]">Structure a longer intent</small></span>
-				</button>
 			</div>
 		</div>
 	</div>
@@ -975,9 +822,6 @@
 						<span>{config.label}</span>
 					</button>
 				{/each}
-				<button class="mode-button plan-button" onclick={openPlanModal} title="Declare a plan — turn a longer intent into stages" disabled={startingTurn || planSubmitting || localOnlyStory}>
-					<Target class="h-3.5 w-3.5" /><span>Plan</span>
-				</button>
 			</div>
 		{/if}
 		<textarea
@@ -1087,8 +931,6 @@
 	.mode-button, .mobile-mode-button { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; min-height: 2.25rem; border-radius: 0.5rem; padding: 0 0.65rem; font-size: 0.75rem; font-weight: 500; color: var(--text-muted); transition: color 150ms ease, background 150ms ease; }
 	.mode-button:hover, .mobile-mode-button:hover { color: var(--text-primary); background: var(--bg-tertiary); }
 	.mode-button[aria-pressed='true'] { color: var(--text-accent); background: color-mix(in srgb, var(--text-accent) 12%, transparent); }
-	.plan-button { margin-left: auto; border-left: 1px solid var(--border-secondary); border-radius: 0; padding-left: 0.85rem; }
-	.plan-button:disabled { opacity: 0.4; }
 	.composer-input { display: block; width: 100%; min-height: 4.5rem; max-height: min(9rem, 18dvh); resize: none; overflow-y: auto; field-sizing: content; padding: 1rem 1.1rem 0.5rem; background: transparent; color: var(--text-primary); font-size: 1rem; line-height: 1.65; outline: none; }
 	.composer-input::placeholder { color: var(--text-muted); }
 	.composer-footer { display: flex; align-items: center; gap: 0.5rem; padding: 0.15rem 0.65rem 0.65rem; }
