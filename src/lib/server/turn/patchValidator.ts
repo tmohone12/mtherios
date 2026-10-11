@@ -24,7 +24,7 @@ import {
 	storyEvents,
 } from '$lib/server/db/schema';
 import { buildNpcEventLinksForEvent } from '$lib/server/events/timeline';
-import { applyWorldTimeChange, headerTimeProposal, loadWorldClock, parseWorldDuration, type WorldTimeChangeResult, type WorldTimeProposal, type WorldTimeProposer } from '$lib/server/events/worldClock';
+import { applyWorldTimeChange, headerTimeProposal, loadWorldClock, parseTimeOfDay, parseWorldDuration, type WorldTimeChangeResult, type WorldTimeProposal, type WorldTimeProposer } from '$lib/server/events/worldClock';
 import { enqueueFactionCadenceJob, enqueueTurnProjectionJobs } from '$lib/server/jobs/outbox';
 import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from '$lib/server/memory/entityResolver';
 import { worldStateUpdateSchema, worldStateTimelineEventSchema, type WorldStateTimelineEvent, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
@@ -809,22 +809,24 @@ export function turnUpdateOperationCount(update: WorldStateUpdate): number {
 	return makeOperations(update).length;
 }
 
-function parseNarrationSceneAnchor(narration: string): { currentWorldTime: string | null; location: string | null } | null {
+export function parseNarrationSceneAnchor(narration: string): { currentWorldTime: string | null; location: string | null } | null {
 	const firstLine = narration.split(/\r?\n/).map(line => line.trim()).find(Boolean);
 	if (!firstLine?.startsWith('[')) return null;
 	const closingBracket = firstLine.lastIndexOf(']');
 	if (closingBracket < 0) return null;
 	const fields = firstLine.slice(1, closingBracket).split('|');
 	if (fields.length < 3) return null;
-	const rawField = (matcher: RegExp, fallbackIndex: number) => fields.find(part => matcher.test(part)) ?? fields[fallbackIndex] ?? '';
 	const cleanMarker = (value: string) => value
 		.trim()
 		.replace(/^[^\p{L}\p{N}]+/u, '')
 		.replace(/^\s*[-,:]?\s*/, '')
 		.trim();
-	const timeField = rawField(/(?:🕰️|\bTime\b)/iu, 0);
-	const dayField = rawField(/(?:🗓️|\b(?:Day|Date)\b)/iu, 1);
-	const locationField = rawField(/(?:📍|\bLocation\b)/iu, 2);
+	const marked = (matcher: RegExp) => fields.find(part => matcher.test(part));
+	// Unlabelled headers ("[Day 3 | 09:42 | Harbor]") are read by content, not position.
+	const unlabelledTime = fields.find(part => parseTimeOfDay(cleanMarker(part)) !== null);
+	const timeField = marked(/(?:🕰️|\bTime\b)/iu) ?? unlabelledTime ?? fields[0] ?? '';
+	const dayField = marked(/(?:🗓️|\b(?:Day|Date)\b)/iu) ?? fields.find(part => part !== timeField) ?? '';
+	const locationField = marked(/(?:📍|\bLocation\b)/iu) ?? fields.find(part => part !== timeField && part !== dayField) ?? '';
 	const time = cleanMarker(/\bTime\b/i.test(timeField) ? timeField.replace(/^[\s\S]*?\bTime\b\s*/i, '') : timeField);
 	const day = cleanMarker(/\b(?:Day|Date)\b/i.test(dayField) ? dayField.replace(/^[\s\S]*?\b(?:Day|Date)\b\s*/i, '') : dayField);
 	const rawLocation = cleanMarker(/\bLocation\b/i.test(locationField) ? locationField.replace(/^[\s\S]*?\bLocation\b\s*/i, '') : locationField);

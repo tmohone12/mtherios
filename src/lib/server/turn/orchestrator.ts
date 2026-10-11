@@ -41,6 +41,8 @@ import {
 	type ServerGenerationOptions,
 } from './provider';
 import { applyValidatedTurnUpdate, turnUpdateOperationCount } from './patchValidator';
+import { ensureSceneHeader } from './sceneHeader';
+import { loadWorldClock } from '$lib/server/events/worldClock';
 import { playerRequestsPlotRetirement } from '$lib/server/plotBrain/lifecycle';
 import { retirePlotBrainFrame } from '$lib/server/plotBrain/reconciler';
 export { playerRequestsPlotRetirement } from '$lib/server/plotBrain/lifecycle';
@@ -4445,6 +4447,48 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 	// A disconnected stream must not turn a completed provider response into a
 	// new canonical turn after the caller has explicitly cancelled the request.
 	throwIfAborted(options.signal);
+	// The world clock and scene location are proposed from the turn's header line. When the
+	// narrator leaves it out of a time-tracked story, the Classifier role writes it from the
+	// passage; the clock validates it like any narrated header.
+	const sceneHeader = await ensureSceneHeader({
+		narration,
+		eligible: !oocMode && !parallelPov && request.actionType !== 'think',
+		storyLabel: ctxWithTimeline.story.currentWorldTime,
+		previousEntries: ctxWithTimeline.recentEntries,
+		location: ctxWithTimeline.entities.find(entity => entity.id === ctxWithTimeline.story.currentLocationId)?.name ?? null,
+		playerText: request.playerText,
+		signal: options.signal,
+	}, {
+		resolve: () => resolveServiceGeneration('sceneHeader'),
+		loadClock: () => loadWorldClock(request.storyId, db, ctxWithTimeline.story.currentWorldTime),
+		generate: async (headerRequest, headerService) => {
+			const headerProfile = headerService.profile!;
+			try {
+				const headerResult = await generateServerTextWithMetrics({
+					profile: headerProfile,
+					onAttempt: attempt => logGenerationCall({ storyId: request.storyId, clientTurnId: request.clientTurnId, serviceId: 'sceneHeader',
+						operation: 'turn.scene_header', profile: headerProfile, result: generationAttemptResult(attempt), status: attempt.status, error: attempt.error ?? undefined }),
+					model: headerService.generation.model,
+					temperature: headerService.generation.temperature ?? 0.1,
+					maxTokens: headerService.generation.maxTokens ?? 300,
+					reasoningEffort: 'off',
+					system: headerRequest.system,
+					prompt: headerRequest.prompt,
+					maxRetries: 0,
+					signal: options.signal,
+				});
+				generationTimings.push(timingFromResult('turn.scene_header', 'sceneHeader', headerResult, 'success'));
+				return headerResult;
+			} catch (error) {
+				const failed = generationErrorResult(error);
+				if (failed) generationTimings.push(timingFromResult('turn.scene_header', 'sceneHeader', failed, 'error'));
+				throw error;
+			}
+		},
+	});
+	narration = sceneHeader.narration;
+	const sceneHeaderReceipt = sceneHeader.receipt;
+	if (sceneHeader.warning) warnings.push(sceneHeader.warning);
 	const dueIds = !oocMode && !parallelPov ? gmBrief.dueEvents.slice(0, 16).map(event => event.id) : [];
 	const dueRows = dueIds.length ? await db.select({
 		id: storyEvents.id, title: storyEvents.title, body: storyEvents.body,
@@ -4486,6 +4530,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		wikiContextSeedCount: wikiContext?.seedCount ?? 0,
 		generationTimings,
 		...(dialoguePass ? { dialoguePass } : {}),
+		...(sceneHeaderReceipt ? { sceneHeader: sceneHeaderReceipt } : {}),
 		stateExtraction: { mode: stateExtractionMode },
 		...(factionCueReceipt ? { factionCueReceipt } : {}),
 		...(dueEventCandidates.length ? { dueEventCandidates, dueEventSourceFingerprint: turnStateSourceFingerprint(request.playerText, narration) } : {}),
