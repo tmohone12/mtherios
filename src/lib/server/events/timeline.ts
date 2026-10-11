@@ -10,6 +10,7 @@ import type {
 } from '$lib/contracts/memory';
 import { getDb } from '$lib/server/db/client';
 import { entities, entityAliases, npcEventLinks, stories, storyEvents } from '$lib/server/db/schema';
+import { loadWorldClock } from './worldClock';
 
 export type StoryEventRow = typeof storyEvents.$inferSelect;
 export type StoryEventInsert = typeof storyEvents.$inferInsert;
@@ -243,8 +244,11 @@ export function buildScheduledTimelineEventInsert(input: {
 	sourcePatchIds?: string[];
 	metadata?: Record<string, unknown>;
 	serverVersion?: number;
+	/** World-clock minute at which the event becomes due; replaces turn scheduling. */
+	dueWorldMinutes?: number | null;
 }): StoryEventInsert {
 	const delayTurns = Math.max(0, Math.floor(Number.isFinite(input.delayTurns) ? input.delayTurns : 0));
+	const dueWorldMinutes = typeof input.dueWorldMinutes === 'number' && Number.isFinite(input.dueWorldMinutes) ? Math.max(0, Math.round(input.dueWorldMinutes)) : null;
 
 	return {
 		id: input.id ?? buildId('story_event'),
@@ -262,14 +266,15 @@ export function buildScheduledTimelineEventInsert(input: {
 		visibility: input.visibility ?? 'player_known',
 		createdTurn: input.currentTurn,
 		occurredTurn: null,
-		scheduledTurn: input.currentTurn + delayTurns,
+		// A world-time event is due when the clock reaches it, never by turn count.
+		scheduledTurn: dueWorldMinutes === null ? input.currentTurn + delayTurns : null,
 		worldTime: input.worldTime ?? input.currentWorldTime ?? null,
 		memoryImpact: input.memoryImpact ?? {},
 		sourceEntryIds: input.sourceEntryIds ?? [],
 		sourcePatchIds: input.sourcePatchIds ?? [],
 		metadata: {
 			...(input.metadata ?? {}),
-			inWorldDelayTurns: delayTurns,
+			...(dueWorldMinutes === null ? { inWorldDelayTurns: delayTurns } : { dueWorldMinutes }),
 		},
 		serverVersion: input.serverVersion ?? 1,
 		createdAt: input.now,
@@ -550,6 +555,8 @@ export async function loadGmTimelineBrief(input: {
 export async function scheduleTimelineEvent(input: Parameters<typeof buildScheduledTimelineEventInsert>[0] & {
 	actorNpcEntityIds?: string[];
 	targetNpcEntityIds?: string[];
+	/** Minutes of world time from now (read from the World Clock in this transaction). */
+	delayWorldMinutes?: number;
 }): Promise<StoryEventRow> {
 	const db = getDb();
 
@@ -568,7 +575,9 @@ export async function scheduleTimelineEvent(input: Parameters<typeof buildSchedu
 			updatedAt: input.now,
 		}).where(eq(stories.id, input.storyId));
 
-		const eventInsert = buildScheduledTimelineEventInsert({ ...input, serverVersion });
+		const dueWorldMinutes = typeof input.delayWorldMinutes === 'number'
+			? (await loadWorldClock(input.storyId, tx)).minutes + Math.max(0, Math.round(input.delayWorldMinutes)) : input.dueWorldMinutes;
+		const eventInsert = buildScheduledTimelineEventInsert({ ...input, serverVersion, dueWorldMinutes });
 		const [row] = await tx.insert(storyEvents).values(eventInsert).returning();
 		if (!row) throw new Error('Failed to schedule timeline event');
 

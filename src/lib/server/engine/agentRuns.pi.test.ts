@@ -201,22 +201,11 @@ describe('durable production GM Pi owner with scripted transport', () => {
     expect(request.system).toContain('Do not ask JEV for routine or already-settled reactions.');
     expect(request.system).toContain('Do not reveal private evidence as player/NPC knowledge.');
   });
-  it.each(['running', 'committing'])('retains stream and cancellation callbacks for legacy %s completion', async status => {
+  it('starts a Pi run even when saved settings still select the retired legacy runtime', async () => {
     piEnabled = false;
-    const execute = mocks.db.execute.getMockImplementation()!;
-    mocks.db.execute.mockImplementation(async (statement: SQL) => {
-      const result = await execute(statement);
-      if (dialect.sqlToQuery(statement).sql.startsWith('insert into agent_runs')) {
-        run!.status = status;
-        run!.pending_decision = { kind: 'final', text: 'Legacy ready.' };
-      }
-      return result;
-    });
-    const callbacks = { onGmActivity: vi.fn(), onNarrationChunk: vi.fn(), signal: new AbortController().signal };
-    const completed = await startAgentRun({ turn }, 'game', callbacks);
-    expect(completed.status, String(completed.error)).toBe('completed');
-    expect(mocks.process.mock.calls[0][1]).toMatchObject(callbacks);
-    expect(canonicalCommits).toBe(1);
+    const pending = await startAgentRun({ turn, wait: false }, 'game');
+    expect(pending.continuation).toMatchObject({ runtime: 'pi-v1' });
+    expect(Array.isArray(run!.continuation)).toBe(false);
   });
   it('cannot reset a stopped Pi budget through the legacy planner retry command', async () => {
     savedRun();
@@ -385,8 +374,9 @@ describe('durable production GM Pi owner with scripted transport', () => {
     expect(Array.isArray(run!.continuation)).toBe(true);
     expect(mocks.provider).not.toHaveBeenCalled();
     expect(mocks.process.mock.calls[0][1].generateNarration).toBeUndefined();
+    // A new run never re-enters the retired legacy runtime, whatever the saved setting says.
     run = null; piEnabled = false;
     const pending = await startAgentRun({ turn: { ...turn, clientTurnId: 'rollback' }, wait: false }, 'game');
-    expect(pending.continuation).toEqual({ runtime: 'legacy', budget: null, receipts: [] });
+    expect(pending.continuation).toMatchObject({ runtime: 'pi-v1' });
   });
 });

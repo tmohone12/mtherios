@@ -6,7 +6,10 @@ export async function agentEmbeddingRevision(storyId: string): Promise<string> {
   const [row] = await getDb().execute(sql`
     select md5(jsonb_build_object(
       'story', to_jsonb(s), 'project', to_jsonb(p),
-      'settings', (select jsonb_agg(to_jsonb(l) order by l.service_id) from llm_service_settings l),
+      'settings', jsonb_build_array(
+        (select jsonb_agg(jsonb_build_array(mp.id, mp.revision) order by mp.id) from model_profiles mp),
+        (select jsonb_agg(jsonb_build_array(mr.role, mr.profile_id, mr.revision) order by mr.role) from model_roles mr),
+        (select jsonb_agg(jsonb_build_array(mo.task_id, mo.revision) order by mo.task_id) from model_task_overrides mo)),
       'memory', (select jsonb_agg(jsonb_build_array(m.id,m.server_version,m.updated_at) order by m.id)
         from memory_nodes m where m.story_id=s.id),
       'sources', (select jsonb_agg(jsonb_build_array(c.id,c.revision,c.source_deleted,c.hidden) order by c.id)

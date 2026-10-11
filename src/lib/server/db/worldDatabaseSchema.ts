@@ -27,6 +27,9 @@ export const TERMINAL_WORLD_DATABASE_TABLE_ORDER = [
 	'arcs',
 	'backendJobs',
 	'llmServiceSettings',
+	'modelProfiles',
+	'modelRoles',
+	'modelTaskOverrides',
 	'searchIndexRecords',
 	'apiCallLogs',
 ] as const;
@@ -381,6 +384,23 @@ export const TERMINAL_WORLD_DATABASE_SCHEMA = {
 			purpose: 'Terminal-side LLM provider settings by service. Raw API keys are not stored; apiKeyRef resolves to env/config.',
 			primaryKey: 'serviceId',
 			fields: ['serviceId', 'providerType', 'baseUrl', 'model', 'temperature', 'maxTokens', 'topP', 'frequencyPenalty', 'presencePenalty', 'reasoningEffort', 'contextBudget', 'contextWindowTokens', 'enabled', 'systemPromptOverride', 'apiKeyRef', 'metadata', 'createdAt', 'updatedAt'],
+		},
+		modelProfiles: {
+			purpose: 'Model profiles: provider connection, model, capabilities, context limit and generation defaults. Raw API keys are not stored. Replaces llmServiceSettings, which is retained unchanged as a rollback source.',
+			primaryKey: 'id',
+			fields: ['id', 'name', 'providerType', 'baseUrl', 'apiKeyRef', 'model', 'contextWindowTokens', 'capabilities', 'generation', 'metadata', 'revision', 'createdAt', 'updatedAt'],
+		},
+		modelRoles: {
+			purpose: 'Profile selected for each model role (GameMaster, Classifier, Summaries, Decisions, Authoring, Image) and explicit fallback profiles.',
+			primaryKey: 'role',
+			foreignKeys: ['profileId -> modelProfiles.id'],
+			fields: ['role', 'profileId', 'fallbackProfileIds', 'metadata', 'revision', 'updatedAt'],
+		},
+		modelTaskOverrides: {
+			purpose: 'Explicit per-task differences from the role: profile, enablement, generation parameters, prompt override, fallbacks and budget. No row means full inheritance.',
+			primaryKey: 'taskId',
+			foreignKeys: ['profileId -> modelProfiles.id'],
+			fields: ['taskId', 'profileId', 'enabled', 'parameters', 'systemPromptOverride', 'fallbackProfileIds', 'budget', 'metadata', 'revision', 'updatedAt'],
 		},
 		searchIndexRecords: {
 			purpose: 'Qdrant/embedding index bookkeeping for canonical records and generated wiki pages. Rebuildable, never canon.',

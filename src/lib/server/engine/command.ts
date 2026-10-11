@@ -179,6 +179,7 @@ import { getAppStatus, type AppStatusInput } from './appStatus';
 import { getDatabaseHealth } from './databaseHealth';
 import { listApiCallLogs, recordApiCallLog } from './apiCallLogs';
 import { listLlmServiceSettings, saveLocalApiKeyRefs, upsertLlmServiceSettings } from './llmSettings';
+import { describeModelSettings, saveModelSettings } from './modelSettings';
 import { buildPromptPacketDebug, type PromptPacketDebugInput } from './promptDiagnostics';
 import {
 	getWorldRecord,
@@ -769,6 +770,104 @@ export async function executeEngineCommand(
 					},
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'prompts.presets.list':
+			case 'prompts.presets.get':
+			case 'prompts.presets.save':
+			case 'prompts.presets.duplicate':
+			case 'prompts.presets.select':
+			case 'prompts.presets.setDefault':
+			case 'prompts.presets.export':
+			case 'prompts.presets.import':
+			case 'prompts.presets.preview': {
+				const args = (request.args ?? {}) as Record<string, unknown>;
+				if (request.command === 'prompts.presets.select' && request.storyId !== args.storyId) {
+					throw new MutationError('SCOPE_DENIED', 'Preset selection must target the command story.');
+				}
+				const presets = await import('./promptPresets');
+				const result = request.command === 'prompts.presets.list' ? await presets.listPromptPresets(typeof args.storyId === 'string' ? args.storyId : null)
+					: request.command === 'prompts.presets.get' ? await presets.getPromptPreset(String(args.presetId ?? ''), typeof args.revision === 'number' ? args.revision : undefined)
+					: request.command === 'prompts.presets.save' ? await presets.savePromptPreset(args)
+					: request.command === 'prompts.presets.duplicate' ? await presets.duplicatePromptPreset(args)
+					: request.command === 'prompts.presets.select' ? await presets.selectStoryPromptPreset(args)
+					: request.command === 'prompts.presets.setDefault' ? await presets.setDefaultPromptPreset(args)
+					: request.command === 'prompts.presets.export' ? await presets.exportPromptPreset(args)
+					: request.command === 'prompts.presets.import' ? await presets.importPromptPreset(args)
+					: await presets.previewPromptPreset(args);
+				const changed = ['prompts.presets.save', 'prompts.presets.duplicate', 'prompts.presets.select', 'prompts.presets.setDefault', 'prompts.presets.import'].includes(request.command);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: result as unknown as JsonRecord,
+					projectionChanges: changed ? { promptPresets: { command: request.command } } : {},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				if (changed) publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.clock.status':
+			case 'world.clock.configure': {
+				const clock = await import('$lib/server/events/worldClock');
+				const args = request.command === 'world.clock.configure' ? z.object({
+					calendar: z.object({ hoursPerDay: z.number().int().min(1).max(100).optional(),
+						months: z.array(z.object({ name: z.string().trim().min(1), days: z.number().int().min(1).max(1000) }).strict()).max(100).optional(),
+						weekdays: z.array(z.string().trim().min(1)).max(50).optional(), era: z.string().trim().max(40).nullable().optional() }).strict().optional(),
+					label: z.string().trim().min(1).max(240).nullable().optional(),
+					reviewedBy: z.string().trim().min(1), reason: z.string().max(2000).optional(),
+				}).strict().parse(request.args ?? {}) : null;
+				const result = args
+					? await clock.configureWorldClock({ storyId: request.storyId, ...args })
+					: await clock.worldClockStatus(request.storyId);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { worldClock: args ? { configured: true } : { status: true } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				if (args) publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'chapters.windows.status':
+			case 'chapters.windows.reconcile': {
+				const [windows, { enqueueChapterSummaryJob }] = await Promise.all([import('$lib/server/jobs/chapterWindows'), import('$lib/server/jobs/outbox')]);
+				const args = request.command === 'chapters.windows.reconcile' ? z.object({
+					windowId: z.string().min(1), revision: z.number().int().positive(), decision: z.enum(['redispatch', 'invalidate']),
+					reviewedBy: z.string().trim().min(1), note: z.string().max(2000).optional(),
+				}).strict().parse(request.args ?? {}) : null;
+				const result = args
+					? await windows.reconcileChapterWindow({ storyId: request.storyId, ...args })
+					: await windows.chapterWindowStatus(request.storyId);
+				if (args) await enqueueChapterSummaryJob({ storyId: request.storyId, serverVersion: 0,
+					dedupeKey: `${args.windowId}-r${args.revision}-reconciled-${Date.now()}` });
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { chapters: { windows: args ? { reconciled: { windowId: args.windowId, revision: args.revision, decision: args.decision } } : { status: true } } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				if (args) publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'settings.models.get':
+			case 'settings.models.save': {
+				const result = request.command === 'settings.models.save'
+					? await saveModelSettings(request.args ?? {})
+					: await describeModelSettings();
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: { modelSettings: { revision: result.revision } },
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				if (request.command === 'settings.models.save') publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
 				publishSucceededEvent(response);
 				return response;
 			}
@@ -2208,6 +2307,7 @@ export async function executeEngineCommand(
 					body: args.body,
 					currentTurn,
 					delayTurns: args.delayTurns,
+					...(args.delayWorldMinutes ? { delayWorldMinutes: args.delayWorldMinutes } : {}),
 					now: nowIso(),
 					actorEntityIds: args.actorEntityIds,
 					targetEntityIds: args.targetEntityIds,

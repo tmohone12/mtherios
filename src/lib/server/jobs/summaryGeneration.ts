@@ -26,18 +26,29 @@ export const SUMMARY_GENERATION_POLICY: Readonly<SummaryGenerationPolicy> = Obje
 });
 type SummaryService = { serviceId: string; resolved: Awaited<ReturnType<typeof resolveServiceGeneration>> };
 
+/** The Summaries task and its explicitly configured fallback profiles. The Classifier or
+ * GameMaster never write history implicitly. */
 async function summaryServices(kind: 'chapter' | 'arc'): Promise<SummaryService[]> {
+	const serviceId = kind === 'arc' ? 'arcCondensation' : 'memory';
+	const resolved = await resolveServiceGeneration(serviceId);
+	if (!resolved.profile) {
+		const reason = resolved.missingReason ?? `${kind === 'arc' ? 'Arc' : 'Chapter'} summaries are not configured.`;
+		throw new SummaryGenerationError(/^Model configuration needed/i.test(reason) ? reason : `Model configuration needed: ${reason}`, 'summary_configuration');
+	}
+	const candidates = [
+		{ profile: resolved.profile, generation: resolved.generation },
+		...(resolved.fallbacks ?? []).map(fallback => ({ profile: fallback.profile, generation: fallback.generation })),
+	];
 	const attempted = new Set<string>();
 	const services: SummaryService[] = [];
-	for (const serviceId of (kind === 'arc' ? ['arcCondensation', 'memory', 'classifier', 'narrative'] : ['memory', 'classifier', 'narrative'])) {
-		const resolved = await resolveServiceGeneration(serviceId);
-		if (!resolved.profile) continue;
-		const key = JSON.stringify([resolved.profile.providerType, resolved.profile.baseUrl, resolved.generation.model, resolved.generation.reasoningEffort, resolved.generation.temperature]);
+	for (const candidate of candidates) {
+		const key = JSON.stringify([candidate.profile.providerType, candidate.profile.baseUrl, candidate.generation.model, candidate.generation.reasoningEffort, candidate.generation.temperature]);
 		if (attempted.has(key)) continue;
 		attempted.add(key);
-		services.push({ serviceId, resolved: { ...resolved, profile: { ...resolved.profile }, generation: { ...resolved.generation } } });
+		services.push({ serviceId, resolved: { ...resolved, profile: { ...candidate.profile }, generation: { ...candidate.generation } } });
 	}
-	return services;
+	// The task budget bounds the fallback chain, not each stage's own repair.
+	return services.slice(0, Math.max(1, resolved.provenance?.limits.maxRequests ?? services.length));
 }
 
 const readableNarrativeSchema = z.object({ narrative: z.string().trim().min(80) });
@@ -116,7 +127,11 @@ export function chronologicalMemoryPrompt(kind: 'chapter' | 'arc', sources: Summ
 	].filter(Boolean).join('\n\n');
 }
 
-type MemoryInput = { storyId: string; kind: 'chapter' | 'arc'; sources: SummarySource[]; evidence?: string; campaignFacts?: CampaignStateFact[]; summaryWindows?: boolean };
+export type MemoryInput = { storyId: string; kind: 'chapter' | 'arc'; sources: SummarySource[]; evidence?: string; campaignFacts?: CampaignStateFact[]; summaryWindows?: boolean };
+
+/** Chapter summarizer identity (version, policy and prompt template) recorded on each frozen chapter window. */
+export const CHAPTER_SUMMARIZER_REVISION = `${SUMMARY_CHECKPOINT_VERSION}+${summaryFingerprint({ policy: SUMMARY_GENERATION_POLICY,
+	template: chronologicalMemoryPrompt('chapter', [], '', [], false, false) }).slice(0, 16)}`;
 
 function serviceIdentity(service: SummaryService) {
 	const { profile, generation } = service.resolved;

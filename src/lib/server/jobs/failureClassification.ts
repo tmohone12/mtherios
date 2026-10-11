@@ -5,6 +5,7 @@ export type BackendJobFailureCause =
 	| 'capacity'
 	| 'stale_source'
 	| 'validation'
+	| 'configuration'
 	| 'unknown';
 
 export interface BackendJobFailureClass {
@@ -19,8 +20,25 @@ export interface BackendJobFailureClass {
 	retryable: boolean;
 }
 
+/** The persisted, classifiable failure text. Drizzle reports database errors as
+ * "Failed query: <sql> params: <values>" with the server's reason only in `cause`;
+ * keep that reason (deadlock, timeout, constraint) and drop bound parameter values. */
+export function describeBackendJobError(error: unknown): string {
+	if (!(error instanceof Error)) return String(error);
+	if (!error.message.startsWith('Failed query: ')) return error.message;
+	const causes: string[] = [];
+	for (let cause: unknown = error.cause, depth = 0; cause && depth < 4; cause = (cause as { cause?: unknown }).cause, depth++) {
+		const message = cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : '';
+		if (message && !causes.includes(message)) causes.push(message);
+	}
+	const query = error.message.slice('Failed query: '.length).split('\nparams:')[0].replace(/\s+/g, ' ').trim();
+	return `${causes.join('; ') || 'Database query failed'} (query: ${query.length > 160 ? `${query.slice(0, 160)}...` : query})`;
+}
+
 export function classifyBackendJobFailure(lastError: string | null): { cause: BackendJobFailureCause; retryable: boolean } {
 	const error = (lastError ?? '').toLowerCase();
+	// A missing or disabled model is fixed in settings; retrying before then cannot succeed.
+	if (/model configuration needed/i.test(error)) return { cause: 'configuration', retryable: false };
 	const accountExhausted = /(?:insufficient balance|payment required|\b402\b|billing|insufficient[_ ]quota)/i.test(error);
 	const quotaWithoutThrottle = /quota/i.test(error) && !/(?:\b429\b|rate|per (?:minute|second)|retry[- ]after)/i.test(error);
 	if (accountExhausted || quotaWithoutThrottle) return { cause: 'provider_account', retryable: false };

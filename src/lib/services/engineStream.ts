@@ -184,6 +184,8 @@ export function shouldRefreshCampaignProjection(event: EngineStreamEvent | null 
 		return [
 			'extract_turn_state',
 			'summarize_chapter',
+			'chapter_threads',
+			'chapter_characters',
 			'create_memory_nodes_from_events',
 			'update_faction_pressure',
 			'evaluate_world_sim_tick',

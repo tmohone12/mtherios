@@ -7,13 +7,13 @@ import { countTokens } from '$lib/utils/tokens';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '$lib/server/db/client';
-import { agreements, arcs, backendJobs, chapters, continuityWarnings, entities, factionGoals, factionMemberships, factionProjects, factionResources, factions, llmServiceSettings, memoryNodes, npcBeliefs, npcEventLinks, patchProposals, relationships, sagas, stories, storyEntries, storyEvents, storyThreads } from '$lib/server/db/schema';
+import { agreements, arcs, backendJobs, chapters, continuityWarnings, entities, factionGoals, factionMemberships, factionProjects, factionResources, factions, memoryNodes, npcBeliefs, npcEventLinks, patchProposals, relationships, sagas, stories, storyEntries, storyEvents, storyThreads } from '$lib/server/db/schema';
 import { gmTurnReceiptSchema, type MemoryNode } from '$lib/contracts/memory';
-import { applyChapterCampaignFactReview, campaignStateExtractionContext, readCampaignState, type CampaignStateFact, type ChapterCampaignFactAction } from '$lib/contracts/campaignState';
+import { campaignStateExtractionContext, type CampaignStateFact, type ChapterCampaignFactAction } from '$lib/contracts/campaignState';
 import { getServerMemoryConfig } from '$lib/server/env';
 import { CHAPTER_TURN_COUNT, CHAPTERS_PER_ARC, selectArcRollupBatches, selectCompletedChapterTurns, selectNextChapterWindow } from '$lib/services/chapterCadence';
 export { selectArcRollupBatches } from '$lib/services/chapterCadence';
-import { generateChronologicalMemory } from './summaryGeneration';
+import { generateChronologicalMemory, type MemoryInput } from './summaryGeneration';
 import { chapterSourceForArc } from './chapterSummarySource';
 export { chapterSourceForArc } from './chapterSummarySource';
 import {
@@ -39,7 +39,7 @@ import { mapWithConcurrency, readGenerationConcurrency } from '$lib/server/perfo
 import { buildTurnDebugSnapshot } from '$lib/server/turn/debugSnapshot';
 import { filterNarrativeContextEntries, loadCanonicalCharacters, loadClassifierAgreements, loadClassifierLocations, loadClassifierFactions } from '$lib/server/turn/context';
 import type { CharacterContextRecord } from '$lib/utils/characterState';
-import { classifyBackendJobFailure, type BackendJobFailureCause, type BackendJobFailureClass } from './failureClassification';
+import { classifyBackendJobFailure, describeBackendJobError, type BackendJobFailureCause, type BackendJobFailureClass } from './failureClassification';
 export { classifyBackendJobFailure } from './failureClassification';
 export type { BackendJobFailureCause, BackendJobFailureClass } from './failureClassification';
 import { applyValidatedTurnUpdate, turnUpdateOperationCount } from '$lib/server/turn/patchValidator';
@@ -54,7 +54,6 @@ import {
 	DEFAULT_STATE_EXTRACTION_SYSTEM,
 	parseStateExtractionResult,
 	shouldExtractDurableState,
-	shouldUseLegacyClassifierFallback,
 } from '$lib/server/turn/orchestrator';
 import { applyChapterScribeCharacterContextProposals } from '$lib/server/engine/canonRepair';
 import { refineChapterCharacterUpdates } from '$lib/server/engine/characterDrafts';
@@ -74,8 +73,6 @@ import { plotBrainLifecycleState, type PlotBrainLifecycleState } from '$lib/serv
 import { closeThreadPressure } from '$lib/server/engine/plotEditing';
 import { applyDueEventFeedback, applyFactionCueFeedback, dueEventCandidateSchema, isFactionCueCandidate, type DueEventCandidate } from '$lib/server/events/dueEventFeedback';
 import {
-	buildChapterThreadPlan,
-	chapterThreadMetadata,
 	coerceChapterThreadDirectives,
 	formatChapterThreadCatalog,
 	type ChapterNewThread,
@@ -107,17 +104,17 @@ export {
 export type { FactionDoctrineKind, FactionMovePlan } from '$lib/server/factions/autonomy';
 
 type AnyBackendJobRow = typeof backendJobs.$inferSelect;
-type BackendJobRow = AnyBackendJobRow & { storyId: string };
+export type BackendJobRow = AnyBackendJobRow & { storyId: string };
 type ArcRow = typeof arcs.$inferSelect;
-type ChapterRow = typeof chapters.$inferSelect;
+export type ChapterRow = typeof chapters.$inferSelect;
 type FactionRow = typeof factions.$inferSelect;
 type FactionGoalRow = typeof factionGoals.$inferSelect;
 type FactionMembershipRow = typeof factionMemberships.$inferSelect;
 type FactionProjectRow = typeof factionProjects.$inferSelect;
 type FactionResourceRow = typeof factionResources.$inferSelect;
 type EntityRow = typeof entities.$inferSelect;
-type StoryEntryRow = typeof storyEntries.$inferSelect;
-type StoryEventRow = typeof storyEvents.$inferSelect;
+export type StoryEntryRow = typeof storyEntries.$inferSelect;
+export type StoryEventRow = typeof storyEvents.$inferSelect;
 type RelationshipRow = typeof relationships.$inferSelect;
 type ProcessorDb = ReturnType<typeof getDb>;
 type ProcessorTransaction = Parameters<Parameters<ProcessorDb['transaction']>[0]>[0];
@@ -127,7 +124,7 @@ type ProviderProfile = NonNullable<Awaited<ReturnType<typeof resolveServiceGener
 type GenerationResult = ServerGenerationResult | ServerGenerationError['result'];
 
 const ARC_ROLLUP_THREAD_LIMIT = 20;
-const CHARACTER_CONTEXT_AUTO_APPLY_CHAPTER_INTERVAL = 1;
+export const CHARACTER_CONTEXT_AUTO_APPLY_CHAPTER_INTERVAL = 1;
 export const CHAPTER_PROJECTION_COMPILER = 'chapter-projection-v3';
 export const ARC_PROJECTION_COMPILER = 'arc-projection-v3';
 export const SAGA_PROJECTION_COMPILER = 'saga-projection-v1';
@@ -463,7 +460,7 @@ type FactionPressureReason = {
 	updatedAt: string;
 };
 
-function nowIso(): string {
+export function nowIso(): string {
 	return new Date().toISOString();
 }
 
@@ -471,7 +468,7 @@ function id(prefix = 'job'): string {
 	return `${prefix}_${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
 }
 
-async function timePhase<T>(
+export async function timePhase<T>(
 	recorder: TimingRecorder | undefined,
 	phase: string,
 	metadata: Record<string, unknown>,
@@ -489,11 +486,11 @@ function timePhaseSync<T>(
 	return recorder ? recorder.timeSync(phase, metadata, fn) : fn();
 }
 
-function asStringArray(value: unknown): string[] {
+export function asStringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
+export function asRecord(value: unknown): Record<string, unknown> {
 	return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
@@ -532,7 +529,7 @@ export function factionCanReceiveCharacterTagSync(
 	return metadata.scratchSeed !== true && !faction.id.startsWith('veil_scratch_');
 }
 
-function asNumber(value: unknown, fallback = 0): number {
+export function asNumber(value: unknown, fallback = 0): number {
 	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
@@ -541,13 +538,13 @@ function asOptionalInt(value: unknown, min: number, max: number): number | undef
 	return clamp(Math.trunc(value), min, max);
 }
 
-function requirePayloadString(payload: Record<string, unknown>, key: string): string {
+export function requirePayloadString(payload: Record<string, unknown>, key: string): string {
 	const value = payload[key];
 	if (typeof value === 'string' && value.trim()) return value;
 	throw new Error(`extract_turn_state job is missing payload.${key}`);
 }
 
-function uniqueStrings(values: string[]): string[] {
+export function uniqueStrings(values: string[]): string[] {
 	return [...new Set(values.filter(Boolean))];
 }
 
@@ -985,9 +982,13 @@ export function chapterCharacterContextPatch(input: {
 	events: StoryEventRow[];
 }): ChapterCharacterContextPatch | null {
 	const didEvents = input.events.filter((event) => asStringArray(event.actorEntityIds).includes(input.entityId));
+	// Being the target of an event is not evidence of noticing it: a secret plot against a
+	// character, or the player's private thought about them, never becomes their memory.
 	const sawEvents = input.events.filter((event) =>
 		!asStringArray(event.actorEntityIds).includes(input.entityId) &&
-		asStringArray(event.targetEntityIds).includes(input.entityId)
+		asStringArray(event.targetEntityIds).includes(input.entityId) &&
+		event.visibility !== 'secret' &&
+		!['think', 'thought'].includes(String(asRecord(event.metadata).actionType ?? asRecord(event.metadata).narrativeMode ?? ''))
 	);
 	const did = uniqueStrings(didEvents.map(eventSummaryForCharacter)).slice(-6);
 	const saw = uniqueStrings(sawEvents.map(eventSummaryForCharacter)).slice(-6);
@@ -2128,7 +2129,7 @@ async function maxEntryPositionForIds(storyId: string, entryIds: string[]): Prom
 	return rows.reduce((max, row) => Math.max(max, row.position), -1);
 }
 
-async function lastChapterBoundary(storyId: string): Promise<{ chapter: ChapterRow | null; endPosition: number }> {
+export async function lastChapterBoundary(storyId: string): Promise<{ chapter: ChapterRow | null; endPosition: number }> {
 	const [chapter] = await getDb()
 		.select()
 		.from(chapters)
@@ -2187,10 +2188,10 @@ export function isNarrativeChapterEvent(event: Pick<StoryEventRow, 'status' | 'm
 		&& metadata.narrativeMode !== 'ooc';
 }
 
-async function loadEventsForEntries(storyId: string, entryIds: string[]): Promise<StoryEventRow[]> {
+export async function loadEventsForEntries(storyId: string, entryIds: string[], db: Pick<ProcessorDb, 'select'> | ProcessorTransaction = getDb()): Promise<StoryEventRow[]> {
 	if (entryIds.length === 0) return [];
 	const entrySet = new Set(entryIds);
-	const rows = await getDb()
+	const rows = await db
 		.select()
 		.from(storyEvents)
 		.where(and(eq(storyEvents.storyId, storyId), sql`exists (select 1 from jsonb_array_elements_text(${storyEvents.sourceEntryIds}) as source(id) where source.id in (${sql.join(entryIds.map(id => sql`${id}`), sql`, `)}))`))
@@ -2475,6 +2476,17 @@ export async function summarizeChapterMemoryWithLlm(
 	existingThreads: Array<typeof storyThreads.$inferSelect>,
 	campaignFacts: CampaignStateFact[] = [],
 ): Promise<ChapterMemoryDigest> {
+	return summarizeChapterMemoryFromInput(chapterMemoryInput(entries, events, existingThreads, campaignFacts), entries);
+}
+
+/** The exact summarizer request for a chapter window. Frozen with the window so a
+ * restart repeats the same request and reuses its checkpointed result. */
+export function chapterMemoryInput(
+	entries: StoryEntryRow[],
+	events: StoryEventRow[],
+	existingThreads: Array<typeof storyThreads.$inferSelect>,
+	campaignFacts: CampaignStateFact[] = [],
+): MemoryInput {
 	const turns = selectCompletedChapterTurns(entries);
 	if (turns.length !== CHAPTER_TURN_COUNT) throw new Error(`Chapter requires exactly ${CHAPTER_TURN_COUNT} completed turns.`);
 	let previousEnd = -1;
@@ -2485,14 +2497,18 @@ export async function summarizeChapterMemoryWithLlm(
 		previousEnd = narration.position;
 		return { id: narration.id, text: evidence.map(entry => `[${entry.position}] [${entry.type}] [branch:${entry.branchId ?? 'primary'}] [POV:${JSON.stringify(asRecord(entry.metadata).parallelPov ?? asRecord(entry.metadata).narrativeMode ?? 'primary')}] ${entry.content}`).join('\n\n') };
 	});
-	const generated = await generateChronologicalMemory({
+	return {
 		storyId: entries[0].storyId, kind: 'chapter', sources, campaignFacts,
 		evidence: [
 			// Extracted/Director event prose can be wrong or describe future intent. It is not transcript history.
 			events.filter(isNarrativeChapterEvent).map(event => JSON.stringify({ eventId: event.id, sourceEntryIds: event.sourceEntryIds, threadIds: event.threadIds })).join('\n'),
 			`Existing thread catalog:\n${formatChapterThreadCatalog(existingThreads)}\nOptional threadChanges: [{threadId, action: advance|hold|stall|resolve|abandon, currentState, evidenceEventIds}]. Exact catalog IDs only. Resolve/abandon only with source event proof in this window. Optional newThreads: [{title,currentState,significance:minor|moderate|major|critical,evidenceEventIds}]. Never recreate a catalog thread. Accounts remain the priority.`,
 		].filter(Boolean).join('\n\n'),
-	});
+	};
+}
+
+export async function summarizeChapterMemoryFromInput(input: MemoryInput, entries: StoryEntryRow[]): Promise<ChapterMemoryDigest> {
+	const generated = await generateChronologicalMemory(input);
 	const first = entries[0];
 	const last = entries[entries.length - 1];
 	return {
@@ -2517,38 +2533,65 @@ export async function summarizeChapterMemoryWithLlm(
 	};
 }
 
-export async function persistChapterThreadPlan(input: {
+export interface ChapterThreadApplyResult {
+	updatedThreadIds: string[];
+	/** Changed after the chapter snapshot; the newer record is kept. */
+	staleThreadIds: string[];
+	insertedThreadIds: string[];
+	closedThreadIds: string[];
+	updatedEventIds: string[];
+	staleEventIds: string[];
+}
+
+export async function persistChapterThreadPlan<T = ChapterThreadApplyResult>(input: {
 	storyId: string;
 	chapterId: string;
 	chapterNumber: number;
 	plan: ChapterThreadPlan;
 	serverVersion: number;
 	now: string;
-}): Promise<void> {
-	await getDb().transaction(async (tx) => {
+	/** Runs in the same transaction, after the thread writes (receipts, dependent jobs). */
+	afterApply?: (tx: ProcessorTransaction, applied: ChapterThreadApplyResult) => Promise<T>;
+}): Promise<T | ChapterThreadApplyResult | null> {
+	return getDb().transaction(async (tx) => {
 		const [story] = await tx.select({ metadata: stories.metadata }).from(stories)
 			.where(eq(stories.id, input.storyId)).for('update');
-		if (!story) return;
-		const closedThreadIds: string[] = [];
+		if (!story) return null;
+		const applied: ChapterThreadApplyResult = {
+			updatedThreadIds: [], staleThreadIds: [], insertedThreadIds: [], closedThreadIds: [], updatedEventIds: [], staleEventIds: [],
+		};
+		const closedThreadIds = applied.closedThreadIds;
 		for (const update of input.plan.updates) {
 			const changed = await tx.update(storyThreads).set(update.values as Partial<typeof storyThreads.$inferInsert>).where(and(
 				eq(storyThreads.storyId, input.storyId),
 				eq(storyThreads.id, update.threadId),
 				sql`coalesce(${storyThreads.closureReason}, '') not like '[player:%'`,
+				// A plan applied after its snapshot never overwrites a newer thread edit.
+				typeof update.expectedServerVersion === 'number' ? eq(storyThreads.serverVersion, update.expectedServerVersion) : undefined,
 			)).returning({ id: storyThreads.id });
+			if (changed.length) applied.updatedThreadIds.push(update.threadId);
+			else if (typeof update.expectedServerVersion === 'number') applied.staleThreadIds.push(update.threadId);
 			if (update.values.status === 'closed' && changed.length) closedThreadIds.push(update.threadId);
 		}
 		if (input.plan.inserts.length > 0) {
-			await tx.insert(storyThreads)
+			const inserted = await tx.insert(storyThreads)
 				.values(input.plan.inserts as Array<typeof storyThreads.$inferInsert>)
-				.onConflictDoNothing();
+				.onConflictDoNothing()
+				.returning({ id: storyThreads.id });
+			applied.insertedThreadIds.push(...(inserted ?? []).map(row => row.id));
 		}
 		for (const event of input.plan.eventUpdates) {
-			await tx.update(storyEvents).set({
+			const changed = await tx.update(storyEvents).set({
 				threadIds: event.threadIds,
 				serverVersion: input.serverVersion,
 				updatedAt: input.now,
-			}).where(and(eq(storyEvents.storyId, input.storyId), eq(storyEvents.id, event.eventId)));
+			}).where(and(
+				eq(storyEvents.storyId, input.storyId),
+				eq(storyEvents.id, event.eventId),
+				event.previousThreadIds ? sql`${storyEvents.threadIds} = ${JSON.stringify(event.previousThreadIds)}::jsonb` : undefined,
+			)).returning({ id: storyEvents.id });
+			if (changed.length) applied.updatedEventIds.push(event.eventId);
+			else if (event.previousThreadIds) applied.staleEventIds.push(event.eventId);
 		}
 		const metadata = { ...asRecord(story.metadata) };
 		const plotBrain = closeThreadPressure(metadata.plotBrain, input.storyId, closedThreadIds);
@@ -2573,6 +2616,7 @@ export async function persistChapterThreadPlan(input: {
 			metadata: { ...metadata, plotBrain },
 			updatedAt: input.now,
 		}).where(eq(stories.id, input.storyId));
+		return input.afterApply ? input.afterApply(tx, applied) : applied;
 	});
 }
 
@@ -2789,7 +2833,7 @@ export async function createChapterCharacterReferenceProposals(input: {
 	return { candidates: candidates.length, created, updated, skipped };
 }
 
-async function createChapterCharacterContextUpdateProposals(input: {
+export async function createChapterCharacterContextUpdateProposals(input: {
 	storyId: string;
 	chapter: typeof chapters.$inferSelect;
 	digest: ChapterMemoryDigest;
@@ -2866,7 +2910,7 @@ async function createChapterCharacterContextUpdateProposals(input: {
 	return { candidates: rows.length, created, updated, skipped };
 }
 
-function storedChapterMemoryDigest(chapter: ChapterRow): ChapterMemoryDigest {
+export function storedChapterMemoryDigest(chapter: ChapterRow): ChapterMemoryDigest {
 	const metadata = asRecord(chapter.metadata);
 	return {
 		title: chapter.title ?? `Chapter ${chapter.number}`,
@@ -3187,294 +3231,8 @@ export function chapterCharacterSummaryContextPatch(input: {
 	};
 }
 
-export async function createChapterCheckpoint(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
-	const payload = asRecord(job.payload);
-	const threshold = CHAPTER_TURN_COUNT;
-	const buffer = 0;
-	const { chapter: previousChapter, endPosition } = await timePhase(recorder, 'job.summarize_chapter.load_boundary', {}, () => lastChapterBoundary(job.storyId));
-	const entries = await timePhase(recorder, 'job.summarize_chapter.load_entries', { endPosition }, () => loadEntriesAfter(job.storyId, endPosition, threshold * 2));
-	const window = selectNextChapterWindow(entries);
-	if (!window) return { created: false, reason: 'chapter_threshold_not_met', completedTurns: selectCompletedChapterTurns(entries).length, threshold, buffer };
-	const chapterEntries = window.entries;
-	const first = chapterEntries[0];
-	const last = chapterEntries[chapterEntries.length - 1];
-	const sourceEntryIds = chapterEntries.map((entry) => entry.id);
-	const events = await timePhase(recorder, 'job.summarize_chapter.load_events', {
-		sourceEntryIds: sourceEntryIds.length,
-	}, () => loadEventsForEntries(job.storyId, sourceEntryIds));
-	const sourceEventIds = events.map((event) => event.id);
-	const existingThreads = await timePhase(recorder, 'job.summarize_chapter.load_threads', {}, () => getDb()
-		.select()
-		.from(storyThreads)
-		.where(eq(storyThreads.storyId, job.storyId))
-		.orderBy(sql`case when ${storyThreads.status} = 'closed' then 1 else 0 end`, desc(storyThreads.updatedAt))
-		.limit(200));
-	const number = (previousChapter?.number ?? 0) + 1;
-	const chapterId = stableId('chapter', [first.id, last.id]);
-	const [campaignStory] = await getDb().select({ metadata: stories.metadata }).from(stories).where(eq(stories.id, job.storyId)).limit(1);
-	const campaignFacts = readCampaignState(campaignStory?.metadata);
-	const fallbackDigest = timePhaseSync(recorder, 'job.summarize_chapter.build_summary', {
-		entries: chapterEntries.length,
-		events: events.length,
-	}, () => buildChapterMemoryDigest(number, chapterEntries, events));
-	const digest = await timePhase(recorder, 'job.summarize_chapter.llm_memory_digest', {
-		entries: chapterEntries.length,
-		events: events.length,
-		threads: existingThreads.length,
-	}, () => summarizeChapterMemoryWithLlm(chapterEntries, events, fallbackDigest, existingThreads, campaignFacts));
-	const { title, summary } = digest;
-	const canonicalCharacters = await timePhase(recorder, 'job.summarize_chapter.resolve_character_tags', {
-		keyCharacters: digest.keyCharacters.length,
-	}, () => getDb().select().from(entities).where(and(
-		eq(entities.storyId, job.storyId),
-		eq(entities.type, 'character'),
-	)));
-	const entityIds = chapterMemoryEntityIds({
-		eventEntityIds: [],
-		keyCharacters: digest.keyCharacters,
-		canonicalCharacters,
-	});
-	const sourcesStillMatch = await timePhase(recorder, 'job.summarize_chapter.revalidate_sources', {
-		entries: chapterEntries.length,
-		events: events.length,
-	}, () => projectionSourcesStillMatch({ storyId: job.storyId, entries: chapterEntries, events }));
-	if (!sourcesStillMatch) {
-		return {
-			created: false,
-			reason: 'projection_sources_changed',
-			entryCount: chapterEntries.length,
-			eventCount: events.length,
-		};
-	}
-	const now = nowIso();
-	const serverVersion = await timePhase(recorder, 'job.summarize_chapter.bump_version', {}, () => bumpStoryVersion(job.storyId));
-	const threadPlan = buildChapterThreadPlan({
-		storyId: job.storyId,
-		chapterId,
-		existingThreads,
-		events: events.map((event) => ({ id: event.id, threadIds: asStringArray(event.threadIds) })),
-		directives: {
-			threadChanges: digest.threadChanges ?? [],
-			newThreads: digest.newThreads ?? [],
-		},
-		sourceEntryIds,
-		serverVersion,
-		now,
-	});
-	const openThreads = digest.plotThreads;
-	const chapterMetadata = {
-		sourceType: 'terminal_chapter_job',
-		jobId: job.id,
-		projectionCompiler: CHAPTER_PROJECTION_COMPILER,
-		projectionFingerprint: projectionFingerprint({
-			compiler: CHAPTER_PROJECTION_COMPILER,
-			campaignId: job.storyId,
-			sourceStart: first.position,
-			sourceEnd: last.position,
-			branchIds: uniqueStrings(chapterEntries.map(entry => entry.branchId ?? 'primary')),
-			pov: 'primary',
-			entries: chapterEntries.map(entry => ({ id: entry.id, position: entry.position, content: entry.content })),
-			events: events.map(event => ({ id: event.id, status: event.status, title: event.title, body: event.body, sourceEntryIds: event.sourceEntryIds })),
-		}),
-		campaignId: job.storyId,
-		summarySource: digest.source,
-		sourceAccounts: digest.sourceAccounts,
-		turnCount: CHAPTER_TURN_COUNT,
-		summaryModel: digest.model ?? null,
-		entryCount: chapterEntries.length,
-		startPosition: first.position,
-		endPosition: last.position,
-		branchIds: uniqueStrings(chapterEntries.map(entry => entry.branchId ?? 'primary')),
-		pov: 'primary',
-		threshold,
-		postChapterBuffer: buffer,
-		trackedEntityIds: entityIds,
-		legacyKeywords: digest.keywords,
-		legacyCharacters: digest.keyCharacters,
-		legacyLocations: digest.keyLocations,
-		emotionalTone: digest.emotionalTone,
-		...chapterThreadMetadata(threadPlan.openThreadIds),
-	};
-
-	let arcJobId: string | null = null;
-	let sourceChangedBeforeCommit = false;
-	const [chapter] = await timePhase(recorder, 'job.summarize_chapter.persist_projection', {}, () => getDb().transaction(async (tx) => {
-		await tx.select({ id: stories.id }).from(stories).where(eq(stories.id, job.storyId)).for('update');
-		const [boundary] = await tx.select({ id: chapters.id }).from(chapters).where(eq(chapters.storyId, job.storyId)).orderBy(desc(chapters.number)).limit(1);
-		if ((boundary?.id ?? null) !== (previousChapter?.id ?? null)) return [];
-		// A checkpoint is derived evidence. Revalidate and hold the source rows until the
-		// canonical commit, including when a prior job supplied the generated digest.
-		if (!await projectionSourcesStillMatch({ storyId: job.storyId, entries: chapterEntries, events }, tx, true)) {
-			sourceChangedBeforeCommit = true;
-			return [];
-		}
-		const [savedChapter] = await tx.insert(chapters).values({
-			id: chapterId,
-			storyId: job.storyId,
-			number,
-			title,
-			sceneOutcome: summary,
-			irreversibleChanges: [],
-			npcKnowledgeChanges: [],
-			// Factual changes live in the complete transcript-derived account; extracted event titles are not history.
-			promisesDebtsOaths: [],
-			discoveredClues: [],
-			relationshipChanges: [],
-			factionChanges: [],
-			openThreads,
-			sourceEntryIds,
-			sourceEventIds,
-			metadata: chapterMetadata,
-			serverVersion,
-			createdAt: now,
-			updatedAt: now,
-		}).onConflictDoNothing().returning();
-		if (!savedChapter) return [];
-		if (digest.campaignFactReview?.length) {
-			const [currentStory] = await tx.select({ metadata: stories.metadata }).from(stories).where(eq(stories.id, job.storyId));
-			const metadata = asRecord(currentStory?.metadata);
-			const before = readCampaignState(metadata);
-			const review = applyChapterCampaignFactReview(before, digest.campaignFactReview, chapterEntries);
-			if (review.accepted.length) {
-				const history = Array.isArray(metadata.campaignStateReviewHistory) ? metadata.campaignStateReviewHistory : [];
-				await tx.update(stories).set({ metadata: { ...metadata, campaignState: review.facts,
-					campaignStateReviewHistory: [...history, { chapterId, accepted: review.accepted, warnings: review.warnings,
-						before: before.filter(fact => review.accepted.some(action => action.key === fact.key)), reviewedAt: now }].slice(-100) },
-					updatedAt: now }).where(eq(stories.id, job.storyId));
-			}
-		}
-		await upsertChapterMemoryNode({
-			db: tx,
-			storyId: job.storyId,
-			chapterId,
-			title,
-			summary,
-			keywords: digest.keywords,
-			entityIds,
-			sourceEntryIds,
-			sourceEventIds,
-			threadIds: threadPlan.openThreadIds,
-			serverVersion,
-			now,
-			jobId: job.id,
-			sourceFingerprint: String(chapterMetadata.projectionFingerprint),
-			sourceStart: first.position,
-			sourceEnd: last.position,
-			branchIds: uniqueStrings(chapterEntries.map(entry => entry.branchId ?? 'primary')),
-		});
-		// A saved chapter must keep its rollup work even if later character/thread work fails.
-		arcJobId = await enqueueBackendJob({
-			storyId: job.storyId, type: 'rollup_arc', dedupeKey: `arc-rollup-${savedChapter.id}`,
-			payload: { chapterId: savedChapter.id }, maxAttempts: 3, requeueExisting: false,
-		}, tx);
-		return [savedChapter];
-	}));
-	if (!chapter) {
-		return { created: false, reason: sourceChangedBeforeCommit ? 'projection_sources_changed' : 'projection_superseded', chapterId };
-	}
-
-	await timePhase(recorder, 'job.summarize_chapter.reconcile_threads', {
-		updates: threadPlan.updates.length,
-		inserts: threadPlan.inserts.length,
-		openThreads: threadPlan.openThreadIds.length,
-	}, () => persistChapterThreadPlan({
-		storyId: job.storyId,
-		chapterId,
-		chapterNumber: number,
-		plan: threadPlan,
-		serverVersion,
-		now,
-	}));
-
-	const characterReferences = await timePhase(recorder, 'job.summarize_chapter.character_references', {
-		keyCharacters: digest.keyCharacters.length,
-	}, () => createChapterCharacterReferenceProposals({
-		storyId: job.storyId,
-		chapter,
-		digest,
-		events,
-		sourceEntryIds,
-		serverVersion,
-		now,
-	}));
-	const previousCharacterContextUpdates = previousChapter
-		&& previousChapter.number === number - 1
-		&& shouldAutoApplyChapterCharacterContext(number)
-		? await timePhase(recorder, 'job.summarize_chapter.previous_character_context_updates', {
-			chapterNumber: previousChapter.number,
-		}, async () => {
-			const previousEvents = await loadEventsForEntries(job.storyId, asStringArray(previousChapter.sourceEntryIds));
-			return createChapterCharacterContextUpdateProposals({
-				storyId: job.storyId,
-				chapter: previousChapter,
-				digest: storedChapterMemoryDigest(previousChapter),
-				events: previousEvents,
-				sourceEntryIds: asStringArray(previousChapter.sourceEntryIds),
-				serverVersion,
-				now,
-			});
-		})
-		: { candidates: 0, created: 0, updated: 0, skipped: 0, deferred: true };
-	const characterContextUpdates = await timePhase(recorder, 'job.summarize_chapter.character_context_updates', {
-		entityIds: entityIds.length,
-	}, () => createChapterCharacterContextUpdateProposals({
-		storyId: job.storyId,
-		chapter,
-		digest,
-		events,
-		sourceEntryIds,
-		serverVersion,
-		now,
-	}));
-
-	const chapterScopedJob = {
-		...job,
-		payload: {
-			...payload,
-			eventIds: sourceEventIds,
-			chapterId,
-			chapterNumber: number,
-			serverVersion,
-			deferWorldTick: true,
-		},
-	};
-	const [factionPressure, arc] = await timePhase(recorder, 'job.summarize_chapter.post_chapter_parallel', {
-		branches: 2,
-	}, () => Promise.all([
-		updateFactionPressure(chapterScopedJob, recorder),
-		Promise.resolve({ created: false, queued: true, jobId: arcJobId } as Record<string, unknown>),
-	]));
-	const plotBrainJobId = await timePhase(recorder, 'job.summarize_chapter.enqueue_plot_brain', {}, () => enqueuePlotBrainJob({
-		storyId: job.storyId,
-		trigger: arc.created === true ? 'arc_created' : 'scheduled_refresh',
-		scopeId: typeof arc.arcId === 'string' ? arc.arcId : chapter.id,
-		skipIfPlanned: arc.created !== true,
-	}));
-	const automaticCharacterContextUpdates = await timePhase(recorder, 'job.summarize_chapter.auto_apply_character_context', {
-		chapterNumber: number,
-		cadence: CHARACTER_CONTEXT_AUTO_APPLY_CHAPTER_INTERVAL,
-	}, () => autoApplyChapterCharacterContextUpdates({
-		storyId: job.storyId,
-		chapterNumber: number,
-	}));
-	return {
-		created: true,
-		chapterId: chapter.id,
-		number: chapter.number,
-		entryCount: chapterEntries.length,
-		eventCount: events.length,
-		characterReferences,
-		previousCharacterContextUpdates,
-		characterContextUpdates,
-		automaticCharacterContextUpdates,
-		factionPressure,
-		worldTickJobId: null,
-		arc,
-		plotBrainJobId,
-		plotBrainDeferredToWorldTick: false,
-	};
-}
-
+import { applyChapterCharacterFollowUp, applyChapterThreadFollowUp, createChapterCheckpoint } from './chapterCheckpoint';
+export { applyChapterCharacterFollowUp, applyChapterThreadFollowUp, createChapterCheckpoint };
 
 type ArcSummaryChapter = Pick<ChapterRow, 'number' | 'title' | 'sceneOutcome' | 'irreversibleChanges' | 'promisesDebtsOaths' | 'openThreads' | 'metadata'>
 	& Partial<Pick<ChapterRow, 'id' | 'npcKnowledgeChanges' | 'relationshipChanges' | 'sourceEntryIds' | 'sourceEventIds'>>;
@@ -3746,7 +3504,7 @@ export async function rollupArc(
 		};
 	}
 
-	const createdArcs: Array<{ arcId: string; number: number; chapterCount: number }> = [];
+	const createdArcs: Array<{ arcId: string; number: number; chapterCount: number; sagaJobId: string; plotBrainJobId: string | null }> = [];
 	for (const arcChapters of batches) {
 		const first = arcChapters[0];
 		const last = arcChapters[arcChapters.length - 1];
@@ -3854,29 +3612,32 @@ export async function rollupArc(
 				sourceEnd,
 				branchIds,
 			});
-			return [savedArc];
+			// Dependent work commits with the arc; a retry finds the arc covered and
+			// would otherwise never queue the saga or Director review again.
+			const sagaJobId = await enqueueBackendJob({
+				storyId: job.storyId,
+				type: 'rollup_saga',
+				dedupeKey: `saga-rollup-${savedArc.id}`,
+				payload: { sourceArcIds: [savedArc.id], sourceJobId: job.id },
+				maxAttempts: 3,
+				requeueExisting: false,
+			}, tx);
+			const plotBrainJobId = options.enqueuePlotBrain === false ? null : await enqueuePlotBrainJob({
+				storyId: job.storyId,
+				trigger: 'arc_created',
+				scopeId: savedArc.id,
+			}, tx);
+			return [{ ...savedArc, sagaJobId, plotBrainJobId }];
 		}));
 		if (!arc) continue;
-		createdArcs.push({ arcId: arc.id, number: arc.number, chapterCount: arcChapters.length });
+		createdArcs.push({ arcId: arc.id, number: arc.number, chapterCount: arcChapters.length, sagaJobId: arc.sagaJobId, plotBrainJobId: arc.plotBrainJobId });
 	}
 	if (createdArcs.length === 0) return { created: false, reason: 'projection_superseded' };
 
 	const firstArc = createdArcs[0];
 	const latestArc = createdArcs[createdArcs.length - 1];
-	const plotBrainJobId = options.enqueuePlotBrain === false
-		? null
-		: await timePhase(recorder, 'job.rollup_arc.enqueue_plot_brain', {}, () => enqueuePlotBrainJob({
-			storyId: job.storyId,
-			trigger: 'arc_created',
-			scopeId: latestArc.arcId,
-		}));
-	const sagaJobId = await timePhase(recorder, 'job.rollup_arc.enqueue_saga', {}, () => enqueueBackendJob({
-		storyId: job.storyId,
-		type: 'rollup_saga',
-		dedupeKey: `saga-rollup-${latestArc.arcId}`,
-		payload: { sourceArcIds: createdArcs.map((arc) => arc.arcId), sourceJobId: job.id },
-		maxAttempts: 3,
-	}));
+	const plotBrainJobId = latestArc.plotBrainJobId;
+	const sagaJobId = latestArc.sagaJobId;
 	return {
 		created: true,
 		arcId: firstArc.arcId,
@@ -4253,11 +4014,9 @@ export async function prepareBatchTurnMemory(jobs: BackendJobRow[]): Promise<Map
 		loadClassifierFactions(storyId), getDb().select({ metadata: stories.metadata }).from(stories).where(eq(stories.id, storyId)).limit(1),
 	]);
 	if (classifierService.setting?.enabled === false) return null;
-	const fallback = !classifierService.profile && shouldUseLegacyClassifierFallback(classifierService)
-		? await resolveServiceGeneration('narrative') : null;
-	const profile = classifierService.profile ?? fallback?.profile;
-	const generation = classifierService.profile ? classifierService.generation : fallback?.generation;
-	if (!profile || !generation) return null;
+	const profile = classifierService.profile;
+	const generation = classifierService.generation;
+	if (!profile) return null;
 	const sharedContext = [
 		buildCharacterCreationInstructions(factions, combinedText), campaignStateExtractionContext(story[0]?.metadata),
 		buildClassifierCharacterContext(characters, combinedText, combinedText),
@@ -4360,19 +4119,11 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 			chapterSummaryJobId,
 		};
 	}
-	const useNarrativeFallback = shouldUseLegacyClassifierFallback(classifierService);
-	const fallbackNarrativeService = useNarrativeFallback
-		? await timePhase(recorder, 'job.extract_turn_state.resolve_narrative_fallback', {}, () => resolveServiceGeneration('narrative'))
-		: null;
-	const classifierProfile = classifierService.profile ?? fallbackNarrativeService?.profile ?? null;
-	if (!classifierProfile) {
-		throw new Error(classifierService.missingReason
-			?? fallbackNarrativeService?.missingReason
-			?? 'Classifier service is unavailable.');
-	}
-
-	const generationService = classifierService.profile ? classifierService : fallbackNarrativeService ?? classifierService;
-	const classifierGeneration = generationService.generation;
+	// The Classifier role never borrows the GameMaster model implicitly.
+	const useNarrativeFallback = false;
+	const classifierProfile = classifierService.profile;
+	if (!classifierProfile) throw new Error(classifierService.missingReason ?? 'Model configuration needed: Classifier is unavailable.');
+	const classifierGeneration = classifierService.generation;
 	const classifierMaxTokens = classifierGenerationMaxTokens(classifierGeneration);
 	const classifierSystem = classifierService.systemPromptOverride?.trim() || DEFAULT_STATE_EXTRACTION_SYSTEM;
 	const stateExtractionResponseSchema = buildStateExtractionResponseSchema();
@@ -4401,7 +4152,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 	let extractionSystem = extractionPlan.compactRecovery
 		? `${classifierSystem}\nRecover the prior invalid extraction. Return strict JSON only.`
 		: classifierSystem;
-	const effectiveServiceId = classifierService.profile ? 'classifier' : 'narrative';
+	const effectiveServiceId = 'classifier';
 	const responseFormat = getProviderCapabilities(classifierProfile, classifierGeneration.model).structuredOutputs
 		? 'json_schema'
 		: 'json_object';
@@ -4947,9 +4698,9 @@ async function continuityAudit(job: BackendJobRow, recorder?: TimingRecorder): P
 	const contextReceipt = asRecord(payload.contextReceipt);
 	const truncated = contextReceipt.truncated === true;
 	let shadowReview: Record<string, unknown> = { status: 'disabled', findingCount: 0 };
-	const [reviewSetting] = await getDb().select().from(llmServiceSettings).where(eq(llmServiceSettings.serviceId, 'continuityReview')).limit(1);
-	if (reviewSetting?.enabled === true && assistantEntryId && rows.some((row) => row.id === assistantEntryId)) {
-		const service = await timePhase(recorder, 'job.continuity_audit.resolve_service', {}, () => resolveServiceGeneration('continuityReview'));
+	// The optional audit runs only when enabled; checking it never enables it.
+	const service = await timePhase(recorder, 'job.continuity_audit.resolve_service', {}, () => resolveServiceGeneration('continuityReview'));
+	if (service.provenance?.enabled === true && assistantEntryId && rows.some((row) => row.id === assistantEntryId)) {
 		if (!service.profile || !service.generation.model) {
 			shadowReview = { status: 'unavailable', findingCount: 0, reason: service.missingReason ?? 'No configured reviewer model.' };
 		} else {
@@ -5121,6 +4872,10 @@ async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder, 
 			}
 			case 'summarize_chapter':
 				return createChapterCheckpoint(job, recorder);
+			case 'chapter_threads':
+				return applyChapterThreadFollowUp(job, recorder);
+			case 'chapter_characters':
+				return applyChapterCharacterFollowUp(job, recorder);
 			case 'refresh_scene_checkpoint':
 				return refreshSceneCheckpoint(job.storyId);
 			case 'rollup_arc':
@@ -5201,7 +4956,7 @@ async function runClaimedJob(job: AnyBackendJobRow, prefetched?: ServerGeneratio
 			timing: jobTimingReport(job, 'completed', recorder.timings),
 		};
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = describeBackendJobError(error);
 		await timePhase(recorder, 'job.mark_failed', { error: message }, () => markBackendJobFailed(job, error));
 		if (job.type === 'extract_turn_state' && campaignJob) {
 			await reconcileDeferredExtractionReceipt(campaignJob, job.attemptCount >= job.maxAttempts ? 'failed' : 'queued', { error: message });

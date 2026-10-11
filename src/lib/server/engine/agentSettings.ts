@@ -4,6 +4,7 @@ import { getDb } from '$lib/server/db/client';
 import { agentSettingsDocumentSchema, agentSettingsReadSchema, agentSettingsSaveSchema, projectJobActionSchema, resolveAgentSettings, type AgentSettingsDocument } from '$lib/contracts/agentTools';
 import { MutationError } from './mutationSafety';
 import { readProjectImageStyle } from '$lib/contracts/imageStyle';
+import { loadModelSettings, resolveModelTaskFromSnapshot } from './modelSettings';
 
 type Db = ReturnType<typeof getDb>;
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -25,7 +26,13 @@ async function readScope(db: Db | Tx, projectId: string, gameId?: string, lock =
 export async function getAgentSettings(input: unknown) {
 	const { projectId, gameId } = agentSettingsReadSchema.parse(input);
 	const scope = await readScope(getDb(), projectId, gameId);
-	const profiles = await getDb().execute(sql`select service_id, provider_type, model, enabled from llm_service_settings where service_id in ('assistant', 'batchAuthoring', 'activeRecall', 'imageGeneration')`);
+	const modelSettings = await loadModelSettings();
+	const profiles = ['assistant', 'batchAuthoring', 'activeRecall', 'imageGeneration'].flatMap(taskId => {
+		const { setting, provenance } = resolveModelTaskFromSnapshot(taskId, modelSettings);
+		// An environment default for a disabled optional task is not a configured profile.
+		return setting && (setting.enabled || provenance.source !== 'environment')
+			? [{ service_id: taskId, provider_type: setting.providerType, model: setting.model, enabled: setting.enabled }] : [];
+	});
 	const resolved = resolveAgentSettings(scope.projectDocument, scope.gameDocument);
 	if (resolved.sources.gmAdaptiveResearch === 'default' && profiles.some(profile => profile.service_id === 'activeRecall' && profile.enabled === true)) {
 		resolved.effective.gmAdaptiveResearch = true;

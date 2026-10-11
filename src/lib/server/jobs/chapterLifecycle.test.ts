@@ -1,16 +1,58 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { arcs, backendJobs, chapters, memoryNodes, stories, storyEntries } from '$lib/server/db/schema';
 
-const mocks = vi.hoisted(() => ({ getDb: vi.fn(), generate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getDb: vi.fn(), generate: vi.fn(), windows: [] as Array<Record<string, unknown>> }));
 vi.mock('$lib/server/db/client', () => ({ getDb: mocks.getDb }));
 vi.mock('./summaryGeneration', async original => ({
 	...await original<typeof import('./summaryGeneration')>(), generateChronologicalMemory: mocks.generate,
 }));
+// The window ledger is exercised against PostgreSQL in chapterWindows.integration.test.ts;
+// here an in-memory ledger keeps these tests on the chapter tables.
+vi.mock('./chapterWindows', async original => {
+	const actual = await original<typeof import('./chapterWindows')>();
+	type Attempt = import('./chapterWindows').ChapterWindowAttempt;
+	const find = (ref: { windowId: string; revision: number }) => mocks.windows.find(row => row.windowId === ref.windowId && row.revision === ref.revision) as Attempt | undefined;
+	const transition = async (_db: unknown, ref: { windowId: string; revision: number }, to: string, patch: Record<string, unknown> = {}, from?: readonly string[]) => {
+		const row = find(ref);
+		const allowed = from ?? actual.CHAPTER_WINDOW_STATES.filter(state => actual.CHAPTER_WINDOW_TRANSITIONS[state].includes(to as never));
+		if (!row || !allowed.includes(row.state as never)) return null;
+		Object.assign(row, patch, { state: to });
+		return { ...row };
+	};
+	return {
+		...actual,
+		latestChapterWindowAttempt: async (_db: unknown, storyId: string, number: number) => {
+			const rows = mocks.windows.filter(row => row.windowId === actual.chapterWindowId(storyId, number));
+			return (rows.at(-1) as Attempt | undefined) ?? null;
+		},
+		freezeChapterWindow: async (_db: unknown, input: import('./chapterWindows').FreezeChapterWindowInput) => {
+			const windowId = actual.chapterWindowId(input.storyId, input.number);
+			const row = { windowId, revision: input.expectedRevision + 1, storyId: input.storyId, policy: input.policy, state: input.state ?? 'ready',
+				afterChapterId: input.afterChapterId, startPosition: input.startPosition, endPosition: input.endPosition, sourceEntryIds: input.sourceEntryIds,
+				sourceFingerprint: 'fixture', compiler: input.compiler, summarizerRevision: input.summarizerRevision, inputs: null, draft: null, draftHash: null,
+				ownerJobId: null, leaseUntil: null, extraction: {}, failure: null, invalidation: null, reconciliations: [],
+				reference: { rangeAfter: input.rangeAfter, sourceRows: input.sourceRows }, chapterId: null, committedAt: null };
+			mocks.windows.push(row);
+			return { frozen: true, attempt: { ...row } };
+		},
+		transitionChapterWindow: transition,
+		invalidateChapterWindow: (db: unknown, ref: { windowId: string; revision: number }, invalidation: Record<string, unknown>) => transition(db, ref, 'invalidated', { invalidation }),
+		claimChapterWindowGeneration: async (_db: unknown, ref: { windowId: string; revision: number }, ownerJobId: string, inputs: Record<string, unknown> | null, patch = {}) => {
+			const row = find(ref);
+			if (!row || !['waiting', 'ready', 'retryable_failure', 'needs_configuration'].includes(row.state)) return null;
+			Object.assign(row, patch, { state: 'generating', ownerJobId, inputs: row.inputs ?? inputs });
+			return { ...row };
+		},
+		markChapterWindowCommitted: (db: unknown, ref: { windowId: string; revision: number }, chapterId: string, committedAt: string) =>
+			transition(db, ref, 'committed', { chapterId, committedAt }, ['validated']),
+	};
+});
+beforeEach(() => { mocks.windows.length = 0; });
 
-import { createChapterCheckpoint, loadEntriesAfter, rollupArc, stableId } from './processor';
+import { applyChapterCharacterFollowUp, applyChapterThreadFollowUp, createChapterCheckpoint, loadEntriesAfter, rollupArc, stableId } from './processor';
 import { selectCompletedChapterTurns, selectNextChapterWindow } from '$lib/services/chapterCadence';
 
-it('commits the tenth chapter and its arc job together before fallible thread work', async () => {
+it('commits the tenth chapter, its memory, receipt and every follow-up job in one transaction', async () => {
 	const entries = Array.from({ length: 20 }, (_, index) => [
 		{ id: `player-${index}`, storyId: 'story', type: 'user_action', content: `I ask question ${index}.`, position: index * 2 + 1, parentId: null, metadata: {}, serverVersion: 1, branchId: null },
 		{ id: `answer-${index}`, storyId: 'story', type: 'narration', content: `The envoy answers question ${index}.`, position: index * 2 + 2, parentId: `player-${index}`, metadata: {}, serverVersion: 1, branchId: null },
@@ -26,8 +68,7 @@ it('commits the tenth chapter and its arc job together before fallible thread wo
 	let activeTransaction = 0;
 	const db = {
 		transaction: async (callback: (tx: unknown) => Promise<unknown>) => {
-			if (++transactionCount === 2) throw new Error('Injected thread reconciliation failure');
-			activeTransaction = transactionCount;
+			activeTransaction = ++transactionCount;
 			pending = [];
 			try {
 				const result = await callback(db);
@@ -44,7 +85,7 @@ it('commits the tenth chapter and its arc job together before fallible thread wo
 			};
 			return query;
 		},
-		update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ serverVersion: 2 }] }) }) }),
+		update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ serverVersion: 3 }] }) }) }),
 		insert: (table: unknown) => ({ values: (value: Record<string, unknown>) => {
 			pending.push({ table, value, transaction: activeTransaction });
 			const result = { returning: async () => [value], then: (resolve: (value: unknown[]) => unknown) => Promise.resolve([value]).then(resolve) };
@@ -57,13 +98,103 @@ it('commits the tenth chapter and its arc job together before fallible thread wo
 		characters: [], openThreads: [], locations: [], keywords: [], model: 'fixture',
 	});
 	const job = { id: 'summary-job', storyId: 'story', payload: {}, type: 'summarize_chapter' } as Parameters<typeof createChapterCheckpoint>[0];
-	await expect(createChapterCheckpoint(job)).rejects.toThrow('Injected thread reconciliation failure');
+	const result = await createChapterCheckpoint(job);
 
-	expect(committed.map(write => write.table)).toEqual([chapters, memoryNodes, backendJobs]);
+	// Thread, character, faction and index work is no longer inline: the job reports completion.
+	expect(result).toMatchObject({ created: true, number: 10, serverVersion: 3, completion: 'committed' });
+	expect(transactionCount).toBe(1);
 	expect(committed.every(write => write.transaction === 1)).toBe(true);
-	expect(committed[0].value).toMatchObject({ number: 10 });
-	expect(committed[2].value).toMatchObject({
-		type: 'rollup_arc', status: 'queued', payload: { chapterId: committed[0].value.id },
+	expect(committed.map(write => write.table)).toEqual([chapters, memoryNodes, backendJobs, backendJobs, backendJobs, backendJobs, backendJobs]);
+	const chapter = committed[0].value;
+	expect(chapter).toMatchObject({ number: 10, serverVersion: 3 });
+	const jobs = committed.filter(write => write.table === backendJobs).map(write => write.value);
+	// No source events: a campaign-wide faction scan would be unrelated to this chapter.
+	expect(jobs.map(row => row.type)).toEqual(['rollup_arc', 'chapter_threads', 'chapter_characters', 'embed_memory_nodes', 'sync_story_vault']);
+	expect(jobs[0]).toMatchObject({ status: 'queued', payload: { chapterId: chapter.id } });
+	for (const row of jobs.slice(1)) {
+		expect(row.payload).toMatchObject({ chapterId: chapter.id, chapterNumber: 10, chapterServerVersion: 3,
+			projectionFingerprint: (chapter.metadata as Record<string, unknown>).projectionFingerprint });
+	}
+	expect(jobs[1].payload).toHaveProperty('threadPlan');
+	expect(jobs[3].payload).toMatchObject({ memoryNodeIds: [`mem_chapter_${chapter.id}`] });
+	expect((chapter.metadata as Record<string, unknown>).completion).toMatchObject({
+		state: 'committed', jobId: 'summary-job', followUpJobIds: Object.fromEntries(
+			['arcRollup', 'threads', 'characters', 'embedding', 'vault'].map((kind, index) => [kind, jobs[index].id])),
+	});
+	expect(result.followUpJobIds).toEqual((chapter.metadata as { completion: { followUpJobIds: unknown } }).completion.followUpJobIds);
+	// The frozen window commits with the chapter and records its exact revision.
+	expect(mocks.windows).toEqual([expect.objectContaining({ revision: 1, state: 'committed', chapterId: chapter.id, afterChapterId: 'chapter-9' })]);
+	expect((chapter.metadata as { completion: { window: unknown } }).completion.window).toMatchObject({ revision: 1, policy: 'live' });
+});
+
+describe('chapter follow-up jobs', () => {
+	const chapterRow = { id: 'chapter-10', storyId: 'story', number: 10, title: 'Ten', sceneOutcome: 'CHARACTER STATE\nEnvoy: answered.',
+		serverVersion: 3, sourceEntryIds: ['answer-1'], sourceEventIds: [], openThreads: [], metadata: { projectionFingerprint: 'fp-10' } };
+	const followUp = (type: string, payload: Record<string, unknown>, metadata: Record<string, unknown> = {}) =>
+		({ id: `${type}-job`, storyId: 'story', type, payload, metadata }) as unknown as Parameters<typeof applyChapterThreadFollowUp>[0];
+
+	function followUpDb(options: { failTransaction?: boolean; chapter?: Record<string, unknown> | null } = {}) {
+		const writes: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+		const db = {
+			transaction: async (callback: (tx: unknown) => Promise<unknown>) => {
+				if (options.failTransaction) throw new Error('Injected thread reconciliation failure');
+				return callback(db);
+			},
+			select: () => {
+				let table: unknown;
+				const query = {
+					from: (value: unknown) => { table = value; return query; }, where: () => query, orderBy: () => query, limit: () => query, for: () => query,
+					then: (resolve: (value: unknown[]) => unknown) => Promise.resolve(table === chapters ? (options.chapter === null ? [] : [options.chapter ?? chapterRow])
+						: table === stories ? [{ id: 'story', metadata: {}, currentTurn: 4 }] : []).then(resolve),
+				};
+				return query;
+			},
+			update: (table: unknown) => ({ set: (values: Record<string, unknown>) => {
+				writes.push({ table, values });
+				const where = { returning: async () => [{ id: 'row' }], then: (resolve: (value: unknown[]) => unknown) => Promise.resolve([]).then(resolve) };
+				return { where: () => where };
+			} }),
+			insert: (table: unknown) => ({ values: (values: Record<string, unknown>) => {
+				writes.push({ table, values });
+				const result = { returning: async () => [values], then: (resolve: (value: unknown[]) => unknown) => Promise.resolve([values]).then(resolve) };
+				return { onConflictDoNothing: () => result, onConflictDoUpdate: () => result };
+			} }),
+		};
+		mocks.getDb.mockReturnValue(db);
+		return writes;
+	}
+	const plan = { updates: [], inserts: [], eventUpdates: [], openThreadIds: [] };
+
+	it('fails only its own job when thread reconciliation fails, without touching the committed chapter', async () => {
+		const writes = followUpDb({ failTransaction: true });
+		await expect(applyChapterThreadFollowUp(followUp('chapter_threads', { chapterId: 'chapter-10', chapterServerVersion: 3, projectionFingerprint: 'fp-10', threadPlan: plan })))
+			.rejects.toThrow('Injected thread reconciliation failure');
+		expect(writes.some(write => write.table === chapters)).toBe(false);
+	});
+
+	it('commits the thread receipt and Director review with the thread writes, and reuses that receipt on retry', async () => {
+		const writes = followUpDb();
+		const job = followUp('chapter_threads', { chapterId: 'chapter-10', chapterServerVersion: 3, projectionFingerprint: 'fp-10', threadPlan: plan });
+		const applied = await applyChapterThreadFollowUp(job);
+		expect(applied).toMatchObject({ applied: true, chapterId: 'chapter-10' });
+		const receipt = writes.find(write => write.table === backendJobs && 'metadata' in write.values);
+		expect(receipt).toBeDefined();
+		expect(writes.some(write => write.table === backendJobs && (write.values as { type?: string }).type === 'plan_plot_brain')).toBe(true);
+
+		const retried = followUpDb();
+		await expect(applyChapterThreadFollowUp(followUp('chapter_threads', job.payload as Record<string, unknown>, { chapterThreadsReceipt: applied })))
+			.resolves.toMatchObject({ applied: true, reused: true });
+		expect(retried).toHaveLength(0);
+	});
+
+	it.each([
+		['a missing chapter', null, 'chapter_missing'],
+		['a rebuilt chapter revision', { ...chapterRow, serverVersion: 9 }, 'chapter_revision_changed'],
+	])('skips %s instead of applying stale chapter effects', async (_label, chapter, reason) => {
+		const writes = followUpDb({ chapter });
+		await expect(applyChapterCharacterFollowUp(followUp('chapter_characters', { chapterId: 'chapter-10', chapterServerVersion: 3, projectionFingerprint: 'fp-10' })))
+			.resolves.toMatchObject({ applied: false, reason });
+		expect(writes).toHaveLength(0);
 	});
 });
 

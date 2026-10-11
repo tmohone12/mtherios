@@ -109,7 +109,8 @@ describe('chapter thread reconciliation', () => {
 			},
 		});
 		expect(result.updates[0].values.description).toContain('Current state: The claimant has seized the eastern gate.');
-		expect(result.eventUpdates).toEqual([{ eventId: 'event_7', threadIds: [existingThread.id] }]);
+		// The deferred apply compares the snapshot so a later edit to the event is never overwritten.
+		expect(result.eventUpdates).toEqual([{ eventId: 'event_7', threadIds: [existingThread.id], previousThreadIds: [] }]);
 	});
 
 	it('ignores a resolve action without current-chapter evidence', () => {

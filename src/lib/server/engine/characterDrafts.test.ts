@@ -603,40 +603,13 @@ describe('refineChapterCharacterUpdates', () => {
 		expect(mocks.generateServerTextWithMetrics).not.toHaveBeenCalled();
 	});
 
-	it('uses classifier only as a migration fallback when no new service row exists', async () => {
-		mocks.resolveServiceGeneration
-			.mockResolvedValueOnce({
-				setting: null,
-				profile: null,
-				generation: {},
-				systemPromptOverride: null,
-				missingReason: 'missing characterUpdate row',
-			})
-			.mockResolvedValueOnce({
-				setting: { serviceId: 'classifier', enabled: true },
-				profile: {
-					id: 'server-classifier',
-					name: 'Server classifier',
-					providerType: 'openrouter',
-					apiKey: 'test-key',
-					customModels: [],
-					fetchedModels: [],
-					reasoningModels: [],
-					hiddenModels: [],
-					favoriteModels: [],
-				},
-				generation: { model: 'legacy-model', temperature: 0.2, maxTokens: 1800 },
-				systemPromptOverride: null,
-				missingReason: null,
-			});
-		mocks.generateServerTextWithMetrics.mockResolvedValueOnce({
-			text: JSON.stringify({ updates: [] }),
-			model: 'legacy-model',
-			endpoint: 'mock',
-			durationMs: 1,
-			promptChars: 100,
-			responseChars: 14,
-			usage: { requestTokens: null, responseTokens: null, totalTokens: null },
+	it('skips visibly instead of borrowing the classifier when character update is unavailable', async () => {
+		mocks.resolveServiceGeneration.mockResolvedValueOnce({
+			setting: null,
+			profile: null,
+			generation: {},
+			systemPromptOverride: null,
+			missingReason: 'Model configuration needed: Classifier has no model profile.',
 		});
 
 		const result = await refineChapterCharacterUpdates({
@@ -645,9 +618,10 @@ describe('refineChapterCharacterUpdates', () => {
 			candidates: [{ entityId: 'npc_mira', name: 'Mira', state: {} }],
 		});
 
-		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(1, 'characterUpdate');
-		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(2, 'classifier');
-		expect(mocks.generateServerTextWithMetrics).toHaveBeenCalledWith(expect.objectContaining({ reasoningEffort: 'off' }));
-		expect(result).toMatchObject({ status: 'skipped', effectiveServiceId: 'classifier', updates: [] });
+		expect(mocks.resolveServiceGeneration).toHaveBeenCalledTimes(1);
+		expect(mocks.resolveServiceGeneration).toHaveBeenCalledWith('characterUpdate');
+		expect(mocks.generateServerTextWithMetrics).not.toHaveBeenCalled();
+		expect(result).toMatchObject({ status: 'skipped', effectiveServiceId: 'characterUpdate', updates: [],
+			reason: 'Model configuration needed: Classifier has no model profile.' });
 	});
 });

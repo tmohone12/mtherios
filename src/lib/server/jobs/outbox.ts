@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { and, asc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
 import { backendJobs, stories } from '$lib/server/db/schema';
-import { classifyBackendJobFailure, manualRetryBlockCause } from './failureClassification';
+import { classifyBackendJobFailure, describeBackendJobError, manualRetryBlockCause } from './failureClassification';
 
 export const backendJobTypes = [
 	'validate_agent_settings',
@@ -11,6 +11,8 @@ export const backendJobTypes = [
 	'create_memory_nodes_from_events',
 	'embed_memory_nodes',
 	'summarize_chapter',
+	'chapter_threads',
+	'chapter_characters',
 	'rebuild_summaries',
 	'refresh_scene_checkpoint',
 	'rollup_arc',
@@ -42,6 +44,12 @@ export const manuallyRetryableBackendJobTypes = [
 	'rebuild_retrieval_projection',
 	'embed_memory_nodes',
 	'extract_turn_state',
+	// Chapter follow-ups commit their effects with a receipt on their own job row
+	// (threads) or are keyed by stable proposal/event receipts, so a retry never
+	// regenerates the chapter or repeats another consumer's effects.
+	'chapter_threads',
+	'chapter_characters',
+	'update_faction_pressure',
 ] as const satisfies readonly BackendJobType[];
 
 type BackendJobRetryInspection = Pick<typeof backendJobs.$inferSelect, 'status' | 'type' | 'lockedAt' | 'lockedBy'> &
@@ -60,7 +68,8 @@ export function backendJobRetryBlockReason(job: BackendJobRetryInspection): stri
 	const cause = typeof job.lastError === 'string' ? classifyBackendJobFailure(job.lastError).cause : null;
 	// A changed classifier can repair bad output; the explicit retry remains source- and lock-guarded.
 	const correctedExtraction = job.type === 'extract_turn_state' && cause === 'provider_output';
-	if (recordedRetryable === false && !correctedExtraction) return 'Manual retry is blocked for this recorded permanent failure; correct the source or configuration first.';
+	// A configuration failure is permanent until settings change; then an explicit retry is the fix.
+	if (recordedRetryable === false && !correctedExtraction && cause !== 'configuration') return 'Manual retry is blocked for this recorded permanent failure; correct the source or configuration first.';
 	if (cause && manualRetryBlockCause(cause) && !correctedExtraction) {
 		return `Manual retry is blocked for ${cause.replaceAll('_', ' ')} failures; correct the source or configuration first.`;
 	}
@@ -319,6 +328,8 @@ export async function enqueueChapterSummaryJob(input: {
 	eventIds?: string[];
 	patchIds?: string[];
 	dedupeKey?: string;
+	/** A deferred re-check, e.g. while classifier work on the window's turns finishes. */
+	runAfter?: string;
 	memorySettings?: {
 		chapterThreshold?: number;
 		postChapterBuffer?: number;
@@ -329,6 +340,7 @@ export async function enqueueChapterSummaryJob(input: {
 		storyId: input.storyId,
 		type: 'summarize_chapter',
 		dedupeKey: input.dedupeKey ?? `chapter-summary-${input.serverVersion}`,
+		...(input.runAfter ? { runAfter: input.runAfter } : {}),
 		payload: {
 			eventIds: input.eventIds ?? [],
 			patchIds: input.patchIds ?? [],
@@ -336,6 +348,75 @@ export async function enqueueChapterSummaryJob(input: {
 			...(input.memorySettings ?? {}),
 		},
 	}, db);
+}
+
+/** Durable consumers of one committed chapter. Keys include the chapter's commit
+ * revision: a chapter deleted and regenerated under the same stable ID gets fresh
+ * consumers, while a duplicate attempt for the same commit can never reset one. */
+export const chapterFollowUpKinds = ['arcRollup', 'threads', 'characters', 'factionPressure', 'embedding', 'vault'] as const;
+export type ChapterFollowUpKind = typeof chapterFollowUpKinds[number];
+
+const chapterFollowUpJobs: Record<ChapterFollowUpKind, { type: BackendJobType; prefix: string; maxAttempts: number }> = {
+	arcRollup: { type: 'rollup_arc', prefix: 'arc-rollup', maxAttempts: 3 },
+	threads: { type: 'chapter_threads', prefix: 'chapter-threads', maxAttempts: 5 },
+	characters: { type: 'chapter_characters', prefix: 'chapter-characters', maxAttempts: 5 },
+	factionPressure: { type: 'update_faction_pressure', prefix: 'chapter-faction-pressure', maxAttempts: 5 },
+	embedding: { type: 'embed_memory_nodes', prefix: 'chapter-embed', maxAttempts: 3 },
+	vault: { type: 'sync_story_vault', prefix: 'chapter-vault', maxAttempts: 3 },
+};
+
+function chapterFollowUpDedupeKey(kind: ChapterFollowUpKind, chapterId: string, chapterServerVersion: number): string {
+	return `${chapterFollowUpJobs[kind].prefix}-${chapterId}-r${chapterServerVersion}`;
+}
+
+export function chapterFollowUpJobId(storyId: string, chapterId: string, chapterServerVersion: number, kind: ChapterFollowUpKind): string {
+	return stableJobId(storyId, chapterFollowUpJobs[kind].type, chapterFollowUpDedupeKey(kind, chapterId, chapterServerVersion));
+}
+
+export interface ChapterFollowUpInput {
+	storyId: string;
+	chapterId: string;
+	chapterNumber: number;
+	chapterServerVersion: number;
+	projectionFingerprint: string;
+	sourceJobId: string;
+	sourceEventIds: string[];
+	memoryNodeId: string;
+	threadPlan: unknown;
+	/** Defaults to every kind. A reviewed runner chapter has no thread, character or event evidence to apply. */
+	kinds?: readonly ChapterFollowUpKind[];
+}
+
+/** Enqueue every chapter consumer in the caller's commit transaction. */
+export async function enqueueChapterFollowUpJobs(input: ChapterFollowUpInput, db: OutboxDb | OutboxTx): Promise<Partial<Record<ChapterFollowUpKind, string>>> {
+	const chapter = {
+		chapterId: input.chapterId,
+		chapterNumber: input.chapterNumber,
+		chapterServerVersion: input.chapterServerVersion,
+		projectionFingerprint: input.projectionFingerprint,
+		sourceJobId: input.sourceJobId,
+	};
+	const payloads: Partial<Record<ChapterFollowUpKind, Record<string, unknown>>> = {
+		arcRollup: { chapterId: input.chapterId },
+		threads: { ...chapter, threadPlan: input.threadPlan },
+		characters: chapter,
+		// Without source events the chapter has no pressure evidence; never fall back to a campaign-wide scan.
+		...(input.sourceEventIds.length ? { factionPressure: { ...chapter, eventIds: input.sourceEventIds, serverVersion: input.chapterServerVersion, deferWorldTick: true } } : {}),
+		embedding: { ...chapter, memoryNodeIds: [input.memoryNodeId], serverVersion: input.chapterServerVersion },
+		vault: { ...chapter, serverVersion: input.chapterServerVersion, reason: 'chapter' },
+	};
+	const ids: Partial<Record<ChapterFollowUpKind, string>> = {};
+	for (const kind of chapterFollowUpKinds) {
+		const payload = payloads[kind];
+		if (!payload || (input.kinds && !input.kinds.includes(kind))) continue;
+		const job = chapterFollowUpJobs[kind];
+		ids[kind] = await enqueueBackendJob({
+			storyId: input.storyId, type: job.type as Exclude<BackendJobType, 'validate_agent_settings' | 'generate_image' | 'assistant_batch_child'>,
+			dedupeKey: chapterFollowUpDedupeKey(kind, input.chapterId, input.chapterServerVersion), payload, maxAttempts: job.maxAttempts, requeueExisting: false,
+			metadata: { chapterFollowUp: { kind, chapterId: input.chapterId, chapterServerVersion: input.chapterServerVersion } },
+		}, db);
+	}
+	return ids;
 }
 
 const FACTION_TICK_TURN_INTERVAL = 5;
@@ -361,9 +442,9 @@ export async function enqueuePlotBrainJob(input: {
 	trigger: 'scheduled_refresh' | 'arc_created' | 'faction_shock';
 	scopeId: string;
 	skipIfPlanned?: boolean;
-}): Promise<string> {
+}, db: OutboxDb | OutboxTx = getDb()): Promise<string> {
 	const [story] = input.trigger === 'scheduled_refresh'
-		? await getDb().select({ currentTurn: stories.currentTurn, metadata: stories.metadata }).from(stories).where(eq(stories.id, input.storyId)).limit(1)
+		? await db.select({ currentTurn: stories.currentTurn, metadata: stories.metadata }).from(stories).where(eq(stories.id, input.storyId)).limit(1)
 		: [];
 	const workflow = story?.metadata?.factionWorkflow as Record<string, unknown> | undefined;
  const gardener = workflow?.gardener as Record<string, unknown> | undefined;
@@ -383,7 +464,7 @@ export async function enqueuePlotBrainJob(input: {
 		},
 		requeueExisting: false,
 		maxAttempts: 3,
-	});
+	}, db);
 }
 
 export function backendJobFailureIsRetryable(error: unknown): boolean {
@@ -392,7 +473,7 @@ export function backendJobFailureIsRetryable(error: unknown): boolean {
 		if (retryable === false) return false;
 		if (retryable === true) return true;
 	}
-	const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+	const message = error instanceof Error || typeof error === 'string' ? describeBackendJobError(error) : '';
 	// Automatic retries follow the classifier's decision. Manual recovery has a
 	// separate policy; treating everything outside its blocklist as transient
 	// repeatedly dispatches unknown/deterministic summary failures.
@@ -667,7 +748,7 @@ export async function markBackendJobFailed(job: ClaimedBackendJob, error: unknow
 		runAfter: new Date(Date.now() + delayMs).toISOString(),
 		lockedAt: null,
 		lockedBy: null,
-		lastError: error instanceof Error ? error.message : String(error),
+		lastError: describeBackendJobError(error),
 		metadata: sql`${backendJobs.metadata} || ${JSON.stringify({ lastFailure: {
 			kind: !retryable ? 'non_retryable' : exhausted ? 'attempts_exhausted' : 'retry_scheduled',
 			failedAt, retryable, attemptCount: job.attemptCount, maxAttempts: job.maxAttempts,

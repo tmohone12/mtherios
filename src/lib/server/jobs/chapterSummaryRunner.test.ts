@@ -1,11 +1,14 @@
 import {beforeAll,afterAll,describe,it,expect,vi} from 'vitest';
 import postgres,{type Sql} from 'postgres';
 import {randomUUID,createHash} from 'node:crypto';
-import {getChapterRunnerStatus,configureChapterRunner,tickChapterRunner,verifyChapterEndpoint,authorizeChapterReplacement,reconcileCommittedChapterRunner,reconcileBackfilledChapterRunner,type ChapterRunnerDependencies} from './chapterSummaryRunner';
+import {getChapterRunnerStatus,configureChapterRunner,tickChapterRunner,verifyChapterEndpoint,reconcileCommittedChapterRunner,reconcileBackfilledChapterRunner,type ChapterRunnerDependencies} from './chapterSummaryRunner';
+import {authorizeChapterReplacement} from './chapterReplacementRecovery';
 import {planSummaryRecovery,readRecoveryRun,recoveryHash,reviewRecoveryDraft,commitRecoveryDraft,importRecoveryDraft,RECOVERY_PROVIDER} from './summaryRecovery';
 import {RECOVERY_ROUTE,type ChapterRunnerApproval} from '$lib/contracts/chapterRunner';
 import type {ServerGenerationOptions,ServerGenerationResult} from '$lib/server/turn/provider';
 import {sourceEvidenceCatalog} from './summaryEvidenceReferences';
+import {chapterWindowId,ensureReviewedChapterFollowUps} from './chapterWindows';
+import {createChapterCheckpoint} from './processor';
 const url=process.env.RECOVERY_TEST_DATABASE_URL,tests=url?describe:describe.skip;
 let db:Sql;
 beforeAll(()=>{if(!url)return;const u=new URL(url);if(u.hostname!=='127.0.0.1'||u.port!=='5433'||!/^\/mythengine_summary_repair_recovery_\d+$/.test(u.pathname))throw Error('Disposable DB required');
@@ -135,6 +138,48 @@ tests('isolated chapter-only runner',()=>{
   await db`update chapter_summary_runners set document=${db.json(row.document)} where story_id=${f.sid}`;
   await db`insert into summary_recovery_runs(id,story_id,document) values(${manifest.id},${f.sid},${db.json({manifest,attempts:[{stage:'sources-1',status:'reserved',reservedInput:1000,reservedOutput:12000,reservedUsd:0.004,requestHash:'unknown'}]})})`;
   const s=await tickChapterRunner(db,f.sid,f.gate,m.deps(f.now));expect(s.phase).toBe('held');expect(s.message).toContain('uncertain');expect(m.calls).toBe(0);
+  // The shared chapter lifecycle shows the same window held for reconciliation.
+  const [attempt]=await db`select policy,state,failure from chapter_window_attempts where story_id=${f.sid} order by revision desc limit 1`;
+  expect(attempt).toMatchObject({policy:'reviewed',state:'uncertain_dispatch',failure:{code:'runner_uncertain_dispatch',retryable:false}});
+ });
+});
+
+tests('shared chapter lifecycle',()=>{
+ // The lifecycle owner writes through the application database client.
+ const owner=process.env.DATABASE_URL===url?it:it.skip;
+ it('records the runner window as a reviewed revision without any runner job writes',async()=>{
+  const f=await fixture(),m=mock(f.sid);await configureChapterRunner(db,f.sid,f.gate,f.approval,f.now);
+  const jobs=await db`select id from backend_jobs where story_id=${f.sid}`;
+  await tickChapterRunner(db,f.sid,f.gate,m.deps(f.now));
+  const [attempt]=await db`select policy,state,chapter_id,draft_hash,reference from chapter_window_attempts where story_id=${f.sid}`;
+  const [chapter]=await db`select id from chapters where story_id=${f.sid}`;
+  expect(attempt).toMatchObject({policy:'reviewed',state:'committed',chapter_id:chapter.id,draft_hash:expect.any(String)});
+  expect(attempt.reference.followUps).toMatchObject({pending:true});
+  expect(await db`select id from backend_jobs where story_id=${f.sid}`).toHaveLength(jobs.length);
+ });
+ it('defers to a live window that is generating, without allocating budget or dispatching',async()=>{
+  const f=await fixture(),m=mock(f.sid);await configureChapterRunner(db,f.sid,f.gate,f.approval,f.now);
+  const windowId=chapterWindowId(f.sid,1);
+  await db`insert into chapter_windows(id,story_id,number,revision) values(${windowId},${f.sid},1,1)`;
+  await db`insert into chapter_window_attempts(window_id,revision,story_id,policy,state,start_position,end_position,source_entry_ids,source_fingerprint,compiler,summarizer_revision,owner_job_id,lease_until)
+   values(${windowId},1,${f.sid},'live','generating',1,40,'[]'::jsonb,'fixture','fixture','fixture','live-job',now()+interval '5 minutes')`;
+  const s=await tickChapterRunner(db,f.sid,f.gate,m.deps(f.now));
+  expect(s).toMatchObject({phase:'waiting',reservedUsd:0});expect(s.message).toContain('live chapter worker');expect(m.calls).toBe(0);
+ });
+ owner('hands index and arc consumers for a runner chapter to the lifecycle owner, once; the live worker defers to a held reviewed window',async()=>{
+  const f=await fixture(),m=mock(f.sid);await configureChapterRunner(db,f.sid,f.gate,f.approval,f.now);
+  await tickChapterRunner(db,f.sid,f.gate,m.deps(f.now));
+  expect(await ensureReviewedChapterFollowUps(f.sid)).toBe(1);
+  const jobs=await db`select type,payload from backend_jobs where story_id=${f.sid} and metadata ? 'chapterFollowUp' order by type`;
+  expect(jobs.map(job=>job.type)).toEqual(['embed_memory_nodes','rollup_arc','sync_story_vault']);
+  expect(await ensureReviewedChapterFollowUps(f.sid)).toBe(0);
+  const [attempt]=await db`select reference from chapter_window_attempts where story_id=${f.sid}`;
+  expect(attempt.reference.followUps).toMatchObject({pending:false,jobIds:{arcRollup:expect.any(String),embedding:expect.any(String),vault:expect.any(String)}});
+
+  const held=await fixture(),old=mock(held.sid,'timeout');await configureChapterRunner(db,held.sid,held.gate,held.approval,held.now);
+  await tickChapterRunner(db,held.sid,held.gate,old.deps(held.now));
+  await expect(createChapterCheckpoint({id:'live-job',storyId:held.sid,payload:{},type:'summarize_chapter'} as Parameters<typeof createChapterCheckpoint>[0]))
+   .resolves.toMatchObject({created:false,reason:'window_owned_by_reviewed_runner',state:'uncertain_dispatch'});
  });
 });
 tests('reviewed held chapter reconciliation',()=>{

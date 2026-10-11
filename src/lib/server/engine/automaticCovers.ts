@@ -7,6 +7,7 @@ import { resolveApiKeyRef } from './llmSettings';
 import type { ContentItem } from '$lib/contracts/content';
 import { readProjectImageStyle, styledImagePrompt } from '$lib/contracts/imageStyle';
 import { isImageProfile } from './imageProvider';
+import { imageTaskSetting } from './modelSettings';
 
 type Db = ReturnType<typeof getDb>;
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -15,7 +16,7 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 export async function enqueueAutomaticCover(tx: Tx, item: ContentItem): Promise<string | null> {
   const [project] = await tx.execute(sql`select settings from shelves where id=${item.project_id}`);
   if (!project || !resolveAgentSettings(readAgentDocument(project.settings)).effective.automaticCovers) return null;
-  const [profile] = await tx.execute(sql`select provider_type,model,api_key_ref,enabled from llm_service_settings where service_id='imageGeneration'`);
+  const profile = await imageTaskSetting(tx);
   if (!profile || profile.enabled === false || !['openai', 'nanogpt'].includes(String(profile.provider_type)) ||
     typeof profile.model !== 'string' || !isImageProfile(String(profile.provider_type), profile.model) ||
     !resolveApiKeyRef(typeof profile.api_key_ref === 'string' ? profile.api_key_ref : null)) return null;

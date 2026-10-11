@@ -4,9 +4,10 @@ import type {Sql} from 'postgres';
 import {randomUUID} from 'node:crypto';
 import {chapterRunnerApprovalSchema,RECOVERY_ROUTE,RECOVERY_LIMITS,LEGACY_NANO_RECOVERY_ROUTE,type ChapterRunnerApproval,type ChapterRunnerStatus} from '$lib/contracts/chapterRunner';
 import {selectCompletedChapterTurns,type ChapterSourceEntry} from '$lib/services/chapterCadence';
-import {planSummaryRecovery,previewRecoveryCalls,readRecoveryRun,readReplacementPrior,recoveryHash,generateRecoveryDraft,reviewRecoveryDraft,commitRecoveryDraft,verifyRecoveryCommit,type RecoveryManifest} from './summaryRecovery';
+import {planSummaryRecovery,previewRecoveryCalls,readRecoveryRun,recoveryHash,generateRecoveryDraft,reviewRecoveryDraft,commitRecoveryDraft,verifyRecoveryCommit,type RecoveryManifest} from './summaryRecovery';
 import type {ServerGenerationOptions} from '$lib/server/turn/provider';
 import {EVIDENCE_REFERENCE_PROTOCOL} from './summaryEvidenceReferences';
+import {recordReviewedChapterWindow,reviewedChapterWindowBlocked,setReviewedChapterWindowState} from './chapterWindows';
 type Query=Pick<Sql,'unsafe'>;
 type State={enabled:boolean;approval:ChapterRunnerApproval;phase:ChapterRunnerStatus['phase'];message:string;nextDueAt:string|null;
  active?:{manifest:RecoveryManifest;owner:string;leaseUntil:string};
@@ -28,6 +29,11 @@ async function readState(db:Query,sid:string) {
 async function writeState(db:Query,sid:string,d:State) {
  await db.unsafe('insert into chapter_summary_runners(story_id,document) values($1,$2::text::jsonb) on conflict(story_id) do update set document=excluded.document,updated_at=now()',[sid,JSON.stringify(d)]);
 }
+/** Runner document access under its advisory lock, for local recovery tooling. */
+export type ChapterRunnerState=State;
+export const chapterRunnerAllowed=(sid:string,gate:ChapterRunnerGate)=>allowed(sid,gate);
+export const saveChapterRunnerState=(db:Query,sid:string,d:State)=>writeState(db,sid,d);
+export const lockedChapterRunnerState=<T>(db:Sql,sid:string,fn:(tx:Query,d:State|null)=>Promise<T>)=>locked(db,sid,fn);
 async function locked<T>(db:Sql,sid:string,fn:(tx:Query,d:State|null)=>Promise<T>) {
  return db.begin(async tx=>{
   await tx.unsafe('select pg_advisory_xact_lock(hashtextextended($1,0))',['chapter-summary-runner:'+sid]);
@@ -74,6 +80,8 @@ export async function reconcileCommittedChapterRunner(db:Sql,sid:string,gate:Cha
   }
   if(!times.length)throw Error('Retained paid cadence evidence required');
   if(!d.completed.some(c=>c.manifestId===m.id))d.completed.push({manifestId:m.id,number:m.number,at:run.commit!.at});
+  await setReviewedChapterWindowState(tx,{storyId:sid,number:m.number,manifestId:m.id,state:'committed',commit:reviewedCommit(run.commit!),
+   from:['generating','validated','retryable_failure','uncertain_dispatch']});
   delete d.active;
   const previousDue=d.nextDueAt?Date.parse(d.nextDueAt):0;if(!Number.isFinite(previousDue))throw Error('Existing paid cadence changed');
   d.nextDueAt=new Date(Math.max(previousDue,Math.max(...times)+(d.approval.minIntervalMinutes*60000))).toISOString();
@@ -107,6 +115,8 @@ export async function reconcileBackfilledChapterRunner(db:Sql,sid:string,
    ||old.sourceIds.some(id=>!covered.has(id)))throw Error('Backfill does not cover retained attempt');
   d.backfills??=[];d.backfills.push({priorManifestId:old.id,priorRunHash:a.priorRunHash,runnerHash:a.runnerHash,
    manifestIds:a.commits.map(c=>c.manifest.id),reviewedBy:a.reviewedBy,at:now.toISOString()});
+  await setReviewedChapterWindowState(tx,{storyId:sid,number:old.number,manifestId:old.id,state:'invalidated',
+   invalidation:{reason:'operator',detail:`Reviewed backfill through chapter ${a.commits.at(-1)!.manifest.number}.`}});
   delete d.active;d.phase='paused';
   d.message=`Reviewed catch-up through chapter ${a.commits.at(-1)!.manifest.number} saved. Previous attempt retained for audit; automatic chapters remain paused.`;
   await writeState(tx,sid,d);
@@ -149,29 +159,6 @@ export async function verifyChapterEndpoint() {
   ||Number(price.inputPer1kTokens)*1000>RECOVERY_ROUTE.inputUsdPerMillion||Number(price.outputPer1kTokens)*1000>RECOVERY_ROUTE.outputUsdPerMillion
   ||Number(price.cacheReadInputPer1kTokens??0)*1000>RECOVERY_ROUTE.inputUsdPerMillion||Number(price.cacheWriteInputPer1kTokens??0)>0)throw Error('Pinned Xiaomi endpoint is unavailable or exceeds the approved prices. Review routing before enabling again.');
 }
-export type ChapterReplacementApproval={priorManifestId:string;priorDocumentHash:string;approvedBy:string;approvedAt:string;number:number;start:number;end:number;
- calls:4;inputTokens:153697;outputTokens:48000;usd:0.043};
-/** Local operator only; never exposed as a browser action. No provider request is sent here. */
-export async function authorizeChapterReplacement(db:Sql,sid:string,gate:ChapterRunnerGate,a:ChapterReplacementApproval,now=new Date()) {
- if(!allowed(sid,gate)||!a.approvedBy.trim()||!Number.isFinite(Date.parse(a.approvedAt))||Date.parse(a.approvedAt)>now.getTime()
-  ||recoveryHash({calls:a.calls,inputTokens:a.inputTokens,outputTokens:a.outputTokens,usd:a.usd})!==recoveryHash({calls:4,inputTokens:153697,outputTokens:48000,usd:0.043}))throw Error('Exact one-time replacement approval required');
- await locked(db,sid,async(tx,d)=>{
-  if(!d?.active||d.phase!=='held'||d.enabled||d.active.manifest.replacement||d.active.manifest.id!==a.priorManifestId)throw Error('Held original attempt required; replacement cannot repeat');
-  if(Date.parse(d.approval.expiresAt)<=now.getTime()||d.approval.totalUsd!==0.31||d.approval.maxChapters!==10||d.approval.minIntervalMinutes!==60)throw Error('Existing aggregate approval differs or expired');
-  const prior=await readRecoveryRun(tx,d.active.manifest);if(!prior||recoveryHash(prior)!==a.priorDocumentHash)throw Error('Prior uncertain document differs');
-  const fresh=await planSummaryRecovery(tx,sid,'chapter');
-  if(fresh.number!==a.number||fresh.startPosition!==a.start||fresh.endPosition!==a.end)throw Error('Replacement source range differs');
-  const {id:_,...body}=fresh;body.replacement={priorManifestId:a.priorManifestId,priorDocumentHash:a.priorDocumentHash,approvedBy:a.approvedBy,approvedAt:a.approvedAt,limits:{calls:a.calls,inputTokens:a.inputTokens,outputTokens:a.outputTokens,usd:a.usd}};
-  const m:RecoveryManifest={id:`summary_recovery_${recoveryHash(body)}`,...body};await readReplacementPrior(tx,m);
-  const old=d.allocations.find(r=>r.manifestId===a.priorManifestId&&!r.incrementOf);
-  if(!old||old.usd!==0.033||d.allocations.some(r=>r.incrementOf===a.priorManifestId)||d.reservations.filter(r=>r.manifestId===a.priorManifestId).length!==1
-   ||d.reservations.length+3>30||d.allocations.reduce((n,r)=>n+r.usd,0)+0.010>d.approval.totalUsd)throw Error('Budget replacement reservation cannot fit');
-  d.allocations.push({manifestId:m.id,usd:0.010,incrementOf:a.priorManifestId});
-  d.active={manifest:m,owner:'explicit-replacement-not-yet-dispatched',leaseUntil:new Date(0).toISOString()};
-  d.enabled=true;d.phase='generating';d.message='Approved one-time replacement; original uncertain execution and allocation remain counted.';await writeState(tx,sid,d);
- });
- return getChapterRunnerStatus(db,sid,gate);
-}
 export async function tickChapterRunner(db:Sql,sid:string,gate:ChapterRunnerGate,deps:ChapterRunnerDependencies) {
  if(!allowed(sid,gate))return getChapterRunnerStatus(db,sid,gate);
  const owner=randomUUID(),now=nowDate(deps);
@@ -184,6 +171,8 @@ export async function tickChapterRunner(db:Sql,sid:string,gate:ChapterRunnerGate
    const e=await eligibility(tx,sid);
    if(!e.manifest){d.phase='waiting';d.message=`Waiting: ${e.completedTurns}/20 completed turns after position ${e.boundary.endPosition}.`;await writeState(tx,sid,d);return null;}
    if(e.manifest.startPosition<=d.approval.afterPosition)throw Error('Candidate overlaps the approved source floor.');
+   const blocked=await reviewedChapterWindowBlocked(tx,sid,e.manifest.number);
+   if(blocked){d.phase='waiting';d.message=`Waiting: ${blocked}`;await writeState(tx,sid,d);return null;}
    if(chapterAllocations(d)>=d.approval.maxChapters||d.allocations.reduce((n,a)=>n+a.usd,0)+RECOVERY_LIMITS.usd>d.approval.totalUsd||d.reservations.length+3>30) {
     d.enabled=false;d.phase='complete';d.message='Approved count or budget exhausted. Review new limits to continue.';await writeState(tx,sid,d);return null;
    }
@@ -191,6 +180,9 @@ export async function tickChapterRunner(db:Sql,sid:string,gate:ChapterRunnerGate
    d.active={manifest:e.manifest,owner,leaseUntil:new Date(now.getTime()+10*60000).toISOString()};
   }else d.active={...d.active,owner,leaseUntil:new Date(now.getTime()+10*60000).toISOString()};
   d.phase='generating';d.message='Generating one source-bound chapter. Reserved requests will never be replayed after an uncertain outcome.';
+  const am=d.active.manifest;
+  await recordReviewedChapterWindow(tx,{storyId:sid,number:am.number,manifestId:am.id,startPosition:am.startPosition,endPosition:am.endPosition,
+   sourceEntryIds:am.sourceIds,owner,compiler:am.version,summarizerRevision:`${am.route.model}@${recoveryHash(am.route).slice(0,12)}`});
   await writeState(tx,sid,d);return d.active.manifest;
  });
  if(!selected)return getChapterRunnerStatus(db,sid,gate);
@@ -220,11 +212,14 @@ export async function tickChapterRunner(db:Sql,sid:string,gate:ChapterRunnerGate
   // this does not claim a human read the generated prose or semantic certainty.
   await reviewRecoveryDraft(db,m,result.draftHash,'Automatic exact-source quote, attribution and account-order validation under approved chapter-only activation',
    {quotesChecked:true,uncertaintyChecked:true,chronologyChecked:true});
+  await setReviewedChapterWindowState(db,{storyId:sid,number:m.number,manifestId:m.id,state:'validated',draftHash:result.draftHash});
   await commitRecoveryDraft(db,m,result.draftHash,async(tx,commit)=>{
    await tx.unsafe('select pg_advisory_xact_lock(hashtextextended($1,0))',['chapter-summary-runner:'+sid]);
    const [row]=await tx.unsafe('select document from chapter_summary_runners where story_id=$1 for update',[sid]),d=row?.document as State;
    if(!d?.enabled||d.active?.owner!==owner||d.active.manifest.id!==m.id||Date.parse(d.approval.expiresAt)<=nowDate(deps).getTime()||Date.parse(d.active.leaseUntil)<=nowDate(deps).getTime())throw Error('Activation paused or expired before publishing. The draft is retained.');
    if(!d.completed.some(c=>c.manifestId===m.id))d.completed.push({manifestId:m.id,number:m.number,at:commit.at});
+   // The window commits with the chapter; index and arc consumers are enqueued by the lifecycle owner.
+   await setReviewedChapterWindowState(tx,{storyId:sid,number:m.number,manifestId:m.id,state:'committed',commit:reviewedCommit(commit)});
    delete d.active;d.nextDueAt=new Date(nowDate(deps).getTime()+d.approval.minIntervalMinutes*60000).toISOString();
    const exhausted=chapterAllocations(d)>=d.approval.maxChapters||d.allocations.reduce((n,a)=>n+a.usd,0)+RECOVERY_LIMITS.usd>d.approval.totalUsd||d.reservations.length+3>30;
    d.enabled=!exhausted;d.phase=exhausted?'complete':'waiting';d.message=exhausted?'Chapter saved. Approved count or budget exhausted; paused.':`Chapter ${m.number} saved. Waiting for the next complete source window and approved interval.`;
@@ -241,7 +236,13 @@ export async function tickChapterRunner(db:Sql,sid:string,gate:ChapterRunnerGate
    d.phase=uncertain||d.enabled?'held':'paused';d.enabled=false;
    d.message=codes.includes(402)?'NanoGPT rejected the request for insufficient credit. Review the retained receipt and account balance; automatic retry is forbidden.':codes.includes(429)?'NanoGPT quota or rate limit rejected the request. Review the retained receipt and quota; automatic retry is forbidden.':safe;
    if(d.active)d.active.leaseUntil=new Date(0).toISOString();await writeState(tx,sid,d);
+   await setReviewedChapterWindowState(tx,{storyId:sid,number:m.number,manifestId:m.id,state:uncertain?'uncertain_dispatch':'retryable_failure',
+    failure:{code:uncertain?'runner_uncertain_dispatch':'runner_held',message:d.message,retryable:false}});
   });
  }
  return getChapterRunnerStatus(db,sid,gate);
+}
+function reviewedCommit(commit:{projection:Record<string,any>;node:Record<string,any>;at:string}) {
+ return {chapterId:String(commit.projection.id),committedAt:commit.at,chapterServerVersion:Number(commit.projection.server_version),
+  projectionFingerprint:String(commit.projection.metadata?.projectionFingerprint??''),memoryNodeId:String(commit.node.id)};
 }

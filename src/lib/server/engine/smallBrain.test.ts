@@ -495,68 +495,56 @@ describe('runSmallBrain', () => {
 		expect(result.warnings.join(' ')).toMatch(/unsupported evidence details.*pregnant/i);
 	});
 
-	it('falls back to classifier and reports warning when smallBrain settings fail', async () => {
+	it('reports smallBrain as unavailable instead of borrowing the classifier when its settings fail', async () => {
 		const { db } = createDbMock();
 		mocks.getDb.mockReturnValue(db);
-		mocks.resolveServiceGeneration
-			.mockResolvedValueOnce({
-				setting: null,
-				profile: null,
-				generation: {},
-				systemPromptOverride: null,
-				missingReason: 'smallBrain missing',
-			})
-			.mockResolvedValueOnce(resolved('classifier-model'));
+		mocks.resolveServiceGeneration.mockResolvedValueOnce({
+			setting: null,
+			profile: null,
+			generation: {},
+			systemPromptOverride: null,
+			missingReason: 'smallBrain missing',
+		});
 
 		const result = await runSmallBrain({ storyId: 'story_alpha', mode: 'context' });
 
-		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(1, 'smallBrain');
-		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(2, 'classifier');
-		expect(mocks.generateServerTextWithMetrics.mock.calls[0][0].model).toBe('classifier-model');
-		expect(result.ok).toBe(true);
-		expect(result.warnings).toHaveLength(1);
-		expect(result.warnings[0]).toContain('smallBrain');
-		expect(result.warnings[0]).toContain('classifier');
+		expect(mocks.resolveServiceGeneration).toHaveBeenCalledTimes(1);
+		expect(mocks.resolveServiceGeneration).toHaveBeenCalledWith('smallBrain');
+		expect(mocks.generateServerTextWithMetrics).not.toHaveBeenCalled();
+		expect(result.ok).toBe(false);
+		expect(result.warnings.join(' ')).toContain('smallBrain missing');
 	});
 
-	it('falls back to classifier when smallBrain has no usable model', async () => {
+	it('does not borrow the classifier when smallBrain has no usable model', async () => {
 		const { db } = createDbMock();
 		mocks.getDb.mockReturnValue(db);
-		mocks.resolveServiceGeneration
-			.mockResolvedValueOnce({
-				setting: null,
-				profile,
-				generation: { model: '' },
-				systemPromptOverride: null,
-				missingReason: null,
-			})
-			.mockResolvedValueOnce(resolved('classifier-model'));
+		mocks.resolveServiceGeneration.mockResolvedValueOnce({
+			setting: null,
+			profile,
+			generation: { model: '' },
+			systemPromptOverride: null,
+			missingReason: null,
+		});
 
 		const result = await runSmallBrain({ storyId: 'story_alpha', mode: 'context' });
 
-		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(1, 'smallBrain');
-		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(2, 'classifier');
-		expect(mocks.generateServerTextWithMetrics.mock.calls[0][0].model).toBe('classifier-model');
-		expect(result.ok).toBe(true);
-		expect(result.warnings.join(' ')).toContain('smallBrain');
-		expect(result.warnings.join(' ')).toMatch(/classifier|fallback/);
+		expect(mocks.resolveServiceGeneration).toHaveBeenCalledTimes(1);
+		expect(mocks.generateServerTextWithMetrics).not.toHaveBeenCalled();
+		expect(result.ok).toBe(false);
+		expect(result.warnings.join(' ')).toContain('smallBrain profile has no configured model');
 	});
 
-	it('falls back to classifier and reports warning when smallBrain resolution rejects', async () => {
+	it('reports a rejected smallBrain resolution without a fallback request', async () => {
 		const { db } = createDbMock();
 		mocks.getDb.mockReturnValue(db);
-		mocks.resolveServiceGeneration
-			.mockRejectedValueOnce(new Error('smallBrain exploded'))
-			.mockResolvedValueOnce(resolved('classifier-model'));
+		mocks.resolveServiceGeneration.mockRejectedValueOnce(new Error('smallBrain exploded'));
 
 		const result = await runSmallBrain({ storyId: 'story_alpha', mode: 'context' });
 
-		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(1, 'smallBrain');
-		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(2, 'classifier');
-		expect(mocks.generateServerTextWithMetrics.mock.calls[0][0].model).toBe('classifier-model');
-		expect(result.ok).toBe(true);
-		expect(result.warnings.join(' ')).toContain('smallBrain');
-		expect(result.warnings.join(' ')).toContain('fallback');
+		expect(mocks.resolveServiceGeneration).toHaveBeenCalledTimes(1);
+		expect(mocks.generateServerTextWithMetrics).not.toHaveBeenCalled();
+		expect(result.ok).toBe(false);
+		expect(result.warnings.join(' ')).toContain('smallBrain resolution failed: smallBrain exploded');
 	});
 
 	it('returns ok:false on invalid JSON parse failure', async () => {

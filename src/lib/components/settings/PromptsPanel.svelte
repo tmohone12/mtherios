@@ -7,6 +7,7 @@
 	import { story } from '$lib/stores/story.svelte';
 	import { listBackendStories, type BackendStorySummary } from '$lib/services/serverStories';
 	import { getOnboardingGenreOptions, NEUTRAL_PROMPT_PACK_ID } from '$lib/components/wizard/storyPromptPacks';
+	import NarrativePresetsEditor from './NarrativePresetsEditor.svelte';
 	import {
 		buildPromptOverridePatch,
 		loadTerminalPromptSettings,
@@ -215,8 +216,8 @@
 					>
 						<div class="flex items-center justify-between gap-2">
 							<span class="truncate text-xs font-medium text-[var(--text-primary)]">{serviceLabel(row.serviceId)}</span>
-							<span class="shrink-0 rounded border border-[var(--border-secondary)] px-1.5 py-0.5 text-[9px] {hasOverride(row.serviceId) ? 'text-amber-300' : 'text-emerald-300'}">
-								{hasOverride(row.serviceId) ? 'Override' : 'Built-in'}
+							<span class="shrink-0 rounded border border-[var(--border-secondary)] px-1.5 py-0.5 text-[9px] {row.serviceId === 'narrative' ? 'text-sky-300' : hasOverride(row.serviceId) ? 'text-amber-300' : 'text-emerald-300'}">
+								{row.serviceId === 'narrative' ? 'Presets' : hasOverride(row.serviceId) ? 'Override' : 'Built-in'}
 							</span>
 						</div>
 						<div class="mt-1 truncate font-mono text-[10px] text-[var(--text-muted)]">{row.model ?? 'default model'}</div>
@@ -241,7 +242,7 @@
 						<div class="mt-1 truncate text-[11px] text-[var(--text-muted)]">{serviceDescription(selectedRow.serviceId)}</div>
 						<div class="mt-1 truncate font-mono text-[10px] text-[var(--text-muted)]">{selectedRow.model ?? 'default model'}</div>
 					</div>
-					<div class="flex shrink-0 gap-2">
+					<div class="flex shrink-0 gap-2" class:hidden={selectedRow.serviceId === 'narrative'}>
 						<button
 							class="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--border-primary)] px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-50"
 							onclick={() => resetDraft(selectedRow.serviceId)}
@@ -264,42 +265,13 @@
 
 			<div class="space-y-3 p-4">
 				{#if selectedRow.serviceId === 'narrative'}
-					<div class="space-y-2 rounded-lg border border-[var(--border-secondary)] px-3 py-2.5">
-						{#if !story.currentStory?.serverStoryId}
-							<label for="narrative-preview-story" class="block text-xs text-[var(--text-secondary)]">Preview story</label>
-							<select id="narrative-preview-story" bind:value={previewStoryId} disabled={loading || saving || editingNarrative || hasOverride('narrative')}
-								class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-2 text-xs text-[var(--text-primary)] disabled:opacity-50">
-								<option value="">Genre preview without story instructions</option>
-								{#each previewStories as previewStory}
-									<option value={previewStory.id}>{previewStory.title ?? previewStory.id}</option>
-								{/each}
-							</select>
-							{#if storyListError}<p role="status" class="text-[11px] text-[var(--text-muted)]">{storyListError}</p>{/if}
-						{/if}
-						{#if activeStoryId}
-							<p class="text-xs text-[var(--text-secondary)]">Current prompt for <strong>{preview?.storyTitle ?? story.currentStory?.title ?? previewStories.find((row) => row.id === activeStoryId)?.title}</strong></p>
-							<p class="text-[11px] text-[var(--text-muted)]">{preview?.promptPackLabel ?? 'Loading genre...'}</p>
-						{:else}
-							<label for="narrative-preview-genre" class="block text-xs text-[var(--text-secondary)]">Preview genre</label>
-							<select id="narrative-preview-genre" bind:value={previewPackId} disabled={loading || saving || editingNarrative || hasOverride('narrative')}
-								class="w-full rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-2.5 py-2 text-xs text-[var(--text-primary)] disabled:opacity-50">
-								{#each getOnboardingGenreOptions() as pack}
-									<option value={pack.id}>{pack.label}</option>
-								{/each}
-							</select>
-						{/if}
-						<p class="text-[11px] text-[var(--text-muted)]">Grey text is the built-in prompt. Click in the editor to change it. Saving a custom narrator prompt applies to all stories.</p>
-					</div>
-					{#if previewLoading}
-						<p role="status" class="text-xs text-[var(--text-muted)]">Loading the current prompt...</p>
-					{:else if previewError}
-						<p role="alert" class="text-xs text-red-300">{previewError}</p>
-					{/if}
-				{/if}
+					<!-- Narration uses per-story presets; the old global override was migrated into a preset. -->
+					<NarrativePresetsEditor storyId={activeStoryId} storyTitle={story.currentStory?.title ?? previewStories.find((row) => row.id === activeStoryId)?.title ?? null} />
+				{:else}
 				<label for="prompt-editor" class="block text-xs font-medium text-[var(--text-secondary)]">{serviceLabel(selectedRow.serviceId)} {selectedRow.serviceId === 'dialogue' ? 'style guidance' : 'system prompt'}</label>
 				<textarea
 					id="prompt-editor"
-					value={selectedRow.serviceId === 'narrative' ? narrativeText : draftFor(selectedRow.serviceId)}
+					value={draftFor(selectedRow.serviceId)}
 					oninput={(e) => {
 						if (selectedRow.serviceId === 'narrative') editingNarrative = true;
 						setDraft(selectedRow.serviceId, (e.target as HTMLTextAreaElement).value);
@@ -309,16 +281,15 @@
 					spellcheck={false}
 					class="min-h-[22rem] w-full resize-y rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-3 font-mono text-xs leading-relaxed {selectedRow.serviceId === 'narrative' && showingBuiltIn ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)]'} placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none disabled:opacity-50"
 				></textarea>
-				{#if selectedRow.serviceId === 'narrative'}
-					<p class="text-[10px] text-[var(--text-muted)]">Custom text replaces built-in narrative style and content instructions. Core outcome, NPC-agency, and player-agency rules always remain active.</p>
-				{:else if selectedRow.serviceId === 'dialogue'}
+				{#if selectedRow.serviceId === 'dialogue'}
 					<p class="text-[10px] text-[var(--text-muted)]">This guides NPC voices. The GameMaster keeps scene facts, decisions, and player agency.</p>
 				{/if}
 
 				<div class="flex flex-wrap items-center justify-between gap-3 text-[10px] text-[var(--text-muted)]">
-					<span>{(selectedRow.serviceId === 'narrative' ? narrativeText : draftFor(selectedRow.serviceId)).length.toLocaleString()} chars</span>
+					<span>{draftFor(selectedRow.serviceId).length.toLocaleString()} chars</span>
 					<span>{changedRows.length.toLocaleString()} unsaved</span>
 				</div>
+				{/if}
 
 				{#if error}
 					<div class="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">

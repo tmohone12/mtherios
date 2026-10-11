@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
-import { arcs, backendJobs, chapters, entities, memoryNodes, sagas, stories, storyEntries, storyEvents, storyThreads } from '$lib/server/db/schema';
+import { arcs, backendJobs, chapterWindowAttempts, chapterWindows, chapters, entities, memoryNodes, sagas, stories, storyEntries, storyEvents, storyThreads } from '$lib/server/db/schema';
 import { SUMMARY_REBUILD_GENERATION_POLICY } from '$lib/contracts/engine';
 import { getMtheriosAppConfig } from '$lib/server/app/config';
 
@@ -130,7 +130,13 @@ describe('historical summary rebuild', () => {
 		expect(db.transaction).toHaveBeenNthCalledWith(1, expect.any(Function), { isolationLevel: 'repeatable read', accessMode: 'read only' });
 		const projectionWrites = writes.filter(write => write.table !== backendJobs);
 		expect(projectionWrites.every(write => write.transaction === 2)).toBe(true);
-		expect(new Set(projectionWrites.map(write => write.table))).toEqual(new Set([sagas, arcs, chapters, memoryNodes, stories]));
+		expect(new Set(projectionWrites.map(write => write.table))).toEqual(new Set([sagas, arcs, chapters, memoryNodes, stories, chapterWindows, chapterWindowAttempts]));
+		// A historical rebuild records committed historical windows and enqueues no present-day consumer.
+		expect(writes.filter(write => write.table === backendJobs && write.action === 'insert')).toEqual([]);
+		const historical = writes.find(write => write.table === chapterWindowAttempts && write.action === 'insert')?.rows as Array<Record<string, unknown>>;
+		expect(historical).toEqual([expect.objectContaining({ policy: 'historical', state: 'committed', revision: 1, chapterId: expect.any(String) })]);
+		expect(writes.find(write => write.table === chapterWindowAttempts && write.action === 'update')?.rows)
+			.toMatchObject({ state: 'invalidated', invalidation: { reason: 'summary_rebuild' } });
 		expect(projectionWrites.find(write => write.table === stories)?.rows).toEqual({ serverVersion: 11, updatedAt: expect.any(String) });
 		const saved = (projectionWrites.find(write => write.table === chapters && write.action === 'insert')?.rows as Array<typeof chapters.$inferSelect>)[0];
 		expect(saved).toMatchObject({ irreversibleChanges: [], promisesDebtsOaths: [], discoveredClues: [], relationshipChanges: [], factionChanges: [], sourceEventIds: ['event_interpretation'] });

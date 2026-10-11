@@ -10,6 +10,7 @@ import { countTokens } from '$lib/utils/tokens';
 import { generateServerTextWithMetrics, type ServerGenerationOptions, type ServerGenerationResponseHeaders } from '$lib/server/turn/provider';
 import {EVIDENCE_REFERENCE_PROTOCOL,referenceSelectionPrompt,materializeReferenceSelection} from './summaryEvidenceReferences';
 import {chapterSourceForArc} from './chapterSummarySource';
+import {HELD_CHAPTER_REPLACEMENT_LIMITS,type HeldChapterReplacementLimits} from './summaryRecoveryIncidents';
 
 const VERSION = 'summary-only-recovery-v1';
 import {RECOVERY_ROUTE,RECOVERY_LIMITS,RECOVERY_PROVIDER,LEGACY_NANO_RECOVERY_ROUTE,RECOVERY_TRANSPORT} from '$lib/contracts/chapterRunner';
@@ -30,7 +31,7 @@ export type RecoveryManifest = { id: string; version: string; storyId: string; k
 	startPosition: number; endPosition: number; sourceIds: string[]; sourceRowsHash: string; coverageHash: string;
 	sources: Source[]; route: RecoveryRoute; limits: {[K in keyof typeof RECOVERY_LIMITS]:number};
 	coverage?: {mode:'explicit-backfill';snapshotEndPosition:number;completedTurns:number;storyVersion:number;canonEntityIds:string[];canonIdentityHash:string};
-	replacement?: {priorManifestId:string;priorDocumentHash:string;approvedBy:string;approvedAt:string;limits:{calls:4;inputTokens:153697;outputTokens:48000;usd:0.043}} };
+	replacement?: {priorManifestId:string;priorDocumentHash:string;approvedBy:string;approvedAt:string;limits:HeldChapterReplacementLimits} };
 type Attempt = { stage: string; status: 'claimed' | 'reserved' | 'complete' | 'blocked'; reservedInput?: number;
 	reservedOutput?: number; reservedUsd?: number; requestHash?: string; responseHeaders?: ServerGenerationResponseHeaders; receipt?: unknown; raw?: string; draft?: Draft };
 type Document = { manifest: RecoveryManifest; attempts: Attempt[]; draft?: Draft; draftHash?: string;
@@ -135,7 +136,7 @@ export function validateRecoveryManifest(m: RecoveryManifest) {
 	const oldNano=recoveryHash(m.route)===recoveryHash(LEGACY_NANO_RECOVERY_ROUTE)&&recoveryHash(m.limits)===recoveryHash(RECOVERY_LIMITS);
 	if (id !== `summary_recovery_${recoveryHash(body)}` || m.version !== VERSION || (!current&&!legacy&&!oldNano)) throw Error('Manifest modified or unsupported');
 	if(m.replacement&&(!current||m.kind!=='chapter'||m.coverage||!m.replacement.approvedBy.trim()||!Number.isFinite(Date.parse(m.replacement.approvedAt))
-		||recoveryHash(m.replacement.limits)!==recoveryHash({calls:4,inputTokens:153697,outputTokens:48000,usd:0.043})))throw Error('Unsupported replacement approval');
+		||recoveryHash(m.replacement.limits)!==recoveryHash(HELD_CHAPTER_REPLACEMENT_LIMITS)))throw Error('Unsupported replacement approval');
 }
 async function assertFresh(db: Query, m: RecoveryManifest) {
 	validateRecoveryManifest(m);

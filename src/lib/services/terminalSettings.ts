@@ -64,6 +64,12 @@ export async function patchTerminalLlmSettings(payload: LlmServiceSettingPatch[]
 	}
 }
 
+/** A task without its own saved model or profile inherits its role on the server. */
+export function browserServiceIsExplicit(serviceId: string): boolean {
+	const raw = settings.serviceConfigs[serviceId];
+	return serviceId === 'narrative' || Boolean(raw?.model || raw?.profileId);
+}
+
 function terminalSettingForService(serviceId: string): LlmServiceSettingPatch | null {
 	const config = settings.getServiceConfig(serviceId);
 	const profile = settings.getServiceProfile(serviceId) ?? settings.activeProfile;
@@ -74,17 +80,21 @@ function terminalSettingForService(serviceId: string): LlmServiceSettingPatch | 
 	if (!provider) return null;
 	const serviceDefaults = provider.services?.[serviceDefaultKey(serviceId)] ?? provider.services?.narrative;
 	const model = config.model || serviceDefaults?.model || provider.fallbackModels[0] || null;
-
-	return {
-		serviceId,
+	// Never send a resolved inherited model as though the user chose it for this task.
+	const connection = browserServiceIsExplicit(serviceId) ? {
 		providerType,
 		baseUrl: profile.baseUrl ?? provider.baseUrl ?? null,
 		model,
+		apiKeyRef: terminalApiKeyRefForProfile(profile),
+	} : {};
+
+	return {
+		serviceId,
+		...connection,
 		temperature: config.temperature,
 		maxTokens: config.maxTokens,
 		enabled: config.enabled,
 		systemPromptOverride: config.systemPromptOverride?.trim() || null,
-		apiKeyRef: terminalApiKeyRefForProfile(profile),
 		metadata: {
 			source: 'frontend_settings',
 			profileId: profile.id,
@@ -125,16 +135,6 @@ export async function syncTerminalLlmSettingsFromBrowser(serviceIds = Object.key
 	await patchTerminalLlmSettings(payload, secrets);
 }
 
-/** Keep inherited tools and subagents on the selected GameMaster provider/model. */
-export async function syncInheritedGameMasterTools(): Promise<void> {
-	const inherited = Object.entries(SERVICE_DEFINITIONS)
-		.filter(([id, def]) => id !== 'narrative' && ['narrative', 'memoryContext', 'guidance'].includes(def.profile)
-			&& !settings.profileModels[def.profile]
-			&& !settings.serviceConfigs[id]?.model && !settings.serviceConfigs[id]?.profileId)
-		.map(([id]) => id);
-	await syncTerminalLlmSettingsFromBrowser(inherited);
-}
-
 /** Server settings are authoritative. Secret values are never fetched into the browser. */
 export async function refreshTerminalLlmSettings(): Promise<void> {
 	const response = await fetch('/api/engine/command', {
@@ -154,7 +154,10 @@ export async function refreshTerminalLlmSettings(): Promise<void> {
 			customModels: previous?.customModels ?? [], fetchedModels: previous?.fetchedModels ?? [], reasoningModels: previous?.reasoningModels ?? [], hiddenModels: previous?.hiddenModels ?? [], favoriteModels: previous?.favoriteModels ?? [], createdAt: previous?.createdAt ?? Date.now() });
 		const batchBudget = row.serviceId === 'batchAuthoring' && row.metadata?.batchBudget && typeof row.metadata.batchBudget === 'object'
 			? row.metadata.batchBudget as Record<string, unknown> : null;
-		settings.serviceConfigs[row.serviceId] = { model: row.model ?? '', temperature: row.temperature, maxTokens: row.maxTokens, enabled: row.enabled, systemPromptOverride: row.systemPromptOverride ?? '', profileId: id,
+		// Inherited rows stay inherited in the browser; only explicit task overrides become browser overrides.
+		const inherited = row.metadata?.inherited === true && row.serviceId !== 'narrative';
+		settings.serviceConfigs[row.serviceId] = { model: inherited ? '' : row.model ?? '', effectiveModel: row.model ?? '', inherited,
+			temperature: row.temperature, maxTokens: row.maxTokens, enabled: row.enabled, systemPromptOverride: row.systemPromptOverride ?? '', profileId: inherited ? '' : id,
 			...(row.serviceId === 'dialogue' ? { dialogueMode: row.metadata?.dialogueMode === 'important' ? 'important' as const : 'all' as const } : {}),
 			...(batchBudget ? { batchMaxCostUsd: typeof batchBudget.maxCostUsd === 'number' ? batchBudget.maxCostUsd : null,
 				batchInputUsdPerMillion: typeof batchBudget.inputUsdPerMillion === 'number' ? batchBudget.inputUsdPerMillion : null,
