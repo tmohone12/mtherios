@@ -4,21 +4,14 @@ import {
 	deleteLorebookEntry,
 	deleteArc,
 	deleteChapter,
-	createConversationMemory,
 	getArcs,
 	getLorebookEntry,
 	getStory,
-	bulkPutFactionActions,
-	bulkPutRumors,
 	bulkPutSchemes,
 	putArc,
 	putChapter,
-	putSaga,
 	putCharacter,
-	putItem,
-	putLocation,
 	putLorebookEntry,
-	putWorldEvent,
 	updateLorebookEntry,
 	updateStory,
 } from '$lib/services/database';
@@ -26,7 +19,6 @@ import {
 	createBackendArc,
 	createBackendChapter,
 	createBackendLorebookEntry,
-	createBackendSaga,
 	deleteBackendArc,
 	deleteBackendChapter,
 	deleteBackendLorebookEntry,
@@ -34,9 +26,8 @@ import {
 	upsertBackendChapter,
 	upsertBackendLivingMemory,
 	upsertBackendLorebookEntry,
-	upsertBackendSaga,
 } from '$lib/services/serverStories';
-import type { Arc, Chapter, Character, CharacterEntryState, ConversationMemoryEntry, Entry, FactionActionRecord, Item, ItemEntryState, Location, LocationEntryState, RumorRecord, Saga, Scheme, Story, WorldEvent } from '$lib/types';
+import type { Arc, Chapter, Character, CharacterEntryState, Entry, Scheme, Story } from '$lib/types';
 import type { LivingMemoryKind } from '$lib/services/serverStories';
 
 export type CanonicalWriteMode = 'create' | 'update';
@@ -239,91 +230,6 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 	};
 }
 
-function locationToEntry(location: Location, existing?: Entry | null): Entry {
-	const now = Date.now();
-	const previousState = existing?.state?.type === 'location'
-		? existing.state as LocationEntryState
-		: null;
-	const state = {
-		...(previousState ?? {}),
-		type: 'location',
-		isCurrentLocation: location.current,
-		visitCount: Math.max(previousState?.visitCount ?? 0, location.visited || location.current ? 1 : 0),
-		changes: previousState?.changes ?? [],
-		presentCharacters: previousState?.presentCharacters ?? [],
-		presentItems: previousState?.presentItems ?? [],
-		connections: previousState?.connections ?? [],
-		legacyConnections: location.connections ?? [],
-	} as LocationEntryState;
-	return {
-		id: location.id,
-		storyId: location.storyId,
-		branchId: location.branchId ?? null,
-		name: location.name,
-		type: 'location',
-		description: location.description ?? '',
-		hiddenInfo: existing?.hiddenInfo ?? null,
-		aliases: existing?.aliases ?? [],
-		state,
-		adventureState: existing?.adventureState ?? null,
-		creativeState: existing?.creativeState ?? null,
-		injection: existing?.injection ?? {
-			mode: location.current ? 'always' : 'keyword',
-			keywords: keywordsForName(location.name),
-			priority: location.current ? 250 : 70,
-		},
-		firstMentioned: existing?.firstMentioned ?? null,
-		lastMentioned: existing?.lastMentioned ?? null,
-		mentionCount: existing?.mentionCount ?? 0,
-		createdBy: existing?.createdBy ?? 'user',
-		createdAt: existing?.createdAt ?? now,
-		updatedAt: now,
-		loreManagementBlacklisted: existing?.loreManagementBlacklisted ?? false,
-	};
-}
-
-function itemToEntry(item: Item, existing?: Entry | null): Entry {
-	const now = Date.now();
-	const previousState = existing?.state?.type === 'item'
-		? existing.state as ItemEntryState
-		: null;
-	const state = {
-		...(previousState ?? {}),
-		type: 'item',
-		inInventory: item.equipped || item.location === 'inventory',
-		currentLocation: item.location || previousState?.currentLocation || null,
-		condition: previousState?.condition ?? null,
-		uses: previousState?.uses ?? [],
-		quantity: item.quantity,
-		equipped: item.equipped,
-	} as ItemEntryState;
-	return {
-		id: item.id,
-		storyId: item.storyId,
-		branchId: item.branchId ?? null,
-		name: item.name,
-		type: 'item',
-		description: item.description ?? '',
-		hiddenInfo: existing?.hiddenInfo ?? null,
-		aliases: existing?.aliases ?? [],
-		state,
-		adventureState: existing?.adventureState ?? null,
-		creativeState: existing?.creativeState ?? null,
-		injection: existing?.injection ?? {
-			mode: item.equipped ? 'always' : 'keyword',
-			keywords: keywordsForName(item.name),
-			priority: item.equipped ? 180 : 60,
-		},
-		firstMentioned: existing?.firstMentioned ?? null,
-		lastMentioned: existing?.lastMentioned ?? null,
-		mentionCount: existing?.mentionCount ?? 0,
-		createdBy: existing?.createdBy ?? 'user',
-		createdAt: existing?.createdAt ?? now,
-		updatedAt: now,
-		loreManagementBlacklisted: existing?.loreManagementBlacklisted ?? false,
-	};
-}
-
 async function writeCanonicalLorebookEntry(entry: Entry, mode: CanonicalWriteMode = 'update'): Promise<CanonicalLorebookWriteResult> {
 	const owner = await getStory(entry.storyId);
 	let result: {
@@ -405,22 +311,6 @@ export async function saveCanonicalCharacter(character: Character, mode: Canonic
 	};
 }
 
-export async function saveCanonicalLocation(location: Location, mode: CanonicalWriteMode = 'update'): Promise<{ serverVersion: number | null; entry: Entry }> {
-	const existing = await getLorebookEntry(location.id);
-	const entry = locationToEntry(location, existing);
-	const serverVersion = await saveCanonicalLorebookEntry(entry, mode);
-	await putLocation(location);
-	return { serverVersion, entry };
-}
-
-export async function saveCanonicalItem(item: Item, mode: CanonicalWriteMode = 'update'): Promise<{ serverVersion: number | null; entry: Entry }> {
-	const existing = await getLorebookEntry(item.id);
-	const entry = itemToEntry(item, existing);
-	const serverVersion = await saveCanonicalLorebookEntry(entry, mode);
-	await putItem(item);
-	return { serverVersion, entry };
-}
-
 export async function saveCanonicalChapter(chapter: Chapter, mode: CanonicalWriteMode = 'update'): Promise<number | null> {
 	const owner = await getStory(chapter.storyId);
 	let serverVersion: number | null = null;
@@ -485,46 +375,6 @@ export async function deleteCanonicalArc(storyId: string, arcId: string): Promis
 	return serverVersion;
 }
 
-export async function saveCanonicalSaga(saga: Saga, mode: CanonicalWriteMode = 'update'): Promise<number | null> {
-	const owner = await getStory(saga.storyId);
-	let serverVersion: number | null = null;
-	if (owner?.serverStoryId) {
-		const result = mode === 'create'
-			? await createBackendSaga(owner.serverStoryId, saga)
-			: await upsertBackendSaga(owner.serverStoryId, saga);
-		serverVersion = result.serverVersion;
-		await applyBackendVersion(owner, result.serverVersion);
-	}
-	await putSaga(saga);
-	return serverVersion;
-}
-
-export async function saveCanonicalConversationMemory(entry: ConversationMemoryEntry): Promise<number | null> {
-	return saveCanonicalLivingRecords(entry.storyId, 'conversationMemory', [entry], () => createConversationMemory(entry));
-}
-
-export async function saveCanonicalWorldEvent(event: WorldEvent): Promise<number | null> {
-	return saveCanonicalLivingRecords(event.storyId, 'worldEvent', [event], () => putWorldEvent(event));
-}
-
-export async function saveCanonicalFactionActions(actions: FactionActionRecord[]): Promise<number | null> {
-	const storyId = actions[0]?.storyId;
-	if (!storyId) return null;
-	return saveCanonicalLivingRecords(storyId, 'factionAction', actions, () => bulkPutFactionActions(actions));
-}
-
-export async function saveCanonicalRumors(rumors: RumorRecord[]): Promise<number | null> {
-	const storyId = rumors[0]?.storyId;
-	if (!storyId) return null;
-	return saveCanonicalLivingRecords(storyId, 'rumor', rumors, () => bulkPutRumors(rumors));
-}
-
 export async function saveCanonicalScheme(scheme: Scheme): Promise<number | null> {
 	return saveCanonicalLivingRecords(scheme.storyId, 'scheme', [scheme], () => bulkPutSchemes([scheme]));
-}
-
-export async function saveCanonicalSchemes(schemes: Scheme[]): Promise<number | null> {
-	const storyId = schemes[0]?.storyId;
-	if (!storyId) return null;
-	return saveCanonicalLivingRecords(storyId, 'scheme', schemes, () => bulkPutSchemes(schemes));
 }

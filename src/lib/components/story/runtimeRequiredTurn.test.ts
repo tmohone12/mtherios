@@ -2,78 +2,64 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-describe('runtime-required turn submission boundary', () => {
-	it('does not queue local turns when terminal generation fails', () => {
-		const source = readFileSync(resolve('src/lib/components/story/ActionInput.svelte'), 'utf8');
+// Behaviour of the submission decisions lives in actionInput.test.ts; these checks pin the
+// composer's wiring to that server-only path.
+const source = readFileSync(resolve('src/lib/components/story/ActionInput.svelte'), 'utf8');
+const block = (start: string, end: string) => source.slice(source.indexOf(start), source.indexOf(end));
 
-		expect(source).not.toContain('queueOfflineBackendTurn');
-		expect(source).not.toContain('queued turn command');
-		expect(source).toContain('startBackendAgentRun');
-		expect(source).toContain('prepareBackendAgentTurn');
+describe('server-only turn submission', () => {
+	it('has no browser narration, tool, classifier or background-job path', () => {
+		for (const retired of ['streamNarrative', 'continueAfterTools', 'executeToolCall', 'executeWorldUpdate',
+			'extractInlineToolCalls', 'GM_TOOLS', 'runBackgroundJobs', 'buildStateSnapshot', 'buildOrchestratorSystemBlocks',
+			"story.addEntry('user_action'", "story.addEntry('narration'", 'queueOfflineBackendTurn']) {
+			expect(source, retired).not.toContain(retired);
+		}
+		expect(source).toContain('startServerTurn<BackendAgentRun>');
+		expect(source).toContain('story.prepareBackendAgentTurn()');
 	});
 
-	it('blocks backend-bound input while the terminal runtime is unavailable', () => {
-		const source = readFileSync(resolve('src/lib/components/story/ActionInput.svelte'), 'utf8');
+	it('asks a browser-only save to be imported before play and keeps its draft', () => {
+		const submit = block('async function handleSubmit', 'async function submitServerTurn');
+		expect(source).toMatch(/const sendBlocked = \$derived\(!online \|\| localOnlyStory/);
+		expect(submit.indexOf('sendBlocked) return')).toBeLessThan(submit.indexOf("setInputDraft('')"));
+		expect(source).toContain('story.importCurrentStoryToServer()');
+		expect(source).toContain('Import and continue');
+	});
 
-		expect(source).toContain('terminalRuntimeUnavailable');
-		expect(source).toContain('Terminal agent runtime required. Start the terminal process to use this campaign.');
+	it('blocks input while the story server is unreachable', () => {
+		expect(source).toContain('storyServerUnavailable');
 		expect(source).toContain('!story.engineStreamStatus.connected');
-		expect(source).toContain('isTerminalReachabilityError');
-		expect(source).toContain('Terminal agent runtime required');
-		expect(source).toContain('Terminal turn failed');
-		expect(source).not.toContain('transcript is available');
+		expect(source).toContain('isTerminalReachabilityError(outcome.error)');
 	});
 
-	it('does not persist backend turn failures into the story transcript', () => {
-		const source = readFileSync(resolve('src/lib/components/story/ActionInput.svelte'), 'utf8');
-		const backendTurnBlock = source.slice(
-			source.indexOf('async function submitBackendAuthoritativeTurn'),
-			source.indexOf('function handleStop'),
-		);
-
-		expect(backendTurnBlock).toContain('turnError =');
-		expect(backendTurnBlock).not.toContain("await story.addEntry('system'");
-	});
-
-	it('clears a submitted draft immediately and restores it only after an untouched failed send', () => {
-		const source = readFileSync(resolve('src/lib/components/story/ActionInput.svelte'), 'utf8');
-		const submitBlock = source.slice(
-			source.indexOf('async function handleSubmit'),
-			source.indexOf('async function submitBackendAuthoritativeTurn'),
-		);
-		const backendTurnBlock = source.slice(
-			source.indexOf('async function submitBackendAuthoritativeTurn'),
-			source.indexOf('function handleStop'),
-		);
-		const restoreDraftBlock = source.slice(
-			source.indexOf('function restoreSubmittedDraft'),
-			source.indexOf('function handleDraftInput'),
-		);
-
-		expect(submitBlock.indexOf("setInputDraft('')")).toBeLessThan(submitBlock.indexOf('submitBackendAuthoritativeTurn'));
-		expect(submitBlock.indexOf("setInputDraft('')")).toBeLessThan(submitBlock.indexOf("story.addEntry('user_action'"));
-		expect(submitBlock).toContain("story.addEntry('user_action', content, undefined, submittedStoryId)");
-		expect(submitBlock).toContain('submitBackendAuthoritativeTurn(content, submittedInput, submittedActionType)');
-		expect(restoreDraftBlock).toContain('draftStoryId !== storyId || draftRevision !== revision');
-		expect(backendTurnBlock).toContain('restoreSubmittedDraft(submittedStoryId, submittedDraftRevision, submittedInput, submittedActionType)');
+	it('keeps failed sends and plans out of the story transcript', () => {
+		const serverTurn = block('async function submitServerTurn', 'function openModeSheet');
+		const plan = block('async function submitPlayerPlan', 'async function submitPlanFromModal');
+		expect(serverTurn).toContain('turnError =');
+		expect(serverTurn).not.toContain('story.addEntry');
+		expect(plan).not.toContain('Plan declaration failed');
+		expect(serverTurn).toContain('restoreSubmittedDraft(submittedStoryId, submittedDraftRevision, submittedInput, submittedActionType)');
 	});
 
 	it('sends the selected action mode and keeps prefixed OOC text out of Do formatting', () => {
-		const source = readFileSync(resolve('src/lib/components/story/ActionInput.svelte'), 'utf8');
 		const helperSource = readFileSync(resolve('src/lib/components/story/actionInput.ts'), 'utf8');
-		const submitBlock = source.slice(
-			source.indexOf('async function handleSubmit'),
-			source.indexOf('async function submitBackendAuthoritativeTurn'),
-		);
-		const backendTurnBlock = source.slice(
-			source.indexOf('async function submitBackendAuthoritativeTurn'),
-			source.indexOf('function handleStop'),
-		);
-
-		expect(source).toContain('turnActionTypeForInput');
 		expect(helperSource).toContain('isNarrativeControlInput(rawInput)');
-		expect(submitBlock).toContain("turnActionTypeForInput(rawInput, submittedActionType) === 'ooc'");
-		expect(submitBlock).toContain('content = rawInput');
-		expect(backendTurnBlock).toContain('actionType: turnActionTypeForInput(submittedInput, submittedActionType)');
+		expect(source).toContain("if (turnActionTypeForInput(rawInput, selectedActionType) === 'ooc' || isCreativeMode) return rawInput;");
+		expect(block('async function submitServerTurn', 'function openModeSheet'))
+			.toContain('actionType: turnActionTypeForInput(submittedInput, submittedActionType)');
+	});
+
+	it('returns the move to the composer when an accepted run later fails or is stopped', () => {
+		const accept = block('async function acceptAgentRun', '$effect(() => {\n\t\tconst snapshot = agentRun;');
+		const failed = accept.slice(accept.indexOf("snapshot.status === 'failed' || snapshot.status === 'cancelled'"));
+		expect(failed).toContain('pendingSubmission?.runId === snapshot.id');
+		expect(failed).toContain('await restoreSubmittedDraft(submission.storyId, submission.revision, submission.text, submission.actionType)');
+		expect(block('async function submitServerTurn', 'function openModeSheet')).toContain('pendingSubmission = { runId: outcome.run.id');
+	});
+
+	it('runs post-turn suggestions and images when a run started here completes', () => {
+		const accept = block('async function acceptAgentRun', '$effect(() => {\n\t\tconst snapshot = agentRun;');
+		expect(accept).toContain('followedAgentRunId === snapshot.id');
+		expect(accept).toContain('onTurnEnd?.(turn.narration)');
 	});
 });

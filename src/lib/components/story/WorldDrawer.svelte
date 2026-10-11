@@ -4,14 +4,12 @@
 	import ContextSelection from './ContextSelection.svelte';
 	import MemoryProcessingStatus from './MemoryProcessingStatus.svelte';
 	import { X, Users, MapPin, Swords, ScrollText, BookOpen, ChevronDown, ChevronRight, Gauge, Loader2, Layers, Download, FileArchive, Clock, Activity, Scale, Megaphone, Flag, Zap, Handshake, Play, Search, Database, RefreshCw, AlertTriangle, User, Save } from 'lucide-svelte';
-	import { WORLD_SIM_DAY_INTERVAL, normalizeRelation } from '$lib/services/ai/tools/helpers';
-	import { runBackendWorldSimTick } from '$lib/services/backendMemory';
+	import { normalizeRelation } from '$lib/services/ai/tools/helpers';
+	import { runBackendArcRollup, runBackendWorldSimTick } from '$lib/services/backendMemory';
+	import { selectArcRollupBatches } from '$lib/services/chapterCadence';
 	import { story } from '$lib/stores/story.svelte';
 	import { getChapters, getArcs, getSyncOpsForStory } from '$lib/services/database';
 	import { fetchEngineCacheStatus } from '$lib/services/serverStories';
-	import { saveCanonicalArc } from '$lib/services/canonicalWrites';
-	import { ai } from '$lib/services/ai';
-	import { uuid } from '$lib/utils/uuid';
 	import { DND_ABILITIES, normalizePlayerSheet, type PlayerSheet } from '$lib/utils/playerSheet';
 	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
 	import { downloadStoryVaultArchive, fetchStoryVaultStatus, runStoryVaultJob, type StoryVaultStatus } from '$lib/services/storyVault';
@@ -22,38 +20,9 @@
 	import { fly } from 'svelte/transition';
 	import type { Chapter } from '$lib/types';
 
-	// ── Compact context estimate ──
-	const estimateTokens = (text: string) => Math.ceil(text.length / 4);
-	const contextTotal = $derived.by(() => {
-		if (!story.currentStory) return 0;
-		if (story.currentStory.serverStoryId) return story.lastContextReceipt?.storyId === story.currentStory.serverStoryId
-			? story.lastContextReceipt.included.totalTokens ?? 0 : 0;
-		let total = 250; // base overhead
-		for (const c of story.characters.filter(c => c.status === 'active')) {
-			total += estimateTokens(`${c.name}: ${c.description ?? ''}\n`);
-		}
-		for (const l of story.locations.filter(l => l.name)) {
-			total += estimateTokens(`${l.name}: ${l.description ?? ''}\n`);
-		}
-		const recentText = story.entries.slice(-5).map(en => en.content).join(' ').toLowerCase();
-		let loreCount = 0;
-		for (const e of story.lorebookEntries) {
-			if (e.injection.mode === 'never') continue;
-			if (e.injection.mode === 'always' || e.injection.keywords.some(kw => recentText.includes(kw.toLowerCase()))) {
-				total += estimateTokens(`${e.name}\n${e.description.slice(0, 400)}\n`);
-				loreCount++;
-				if (loreCount >= 30) break;
-			}
-		}
-		// Context assembly budget (~7K) estimated
-		total += 7000;
-		for (const entry of story.entries.slice(-10)) {
-			total += estimateTokens(entry.content);
-		}
-		return total;
-	});
-	const contextBudget = 200000;
-	const contextPercent = $derived(Math.min((contextTotal / contextBudget) * 100, 100));
+	// ── Last recorded request (server receipt; browser-only saves have none) ──
+	const recordedRequestTokens = $derived(story.currentStory?.serverStoryId && story.lastContextReceipt?.storyId === story.currentStory.serverStoryId
+		? story.lastContextReceipt.included.totalTokens ?? 0 : 0);
 	function formatTokens(val: number): string {
 		if (val >= 1000) return `${(val / 1000).toFixed(1)}K`;
 		return String(val);
@@ -204,18 +173,19 @@
 
 	// Arcs
 	let arcs = $state<Arc[]>([]);
-	let generatingArc = $state(false);
+	let rollingUpArc = $state(false);
+	let arcRollupNotice = $state<{ tone: 'info' | 'error'; text: string } | null>(null);
 	let expandedArc = $state<string | null>(null);
 
+	async function loadMemoryRecords(storyId: string): Promise<void> {
+		const [chapterRows, arcRows] = await Promise.all([getChapters(storyId), getArcs(storyId)]);
+		if (story.currentStory?.id !== storyId) return;
+		chapters = chapterRows.sort((a, b) => a.number - b.number);
+		arcs = arcRows;
+	}
+
 	$effect(() => {
-		if (open && story.currentStory) {
-			getChapters(story.currentStory.id).then(ch => {
-				chapters = ch.sort((a, b) => a.number - b.number);
-			});
-			getArcs(story.currentStory.id).then(a => {
-				arcs = a;
-			});
-		}
+		if (open && story.currentStory) void loadMemoryRecords(story.currentStory.id);
 	});
 
 	function toggleArc(id: string) {
@@ -228,60 +198,34 @@
 		return chapters.filter(c => !coveredChapterIds.has(c.id));
 	});
 
-	// Need at least 3 uncovered chapters to condense into an arc
-	const condensableChapters = $derived(uncoveredChapters.length >= 3 ? uncoveredChapters : []);
+	// The worker's rule: the next arc is exactly 10 consecutive chapters not yet in an arc.
+	const nextArcChapters = $derived(selectArcRollupBatches(chapters, arcs)[0] ?? []);
 
-	function applyBackendVersion(serverVersion: number | null) {
-		if (!serverVersion || !story.currentStory) return;
-		story.currentStory = {
-			...story.currentStory,
-			serverVersion,
-			syncStatus: 'synced',
-		};
-	}
-
-	async function generateArc() {
-		if (!story.currentStory || condensableChapters.length === 0) return;
-		generatingArc = true;
+	async function rollUpArcOnServer() {
+		const current = story.currentStory;
+		const serverStoryId = current?.serverStoryId?.trim();
+		if (!current || !serverStoryId || nextArcChapters.length === 0 || rollingUpArc) return;
+		rollingUpArc = true;
+		arcRollupNotice = null;
 		try {
-			const chaptersToCondense = condensableChapters;
-			const arcNumber = arcs.length + 1;
-			const result = await ai.arcCondensation.condense(
-				chaptersToCondense,
-				arcNumber,
-				story.storyMode,
-				story.pov,
-				story.tense,
-				arcs,
-			);
-
-			const firstCh = chaptersToCondense[0];
-			const lastCh = chaptersToCondense[chaptersToCondense.length - 1];
-			const arc: Arc = {
-				id: uuid(),
-				storyId: story.currentStory!.id,
-				arcNumber,
-				title: result.title,
-				summary: result.summary,
-				keyPlotPoints: result.keyPlotPoints,
-				characterArcs: result.characterArcs,
-				unresolvedThreads: result.unresolvedThreads,
-				threadIds: [],
-				resolvedThreadIds: [],
-				emotionalProgression: result.emotionalProgression,
-				chapterIds: chaptersToCondense.map(c => c.id),
-				chapterRange: `${firstCh.number}-${lastCh.number}`,
-				branchId: story.currentStory!.currentBranchId ?? null,
-				createdAt: Date.now(),
-			};
-
-			applyBackendVersion(await saveCanonicalArc(arc, 'create'));
-			arcs = [...arcs, arc];
-			console.log(`Arc ${arcNumber} created: "${arc.title}" (chapters ${arc.chapterRange})`);
-		} catch (e) {
-			console.error('Arc generation failed:', e);
+			const outcome = await runBackendArcRollup(serverStoryId);
+			if (story.currentStory?.id !== current.id) return;
+			if (outcome.error) {
+				arcRollupNotice = { tone: 'error', text: `The arc job failed: ${outcome.error}` };
+			} else if (!outcome.created) {
+				arcRollupNotice = { tone: 'info', text: outcome.reason === 'arc_threshold_not_met'
+					? 'The server does not have 10 consecutive chapters outside an arc yet.'
+					: `No arc was written (${outcome.reason ?? 'no reason recorded'}). The saved chapters may have changed; try again after they refresh.` };
+			} else {
+				arcRollupNotice = { tone: 'info', text: outcome.arcNumber ? `Arc ${outcome.arcNumber} saved.` : 'Arc saved.' };
+			}
+			await story.refreshCampaignProjection();
+			await loadMemoryRecords(current.id);
+		} catch (error) {
+			if (story.currentStory?.id === current.id) arcRollupNotice = { tone: 'error', text: error instanceof Error ? error.message : String(error) };
+		} finally {
+			rollingUpArc = false;
 		}
-		generatingArc = false;
 	}
 
 	function exportArcsAsJson() {
@@ -342,21 +286,14 @@
 
 	const currentLocation = $derived(story.locations.find(l => l.current) ?? null);
 
-	// ── Time + world-sim cadence ──
-	const currentTime = $derived.by(() => {
+	// ── In-world time: the server clock's label; browser-only saves keep their stored time ──
+	const worldTimeLabel = $derived.by(() => {
+		const canonical = story.campaignProjection?.story.currentWorldTime;
+		if (typeof canonical === 'string' && canonical.trim()) return canonical.trim();
 		const t = story.currentStory?.timeTracker;
 		if (!t) return null;
 		const pad = (n: number) => String(n).padStart(2, '0');
-		return { years: t.years, days: t.days, hms: `${pad(t.hours)}:${pad(t.minutes)}` };
-	});
-	const daysUntilSim = $derived.by(() => {
-		if (!story.currentStory?.serverStoryId) return null;
-		const t = story.currentStory?.timeTracker;
-		if (!t) return null;
-		const totalDays = t.years * 365 + t.days;
-		const lastSim = story.currentStory?.lastWorldSimDay ?? 0;
-		const remaining = WORLD_SIM_DAY_INTERVAL - (totalDays - lastSim);
-		return remaining > 0 ? remaining : 0;
+		return `Day ${t.years > 0 ? `${t.years}·` : ''}${t.days}, ${pad(t.hours)}:${pad(t.minutes)}`;
 	});
 
 	// Manual world-sim trigger ─────────────────────────────────────────
@@ -1204,27 +1141,14 @@
 				</div>
 				{/if}
 
-			<!-- Time + World-sim Cadence -->
-			{#if currentTime}
+			<!-- In-world time -->
+			{#if worldTimeLabel}
 			<div>
-				<div class="mb-2 flex items-center justify-between">
-					<div class="flex items-center gap-1.5">
-						<Clock class="h-3.5 w-3.5 text-sky-400" />
-						<span class="font-display text-[10px] tracking-wider uppercase text-sky-400">In-World Time</span>
-					</div>
-					{#if daysUntilSim !== null}
-						<span class="text-[10px] tabular-nums text-[var(--text-muted)]" title="Days until next world simulation tick">
-							sim in {daysUntilSim}d
-						</span>
-					{/if}
+				<div class="mb-2 flex items-center gap-1.5">
+					<Clock class="h-3.5 w-3.5 text-sky-400" />
+					<span class="font-display text-[10px] tracking-wider uppercase text-sky-400">In-World Time</span>
 				</div>
-				<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2 flex items-baseline gap-2">
-					<span class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Day</span>
-					<span class="text-sm font-semibold tabular-nums text-[var(--text-primary)]">
-						{currentTime.years > 0 ? `${currentTime.years}·` : ''}{currentTime.days}
-					</span>
-					<span class="ml-auto text-sm tabular-nums text-[var(--text-primary)]">{currentTime.hms}</span>
-				</div>
+				<div class="rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2 text-sm tabular-nums text-[var(--text-primary)]">{worldTimeLabel}</div>
 			</div>
 			{/if}
 
@@ -1843,21 +1767,24 @@
 						</span>
 					</div>
 
-					<!-- Arc Analyzer button -->
-					{#if condensableChapters.length >= 3}
+					<!-- Arc rollup: the server job, under the worker's 10-consecutive-chapter rule -->
+					{#if story.currentStory?.serverStoryId && nextArcChapters.length > 0}
 						<button
-							onclick={generateArc}
-							disabled={generatingArc}
+							onclick={rollUpArcOnServer}
+							disabled={rollingUpArc}
 							class="mb-2 flex w-full items-center justify-center gap-2 rounded-lg border border-orange-500/30 bg-orange-500/5 px-3 py-2 text-xs text-orange-400 transition-colors hover:bg-orange-500/10 disabled:opacity-40"
 						>
-							{#if generatingArc}
+							{#if rollingUpArc}
 								<Loader2 class="h-3.5 w-3.5 animate-spin" />
-								<span>Analyzing {condensableChapters.length} chapters...</span>
+								<span>Writing the arc for chapters {nextArcChapters[0].number}–{nextArcChapters[nextArcChapters.length - 1].number}…</span>
 							{:else}
 								<Layers class="h-3.5 w-3.5" />
-								<span>Analyze {condensableChapters.length} chapters → Arc {arcs.length + 1}</span>
+								<span>Write arc now · chapters {nextArcChapters[0].number}–{nextArcChapters[nextArcChapters.length - 1].number}</span>
 							{/if}
 						</button>
+					{/if}
+					{#if arcRollupNotice}
+						<p class="mb-2 text-[11px] leading-relaxed {arcRollupNotice.tone === 'error' ? 'text-rose-400' : 'text-[var(--text-secondary)]'}" role={arcRollupNotice.tone === 'error' ? 'alert' : 'status'}>{arcRollupNotice.text}</p>
 					{/if}
 
 					<div class="space-y-1.5">
@@ -1919,24 +1846,18 @@
 			{/if}
 
 			{#if drawerTab === 'technical'}
-			<!-- Context Usage -->
+			<!-- Last recorded request -->
 			{#if story.currentStory}
 			<div>
 				<div class="mb-1.5 flex items-center justify-between">
 					<div class="flex items-center gap-1.5">
 						<Gauge class="h-3.5 w-3.5 text-cyan-400" />
-						<span class="font-display text-[10px] tracking-wider uppercase text-cyan-400">{story.currentStory.serverStoryId ? 'Last primary request' : 'Context estimate'}</span>
+						<span class="font-display text-[10px] tracking-wider uppercase text-cyan-400">Last recorded request</span>
 					</div>
-					<span class="text-[10px] tabular-nums {contextPercent > 80 ? 'text-rose-400' : contextPercent > 50 ? 'text-amber-400' : 'text-emerald-400'}">
-						{#if story.currentStory.serverStoryId}{contextTotal ? `~${formatTokens(contextTotal)} tokens` : 'No saved receipt'}{:else}~{formatTokens(contextTotal)} / 200K{/if}
+					<span class="text-[10px] tabular-nums text-[var(--text-secondary)]">
+						{#if !story.currentStory.serverStoryId}Not recorded for browser-only saves{:else if recordedRequestTokens}~{formatTokens(recordedRequestTokens)} tokens{:else}No saved receipt{/if}
 					</span>
 				</div>
-				{#if !story.currentStory.serverStoryId}<div class="rounded-full bg-[var(--bg-primary)] h-2 overflow-hidden">
-					<div
-						class="h-full transition-all duration-300 rounded-full {contextPercent > 80 ? 'bg-rose-500' : contextPercent > 50 ? 'bg-amber-500' : 'bg-cyan-500'}"
-						style="width: {contextPercent}%"
-					></div>
-				</div>{/if}
 			</div>
 			{/if}
 

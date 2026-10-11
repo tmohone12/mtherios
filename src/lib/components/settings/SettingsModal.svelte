@@ -501,7 +501,7 @@
 		{ id: 'memory', group: 'Story experience', label: 'Memory', shortLabel: 'Memory', description: 'Give each scene the right balance of recent events and lasting history.', icon: Brain },
 		{ id: 'images', group: 'Story experience', label: 'Image Generation', shortLabel: 'Images', description: 'Set an art direction for the people and places in your story.', icon: ImageIcon },
 		{ id: 'interface', group: 'Story experience', label: 'Interface', shortLabel: 'Interface', description: 'Make room for the way you like to read and write.', icon: Palette },
-		{ id: 'inspector', group: 'Advanced', label: 'Inspector', shortLabel: 'Inspector', description: 'Look inside the context and instructions sent to your narrator.', icon: ScrollText },
+		{ id: 'inspector', group: 'Advanced', label: 'Inspector', shortLabel: 'Inspector', description: 'Review this browser\'s own model calls: suggestions, story setup help and plan structuring. Turn requests are on each turn\'s receipt.', icon: ScrollText },
 	];
 
 	function focusDialog(node: HTMLElement) {
@@ -529,24 +529,15 @@
 		} };
 	}
 
-	const serverMemoryControls = $derived(Boolean(story.currentStory?.serverStoryId) || settings.uiSettings.serverAuthoritativeTurns);
-	const liveContextDials: MemoryDial[] = $derived(serverMemoryControls ? [
+	// The server reads these with each turn. The retired browser engine's dials (prompt cap,
+	// message/history scans, local chapter/lore/NPC-memory limits, summarizer context) are gone;
+	// their stored values are left in saved settings and ignored.
+	const liveContextDials: MemoryDial[] = [
 		{ key: 'recentDialogueTurns', label: 'Recent Dialogue', description: 'Keep up to this many complete player-and-GM turns from the current chapter. A scene checkpoint may shorten this to 10 turns; a 24,000-token safety cap prevents oversized requests.', min: 1, max: 40, step: 1, suffix: 'turns' },
-	] : [
-		{ key: 'snapshotTokenCap', label: 'Dynamic Prompt Cap', description: 'Caps arcs, chapters, lore, world state, retrieved memory, and final instructions before history is added.', min: 0, max: 50000, step: 500, suffix: 'tokens', zeroLabel: 'Auto' },
-		{ key: 'maxMessages', label: 'Conversation Messages', description: 'Recent chat turns kept in the short-term prompt window.', min: 1, max: 1000, step: 1, suffix: 'messages' },
-		{ key: 'maxHistoryEntries', label: 'Raw History Scan', description: 'Raw entries allowed into the local history scan before token budgeting cuts them down.', min: 1, max: 1000, step: 1, suffix: 'entries' },
-	]);
-
-	const retrievalDials: MemoryDial[] = [
-		{ key: 'backendMemoryTokenBudget', label: 'Terminal Memory Packet', description: 'Target size for terminal-retrieved memory when a story is bound to the terminal world database.', min: 160, max: 2400, step: 20, suffix: 'tokens' },
-		{ key: 'retrievedChapterLimit', label: 'Chapter Memories', description: 'Searchable episodic chapters injected for the current action.', min: 0, max: 12, step: 1, suffix: 'chapters', zeroLabel: 'Off' },
-		{ key: 'retrievedLoreEntryLimit', label: 'Lorebook Matches', description: 'Local lore entries pulled by current action when backend retrieval is unavailable.', min: 0, max: 24, step: 1, suffix: 'entries', zeroLabel: 'Off' },
-		{ key: 'conversationMemoryLimit', label: 'NPC Conversation Memory', description: 'NPC-specific remembered exchanges eligible for the current scene.', min: 0, max: 24, step: 1, suffix: 'memories', zeroLabel: 'Off' },
 	];
 
-	const summaryDials: MemoryDial[] = [
-		{ key: 'maxPrevChaptersInSummary', label: 'Prior Chapter Context', description: 'Older chapter summaries given to the chapter summarizer for continuity.', min: 0, max: 50, step: 1, suffix: 'chapters', zeroLabel: 'None' },
+	const retrievalDials: MemoryDial[] = [
+		{ key: 'backendMemoryTokenBudget', label: 'Memory Packet', description: 'Target size for the source-linked memory the server retrieves for each turn.', min: 160, max: 2400, step: 20, suffix: 'tokens' },
 	];
 </script>
 
@@ -980,29 +971,16 @@
 										<span class="font-mono text-[11px] text-[var(--text-muted)]">{formatDialValue(dial)}</span>
 									</div>
 									<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
-										{#if dial.key === 'backendMemoryTokenBudget'}
-											<input
-												type="range"
-												aria-label={`${dial.label} slider`} value={String(backendMemorySliderPosition())}
-												use:syncRangeValue={backendMemorySliderPosition()}
-												min="0"
-												max="100"
-												step="1"
-												oninput={(e) => saveUiNumber(dial.key, backendMemoryTokensFromSlider(Number((e.target as HTMLInputElement).value)), dial.min, dial.max)}
-												class="w-full accent-[var(--color-gold-400)]"
-											/>
-										{:else}
-											<input
-												type="range"
-												aria-label={`${dial.label} slider`} value={String(settingValue(dial.key))}
-												use:syncRangeValue={settingValue(dial.key)}
-												min={dial.min}
-												max={dial.max}
-												step={dial.step}
-												oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
-												class="w-full accent-[var(--color-gold-400)]"
-											/>
-										{/if}
+										<input
+											type="range"
+											aria-label={`${dial.label} slider`} value={String(settingValue(dial.key))}
+											use:syncRangeValue={settingValue(dial.key)}
+											min={dial.min}
+											max={dial.max}
+											step={dial.step}
+											oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
+											class="w-full accent-[var(--color-gold-400)]"
+										/>
 										<input
 											type="number"
 											aria-label={dial.label} bind:value={settings.uiSettings[dial.key]}
@@ -1025,13 +1003,10 @@
 								<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Retrieval</h4>
 								<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">How much searchable memory is pulled for the current action.</p>
 							</div>
-							<span class="rounded-full border border-[var(--border-primary)] px-2 py-1 text-[10px] text-[var(--text-muted)]">
-								Terminal-bound
-							</span>
 						</div>
 
 						<div class="space-y-5">
-							{#each retrievalDials.filter(dial => !serverMemoryControls || dial.key === 'backendMemoryTokenBudget') as dial (dial.key)}
+							{#each retrievalDials as dial (dial.key)}
 								<div class="space-y-2">
 									<div class="flex items-center justify-between gap-3">
 										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
@@ -1078,41 +1053,9 @@
 					</section>
 
 					<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
-						<div class="mb-4">
+						<div>
 							<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Summary Jobs</h4>
-							<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">Each chapter summarizes 20 completed story turns, keeping your action and its narration together. Each arc summarizes 10 consecutive chapters. Summarization starts as soon as the window is complete.</p>
-						</div>
-
-						<div class="space-y-5">
-							{#each summaryDials.filter(dial => !serverMemoryControls || dial.key !== 'maxPrevChaptersInSummary') as dial (dial.key)}
-								<div class="space-y-2">
-									<div class="flex items-center justify-between gap-3">
-										<span class="text-xs font-medium text-[var(--text-primary)]">{dial.label}</span>
-										<span class="font-mono text-[11px] text-[var(--text-muted)]">{formatDialValue(dial)}</span>
-									</div>
-									<div class="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-3">
-										<input
-											type="range"
-											aria-label={dial.label} value={settingValue(dial.key)}
-											min={dial.min}
-											max={dial.max}
-											step={dial.step}
-											oninput={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
-											class="w-full accent-[var(--color-gold-400)]"
-										/>
-										<input
-											type="number"
-											aria-label={dial.label} value={settingValue(dial.key)}
-											min={dial.min}
-											max={dial.max}
-											step={dial.step}
-											onchange={(e) => saveUiNumber(dial.key, Number((e.target as HTMLInputElement).value), dial.min, dial.max)}
-											class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1.5 text-right font-mono text-xs text-[var(--text-primary)] focus:border-[var(--color-gold-600)] focus:outline-none"
-										/>
-									</div>
-									<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">{dial.description}</p>
-								</div>
-							{/each}
+							<p class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]">The server summarizes each 20 completed story turns into a chapter, keeping your action and its narration together, and each 10 consecutive chapters into an arc. Summarization starts as soon as the window is complete; the World drawer can write a waiting arc immediately.</p>
 						</div>
 					</section>
 				</div>
@@ -1129,16 +1072,16 @@
 					<div class="space-y-2 border-t border-[var(--border-primary)] pt-4">
 						<span class="font-display text-sm tracking-wide text-[var(--text-primary)]">Generation Mode</span>
 						<p class="text-xs text-[var(--text-muted)] leading-relaxed">
-							Controls when images are generated. Inline generates automatically after each narrative. Agentic lets the AI decide.
+							Illustrate each new passage automatically after the turn completes. Images the Game Master requests itself follow Settings → Agent Tools.
 						</p>
-						<div class="grid grid-cols-3 gap-2">
+						<div class="grid grid-cols-2 gap-2">
 							{#each [
-								{ value: 'none', label: 'Off', desc: 'Disabled' },
-								{ value: 'inline', label: 'Inline', desc: 'Auto-generate' },
-								{ value: 'agentic', label: 'Agentic', desc: 'AI decides' },
+								{ value: 'none', label: 'Off', desc: 'Only on request' },
+								{ value: 'inline', label: 'After each turn', desc: 'Automatic scene image' },
 							] as mode}
+								<!-- A saved 'agentic' value behaves like 'inline'. -->
 								<button class="rounded-lg border border-[var(--border-primary)] px-3 py-3 text-left transition-colors
-									{settings.uiSettings.imageGenerationMode === mode.value
+									{(settings.uiSettings.imageGenerationMode === 'agentic' ? 'inline' : settings.uiSettings.imageGenerationMode) === mode.value
 										? 'border-[var(--color-gold-600)] text-[var(--text-accent)] bg-[rgba(212,168,83,0.08)]'
 										: 'text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-primary)]'}"
 									onclick={() => { settings.uiSettings.imageGenerationMode = mode.value as any; settings.saveUISettings(); }}>
@@ -1174,12 +1117,6 @@
 							<input type="checkbox" class="h-4 w-4 accent-[var(--color-gold-400)]"
 								checked={settings.uiSettings.autoScroll}
 								onchange={(e) => { settings.uiSettings.autoScroll = (e.target as HTMLInputElement).checked; settings.saveUISettings(); }} />
-						</label>
-						<label class="flex items-center justify-between">
-							<span class="text-sm text-[var(--text-primary)]">Show word count</span>
-							<input type="checkbox" class="h-4 w-4 accent-[var(--color-gold-400)]"
-								checked={settings.uiSettings.showWordCount}
-								onchange={(e) => { settings.uiSettings.showWordCount = (e.target as HTMLInputElement).checked; settings.saveUISettings(); }} />
 						</label>
 						<label class="flex items-center justify-between">
 							<span class="text-sm text-[var(--text-primary)]">Disable suggestions</span>

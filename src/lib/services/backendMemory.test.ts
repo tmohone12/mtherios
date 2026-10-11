@@ -2,9 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	fetchBackendEntriesAround,
 	previewBackendTurn,
-	processBackendTurn,
 	pullBackendChanges,
-	retrieveBackendMemory,
 	runBackendPlotBrainPlan,
 	runBackendWorldSimTick,
 	TerminalRequestError,
@@ -25,23 +23,6 @@ const turnRequest = {
 	},
 };
 
-const turnResult = {
-	narration: 'The silver gate opens.',
-	entries: [{ id: 'entry_1', type: 'narration', content: 'The silver gate opens.' }],
-	playerEntryId: 'entry_player',
-	assistantEntryId: 'entry_1',
-	statePatchIds: ['patch_1'],
-	eventIds: ['event_1'],
-	retrievedMemoryIds: ['memory_1'],
-	memoryNodeIds: [],
-	serverVersion: 13,
-	syncChanges: [],
-	warnings: [],
-	generationTimings: [],
-	performance: null,
-	contextReceipt: null,
-};
-
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 	return new Response(JSON.stringify(body), {
 		status: init.status ?? 200,
@@ -52,52 +33,6 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 describe('backend memory turn client', () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-	});
-
-	const pendingTurn = { status: 'awaiting_input', runId: 'run_pending', storyId: 'story_alpha', clientTurnId: 'turn_1',
-		interactions: [{ id: 'question_1', kind: 'question', prompt: 'Which passage?', revision: 1 }] };
-
-	it('returns typed pending IDs from JSON and successful command envelopes', async () => {
-		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse(pendingTurn)).mockResolvedValueOnce(jsonResponse({
-			commandId: 'turn_1', clientCommandId: 'turn_1', storyId: 'story_alpha', command: 'turn.submit', status: 'succeeded',
-			result: pendingTurn, projectionChanges: {}, error: null, createdAt: '2026-10-02T00:00:00.000Z', updatedAt: '2026-10-02T00:00:00.000Z',
-		}));
-		await expect(processBackendTurn(turnRequest)).resolves.toEqual(pendingTurn);
-		await expect(processBackendTurn(turnRequest)).resolves.toEqual(pendingTurn);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-	});
-
-	it.each([false, true])('preserves a pending SSE response with a final done frame: %s', async withDone => {
-		const payload = `event: pending\ndata: ${JSON.stringify(pendingTurn)}\n\n${withDone ? `event: done\ndata: ${JSON.stringify(pendingTurn)}\n\n` : ''}`;
-		vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(payload, { headers: { 'Content-Type': 'text/event-stream' } }));
-		const narration = vi.fn();
-		await expect(processBackendTurn(turnRequest, { onNarrationChunk: narration })).resolves.toEqual(pendingTurn);
-		expect(narration).not.toHaveBeenCalled();
-	});
-
-	it('routes turn submissions through the streaming turn endpoint', async () => {
-		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
-			commandId: 'turn_1',
-			clientCommandId: 'turn_1',
-			storyId: 'story_alpha',
-			command: 'turn.submit',
-			status: 'succeeded',
-			result: turnResult,
-			projectionChanges: { entries: turnResult.entries, serverVersion: 13 },
-			error: null,
-			createdAt: '2026-06-05T12:00:00.000Z',
-			updatedAt: '2026-06-05T12:00:01.000Z',
-		}));
-
-		const result = await processBackendTurn(turnRequest);
-
-		expect(result).toEqual(turnResult);
-		expect(fetchMock).toHaveBeenCalledWith('/api/turn/stream', expect.objectContaining({
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-		}));
-		const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-		expect(payload).toEqual(turnRequest);
 	});
 
 	it('routes context preview through the read-only engine command', async () => {
@@ -139,12 +74,12 @@ describe('backend memory turn client', () => {
 		expect(payload).toEqual({ storyId: 'story_alpha', command: 'campaign.entriesAround', args: { position: 42, radius: 2 } });
 	});
 
-	it('surfaces failed engine command turn submissions as terminal request errors', async () => {
+	it('surfaces failed engine commands as terminal request errors', async () => {
 		vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
 			commandId: 'turn_1',
 			clientCommandId: 'turn_1',
 			storyId: 'story_alpha',
-			command: 'turn.submit',
+			command: 'turn.preview',
 			status: 'failed',
 			result: null,
 			projectionChanges: {},
@@ -153,58 +88,11 @@ describe('backend memory turn client', () => {
 			updatedAt: '2026-06-05T12:00:01.000Z',
 		}));
 
-		await expect(processBackendTurn(turnRequest)).rejects.toMatchObject({
+		await expect(previewBackendTurn(turnRequest)).rejects.toMatchObject({
 			name: 'TerminalRequestError',
 			message: 'Model service unavailable.',
 			code: 'ENGINE_COMMAND_FAILED',
 		} satisfies Partial<TerminalRequestError>);
-	});
-
-	it('routes memory retrieval through the shared engine command gateway', async () => {
-		const memoryResult = {
-			storyId: 'story_alpha',
-			query: 'silver gate',
-			packet: 'Mira remembers the silver gate.',
-			nodes: [],
-			tokenEstimate: 12,
-			retrievalDebug: [],
-			retrievalTrace: [],
-		};
-		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
-			commandId: 'cmd_memory',
-			clientCommandId: null,
-			storyId: 'story_alpha',
-			command: 'memory.retrieve',
-			status: 'succeeded',
-			result: memoryResult,
-			projectionChanges: { memory: { nodeCount: 0, tokenEstimate: 12 } },
-			error: null,
-			createdAt: '2026-06-05T12:00:00.000Z',
-			updatedAt: '2026-06-05T12:00:01.000Z',
-		}));
-
-		const result = await retrieveBackendMemory({
-			storyId: 'story_alpha',
-			query: 'silver gate',
-			sceneEntityIds: [],
-			presentNpcIds: [],
-			threadIds: [],
-			includeSecret: false,
-			tokenBudget: 420,
-		});
-
-		expect(result).toEqual(memoryResult);
-		const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-		expect(fetchMock).toHaveBeenCalledWith('/api/engine/command', expect.objectContaining({ method: 'POST' }));
-		expect(payload).toEqual({
-			storyId: 'story_alpha',
-			command: 'memory.retrieve',
-			args: expect.objectContaining({
-				storyId: 'story_alpha',
-				query: 'silver gate',
-				tokenBudget: 420,
-			}),
-		});
 	});
 
 	it('routes sync pulls through the shared engine command gateway', async () => {

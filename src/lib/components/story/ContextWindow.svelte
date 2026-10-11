@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { story } from '$lib/stores/story.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
-	import { getModelContextWindow } from '$lib/services/ai/context/modelWindows';
-	import { MAX_BACKEND_CONTEXT_BUDGET, normalizeBackendContextBudget, recordedDynamicContextBudget } from '$lib/services/backendTurnContext';
+	import { normalizeBackendContextBudget, recordedDynamicContextBudget } from '$lib/services/backendTurnContext';
 	import {
 		CONTEXT_BUDGET_STEPS,
 		contextBudgetSliderIndexToValue,
@@ -14,17 +13,10 @@
 	import { Gauge } from 'lucide-svelte';
 	import ContextSelection from './ContextSelection.svelte';
 
-	/** Effective budget: user-set value or auto (90% of model context) */
-	const effectiveBudget = $derived(
-		normalizeBackendContextBudget(settings.contextBudget > 0
-			? settings.contextBudget
-			: Math.floor(getModelContextWindow(settings.narrativeSettings?.model || '') * 0.90)) || MAX_BACKEND_CONTEXT_BUDGET
-	);
-
+	/** Next-turn setting; 0 is Auto, which the server derives from the GameMaster model's capacity. */
 	let selectedBudget = $state(0);
 
-	// Sync from settings on mount / when effectiveBudget changes
-	$effect(() => { selectedBudget = effectiveBudget; });
+	$effect(() => { selectedBudget = normalizeBackendContextBudget(settings.contextBudget); });
 
 	function onBudgetSliderInput(index: number) {
 		selectedBudget = contextBudgetSliderIndexToValue(index);
@@ -32,10 +24,10 @@
 
 	async function onBudgetChange() {
 		settings.contextBudget = normalizeBackendContextBudget(selectedBudget);
-		selectedBudget = settings.contextBudget || MAX_BACKEND_CONTEXT_BUDGET;
+		selectedBudget = settings.contextBudget;
 		await settings.saveContextBudget();
 		await patchTerminalLlmSettings(['narrative', 'classifier'].map(serviceId => ({ serviceId, contextBudget: settings.contextBudget || null }))).catch((error) => {
-			console.warn('[ContextWindow] Terminal context budget sync failed:', error);
+			console.warn('[ContextWindow] Server context budget sync failed:', error);
 		});
 	}
 
@@ -43,7 +35,6 @@
 		return formatTokenBudgetCompact(val);
 	}
 
-	const estimateTokens = (text: string) => Math.ceil(text.length / 4);
 	const backendReceipt = $derived(story.currentStory?.serverStoryId && story.lastContextReceipt?.storyId === story.currentStory.serverStoryId ? story.lastContextReceipt : null);
 	const activeRecall = $derived.by(() => {
 		for (const entry of [...story.entries].reverse()) {
@@ -62,73 +53,19 @@
 		return [];
 	});
 
+	/** Token counts from the last recorded server request. Browser-only saves have no receipt. */
 	const stats = $derived.by(() => {
-		if (!story.currentStory) return null;
-		if (story.currentStory.serverStoryId) {
-			if (!backendReceipt) return null;
-			const sectionTokens = (id: string) => backendReceipt.selection?.sections.find(section => section.id === id)?.tokens ?? 0;
-			return { system: sectionTokens('system'), history: sectionTokens('history'), scene: sectionTokens('context'),
-				recent: 0, world: 0, retrieved: 0, tierTotal: sectionTokens('context'), total: backendReceipt.included.totalTokens ?? 0 };
-		}
-
-		// System prompt (without context block — that's counted separately in tiers)
-		const systemTokens = estimateTokens(story.buildSystemPrompt());
-
-		// Conversation history (token-budgeted, up to 50k)
-		let historyTokens = 0;
-		for (const msg of story.buildConversationMessages()) {
-			historyTokens += estimateTokens(msg.content);
-		}
-
-		// Context assembly tiers (from last generation, or 0 if not yet generated)
-		const tiers = story.lastTierUsage;
-		const sceneTokens = tiers?.scene ?? 0;
-		const recentTokens = tiers?.recent ?? 0;
-		const worldTokens = tiers?.world ?? 0;
-		const retrievedTokens = tiers?.retrieved ?? 0;
-		const tierTotal = sceneTokens + recentTokens + worldTokens + retrievedTokens;
-
-		// If we have real total from last gen, use it; otherwise estimate
-		const total = story.lastContextTotal > 0
-			? story.lastContextTotal
-			: systemTokens + historyTokens + tierTotal;
-
-		return {
-			system: systemTokens,
-			history: historyTokens,
-			scene: sceneTokens,
-			recent: recentTokens,
-			world: worldTokens,
-			retrieved: retrievedTokens,
-			tierTotal,
-			total,
-		};
+		if (!backendReceipt) return null;
+		const sectionTokens = (id: string) => backendReceipt.selection?.sections.find(section => section.id === id)?.tokens ?? 0;
+		return { history: sectionTokens('history'), total: backendReceipt.included.totalTokens ?? 0 };
 	});
 
 	const recordedBudget = $derived(recordedDynamicContextBudget(backendReceipt));
-	const usagePercent = $derived(backendReceipt ? recordedBudget?.percent ?? 0 : stats && selectedBudget > 0 ? Math.min((stats.total / selectedBudget) * 100, 100) : 0);
+	const usagePercent = $derived(recordedBudget?.percent ?? 0);
 
-	interface Section {
-		key: string;
-		label: string;
-		tokens: number;
-		color: string;
-	}
-
-	const sections = $derived.by((): Section[] => {
-		if (!stats) return [];
-		if (backendReceipt) return (backendReceipt.selection?.sections ?? []).filter(section => section.tokens > 0)
-			.map((section, index) => ({ key: section.id, label: section.label, tokens: section.tokens,
-				color: ['bg-[var(--color-surface-400)]', 'bg-[var(--text-accent)]', 'bg-[var(--sage)]', 'bg-[#779a9c]'][index % 4] }));
-		return [
-			{ key: 'system', label: 'System Prompt', tokens: stats.system, color: 'bg-[var(--color-surface-400)]' },
-			{ key: 'history', label: 'Chat History', tokens: stats.history, color: 'bg-[var(--sage)]' },
-			{ key: 'scene', label: 'Scene', tokens: stats.scene, color: 'bg-[var(--text-accent)]' },
-			{ key: 'recent', label: 'Recent Chapters', tokens: stats.recent, color: 'bg-[#779a9c]' },
-			{ key: 'world', label: 'World/Arcs', tokens: stats.world, color: 'bg-[#9690aa]' },
-			{ key: 'retrieved', label: 'Retrieved', tokens: stats.retrieved, color: 'bg-[#b18479]' },
-		].filter(s => s.tokens > 0);
-	});
+	const sections = $derived((backendReceipt?.selection?.sections ?? []).filter(section => section.tokens > 0)
+		.map((section, index) => ({ key: section.id, label: section.label, tokens: section.tokens,
+			color: ['bg-[var(--color-surface-400)]', 'bg-[var(--text-accent)]', 'bg-[var(--sage)]', 'bg-[#779a9c]'][index % 4] })));
 </script>
 
 <div class="context-window">
@@ -137,16 +74,16 @@
 			<Gauge class="h-4 w-4 text-[var(--text-accent)]" />
 			<h3 class="font-display text-xl text-[var(--text-primary)]">Context window</h3>
 		</div>
-		<span class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2.5 py-1 text-xs font-medium tabular-nums text-[var(--text-accent)]">{formatBudget(selectedBudget)}</span>
+		<span class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2.5 py-1 text-xs font-medium tabular-nums text-[var(--text-accent)]" title="Setting for the next turn">Next turn: {formatBudget(selectedBudget)}</span>
 	</div>
 
 	<!-- Budget slider -->
 	<div class="mb-4">
-		<label for="story-context-budget" class="mb-1 block text-xs text-[var(--text-muted)]">{story.currentStory?.serverStoryId ? 'Scene and memory budget for the next turn' : 'Available context budget'}</label>
+		<label for="story-context-budget" class="mb-1 block text-xs text-[var(--text-muted)]">Scene and memory budget for the next turn{selectedBudget ? '' : ' · Auto fits the GameMaster model'}</label>
 		<input
 			id="story-context-budget"
 			type="range"
-			min="1"
+			min="0"
 			max={CONTEXT_BUDGET_STEPS.length - 1}
 			step="1"
 			value={contextBudgetValueToSliderIndex(selectedBudget)}
@@ -156,7 +93,7 @@
 			aria-valuetext={`${selectedBudget.toLocaleString()} tokens`}
 		/>
 		<div class="flex justify-between text-[10px] text-[var(--text-muted)] mt-0.5">
-			<span>{formatBudget(CONTEXT_BUDGET_STEPS[1])}</span><span>{formatBudget(MAX_BACKEND_CONTEXT_BUDGET)}</span>
+			<span>Auto</span><span>{formatBudget(CONTEXT_BUDGET_STEPS[CONTEXT_BUDGET_STEPS.length - 1])}</span>
 		</div>
 	</div>
 
@@ -166,32 +103,19 @@
 		{:else if backendReceipt?.budgets.recentDialogueTokensMax !== undefined}
 			<p class="mb-3 text-xs text-[var(--text-secondary)]">Recorded recent dialogue: ~{stats.history.toLocaleString()} / {backendReceipt.budgets.recentDialogueTokensMax.toLocaleString()} tokens. Next turn: {settings.uiSettings.recentDialogueTurns} turns, adjustable in Settings → Memory.</p>
 		{/if}
-		<p class="mb-3 text-[11px] text-[var(--text-muted)]">{backendReceipt ? backendReceipt.selection ? 'Last recorded primary narration request · local token estimates' : 'Legacy receipt · final request selection was not recorded' : 'Local story context estimate'}</p>
+		<p class="mb-3 text-[11px] text-[var(--text-muted)]">{backendReceipt?.selection ? 'Last recorded narration request · token counts estimated by the server' : 'Older receipt · the final request selection was not recorded'}</p>
 		<!-- Usage bar -->
-		{#if !backendReceipt || recordedBudget}
-		<div class="rounded-full bg-[var(--bg-primary)] h-2 overflow-hidden mb-3" role="meter" aria-label="Context budget used" aria-valuenow={usagePercent} aria-valuemin="0" aria-valuemax="100">
+		{#if recordedBudget}
+		<div class="rounded-full bg-[var(--bg-primary)] h-2 overflow-hidden mb-3" role="meter" aria-label="Recorded scene and memory budget used" aria-valuenow={usagePercent} aria-valuemin="0" aria-valuemax="100">
 			<div class="flex h-full">
-				{#if backendReceipt}
-					<div class="h-full bg-[var(--text-accent)]" style="width: {usagePercent}%"></div>
-				{:else}
-				{#each sections as section}
-					{@const pct = (section.tokens / selectedBudget) * 100}
-					{#if pct > 0.3}
-						<div
-							class="{section.color} h-full transition-all duration-300"
-							style="width: {pct}%"
-							title="{section.label}: ~{section.tokens.toLocaleString()} tokens"
-						></div>
-					{/if}
-				{/each}
-				{/if}
+				<div class="h-full bg-[var(--text-accent)]" style="width: {usagePercent}%"></div>
 			</div>
 		</div>
 
 		<!-- Total -->
 		<div class="flex items-center justify-between mb-4 gap-3">
 			<span class="text-xs text-[var(--text-muted)]">
-				{#if recordedBudget}Scene and memory: ~{recordedBudget.used.toLocaleString()} / {formatBudget(recordedBudget.max)} tokens{:else}~{stats.total.toLocaleString()} / {formatBudget(selectedBudget)} tokens{/if}
+				Recorded scene and memory: ~{recordedBudget.used.toLocaleString()} / {formatBudget(recordedBudget.max)} tokens
 			</span>
 			<span class="text-xs font-semibold tabular-nums {usagePercent > 80 ? 'text-[var(--color-crimson-400)]' : usagePercent > 50 ? 'text-[var(--text-accent)]' : 'text-[var(--sage)]'}">
 				{usagePercent.toFixed(1)}%
@@ -199,7 +123,7 @@
 		</div>
 		{/if}
 		{#if backendReceipt}
-			<p class="mb-4 text-xs text-[var(--text-secondary)]">Primary request total: ~{stats.total.toLocaleString()} tokens, including instructions, dialogue and action.{#if !recordedBudget} No scene budget was recorded for this request.{/if}</p>
+			<p class="mb-4 text-xs text-[var(--text-secondary)]">Recorded request total: ~{stats.total.toLocaleString()} tokens, including instructions, dialogue and action.{#if !recordedBudget} No scene budget was recorded for this request.{/if}</p>
 		{/if}
 		{#if activeRecall}
 			<section class="mb-4 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3 text-xs">
@@ -251,11 +175,8 @@
 		{#if backendReceipt?.selection}
 			<ContextSelection selection={backendReceipt.selection} />
 		{/if}
-		{#if !backendReceipt && story.lastContextTotal === 0}
-			<p class="mt-3 text-[11px] leading-relaxed text-[var(--text-muted)]">The breakdown updates after your first generation.</p>
-		{/if}
 	{:else}
-		<p class="text-xs text-[var(--text-muted)]">{story.currentStory ? 'Send a turn to see the context recorded by the server.' : 'No story loaded.'}</p>
+		<p class="text-xs text-[var(--text-muted)]">{!story.currentStory ? 'No story loaded.' : story.currentStory.serverStoryId ? 'Send a turn to see the context recorded by the server.' : 'This story is saved only in this browser, so no request has been recorded. Import it to keep playing.'}</p>
 	{/if}
 </div>
 

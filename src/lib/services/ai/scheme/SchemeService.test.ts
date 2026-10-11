@@ -6,35 +6,11 @@ vi.mock('$lib/services/ai/sdk/generate', () => ({ generateStructuredWithTools: v
 vi.mock('$lib/services/database', () => ({ getChapters: vi.fn() }));
 vi.mock('$lib/services/canonicalWrites', () => ({ saveCanonicalScheme: vi.fn() }));
 
-import { declarePlayerScheme, injectSchemes } from './SchemeService';
+import { declarePlayerScheme } from './SchemeService';
 import { story } from '$lib/stores/story.svelte';
 import { generateStructuredWithTools } from '$lib/services/ai/sdk/generate';
 import { getChapters } from '$lib/services/database';
 import { saveCanonicalScheme } from '$lib/services/canonicalWrites';
-import type { Scheme } from '$lib/types';
-
-function scheme(id: string): Scheme {
-	return {
-		id,
-		storyId: 'story-1',
-		ownerType: 'faction',
-		ownerEntryId: 'faction-1',
-		ownerName: 'House A',
-		goal: 'secure leverage',
-		trigger: 'insult',
-		triggerChapter: 1,
-		triggerEntryId: null,
-		stages: [],
-		currentStageIndex: 0,
-		pressure: 20,
-		status: 'active',
-		secrecy: 'secret',
-		nextTickAtDay: null,
-		branchId: null,
-		createdAt: 0,
-		updatedAt: 0,
-	};
-}
 
 describe('SchemeService safety gates', () => {
 	it('keeps explicit player plan authoring after automatic scheme removal', async () => {
@@ -55,16 +31,4 @@ describe('SchemeService safety gates', () => {
 		expect(localStory.schemes).toHaveLength(1);
 	});
 
-	it('does not force antagonist hooks into browser narration', () => {
-		const secret = { ...scheme('secret-scheme'), pressure: 95,
-			stages: [{ index: 0, label: 'Ambush', hook: 'Attack at the inn', condition: 'time', conditionPayload: {}, completed: false, completedAt: null }] } as Scheme;
-		const publicScheme = { ...secret, id: 'public-scheme', secrecy: 'known' } as Scheme;
-		const playerPlan = { ...secret, id: 'player-plan', ownerType: 'player', goal: 'Book passage',
-			stages: [{ ...secret.stages[0], label: 'Ask clerk', hook: 'Buy a ticket' }] } as Scheme;
-		expect(injectSchemes([secret, publicScheme])).toBe('');
-		const prompt = injectSchemes([secret, publicScheme, playerPlan]);
-		expect(prompt).toContain('Book passage');
-		expect(prompt).not.toContain('Ambush');
-		expect(prompt).not.toContain('THIS chapter');
-	});
 });

@@ -210,13 +210,16 @@
 		backendSyncing = true;
 		backendMessage = null;
 		try {
-			const result = await importLocalStoryToBackend(selectedStory.id);
-			backendMessage = `Terminal database bound: ${Object.entries(result.counts).map(([key, value]) => `${key} ${value}`).join(', ')}`;
+			// The open story reloads from the server so the composer can continue it.
+			const result = story.currentStory?.id === selectedStory.id && !story.currentStory.serverStoryId
+				? await story.importCurrentStoryToServer()
+				: await importLocalStoryToBackend(selectedStory.id);
+			backendMessage = `Imported to the story server: ${Object.entries(result.counts).map(([key, value]) => `${key} ${value}`).join(', ')}`;
 			stories = stories.map(story => story.id === selectedStory.id
 				? { ...story, serverStoryId: result.serverStoryId, serverVersion: result.serverVersion, syncStatus: 'synced' }
 				: story);
 		} catch (error) {
-			backendMessage = error instanceof Error ? error.message : 'Terminal import failed.';
+			backendMessage = error instanceof Error ? error.message : 'Import failed.';
 		} finally {
 			backendSyncing = false;
 		}
@@ -497,8 +500,8 @@
 						<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">GM memory source</div>
 						<p class="mt-1 truncate text-xs text-[var(--text-secondary)]">
 							{selectedStory.serverStoryId
-								? `Terminal database v${selectedStory.serverVersion ?? 0} (${selectedStory.syncStatus ?? 'synced'})`
-								: 'Local-only. Import to use terminal memory retrieval and sync.'}
+								? `Story server v${selectedStory.serverVersion ?? 0} (${selectedStory.syncStatus ?? 'synced'})`
+								: 'Saved only in this browser. Import it to keep playing with server memory and sync.'}
 						</p>
 						{#if selectedStory.serverStoryId}
 							<p class="mt-1 text-[10px] leading-relaxed text-[var(--text-muted)]">These chapter and arc records are refreshed from the same database used to build GM context. Each narrated turn’s receipt shows its exact final selection.</p>
@@ -508,10 +511,10 @@
 						class="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-primary)] px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-accent)] disabled:opacity-50"
 						disabled={backendSyncing}
 						onclick={bindStoryToBackend}
-						title="Import local story to the terminal world database"
+						title="Import this browser save to the story server"
 					>
 						{#if backendSyncing}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<CloudUpload class="h-3.5 w-3.5" />{/if}
-						{selectedStory.serverStoryId ? 'Reimport' : 'Bind'}
+						{selectedStory.serverStoryId ? 'Reimport' : 'Import'}
 					</button>
 				</div>
 				{#if backendMessage}

@@ -1,10 +1,10 @@
 /**
- * Player-declared plan authoring and browser prompt context.
- *   - `injectSchemes()` — keeps player-declared plans available to the
- *     browser narrator. Antagonist presentation uses sourced scene selection.
- *   - `declarePlayerScheme()` — single-shot LLM call that turns free-text
- *     player intent ("I'll poison Lord Frey at the wedding") into staged
- *     obstacles. Owner is the protagonist.
+ * Player-declared plan authoring (the /plan command and the Declare Plan dialog).
+ *
+ * A single browser model call, using the saved Classifier settings, turns free-text
+ * intent ("I'll poison Lord Frey at the wedding") into staged obstacles. The plan
+ * is saved through the canonical scheme write; it is intent, not an outcome.
+ * There is no server command for the structuring step yet.
  */
 
 import { uuid } from '$lib/utils/uuid';
@@ -23,42 +23,11 @@ import {
 import { buildWarSchemeRulesBlock } from '$lib/services/ai/context/warDoctrine';
 
 // ── Tunables ──
-const INJECT_CAP = 4;
 const TIME_STAGE_DEFAULT_DAYS = 3;
 
 function applyCurrentStoryServerVersion(serverVersion: number | null): void {
 	if (!serverVersion || !story.currentStory) return;
 	story.currentStory = { ...story.currentStory, serverVersion, syncStatus: 'synced' };
-}
-
-/**
- * Keep player-declared plans available to the browser narrator. Antagonist
- * schemes need a sourced local cue; pressure and secrecy cannot select one.
- *
- * Returns empty string when there's nothing to inject (the most common case
- * outside ASOIAF/political stories).
- *
- * NOTE: Takes the scheme list as an argument rather than reading from the
- * `story` store. Lets `story.svelte.ts` import this function without creating
- * a circular module dependency (story → SchemeService → story).
- */
-export function injectSchemes(allSchemes: Scheme[]): string {
-	const schemes = allSchemes
-		.filter(s => s.ownerType === 'player' && (s.status === 'active' || s.status === 'climaxing'))
-		.sort((a, b) => b.pressure - a.pressure)
-		.slice(0, INJECT_CAP);
-
-	if (schemes.length === 0) return '';
-
-	const out: string[] = ['## Player Plans', '',
-		'These are the player\'s intentions, not completed actions. Use a stage only when the player pursues it or an established local consequence makes it relevant.'];
-	for (const s of schemes) {
-		const stage = s.stages[s.currentStageIndex];
-		out.push(`- Goal: ${s.goal}`);
-		if (stage) out.push(`  Current stage "${stage.label}": ${stage.hook}`);
-	}
-
-	return out.join('\n');
 }
 
 // ══════════════════════════════════════════════════════════════

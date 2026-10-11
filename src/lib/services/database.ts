@@ -817,30 +817,6 @@ export async function bulkPutProceduralRules(rules: ProceduralRule[]): Promise<v
 }
 
 // ============================================================================
-// Embedding Cache CRUD
-// ============================================================================
-
-export async function getEmbedding(sourceType: string, sourceId: string): Promise<EmbeddingCacheEntry | undefined> {
-	return db.embeddingCache.where({ sourceType, sourceId }).first();
-}
-
-export async function putEmbedding(entry: EmbeddingCacheEntry): Promise<void> {
-	await putRecord(db.embeddingCache, entry);
-}
-
-export async function getEmbeddingsByType(sourceType: string): Promise<EmbeddingCacheEntry[]> {
-	return db.embeddingCache.where('sourceType').equals(sourceType).toArray();
-}
-
-export async function deleteEmbedding(id: string): Promise<void> {
-	await db.embeddingCache.delete(id);
-}
-
-export async function deleteEmbeddingsBySource(sourceType: string, sourceId: string): Promise<void> {
-	await db.embeddingCache.where({ sourceType, sourceId }).delete();
-}
-
-// ============================================================================
 // App Settings
 // ============================================================================
 

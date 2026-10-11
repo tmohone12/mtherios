@@ -1,20 +1,14 @@
 import { chatgptCsrfHeaders } from './chatgptBrowser';
 import {
-	memoryRetrieveRequestSchema,
-	retrievedMemoryPacketSchema,
 	syncPullResponseSchema,
 	syncPushResponseSchema,
 	storyEntriesAroundResponseSchema,
 	turnPreviewResponseSchema,
-	turnSubmissionResponseSchema,
-	type MemoryRetrieveRequest,
-	type RetrievedMemoryPacket,
 	type SyncChange,
 	type SyncOperation,
 	type StoryEntriesAroundResponse,
 	type TurnRequest,
 	type TurnPreviewResponse,
-	type TurnSubmissionResponse,
 } from '$lib/contracts/memory';
 import { engineCommandResponseSchema } from '$lib/contracts/engine';
 import { importStoryBundleToBackend } from '$lib/services/backendImport';
@@ -87,102 +81,6 @@ export async function postEngineCommand(
 	return response.result;
 }
 
-export async function retrieveBackendMemory(
-	request: MemoryRetrieveRequest,
-): Promise<RetrievedMemoryPacket | null> {
-	const parsed = memoryRetrieveRequestSchema.parse(request);
-	try {
-		const raw = await postEngineCommand(parsed.storyId, 'memory.retrieve', parsed);
-		return retrievedMemoryPacketSchema.parse(raw);
-	} catch (error) {
-		console.warn('[BackendMemory] Retrieval fell back to local memory:', error);
-		return null;
-	}
-}
-
-export interface ProcessBackendTurnOptions {
-	signal?: AbortSignal;
-	onNarrationChunk?: (chunk: string) => void | Promise<void>;
-}
-
-export async function processBackendTurn(
-	request: TurnRequest,
-	options: ProcessBackendTurnOptions = {},
-): Promise<TurnSubmissionResponse> {
-	const response = await fetch('/api/turn/stream', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(request),
-		signal: options.signal,
-	});
-	if (!response.ok) {
-		const body = await response.json().catch(() => ({})) as { error?: unknown; code?: unknown };
-		throw new TerminalRequestError(
-			typeof body.error === 'string' ? body.error : `Terminal request failed: ${response.status}`,
-			response.status,
-			typeof body.code === 'string' ? body.code : null,
-		);
-	}
-	if (!response.headers.get('content-type')?.includes('text/event-stream')) {
-		const raw = await response.json();
-		const commandResponse = engineCommandResponseSchema.safeParse(raw);
-		if (commandResponse.success) {
-			if (commandResponse.data.status !== 'succeeded') {
-				throw new TerminalRequestError(
-					commandResponse.data.error ?? `Engine command failed: ${commandResponse.data.command}`,
-					502,
-					'ENGINE_COMMAND_FAILED',
-				);
-			}
-			return turnSubmissionResponseSchema.parse(commandResponse.data.result);
-		}
-		return turnSubmissionResponseSchema.parse(raw);
-	}
-	if (!response.body) throw new TerminalRequestError('Terminal turn stream returned no response body.', 502, 'EMPTY_TURN_STREAM');
-
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
-	let buffer = '';
-	let completed: TurnSubmissionResponse | null = null;
-	const handleFrame = async (frame: string) => {
-		let event = 'message';
-		const data: string[] = [];
-		for (const line of frame.split('\n')) {
-			if (line.startsWith('event:')) event = line.slice(6).trim();
-			else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
-		}
-		if (data.length === 0) return;
-		const payload = JSON.parse(data.join('\n')) as Record<string, unknown>;
-		if (event === 'narration.chunk' && typeof payload.text === 'string') {
-			await options.onNarrationChunk?.(payload.text);
-		} else if (event === 'done' || event === 'pending') {
-			completed = turnSubmissionResponseSchema.parse(payload);
-		} else if (event === 'error') {
-			throw new TerminalRequestError(
-				typeof payload.error === 'string' ? payload.error : 'Terminal turn stream failed.',
-				502,
-				'TURN_STREAM_FAILED',
-			);
-		}
-	};
-
-	while (true) {
-		const { value, done } = await reader.read();
-		buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
-		let boundary = buffer.indexOf('\n\n');
-		while (boundary >= 0) {
-			const frame = buffer.slice(0, boundary).trim();
-			buffer = buffer.slice(boundary + 2);
-			if (frame) await handleFrame(frame);
-			boundary = buffer.indexOf('\n\n');
-		}
-		if (done) break;
-	}
-	if (buffer.trim()) await handleFrame(buffer.trim());
-	if (!completed) throw new TerminalRequestError('Terminal turn stream ended before a final response.', 502, 'INCOMPLETE_TURN_STREAM');
-	return completed;
-}
-
 export async function previewBackendTurn(request: TurnRequest): Promise<TurnPreviewResponse> {
 	const raw = await postEngineCommand(request.storyId, 'turn.preview', request as unknown as Record<string, unknown>, request.clientTurnId);
 	return turnPreviewResponseSchema.parse(raw);
@@ -202,6 +100,30 @@ export async function runBackendWorldSimTick(story: Story): Promise<Record<strin
 		localVersion: story.serverVersion ?? 0,
 		force: true,
 	}) as Promise<Record<string, unknown>>;
+}
+
+export interface BackendArcRollupResult {
+	jobId: string | null;
+	created: boolean;
+	arcNumber: number | null;
+	/** Why no arc was written, e.g. `arc_threshold_not_met`. */
+	reason: string | null;
+	/** The job's recorded failure; the job row keeps it for retry and diagnostics. */
+	error: string | null;
+}
+
+/** Runs the server's `rollup_arc` job now; it applies the same 10-consecutive-chapter rule as the worker. */
+export async function runBackendArcRollup(serverStoryId: string): Promise<BackendArcRollupResult> {
+	const raw = await postEngineCommand(serverStoryId, 'jobs.rollupArc', { runNow: true }) as Record<string, unknown>;
+	const job = raw.job && typeof raw.job === 'object' ? raw.job as Record<string, unknown> : {};
+	const result = job.result && typeof job.result === 'object' ? job.result as Record<string, unknown> : {};
+	return {
+		jobId: typeof raw.jobId === 'string' ? raw.jobId : null,
+		created: result.created === true,
+		arcNumber: typeof result.number === 'number' ? result.number : null,
+		reason: typeof result.reason === 'string' ? result.reason : null,
+		error: job.completed === false ? (typeof job.error === 'string' && job.error ? job.error : 'The arc job failed.') : null,
+	};
 }
 
 export async function saveBackendPlotEdit(story: Story, edit: import('$lib/contracts/plotEditing').PlotEdit) {

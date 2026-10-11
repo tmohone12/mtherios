@@ -32,9 +32,6 @@ export interface BackendClientContextInput {
 	contextBudget?: number | null;
 	recentDialogueTokens?: number | null;
 	recentDialogueTurns?: number | null;
-	chapterThreshold?: number | null;
-	postChapterBuffer?: number | null;
-	chaptersPerArc?: number | null;
 }
 
 const MAX_RELEVANT_NPCS = 8;
@@ -172,6 +169,7 @@ export function buildBackendClientContext(input: BackendClientContextInput) {
 		...(input.recentDialogueTurns === undefined && input.recentDialogueTokens !== undefined
 			? { recentDialogueTokens: normalizeRecentDialogueTokens(input.recentDialogueTokens) }
 			: { recentDialogueTurns: normalizeRecentDialogueTurns(input.recentDialogueTurns) }),
+		// Older servers read these wire keys; the cadence itself is fixed in chapterCadence.ts.
 		...FIXED_CHAPTER_SETTINGS,
 	};
 }

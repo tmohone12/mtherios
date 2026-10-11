@@ -1180,7 +1180,6 @@ export async function runRollupArcJobCommand(input: RollupArcJobCommandInput | J
 		payload: {
 			manual: true,
 			requestedAt,
-			chaptersPerArc: args.chaptersPerArc,
 		},
 		metadata: {
 			source: 'manual_arc_rollup',

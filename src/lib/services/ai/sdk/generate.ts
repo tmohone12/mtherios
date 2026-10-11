@@ -1,14 +1,16 @@
 /**
  * AI Generation — Mtherios
  * 
- * Lightweight wrapper around fetch for streaming narrative generation.
+ * Browser-side model calls for the remaining client assistants: player
+ * suggestions, story setup assistance and player-plan structuring. Story turns,
+ * extraction and summaries run on the server.
  * Uses the active provider profile from settings.
  */
 
 import { getSetting } from '$lib/services/database';
 import { uuid } from '$lib/utils/uuid';
 import { PROVIDERS } from './providers/config';
-import { isDeepSeekProvider, isDeepSeekReasoner, injectDeepSeekRoleplay } from './providers/deepseekInjection';
+import { isDeepSeekProvider, isDeepSeekReasoner } from './providers/deepseekInjection';
 import type { APIProfile, ProviderType } from '$lib/types';
 
 export interface ChatMessage {
@@ -35,14 +37,6 @@ export interface GenerateOptions {
 	 * receive the two halves concatenated.
 	 */
 	systemDynamic?: string;
-	/**
-	 * Tools the model is allowed to call inline during generation. When present,
-	 * `streamNarrative` will yield `StreamChunk`s with a `toolCall` field as
-	 * each tool block completes, in addition to the usual text deltas.
-	 */
-	tools?: any[];
-	/** If set, biases / forces the model to call this specific tool. */
-	forceTool?: string;
 	/**
 	 * If set to `'json_object'`, requests a strict-JSON response from
 	 * OpenAI-compatible providers (sent as `response_format: { type: 'json_object' }`).
@@ -82,14 +76,6 @@ export function onApiLogChange(fn: () => void) { _apiLogListeners.push(fn); retu
 function addLogEntry(entry: APILogEntry) {
 	_apiLog.push(entry);
 	_apiLogListeners.forEach(fn => fn());
-}
-
-export interface StreamChunk {
-	content: string;
-	reasoning?: string;
-	/** Emitted when an inline tool call completes mid-stream. */
-	toolCall?: ToolCall;
-	done: boolean;
 }
 
 /**
@@ -220,19 +206,6 @@ export function parseJsonFromText(raw: string): unknown {
 }
 
 /**
- * iOS Safari (incl. iPadOS) drops chunked-streamed fetch responses through
- * Cloudflare after a few seconds with a generic "Load failed". For the
- * cc-bridge proxy specifically we fall back to non-streaming on iOS.
- */
-function isIOSSafari(): boolean {
-	if (typeof navigator === 'undefined') return false;
-	const ua = navigator.userAgent;
-	if (/iPad|iPhone|iPod/.test(ua)) return true;
-	// iPadOS 13+ reports as Mac; disambiguate via touch points.
-	return ua.includes('Mac') && (navigator as any).maxTouchPoints > 1;
-}
-
-/**
  * Build auth headers for OpenAI-compatible APIs.
  */
 function buildAuthHeaders(profile: APIProfile): Record<string, string> {
@@ -266,11 +239,6 @@ function buildAnthropicHeaders(profile: APIProfile): Record<string, string> {
 /**
  * Convert OpenAI-style messages to Anthropic Messages API format.
  * Extracts system prompt, ensures alternating user/assistant.
- *
- * When `systemDynamic` is provided, the system prompt is sent as two
- * `{type:'text'}` blocks with a `cache_control: { type: 'ephemeral' }`
- * breakpoint between them. The stable half (the static narrator personality)
- * is cached across turns; the dynamic half (per-turn world state) is not.
  */
 function toAnthropicBody(
 	systemPrompt: string,
@@ -278,10 +246,6 @@ function toAnthropicBody(
 	model: string,
 	temperature: number,
 	maxTokens: number,
-	stream: boolean,
-	systemDynamic?: string,
-	tools?: any[],
-	forceTool?: string,
 ): Record<string, any> {
 	// Filter out system messages — Anthropic uses a separate system field
 	const nonSystemMessages = messages.filter(m => m.role !== 'system');
@@ -302,38 +266,14 @@ function toAnthropicBody(
 		}
 	}
 
-	// Two-block form is only useful when BOTH halves have content. Anthropic
-	// rejects empty text blocks, and an empty stable block can't be cached
-	// anyway. Fall back to the single-string form if either is empty.
-	const useSplitSystem = !!(systemDynamic && systemDynamic.length > 0 && systemPrompt.length > 0);
-	const system = useSplitSystem
-		? [
-			{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
-			{ type: 'text', text: systemDynamic },
-		]
-		: (systemDynamic ? `${systemPrompt}\n\n${systemDynamic}` : systemPrompt);
-
-	const body: Record<string, any> = {
+	return {
 		model,
-		system,
+		system: systemPrompt,
 		messages: merged,
 		max_tokens: maxTokens,
 		temperature,
-		stream,
+		stream: false,
 	};
-
-	if (tools && tools.length > 0) {
-		body.tools = tools.map((t: any) => ({
-			name: t.function?.name ?? t.name,
-			description: t.function?.description ?? t.description,
-			input_schema: t.function?.parameters ?? t.input_schema,
-		}));
-		body.tool_choice = forceTool
-			? { type: 'tool', name: forceTool }
-			: { type: 'auto' };
-	}
-
-	return body;
 }
 
 async function getActiveProfile(overrideProfileId?: string): Promise<{ profile: APIProfile; baseUrl: string }> {
@@ -382,361 +322,6 @@ export async function getActiveModel(profileId?: string): Promise<string> {
 }
 
 /**
- * Stream a narrative response from the active provider.
- * Returns an async generator of StreamChunks.
- */
-export async function* streamNarrative(options: GenerateOptions): AsyncGenerator<StreamChunk> {
-	const { profile, baseUrl } = await getActiveProfile(options.profileId);
-	const model = options.model || await getActiveModel(options.profileId);
-	const temperature = options.temperature ?? 1.0;
-	const maxTokens = options.maxTokens ?? 4096;
-	const startTime = Date.now();
-	let fullContent = '';
-	let error: string | undefined;
-	const useAnthropic = isAnthropicProvider(profile);
-	// iOS Safari + cc-bridge: chunked SSE through Cloudflare dies after a few
-	// seconds with "Load failed". Send a non-streaming request and yield the
-	// full text as a single chunk at the end.
-	const useStream = !(isIOSSafari() && profile.providerType === 'anthropic-proxy');
-
-	// Combined system prompt for OpenAI-compatible providers (used for the
-	// Anthropic-bound message construction below and for log entries).
-	const combinedSystem = options.systemDynamic
-		? `${options.system}\n\n${options.systemDynamic}`
-		: options.system;
-
-	// DeepSeek roleplay injection — when targeting a DeepSeek model, the
-	// first user message gets a Chinese instruction block that flips the
-	// `<think>` content from analytical CoT into in-character inner monologue.
-	const priorMessages = options.messages ?? [];
-	const { messages: roleplayMessages, prompt: roleplayPrompt } = isDeepSeekProvider(profile, model)
-		? injectDeepSeekRoleplay(priorMessages, options.prompt)
-		: { messages: priorMessages, prompt: options.prompt };
-
-	// deepseek-reasoner doesn't reliably honor OpenAI-style function calling.
-	// Strip tools so the narrator emits prose only; the orchestrator will fall
-	// through to the separate `executeWorldUpdate` call (which detects reasoner
-	// and uses JSON output mode instead). Without this, the reasoner sometimes
-	// returns an empty response while "thinking", killing the turn entirely.
-	const skipToolsForReasoner = isDeepSeekReasoner(profile, model);
-	const effectiveTools = skipToolsForReasoner ? undefined : options.tools;
-	const effectiveForceTool = skipToolsForReasoner ? undefined : options.forceTool;
-
-	// Build messages array (Anthropic body builder strips the system role)
-	const messages: Array<{ role: string; content: string }> = [];
-	if (!useAnthropic) {
-		messages.push({ role: 'system', content: combinedSystem });
-	}
-	for (const msg of roleplayMessages) {
-		messages.push({ role: msg.role, content: msg.content });
-	}
-	messages.push({ role: 'user', content: roleplayPrompt });
-
-	// Build request based on provider
-	const endpoint = useAnthropic
-		? `${baseUrl || '/api/anthropic'}/v1/messages`
-		: `${baseUrl}/chat/completions`;
-	const headers = useAnthropic ? buildAnthropicHeaders(profile) : buildAuthHeaders(profile);
-
-	let body: Record<string, any>;
-	if (useAnthropic) {
-		body = toAnthropicBody(
-			options.system, messages, model, temperature, maxTokens, useStream,
-			options.systemDynamic, effectiveTools, effectiveForceTool,
-		);
-	} else {
-		// OpenAI-compatible. For OpenRouter we emit a multipart system message
-		// with a cache_control breakpoint between the stable and dynamic halves
-		// — this enables prompt caching on Anthropic-routed models and is
-		// silently ignored by other backends (OpenAI/Gemini/DeepSeek caches
-		// automatically). For everyone else we fall back to a single string.
-		const oaiMessages: Array<{ role: string; content: any }> = [
-			buildOAISystemMessage(profile, options.system, options.systemDynamic),
-		];
-		for (const msg of roleplayMessages) oaiMessages.push({ role: msg.role, content: msg.content });
-		oaiMessages.push({ role: 'user', content: roleplayPrompt });
-		body = { model, messages: oaiMessages, stream: useStream, temperature, max_tokens: maxTokens };
-		if (effectiveTools && effectiveTools.length > 0) {
-			body.tools = effectiveTools;
-			body.tool_choice = effectiveForceTool
-				? { type: 'function', function: { name: effectiveForceTool } }
-				: 'auto';
-		}
-		if (options.responseFormat === 'json_object') {
-			body.response_format = { type: 'json_object' };
-		}
-		// OpenRouter usage accounting — confirms cache hits in the response.
-		if (profile.providerType === 'openrouter') {
-			body.usage = { include: true };
-		}
-	}
-
-	try {
-		const response = await fetch(endpoint, {
-			method: 'POST',
-			headers,
-			body: JSON.stringify(body),
-			signal: options.signal,
-		});
-
-		if (!response.ok) {
-			const errorText = await response.text().catch(() => 'Unknown error');
-			error = `HTTP ${response.status}: ${errorText}`;
-			throw new Error(`AI request failed (${response.status}): ${errorText}`);
-		}
-
-		// Non-streaming branch (iOS + cc-bridge). Parse the full JSON, yield
-		// text + tool calls as discrete chunks, then signal done.
-		if (!useStream) {
-			const { extractInlineToolCalls } = await import('$lib/services/ai/tools/inline-extractor');
-			const data = await response.json();
-			let textOut = '';
-			const collectedToolCalls: ToolCall[] = [];
-
-			if (useAnthropic) {
-				for (const block of data.content ?? []) {
-					if (block.type === 'text' && typeof block.text === 'string') {
-						textOut += block.text;
-					} else if (block.type === 'tool_use') {
-						collectedToolCalls.push({ name: block.name, arguments: block.input ?? {}, id: block.id });
-					}
-				}
-			} else {
-				const message = data.choices?.[0]?.message;
-				textOut = typeof message?.content === 'string' ? message.content : '';
-				// DeepSeek non-streaming: reasoning_content is on the message object.
-				const reasoningOut = typeof message?.reasoning_content === 'string'
-					? message.reasoning_content
-					: (typeof message?.reasoning === 'string' ? message.reasoning : '');
-				if (reasoningOut) {
-					yield { content: '', reasoning: reasoningOut, done: false };
-				}
-				if (Array.isArray(message?.tool_calls)) {
-					for (const tc of message.tool_calls) {
-						let args: Record<string, any> = {};
-						try {
-							args = typeof tc.function?.arguments === 'string'
-								? JSON.parse(tc.function.arguments)
-								: (tc.function?.arguments ?? {});
-						} catch {
-							console.warn('[streamNarrative] Failed to parse tool args:', tc.function?.arguments);
-						}
-						collectedToolCalls.push({ name: tc.function?.name ?? '', arguments: args, id: tc.id });
-					}
-				}
-			}
-
-			// If the model only returned text (e.g. cc-bridge didn't forward
-			// tool definitions), recover any tool calls embedded in the prose.
-			if (collectedToolCalls.length === 0 && textOut) {
-				const { cleaned, toolCalls } = extractInlineToolCalls(textOut);
-				if (toolCalls.length > 0) {
-					textOut = cleaned;
-					collectedToolCalls.push(...toolCalls);
-				}
-			}
-
-			if (textOut) {
-				fullContent += textOut;
-				yield { content: textOut, done: false };
-			}
-			for (const tc of collectedToolCalls) {
-				yield { content: '', toolCall: tc, done: false };
-			}
-			yield { content: '', done: true };
-			return;
-		}
-
-		const reader = response.body?.getReader();
-		if (!reader) throw new Error('No response body');
-
-		const decoder = new TextDecoder();
-		let buffer = '';
-
-		// Per-block state for tool-call accumulation across SSE events.
-		// Anthropic: keyed by content_block index. OpenAI: keyed by tool_calls[i].index.
-		type ToolBlock = { name: string; jsonBuffer: string; id?: string };
-		const anthropicToolBlocks = new Map<number, ToolBlock>();
-		const oaiToolCalls = new Map<number, ToolBlock>();
-
-		try {
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				buffer += decoder.decode(value, { stream: true });
-				const lines = buffer.split('\n');
-				buffer = lines.pop() ?? '';
-
-				for (const line of lines) {
-					const trimmed = line.trim();
-					if (!trimmed || trimmed === 'data: [DONE]') continue;
-					if (trimmed === 'event: message_stop') continue;
-					if (!trimmed.startsWith('data: ')) continue;
-
-					try {
-						const data = JSON.parse(trimmed.slice(6));
-
-						if (useAnthropic) {
-							// content_block_start — register a tool_use block.
-							if (data.type === 'content_block_start' && data.content_block?.type === 'tool_use') {
-								const idx = data.index ?? 0;
-								anthropicToolBlocks.set(idx, {
-									name: data.content_block.name ?? '',
-									jsonBuffer: '',
-									id: data.content_block.id,
-								});
-							}
-							// content_block_delta — text_delta goes to prose, input_json_delta to tool buffer.
-							else if (data.type === 'content_block_delta') {
-								if (data.delta?.type === 'text_delta' && typeof data.delta.text === 'string') {
-									fullContent += data.delta.text;
-									yield { content: data.delta.text, done: false };
-								} else if (data.delta?.type === 'input_json_delta' && typeof data.delta.partial_json === 'string') {
-									const idx = data.index ?? 0;
-									const block = anthropicToolBlocks.get(idx);
-									if (block) block.jsonBuffer += data.delta.partial_json;
-								}
-							}
-							// content_block_stop — if this block was a tool, parse + yield.
-							else if (data.type === 'content_block_stop') {
-								const idx = data.index ?? 0;
-								const block = anthropicToolBlocks.get(idx);
-								if (block) {
-									anthropicToolBlocks.delete(idx);
-									let args: Record<string, any> = {};
-									try {
-										args = block.jsonBuffer ? JSON.parse(block.jsonBuffer) : {};
-									} catch (e) {
-										console.warn('[streamNarrative] Failed to parse tool args:', block.jsonBuffer, e);
-									}
-									yield { content: '', toolCall: { name: block.name, arguments: args, id: block.id }, done: false };
-								}
-							}
-						} else {
-							// OpenAI stream: choices[0].delta. Text into prose, tool_calls into tool buffers.
-							const delta = data.choices?.[0]?.delta;
-							const finishReason = data.choices?.[0]?.finish_reason;
-
-							if (typeof delta?.content === 'string' && delta.content) {
-								fullContent += delta.content;
-								yield { content: delta.content, done: false };
-							}
-							// OpenRouter exposes reasoning as `delta.reasoning`; DeepSeek's
-							// native API uses `delta.reasoning_content`. Capture both — the
-							// latter is required for round-tripping into multi-round tool
-							// calls (DeepSeek thinking-mode rejects requests that drop it).
-							const reasoningDelta = (typeof delta?.reasoning_content === 'string' && delta.reasoning_content)
-								? delta.reasoning_content
-								: (typeof delta?.reasoning === 'string' && delta.reasoning ? delta.reasoning : '');
-							if (reasoningDelta) {
-								yield { content: '', reasoning: reasoningDelta, done: false };
-							}
-							if (Array.isArray(delta?.tool_calls)) {
-								for (const tc of delta.tool_calls) {
-									const idx = tc.index ?? 0;
-									let block = oaiToolCalls.get(idx);
-									if (!block) {
-										block = { name: tc.function?.name ?? '', jsonBuffer: '', id: tc.id };
-										oaiToolCalls.set(idx, block);
-									}
-									if (typeof tc.id === 'string' && tc.id) {
-										block.id = tc.id;
-									}
-									if (typeof tc.function?.name === 'string' && tc.function.name) {
-										block.name = tc.function.name;
-									}
-									if (typeof tc.function?.arguments === 'string') {
-										block.jsonBuffer += tc.function.arguments;
-									}
-								}
-							}
-
-							// On finish, flush all accumulated tool calls.
-							if (finishReason === 'tool_calls' || finishReason === 'stop') {
-								for (const block of oaiToolCalls.values()) {
-									if (!block.name) continue;
-									let args: Record<string, any> = {};
-									try {
-										args = block.jsonBuffer ? JSON.parse(block.jsonBuffer) : {};
-									} catch (e) {
-										console.warn('[streamNarrative] Failed to parse tool args:', block.jsonBuffer, e);
-									}
-									yield { content: '', toolCall: { name: block.name, arguments: args, id: block.id }, done: false };
-								}
-								oaiToolCalls.clear();
-							}
-						}
-					} catch {
-						// Skip malformed JSON lines
-					}
-				}
-			}
-		} finally {
-			reader.releaseLock();
-		}
-
-		// Flush any tool calls that weren't yielded because the provider didn't
-		// emit a terminating event. OpenAI: stream truncated before
-		// finish_reason. Anthropic: stream closed before content_block_stop on
-		// a tool_use block. Without this, tool-only responses look like empty
-		// responses to the caller.
-		if (useAnthropic) {
-			if (anthropicToolBlocks.size > 0) {
-				for (const block of anthropicToolBlocks.values()) {
-					if (!block.name) continue;
-					let args: Record<string, any> = {};
-					try {
-						args = block.jsonBuffer ? JSON.parse(block.jsonBuffer) : {};
-					} catch (e) {
-						console.warn('[streamNarrative] Failed to parse tool args at stream end:', block.jsonBuffer, e);
-					}
-					yield { content: '', toolCall: { name: block.name, arguments: args, id: block.id }, done: false };
-				}
-				anthropicToolBlocks.clear();
-			}
-		} else if (oaiToolCalls.size > 0) {
-			for (const block of oaiToolCalls.values()) {
-				if (!block.name) continue;
-				let args: Record<string, any> = {};
-				try {
-					args = block.jsonBuffer ? JSON.parse(block.jsonBuffer) : {};
-				} catch (e) {
-					console.warn('[streamNarrative] Failed to parse tool args at stream end:', block.jsonBuffer, e);
-				}
-				yield { content: '', toolCall: { name: block.name, arguments: args, id: block.id }, done: false };
-			}
-			oaiToolCalls.clear();
-		}
-
-		yield { content: '', done: true };
-	} catch (err) {
-		error = error || (err instanceof Error ? err.message : String(err));
-		throw err;
-	} finally {
-		const historyLength = options.messages?.reduce((sum, m) => sum + m.content.length, 0) ?? 0;
-		const fullSystem = options.systemDynamic
-			? `${options.system}\n\n${options.systemDynamic}`
-			: options.system;
-		addLogEntry({
-			id: uuid(),
-			timestamp: Date.now(),
-			service: (options as any)._service || 'narrative',
-			model,
-			system: fullSystem,
-			prompt: options.prompt,
-			conversationHistory: options.messages,
-			response: fullContent,
-			temperature,
-			maxTokens,
-			durationMs: Date.now() - startTime,
-			error,
-			tokenEstimate: Math.ceil((fullSystem.length + historyLength + options.prompt.length + fullContent.length) / 4),
-		});
-	}
-}
-
-/**
  * Generate a complete (non-streaming) response.
  * If options.model is set, uses that model. Otherwise falls back to getActiveModel().
  */
@@ -766,7 +351,7 @@ export async function generateNarrative(options: GenerateOptions): Promise<strin
 	const headers = useAnthropic ? buildAnthropicHeaders(profile) : buildAuthHeaders(profile);
 	let body: Record<string, any>;
 	if (useAnthropic) {
-		body = toAnthropicBody(options.system, messages, model, temperature, maxTokens, false);
+		body = toAnthropicBody(options.system, messages, model, temperature, maxTokens);
 	} else {
 		body = { model, messages, temperature, max_tokens: maxTokens };
 		// JSON output mode — required to get reliable JSON out of deepseek-reasoner
@@ -949,8 +534,8 @@ export async function generateStructuredWithTools(options: GenerateWithToolsOpti
 			response_format: { type: 'json_object' },
 		};
 	} else {
-		// OpenAI-compatible with tools. Mirror streamNarrative caching: send a
-		// multipart system message with cache_control on OpenRouter.
+		// OpenAI-compatible with tools: send a multipart system message with
+		// cache_control on OpenRouter.
 		const oaiMessages: Array<{ role: string; content: any }> = [
 			buildOAISystemMessage(profile, options.system, options.systemDynamic),
 		];
@@ -1082,260 +667,6 @@ export async function generateStructuredWithTools(options: GenerateWithToolsOpti
 			durationMs: Date.now() - startTime,
 			error,
 			tokenEstimate: Math.ceil((options.system.length + historyLength + options.prompt.length + responseText.length) / 4),
-		});
-	}
-}
-
-// ── Multi-round tool continuation ──
-
-export interface ToolRoundResult {
-	toolCallId: string | undefined;
-	toolName: string;
-	content: string;
-}
-
-export interface ContinueAfterToolsOptions extends GenerateOptions {
-	priorToolCalls: ToolCall[];
-	toolResults: ToolRoundResult[];
-	/**
-	 * DeepSeek thinking-mode requirement: when an assistant turn contained
-	 * tool_calls, every subsequent request must include the original
-	 * `reasoning_content` on that assistant message. Stripping it produces a
-	 * 400 "The reasoning_content in the thinking mode must be passed back".
-	 * https://api-docs.deepseek.com/guides/thinking_mode
-	 */
-	priorReasoningContent?: string;
-}
-
-/**
- * Continue a conversation after the model emitted tool_calls, following the
- * DeepSeek / OpenAI multi-round protocol:
- *
- *   user → assistant{tool_calls} → tool{tool_call_id, content} → assistant{prose}
- *
- * Anthropic equivalent uses content blocks (`tool_use`/`tool_result`).
- *
- * Used when the narrator returned tool calls without prose. Re-invokes the
- * model with the proper multi-round context so it can produce the final
- * narration consistent with the world updates it just applied.
- */
-export async function continueAfterTools(
-	options: ContinueAfterToolsOptions,
-	onChunk?: (delta: string, full: string) => void,
-): Promise<string> {
-	const { profile, baseUrl } = await getActiveProfile(options.profileId);
-	const model = options.model || await getActiveModel(options.profileId);
-	const temperature = options.temperature ?? 1.0;
-	const maxTokens = options.maxTokens ?? 4096;
-	const startTime = Date.now();
-	const useAnthropic = isAnthropicProvider(profile);
-	let fullContent = '';
-	let error: string | undefined;
-
-	const endpoint = useAnthropic
-		? `${baseUrl || '/api/anthropic'}/v1/messages`
-		: `${baseUrl}/chat/completions`;
-	const headers = useAnthropic ? buildAnthropicHeaders(profile) : buildAuthHeaders(profile);
-
-	let body: Record<string, any>;
-
-	if (useAnthropic) {
-		const priorMessages = options.messages ?? [];
-		const messages: Array<{ role: string; content: any }> = [];
-		for (const msg of priorMessages) messages.push({ role: msg.role, content: msg.content });
-		messages.push({ role: 'user', content: options.prompt });
-		messages.push({
-			role: 'assistant',
-			content: options.priorToolCalls.map(tc => ({
-				type: 'tool_use',
-				id: tc.id ?? `synth_${Math.random().toString(36).slice(2, 10)}`,
-				name: tc.name,
-				input: tc.arguments,
-			})),
-		});
-		messages.push({
-			role: 'user',
-			content: options.toolResults.map(tr => ({
-				type: 'tool_result',
-				tool_use_id: tr.toolCallId ?? '',
-				content: tr.content,
-			})),
-		});
-
-		const useSplitSystem = !!(options.systemDynamic && options.systemDynamic.length > 0 && options.system.length > 0);
-		const system = useSplitSystem
-			? [
-				{ type: 'text', text: options.system, cache_control: { type: 'ephemeral' } },
-				{ type: 'text', text: options.systemDynamic },
-			]
-			: (options.systemDynamic ? `${options.system}\n\n${options.systemDynamic}` : options.system);
-
-		body = {
-			model,
-			system,
-			messages,
-			max_tokens: maxTokens,
-			temperature,
-			stream: true,
-		};
-	} else {
-		// OpenAI/DeepSeek: assistant message with tool_calls + one tool message
-		// per call. DeepSeek requires `tool_call_id` to match the assistant id;
-		// when the upstream stream didn't surface an id (synthesized from inline
-		// parsers, cc-bridge, etc.) we fabricate stable ones.
-		const fabricatedIds = new Map<ToolCall, string>();
-		const idFor = (tc: ToolCall, i: number): string => {
-			if (tc.id) return tc.id;
-			let id = fabricatedIds.get(tc);
-			if (!id) {
-				id = `call_${i}_${Math.random().toString(36).slice(2, 10)}`;
-				fabricatedIds.set(tc, id);
-			}
-			return id;
-		};
-
-		const oaiMessages: Array<{ role: string; content: any; tool_calls?: any[]; tool_call_id?: string; reasoning_content?: string }> = [
-			buildOAISystemMessage(profile, options.system, options.systemDynamic),
-		];
-		const priorMessages = options.messages ?? [];
-		for (const msg of priorMessages) oaiMessages.push({ role: msg.role, content: msg.content });
-		oaiMessages.push({ role: 'user', content: options.prompt });
-		// OpenAI/DeepSeek convention: when an assistant turn carries `tool_calls`,
-		// `content` should be `null` (not `""`). Strict-validating gateways
-		// (DeepSeek's thinking mode being one) reject empty-string content here.
-		const assistantMsg: { role: string; content: any; tool_calls: any[]; reasoning_content?: string } = {
-			role: 'assistant',
-			content: null,
-			tool_calls: options.priorToolCalls.map((tc, i) => ({
-				id: idFor(tc, i),
-				type: 'function',
-				function: {
-					name: tc.name,
-					arguments: JSON.stringify(tc.arguments ?? {}),
-				},
-			})),
-		};
-		// DeepSeek thinking-mode round-trip: every assistant turn that carries
-		// tool_calls MUST include a non-empty `reasoning_content` string, or the
-		// API rejects the entire request with 400 "The reasoning_content in the
-		// thinking mode must be passed back to the API". Detection covers
-		// OpenRouter / aggregators that route to a deepseek-* model name too.
-		// https://api-docs.deepseek.com/guides/thinking_mode
-		if (isDeepSeekProvider(profile, model)) {
-			const captured = options.priorReasoningContent?.trim();
-			if (captured) {
-				assistantMsg.reasoning_content = captured;
-			} else {
-				// Fallback: streaming parser didn't surface reasoning_content
-				// (provider hiccup, non-thinking model, cc-bridge stripped it).
-				// A non-empty placeholder is still accepted by DeepSeek and is
-				// strictly better than the request 400-ing.
-				console.warn(
-					'[continueAfterTools] DeepSeek tool-call round-trip is missing captured reasoning_content; sending placeholder so the request does not 400.',
-				);
-				assistantMsg.reasoning_content =
-					'(Reasoning trace was not captured upstream; tool calls were applied verbatim.)';
-			}
-		}
-		oaiMessages.push(assistantMsg);
-		for (let i = 0; i < options.priorToolCalls.length; i++) {
-			const call = options.priorToolCalls[i];
-			const result = options.toolResults.find(r =>
-				(r.toolCallId && r.toolCallId === call.id) || r.toolName === call.name
-			) ?? options.toolResults[i];
-			oaiMessages.push({
-				role: 'tool',
-				tool_call_id: idFor(call, i),
-				content: result?.content ?? JSON.stringify({ ok: true }),
-			});
-		}
-
-		body = { model, messages: oaiMessages, stream: true, temperature, max_tokens: maxTokens };
-		if (profile.providerType === 'openrouter') {
-			body.usage = { include: true };
-		}
-	}
-
-	try {
-		const response = await fetch(endpoint, {
-			method: 'POST',
-			headers,
-			body: JSON.stringify(body),
-			signal: options.signal,
-		});
-
-		if (!response.ok) {
-			const errorText = await response.text().catch(() => 'Unknown error');
-			error = `HTTP ${response.status}: ${errorText}`;
-			throw new Error(`AI request failed (${response.status}): ${errorText}`);
-		}
-
-		const reader = response.body?.getReader();
-		if (!reader) throw new Error('No response body');
-
-		const decoder = new TextDecoder();
-		let buffer = '';
-
-		try {
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				buffer += decoder.decode(value, { stream: true });
-				const lines = buffer.split('\n');
-				buffer = lines.pop() ?? '';
-				for (const line of lines) {
-					const trimmed = line.trim();
-					if (!trimmed || trimmed === 'data: [DONE]') continue;
-					if (trimmed === 'event: message_stop') continue;
-					if (!trimmed.startsWith('data: ')) continue;
-					try {
-						const data = JSON.parse(trimmed.slice(6));
-						if (useAnthropic) {
-							if (data.type === 'content_block_delta'
-								&& data.delta?.type === 'text_delta'
-								&& typeof data.delta.text === 'string') {
-								fullContent += data.delta.text;
-								onChunk?.(data.delta.text, fullContent);
-							}
-						} else {
-							const delta = data.choices?.[0]?.delta;
-							if (typeof delta?.content === 'string' && delta.content) {
-								fullContent += delta.content;
-								onChunk?.(delta.content, fullContent);
-							}
-						}
-					} catch {
-						// skip malformed
-					}
-				}
-			}
-		} finally {
-			reader.releaseLock();
-		}
-
-		return fullContent;
-	} catch (err) {
-		error = error || (err instanceof Error ? err.message : String(err));
-		throw err;
-	} finally {
-		const historyLength = options.messages?.reduce((sum, m) => sum + m.content.length, 0) ?? 0;
-		const fullSystem = options.systemDynamic
-			? `${options.system}\n\n${options.systemDynamic}`
-			: options.system;
-		addLogEntry({
-			id: uuid(),
-			timestamp: Date.now(),
-			service: (options as any)._service || 'narrative-continuation',
-			model,
-			system: fullSystem,
-			prompt: `${options.prompt}\n[continuation after ${options.priorToolCalls.length} tool call(s)]`,
-			conversationHistory: options.messages,
-			response: fullContent,
-			temperature,
-			maxTokens,
-			durationMs: Date.now() - startTime,
-			error,
-			tokenEstimate: Math.ceil((fullSystem.length + historyLength + options.prompt.length + fullContent.length) / 4),
 		});
 	}
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMtheriosSummaryInstruction, extractMtheriosSummarySection, formatMtheriosMemorySummary, replaceMtheriosStoryNarrative, summarizeMtheriosMemoryForContext, summarizeMtheriosMemoryForRollup } from './mtheriosSummaryFormat';
+import { extractMtheriosSummarySection, formatMtheriosMemorySummary, replaceMtheriosStoryNarrative, summarizeMtheriosMemoryForContext, summarizeMtheriosMemoryForRollup } from './mtheriosSummaryFormat';
 
 describe('mtherios summary format', () => {
 	it('renders the continuity memory summary contract with entity ids', () => {
@@ -53,19 +53,6 @@ describe('mtherios summary format', () => {
 		expect(summary).toContain('- The jade comb is still important.');
 		expect(summary).not.toContain('- - Aurion');
 		expect(summary).not.toContain('- * Serala');
-	});
-
-	it('tells LLM summarizers to use the same summary string shape', () => {
-		const instruction = buildMtheriosSummaryInstruction('chapter');
-
-		expect(instruction).toContain('MTHERIOS CHAPTER SUMMARY FORMAT');
-		expect(instruction).toContain('[CHECKPOINT =');
-		expect(instruction).toContain('[RECENT STORY STATE =');
-		expect(instruction).toContain('[CHARACTER STATE =');
-		expect(instruction).toContain('Character Name [entity_id]');
-		expect(instruction).toContain('Preserve entity ids');
-		expect(instruction).toContain('Time passed in this chapter:');
-		expect(instruction).toContain('entire covered source window in chronological order');
 	});
 
 	it('rolls older bracketed summaries forward without source coverage noise', () => {

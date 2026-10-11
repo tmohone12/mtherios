@@ -1,46 +1,38 @@
 <script lang="ts">
-	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, BookOpen, Square, Loader2, Target, X, ChevronDown, WifiOff } from 'lucide-svelte';
-	import { onDestroy, onMount } from 'svelte';
+	import { Send, Wand2, MessageSquare, Brain, Sparkles, PenLine, BookOpen, Square, Loader2, Target, X, ChevronDown, WifiOff, Upload } from 'lucide-svelte';
+	import { onMount } from 'svelte';
 	import { story } from '$lib/stores/story.svelte';
 	import { settings } from '$lib/stores/settings.svelte';
-	import { streamNarrative, continueAfterTools, type ToolCall, type ToolRoundResult } from '$lib/services/ai/sdk/generate';
-	import { executeWorldUpdate } from '$lib/services/ai/tools/generate-with-tools';
-	import { executeToolCall } from '$lib/services/ai/tools/executor';
-	import { extractInlineToolCalls } from '$lib/services/ai/tools/inline-extractor';
-	import { GM_TOOLS } from '$lib/services/ai/tools/schemas';
 	import { declarePlayerScheme } from '$lib/services/ai/scheme/SchemeService';
-	import { runBackgroundJobs } from '$lib/services/ai/background/runner';
 	import { fetchBackendEntriesAround, isTerminalReachabilityError, previewBackendTurn } from '$lib/services/backendMemory';
 	import { cancelBackendAgentRun, completedBackendAgentTurn, currentBackendAgentRun, getBackendAgentRun, openBackendAgentRunStream, readBackendAgentSource, readBackendDiceRoll, respondBackendAgentRun, startBackendAgentRun, visibleRollPortrait, type BackendAgentActivity, type BackendAgentRun, type BackendAgentInteraction, type BackendAgentSource } from '$lib/services/backendAgentRuns';
 	import type { TurnPreviewResponse } from '$lib/contracts/memory';
 	import { buildBackendClientContext as buildBackendClientContextHint } from '$lib/services/backendClientContext';
-	import { parseRollCommand, rollDice, rollCheck, parseRollMarker, encodeDiceMarker, formatRollText } from '$lib/utils/dice';
-	import { resolveAbilityCheckNotation } from '$lib/utils/playerSheet';
+	import { parseRollCommand, rollDice, formatRollText } from '$lib/utils/dice';
 	import { imageUsageCostLabel } from '$lib/utils/imageUsage';
 	import { deleteSetting, getSetting, setSetting } from '$lib/services/database';
 	import { shouldUseTerminalEngineTurn } from './engineTurnRouting';
 	import DiceRollCard from './DiceRollCard.svelte';
 	import ResearchEvidenceCard from './ResearchEvidenceCard.svelte';
-	import { renderParallelPovDirective } from '$lib/services/ai/context/parallelPov';
-	import { buildActionContent, decodeActionDraft, encodeActionDraft, turnActionTypeForInput, type ActionType } from './actionInput';
+	import { buildActionContent, decodeActionDraft, encodeActionDraft, failedDraftRestoreTarget, startServerTurn, turnActionTypeForInput, type ActionType } from './actionInput';
 
 	type InjectedInput = string | { text: string; actionType?: ActionType };
 
 	interface Props {
-		onStreamStart?: () => void;
-		onStreamChunk?: (text: string) => void;
-		onStreamEnd?: (fullText: string) => void;
-		onStreamClear?: () => void;
+		/** A turn request is being sent to the server. */
+		onTurnStart?: () => void;
+		/** A turn finished with its narration, or stopped without one (''). */
+		onTurnEnd?: (narration: string) => void;
+		/** Discard any pending-turn display. */
+		onTurnClear?: () => void;
 	}
 
-	let { onStreamStart, onStreamChunk, onStreamEnd, onStreamClear }: Props = $props();
+	let { onTurnStart, onTurnEnd, onTurnClear }: Props = $props();
 
 	let inputValue = $state('');
 	let inputElement = $state<HTMLTextAreaElement | null>(null);
 	let actionType = $state<ActionType>('do');
-	let isGenerating = $state(false);
-	let abortController = $state<AbortController | null>(null);
-	let activeGenerationStoryId = $state('');
+	let startingTurn = $state(false);
 	let turnError = $state<string | null>(null);
 	let agentRun = $state<BackendAgentRun | null>(null);
 	let agentBusy = $state(false);
@@ -48,11 +40,17 @@
 	let customAnswer = $state('');
 	let agentLoadVersion = 0;
 	let hydratedAgentRunId = '';
+	/** A run started or answered here; its completion runs the post-turn suggestions and images. */
+	let followedAgentRunId = '';
+	/** The move behind a run started here, returned to the composer if the run ends without a turn. */
+	let pendingSubmission: { runId: string; storyId: string; revision: number; text: string; actionType: ActionType } | null = null;
 	let inspectedAgentSource = $state<{ source: BackendAgentSource; text: string } | null>(null);
 	let modeSheetOpen = $state(false);
 	let modeSheetDialog = $state<HTMLElement | null>(null);
 	let modeSheetTrigger = $state<HTMLButtonElement | null>(null);
 	let online = $state(true);
+	let importingStory = $state(false);
+	let importError = $state<string | null>(null);
 	let preview = $state<TurnPreviewResponse | null>(null);
 	let previewLoading = $state(false);
 	let previewError = $state<string | null>(null);
@@ -75,8 +73,10 @@
 	let draftEdited = false;
 	let draftRevision = 0;
 	const draftStoryId = $derived(story.currentStory?.id ?? '');
-	const backendStoryId = $derived(story.currentStory?.serverStoryId ?? '');
 	const backendTurnEnabled = $derived(shouldUseTerminalEngineTurn(story.currentStory));
+	const backendStoryId = $derived(backendTurnEnabled ? story.currentStory?.serverStoryId?.trim() ?? '' : '');
+	/** A browser-only save: readable and exportable, but play continues only after import. */
+	const localOnlyStory = $derived(Boolean(story.currentStory) && !backendTurnEnabled);
 
 	function draftKey(storyId: string): string {
 		return `narratorDraft:${storyId}`;
@@ -87,9 +87,6 @@
 			contextBudget: settings.contextBudget,
 			recentDialogueTurns: settings.uiSettings.recentDialogueTurns,
 			memoryTokenBudget: settings.uiSettings.backendMemoryTokenBudget,
-			chapterThreshold: settings.uiSettings.chapterThreshold,
-			postChapterBuffer: settings.uiSettings.postChapterBuffer,
-			chaptersPerArc: settings.uiSettings.chaptersPerArc,
 		});
 	}
 
@@ -128,10 +125,22 @@
 		if (inputValue) setInputDraft(inputValue);
 	}
 
-	function restoreSubmittedDraft(storyId: string, revision: number, text: string, type: ActionType): void {
-		if (draftStoryId !== storyId || draftRevision !== revision) return;
-		actionType = type;
-		setInputDraft(text);
+	async function restoreSubmittedDraft(storyId: string, revision: number, text: string, type: ActionType): Promise<void> {
+		const stored = draftStoryId === storyId ? null : await getSetting(draftKey(storyId)).catch(() => null);
+		const target = failedDraftRestoreTarget({
+			submittedStoryId: storyId,
+			submittedRevision: revision,
+			currentStoryId: draftStoryId,
+			currentRevision: draftRevision,
+			storedDraftForSubmittedStory: stored,
+		});
+		if (target === 'composer') {
+			actionType = type;
+			setInputDraft(text);
+		} else if (target === 'storage') {
+			await setSetting(draftKey(storyId), encodeActionDraft({ text, actionType: type }))
+				.catch(error => console.warn('[ActionInput] Failed to restore draft:', error));
+		}
 	}
 
 	function handleDraftInput(event: Event): void {
@@ -145,6 +154,7 @@
 		draftEdited = false;
 		inputValue = '';
 		actionType = 'do';
+		importError = null;
 		if (!storyId) return;
 		getSetting(draftKey(storyId)).then(value => {
 			if (loadVersion === draftLoadVersion && !draftEdited) {
@@ -156,19 +166,12 @@
 	});
 
 	$effect(() => {
-		if (isGenerating && activeGenerationStoryId && draftStoryId !== activeGenerationStoryId) {
-			abortController?.abort();
-		}
-	});
-
-	$effect(() => {
 		const serverStoryId = backendStoryId;
 		const localStoryId = draftStoryId;
-		const useBackend = backendTurnEnabled;
 		const version = ++agentLoadVersion;
 		agentRun = null;
 		inspectedAgentSource = null;
-		if (!serverStoryId || !localStoryId || !useBackend) return;
+		if (!serverStoryId || !localStoryId) return;
 		agentRestoring = true;
 		void (async () => {
 			try {
@@ -184,8 +187,6 @@
 			}
 		})();
 	});
-
-	onDestroy(() => abortController?.abort());
 
 	// ── Player scheme declaration (Declare Plan modal) ──
 	let showPlanModal = $state(false);
@@ -210,34 +211,15 @@
 	});
 
 	const isCreativeMode = $derived(story.storyMode === 'creative-writing');
-	const isAdventure = $derived(story.storyMode === 'adventure');
 
-	function getNarrativeRequestConfig() {
-		const config = settings.getServiceConfig('narrative');
-		return {
-			model: config.model || undefined,
-			temperature: config.temperature,
-			maxTokens: config.maxTokens,
-			profileId: config.profileId || undefined,
-		};
-	}
-
-	function narrativeSupportsInlineTools(): boolean {
-		return settings.getServiceProfile('narrative')?.providerType === 'anthropic';
-	}
-
-	function shouldUseBackendTurn(): boolean {
-		return shouldUseTerminalEngineTurn(story.currentStory);
-	}
-
-	const terminalRuntimeUnavailable = $derived(Boolean(
-		story.currentStory?.serverStoryId &&
-		story.currentStory.syncStatus === 'offline' &&
+	const storyServerUnavailable = $derived(Boolean(
+		backendTurnEnabled &&
+		story.currentStory?.syncStatus === 'offline' &&
 		!story.engineStreamStatus.connected,
 	));
-	const sendBlocked = $derived(!online || story.hydratingWorld || terminalRuntimeUnavailable || agentRestoring || agentBusy || (agentRun !== null && ['running', 'awaiting_input', 'committing'].includes(agentRun.status)));
+	const sendBlocked = $derived(!online || localOnlyStory || importingStory || story.hydratingWorld || storyServerUnavailable || agentRestoring || agentBusy || (agentRun !== null && ['running', 'awaiting_input', 'committing'].includes(agentRun.status)));
 	const activeAgentRun = $derived(agentRun !== null && ['running', 'awaiting_input', 'committing'].includes(agentRun.status));
-	const startingAgentRun = $derived(isGenerating && backendTurnEnabled && !activeAgentRun);
+	const startingAgentRun = $derived(startingTurn && !activeAgentRun);
 	const pendingInteraction = $derived(agentRun?.interactions.find(interaction => interaction.status === 'pending'));
 	const turnStatusTitle = $derived(agentRestoring ? 'Restoring your turn' : startingAgentRun ? 'Starting your turn' : agentRun ? {
 		running: 'The Game Master is at work',
@@ -267,13 +249,21 @@
 				await story.applyBackendTurnResponse(turn, localStoryId);
 			}
 			localStorage.removeItem(`mythengine:agent-run:${snapshot.gameId}`);
-			if (isGenerating || agentBusy) {
-				onStreamClear?.();
-				onStreamEnd?.(turn.narration);
+			if (pendingSubmission?.runId === snapshot.id) pendingSubmission = null;
+			if (followedAgentRunId === snapshot.id) {
+				followedAgentRunId = '';
+				onTurnClear?.();
+				onTurnEnd?.(turn.narration);
 			}
 		} else if (snapshot.status === 'failed' || snapshot.status === 'cancelled') {
 			localStorage.removeItem(`mythengine:agent-run:${snapshot.gameId}`);
+			if (followedAgentRunId === snapshot.id) followedAgentRunId = '';
 			turnError = snapshot.error ?? `Turn ${snapshot.status}.`;
+			const submission = pendingSubmission?.runId === snapshot.id ? pendingSubmission : null;
+			if (submission) {
+				pendingSubmission = null;
+				await restoreSubmittedDraft(submission.storyId, submission.revision, submission.text, submission.actionType);
+			}
 		}
 	}
 
@@ -346,14 +336,15 @@
 		if (!current || agentBusy || interaction.status !== 'pending') return;
 		agentBusy = true;
 		turnError = null;
-		onStreamStart?.();
+		followedAgentRunId = current.id;
+		onTurnStart?.();
 		try {
 			const next = await respondBackendAgentRun(current.gameId, current.id, interaction.id, interaction.revision, response);
 			await acceptAgentRun(next, draftStoryId);
-			if (!completedBackendAgentTurn(next)) onStreamEnd?.('');
+			if (!completedBackendAgentTurn(next)) onTurnEnd?.('');
 			customAnswer = '';
 		} catch (error) {
-			onStreamEnd?.('');
+			onTurnEnd?.('');
 			turnError = error instanceof Error ? error.message : String(error);
 			await getBackendAgentRun(current.gameId, current.id).then(value => acceptAgentRun(value, draftStoryId)).catch(() => {});
 		} finally {
@@ -379,6 +370,20 @@
 		};
 	});
 
+	async function importLocalStory(): Promise<void> {
+		if (importingStory || !story.currentStory) return;
+		importingStory = true;
+		importError = null;
+		try {
+			// The draft is saved under the local story ID, which the import keeps.
+			await story.importCurrentStoryToServer();
+		} catch (error) {
+			importError = error instanceof Error ? error.message : String(error);
+		} finally {
+			importingStory = false;
+		}
+	}
+
 	function buildBackendClientContext(currentActionText: string) {
 		return buildBackendClientContextHint({
 			characters: story.characters,
@@ -389,9 +394,6 @@
 			backendMemoryTokenBudget: settings.uiSettings.backendMemoryTokenBudget,
 			contextBudget: settings.contextBudget,
 			recentDialogueTurns: settings.uiSettings.recentDialogueTurns,
-			chapterThreshold: settings.uiSettings.chapterThreshold,
-			postChapterBuffer: settings.uiSettings.postChapterBuffer,
-			chaptersPerArc: settings.uiSettings.chaptersPerArc,
 		});
 	}
 
@@ -405,7 +407,7 @@
 
 	async function previewNextTurn(): Promise<void> {
 		const currentStory = story.currentStory;
-		const serverStoryId = currentStory?.serverStoryId;
+		const serverStoryId = backendStoryId;
 		if (!inputValue.trim() || previewLoading || !serverStoryId || sendBlocked || !currentStory) return;
 		const requestId = ++previewRequestId;
 		const rawInput = inputValue.trim();
@@ -438,12 +440,12 @@
 	}
 
 	async function openEvidence(position: number | null): Promise<void> {
-		if (position == null || !story.currentStory?.serverStoryId) return;
+		if (position == null || !backendStoryId) return;
 		evidencePosition = position;
 		evidenceLoading = true;
 		evidenceError = null;
 		try {
-			evidenceEntries = (await fetchBackendEntriesAround(story.currentStory.serverStoryId, position, 2)).entries;
+			evidenceEntries = (await fetchBackendEntriesAround(backendStoryId, position, 2)).entries;
 		} catch (error) {
 			evidenceEntries = [];
 			evidenceError = error instanceof Error ? error.message : String(error);
@@ -500,86 +502,16 @@
 	const protagonistName = $derived(story.protagonist?.name ?? 'The protagonist');
 	const pov = $derived(story.pov);
 
-	/**
-	 * Handle player /roll command — standalone dice roll, no AI generation.
-	 */
+	/** Player /roll command — a standalone dice roll saved as a system entry, no narration. */
 	async function handlePlayerRoll(rawInput: string): Promise<boolean> {
 		const notation = parseRollCommand(rawInput);
 		if (!notation) return false;
-
-		const result = rollDice(notation);
-		const rollText = formatRollText(result);
-		await story.addEntry('system', `Roll: ${rollText}`);
-		onStreamStart?.();
-		onStreamEnd?.('');
+		await story.addEntry('system', `Roll: ${formatRollText(rollDice(notation))}`);
 		return true;
 	}
 
-	/**
-	 * After AI narrative streams, check for roll markers.
-	 * If found: execute the roll, embed the result, and stream a continuation.
-	 */
-	async function handleAIRollContinuation(
-		fullResponse: string,
-		systemStable: string,
-		systemDynamic: string,
-		conversationHistory: { role: 'user' | 'assistant'; content: string }[],
-	): Promise<string> {
-		const { preText, marker } = parseRollMarker(fullResponse);
-		if (!marker) return fullResponse;
-
-		// Execute the roll
-		const playerSheet = story.protagonist?.metadata?.playerSheet;
-		const notation = playerSheet && typeof playerSheet === 'object'
-			? resolveAbilityCheckNotation(marker.notation, marker.ability, playerSheet)
-			: marker.notation;
-		const result = rollCheck(notation, marker.dc, marker.ability, marker.description);
-		const diceMarker = encodeDiceMarker(result);
-
-		// Build the narrative so far with the dice result embedded
-		let combined = preText + '\n\n' + diceMarker + '\n\n';
-		onStreamChunk?.(combined);
-
-		// Build the continuation prompt with roll outcome
-		const critLabel = result.critical === 'success' ? ' (NATURAL 20 — CRITICAL SUCCESS!)' :
-			result.critical === 'failure' ? ' (NATURAL 1 — CRITICAL FAILURE!)' : '';
-		const outcomeLabel = result.success ? 'SUCCESS' : 'FAILURE';
-		const rollSummary = `[Roll Result: ${marker.ability} Check — ${result.notation} = ${result.total} (natural ${result.natural}) vs DC ${marker.dc} — ${outcomeLabel}${critLabel}]`;
-
-		// Continue generation with roll result as context
-		const continuationPrompt = `${rollSummary}\n\nContinue narrating the outcome. Do NOT repeat the turn header or include another roll marker.`;
-		const continuationMessages = [
-			...conversationHistory,
-			{ role: 'assistant' as const, content: preText },
-		];
-		const narrativeConfig = getNarrativeRequestConfig();
-
-		const continuationStream = streamNarrative({
-			system: systemStable,
-			systemDynamic,
-			prompt: continuationPrompt,
-			messages: continuationMessages,
-			model: narrativeConfig.model,
-			temperature: narrativeConfig.temperature,
-			maxTokens: narrativeConfig.maxTokens,
-			profileId: narrativeConfig.profileId,
-			signal: abortController?.signal,
-			_service: 'narrative',
-		} as any);
-
-		for await (const chunk of continuationStream) {
-			if (chunk.done) break;
-			if (chunk.content) {
-				combined += chunk.content;
-				onStreamChunk?.(combined);
-			}
-		}
-
-		return combined;
-	}
-
 	async function handleSubmit() {
-		if (!inputValue.trim() || isGenerating || !story.currentStory || sendBlocked) return;
+		if (!inputValue.trim() || startingTurn || !story.currentStory || sendBlocked) return;
 
 		const submittedInput = inputValue;
 		const submittedActionType = actionType;
@@ -588,13 +520,16 @@
 		const submittedStoryId = draftStoryId;
 		setInputDraft('');
 		const submittedDraftRevision = draftRevision;
+		const restoreDraft = () => restoreSubmittedDraft(submittedStoryId, submittedDraftRevision, submittedInput, submittedActionType);
 
-		// Check for /roll command first
-		if (rawInput.match(/^\/roll\s/i)) {
+		if (/^\/roll\s/i.test(rawInput)) {
 			try {
-				await handlePlayerRoll(rawInput);
+				if (!await handlePlayerRoll(rawInput)) {
+					await restoreDraft();
+					turnError = 'Use /roll with dice notation, such as /roll 2d6+1.';
+				}
 			} catch (error) {
-				restoreSubmittedDraft(submittedStoryId, submittedDraftRevision, submittedInput, submittedActionType);
+				await restoreDraft();
 				turnError = error instanceof Error ? error.message : String(error);
 			}
 			return;
@@ -603,340 +538,76 @@
 		// /plan <free text> — declare a player scheme inline (no narrator turn).
 		const planMatch = rawInput.match(/^\/plan\s+([\s\S]+)$/i);
 		if (planMatch) {
-			const text = planMatch[1].trim();
-			await submitPlayerPlan(text);
+			if (!await submitPlayerPlan(planMatch[1].trim())) {
+				await restoreDraft();
+				if (draftStoryId === submittedStoryId) turnError = `Plan not declared: ${planError ?? 'try again.'}`;
+			}
 			return;
 		}
 
-		let content: string;
-		if (turnActionTypeForInput(rawInput, submittedActionType) === 'ooc') {
-			content = rawInput;
-		} else {
-			content = buildSubmittedContent(rawInput, submittedActionType);
-		}
-
-		if (shouldUseBackendTurn()) {
-			const handled = await submitBackendAuthoritativeTurn(content, submittedInput, submittedActionType);
-			if (handled) return;
-		}
-
-		// Add user action entry
-		try {
-			await story.addEntry('user_action', content, undefined, submittedStoryId);
-		} catch (error) {
-			if (draftStoryId !== submittedStoryId) return;
-			restoreSubmittedDraft(submittedStoryId, submittedDraftRevision, submittedInput, submittedActionType);
-			turnError = `Could not send message: ${error instanceof Error ? error.message : String(error)}`;
-			return;
-		}
-		if (draftStoryId !== submittedStoryId) return;
-
-		// Generate response
-		activeGenerationStoryId = submittedStoryId;
-		isGenerating = true;
-		abortController = new AbortController();
-
-		let fullResponse = '';
-
-		try {
-			// ── Provider-aware path selection ──
-			// Inline tool calls only work reliably on Anthropic native. OpenAI-compat
-			// providers (OpenRouter, Kimi, etc.) — especially smaller open-source
-			// models — frequently emit tool calls without prose, dropping the turn.
-			// They also don't honor cache_control, so the larger tool-attached
-			// prompt is pure overhead. Fall back to the post-stream classifier.
-			const narrativeConfig = getNarrativeRequestConfig();
-			const useInlineTools = isAdventure
-				&& narrativeSupportsInlineTools();
-
-			// ── Build orchestrator context: structured state snapshot + classifier-facing string ──
-			const stateSnapshot = await story.buildStateSnapshot(content);
-
-			const { stable: systemStable, dynamic } = story.buildOrchestratorSystemBlocks(stateSnapshot, { useInlineTools });
-			const parallelPovDirective = renderParallelPovDirective(content);
-			const systemDynamic = [dynamic, parallelPovDirective].filter(Boolean).join('\n\n');
-			const snapshotText = story.serializeSnapshotForClassifier(stateSnapshot);
-			const allHistory = story.buildConversationMessages();
-			const conversationHistory = allHistory.length > 0 && allHistory[allHistory.length - 1].role === 'user'
-				? allHistory.slice(0, -1)
-				: allHistory;
-			const userPrompt = story.buildUserPrompt(content);
-
-			const estimateTokens = (t: string) => Math.ceil(t.length / 4);
-			const historyTokens = conversationHistory.reduce((s, m) => s + estimateTokens(m.content), 0);
-			const promptUsage = story.lastPromptSectionUsage ?? {};
-			story.lastTierUsage = {
-				snapshot: estimateTokens(snapshotText),
-				scene: (promptUsage.characters ?? 0) + (promptUsage.playerReputation ?? 0),
-				recent: (promptUsage.arcs ?? 0) + (promptUsage.chapters ?? 0) + (promptUsage.chapterIntro ?? 0),
-				world: (promptUsage.factions ?? 0) + (promptUsage.livingWorld ?? 0) + (promptUsage.schemes ?? 0) + (promptUsage.plotMomentum ?? 0) + (promptUsage.plotLedger ?? 0),
-				retrieved: (promptUsage.lore ?? 0) + (promptUsage.episodicMemory ?? 0) + (promptUsage.conversationMemory ?? 0) + (promptUsage.backendMemory ?? 0),
-			};
-			story.lastContextTotal = estimateTokens(systemStable) + estimateTokens(systemDynamic) + historyTokens + estimateTokens(userPrompt);
-
-			onStreamStart?.();
-
-			// Inline tool calls: the narrator emits prose AND world-state updates in
-			// one streamed response. Falls back to the separate classifier call only
-			// when the model didn't call any tools (older models / cautious settings).
-			const inlineToolCalls: ToolCall[] = [];
-			let inlineReasoning = '';
-
-			const stream = streamNarrative({
-				system: systemStable,
-				systemDynamic,
-				prompt: userPrompt,
-				messages: conversationHistory,
-				model: narrativeConfig.model,
-				temperature: narrativeConfig.temperature,
-				maxTokens: narrativeConfig.maxTokens,
-				profileId: narrativeConfig.profileId,
-				signal: abortController.signal,
-				tools: useInlineTools ? GM_TOOLS : undefined,
-				_service: 'narrative',
-			} as any);
-
-			for await (const chunk of stream) {
-				if (chunk.done) break;
-				if (chunk.content) {
-					fullResponse += chunk.content;
-					onStreamChunk?.(fullResponse);
-				}
-				if (chunk.toolCall) {
-					inlineToolCalls.push(chunk.toolCall);
-				}
-				if (chunk.reasoning) {
-					inlineReasoning += chunk.reasoning;
-				}
-			}
-
-			// cc-bridge fallback: if the model emitted tool calls as text inside
-			// the prose (Claude Code wire format), recover them and clean the
-			// visible narration.
-			if (inlineToolCalls.length === 0 && fullResponse) {
-				const { cleaned, toolCalls } = extractInlineToolCalls(fullResponse);
-				if (toolCalls.length > 0) {
-					fullResponse = cleaned;
-					inlineToolCalls.push(...toolCalls);
-					onStreamChunk?.(fullResponse);
-				}
-			}
-
-			// DeepSeek (and a few other OpenAI-compatible models) sometimes
-			// emit tool calls without any accompanying prose. Apply the tool
-			// calls, then continue the conversation per the DeepSeek/OpenAI
-			// multi-round protocol: append the assistant tool_calls + a tool
-			// result message for each one, and let the model produce the
-			// final narration in-context.
-			//
-			// https://api-docs.deepseek.com/guides/tool_calls
-			if (draftStoryId !== submittedStoryId || abortController?.signal.aborted) {
-				throw new DOMException('Story changed during generation.', 'AbortError');
-			}
-			let toolCallsApplied = false;
-			if (!fullResponse.trim() && inlineToolCalls.length > 0) {
-				console.warn('[Orchestrator] tool-only response — applying tools and continuing per DeepSeek multi-round flow');
-				const toolResults: ToolRoundResult[] = [];
-				for (const tc of inlineToolCalls) {
-					if (draftStoryId !== submittedStoryId || abortController?.signal.aborted) {
-						throw new DOMException('Story changed during generation.', 'AbortError');
-					}
-					let resultText = JSON.stringify({ ok: true });
-					try {
-						const out = await executeToolCall(tc.name, tc.arguments);
-						if (typeof out === 'string' && out) resultText = out;
-					} catch (e) {
-						console.error(`[Orchestrator] retry-apply ${tc.name} failed:`, e);
-						resultText = JSON.stringify({ error: e instanceof Error ? e.message : String(e) });
-					}
-					toolResults.push({ toolCallId: tc.id, toolName: tc.name, content: resultText });
-				}
-				toolCallsApplied = true;
-
-				// State changed; rebuild the snapshot so the model's final
-				// narration sees the freshly-applied world updates.
-				const retrySnapshot = await story.buildStateSnapshot(content);
-				const { stable: retryStable, dynamic: retryDynamicBase } = story.buildOrchestratorSystemBlocks(retrySnapshot);
-				const retryDynamic = [retryDynamicBase, parallelPovDirective].filter(Boolean).join('\n\n');
-
-				try {
-					await continueAfterTools(
-						{
-							system: retryStable,
-							systemDynamic: retryDynamic,
-							prompt: userPrompt,
-							messages: conversationHistory,
-							model: narrativeConfig.model,
-							temperature: narrativeConfig.temperature,
-							maxTokens: narrativeConfig.maxTokens,
-							profileId: narrativeConfig.profileId,
-							signal: abortController.signal,
-							priorToolCalls: inlineToolCalls,
-							toolResults,
-							priorReasoningContent: inlineReasoning,
-							_service: 'narrative-continuation',
-						} as any,
-						(_delta, full) => {
-							fullResponse = full;
-							onStreamChunk?.(fullResponse);
-						},
-					);
-				} catch (e) {
-					console.error('[Orchestrator] continueAfterTools failed:', e);
-				}
-
-				// The continuation can still emit cc-bridge XML if it tried to
-				// re-call tools. Strip leaked tags before showing the player.
-				if (fullResponse) {
-					const { cleaned } = extractInlineToolCalls(fullResponse);
-					if (cleaned !== fullResponse) {
-						fullResponse = cleaned;
-						onStreamChunk?.(fullResponse);
-					}
-				}
-			}
-
-			// Check for AI-initiated dice roll markers and handle continuation
-			if (isAdventure && fullResponse.includes('{{roll:')) {
-				fullResponse = await handleAIRollContinuation(
-					fullResponse,
-					systemStable,
-					systemDynamic,
-					conversationHistory,
-				);
-			}
-			if (draftStoryId !== submittedStoryId) throw new DOMException('Story changed during generation.', 'AbortError');
-
-			if (!fullResponse.trim()) {
-				// Surface a visible system message instead of silently dropping
-				// the turn. Reaches here when the model returned nothing at all
-				// (provider hiccup, empty SSE stream) — the tool-only case is
-				// already handled by the retry above.
-				const reason = toolCallsApplied
-					? 'The model emitted tool calls but no narration, and the prose retry was also empty. Tool calls were applied; try sending another action to continue.'
-					: 'The model returned an empty response. This usually means a provider error or a tool-call leak — try again, or check the active model in Settings.';
-				console.warn('[Orchestrator]', reason);
-				onStreamClear?.();
-				await story.addEntry('system', reason, undefined, submittedStoryId);
-				onStreamEnd?.('');
-			}
-			if (fullResponse.trim()) {
-				// Clear streaming display before adding entry to prevent double display
-				onStreamClear?.();
-				await story.addEntry('narration', fullResponse, undefined, submittedStoryId);
-
-				const worldUpdateErrors: string[] = [];
-				const usedRollCheck = inlineToolCalls.some((tc) => tc.name === 'roll_check');
-				const inlineStateToolCalls = usedRollCheck ? [] : inlineToolCalls.filter((tc) => tc.name === 'update_world_state');
-				if (inlineStateToolCalls.length > 0) {
-					// Inline path: dispatch each tool call the narrator emitted —
-					// unless we already applied them in the prose-retry path above.
-					if (!toolCallsApplied) {
-						for (const tc of inlineStateToolCalls) {
-							if (draftStoryId !== submittedStoryId || abortController?.signal.aborted) {
-								throw new DOMException('Story changed during generation.', 'AbortError');
-							}
-							try {
-								await executeToolCall(tc.name, tc.arguments);
-							} catch (e) {
-								const msg = `Tool ${tc.name}: ${e instanceof Error ? e.message : e}`;
-								worldUpdateErrors.push(msg);
-								console.error(`[Orchestrator] ${msg}`);
-							}
-						}
-					}
-					// Background jobs (chapters, arcs, lore management) still run.
-					try {
-						const bgErrors = await runBackgroundJobs();
-						worldUpdateErrors.push(...bgErrors);
-					} catch (e) {
-						worldUpdateErrors.push(`Background: ${e}`);
-					}
-				} else {
-					// Fallback path: separate classifier call extracts state from prose.
-					const errs = await executeWorldUpdate(fullResponse, snapshotText, abortController?.signal);
-					worldUpdateErrors.push(...errs);
-				}
-
-				if (worldUpdateErrors.length > 0) {
-					console.warn('[Orchestrator] World update errors:', worldUpdateErrors);
-				}
-
-				onStreamEnd?.(fullResponse);
-			}
-		} catch (e) {
-			if (e instanceof Error && e.name === 'AbortError') {
-				onStreamClear?.();
-				onStreamEnd?.('');
-				return;
-			}
-			console.error('Generation error:', e);
-			if (draftStoryId !== submittedStoryId) return;
-			const errorMsg = e instanceof Error ? e.message : 'Generation failed. Please try again.';
-			await story.addEntry('system', errorMsg, undefined, submittedStoryId);
-			onStreamEnd?.('');
-		} finally {
-			isGenerating = false;
-			abortController = null;
-			activeGenerationStoryId = '';
-		}
+		await submitServerTurn(buildSubmittedContent(rawInput, submittedActionType), submittedInput, submittedActionType, submittedStoryId, submittedDraftRevision);
 	}
 
-	async function submitBackendAuthoritativeTurn(content: string, submittedInput: string, submittedActionType: ActionType): Promise<boolean> {
-		if (!story.currentStory?.serverStoryId) return false;
+	async function submitServerTurn(content: string, submittedInput: string, submittedActionType: ActionType, submittedStoryId: string, submittedDraftRevision: number): Promise<void> {
+		const serverStoryId = backendStoryId;
+		if (!serverStoryId) return;
 		const clientContext = buildBackendClientContext(content);
 		const clientTurnId = crypto.randomUUID();
-		const submittedStoryId = draftStoryId;
-		const submittedDraftRevision = draftRevision;
 
-		activeGenerationStoryId = submittedStoryId;
-		isGenerating = true;
-		onStreamStart?.();
+		startingTurn = true;
+		onTurnStart?.();
 		try {
-			const current = await story.prepareBackendAgentTurn();
-			const run = await startBackendAgentRun({
-				storyId: current.serverStoryId!,
-				localVersion: current.serverVersion ?? 0,
+			const outcome = await startServerTurn<BackendAgentRun>({
+				serverStoryId,
 				clientTurnId,
-				playerText: content,
-				actionType: turnActionTypeForInput(submittedInput, submittedActionType),
-				clientContext,
+				stillSelected: () => draftStoryId === submittedStoryId,
+				prepare: async () => {
+					const current = await story.prepareBackendAgentTurn();
+					return { serverStoryId: current.serverStoryId ?? serverStoryId, serverVersion: current.serverVersion ?? 0 };
+				},
+				start: request => startBackendAgentRun({
+					...request,
+					playerText: content,
+					actionType: turnActionTypeForInput(submittedInput, submittedActionType),
+					clientContext,
+				}),
+				current: currentBackendAgentRun,
 			});
-			if (draftStoryId !== submittedStoryId) return true;
-			await acceptAgentRun(run, submittedStoryId);
-			if (run.status === 'failed' || run.status === 'cancelled') {
-				restoreSubmittedDraft(submittedStoryId, submittedDraftRevision, submittedInput, submittedActionType);
+			if ((outcome.kind === 'run' && outcome.restoreDraft) || outcome.kind === 'failed') {
+				await restoreSubmittedDraft(submittedStoryId, submittedDraftRevision, submittedInput, submittedActionType);
 			}
-			if (!completedBackendAgentTurn(run)) onStreamEnd?.('');
-			return true;
-		} catch (error) {
-			const recovered = await currentBackendAgentRun(story.currentStory?.serverStoryId ?? '').catch(() => null);
-			if (recovered?.clientTurnId === clientTurnId) {
-				await acceptAgentRun(recovered, submittedStoryId);
-				onStreamEnd?.('');
-				return true;
+			if (outcome.kind === 'run' && !outcome.storyChanged) {
+				followedAgentRunId = outcome.run.id;
+				if (!outcome.restoreDraft) {
+					pendingSubmission = { runId: outcome.run.id, storyId: submittedStoryId, revision: submittedDraftRevision, text: submittedInput, actionType: submittedActionType };
+				}
+				await acceptAgentRun(outcome.run, submittedStoryId);
+				if (!completedBackendAgentTurn(outcome.run)) onTurnEnd?.('');
+				return;
 			}
-			restoreSubmittedDraft(submittedStoryId, submittedDraftRevision, submittedInput, submittedActionType);
-			const message = error instanceof Error ? error.message : String(error);
-			const runtimeUnavailable = isTerminalReachabilityError(error);
-			console.warn(runtimeUnavailable
-				? '[BackendTurn] Terminal runtime unavailable; refusing local turn queue:'
-				: '[BackendTurn] Terminal turn failed; refusing local turn queue:', error);
-			turnError = runtimeUnavailable
-				? `Terminal agent runtime required: ${message}`
-				: `Terminal turn failed: ${message}`;
-			onStreamClear?.();
-			onStreamEnd?.('');
-			return true;
+			if (outcome.kind === 'run') {
+				// The player switched stories; keep the run discoverable for that story's composer.
+				if (!completedBackendAgentTurn(outcome.run)) {
+					localStorage.setItem(`mythengine:agent-run:${outcome.run.gameId}`, outcome.run.id);
+					if (!outcome.restoreDraft) pendingSubmission = { runId: outcome.run.id, storyId: submittedStoryId, revision: submittedDraftRevision, text: submittedInput, actionType: submittedActionType };
+				}
+			} else {
+				const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+				const unreachable = isTerminalReachabilityError(outcome.error);
+				console.warn(unreachable
+					? '[ServerTurn] Story server unavailable; the move was not queued:'
+					: '[ServerTurn] Turn did not start; the move was not queued:', outcome.error);
+				if (!outcome.storyChanged) {
+					turnError = unreachable
+						? `Couldn't reach the story server, so your move wasn't sent. ${message}`
+						: `Your move couldn't start: ${message}`;
+				}
+			}
+			onTurnClear?.();
+			onTurnEnd?.('');
 		} finally {
-			isGenerating = false;
-			activeGenerationStoryId = '';
+			startingTurn = false;
 		}
-	}
-
-	function handleStop() {
-		if (agentRun && ['running', 'awaiting_input', 'committing'].includes(agentRun.status)) void stopAgentRun();
-		abortController?.abort();
 	}
 
 	function openModeSheet(): void {
@@ -970,16 +641,16 @@
 		}
 	}
 
-	async function submitPlayerPlan(text: string): Promise<void> {
-		if (!text.trim() || !story.currentStory) return;
+	/** Structures and saves a player plan. Failures stay in the composer, not the transcript. */
+	async function submitPlayerPlan(text: string): Promise<boolean> {
+		if (!text.trim() || !story.currentStory || !backendTurnEnabled) return false;
 		planSubmitting = true;
 		planError = null;
 		try {
 			const { scheme, error } = await declarePlayerScheme(text);
 			if (error || !scheme) {
 				planError = error ?? 'Failed to declare plan.';
-				await story.addEntry('system', `Plan declaration failed: ${planError}`);
-				return;
+				return false;
 			}
 			const stageList = scheme.stages
 				.map((s, i) => `  ${i + 1}. ${s.label}`)
@@ -990,8 +661,10 @@
 			);
 			showPlanModal = false;
 			planText = '';
+			return true;
 		} catch (e) {
 			planError = e instanceof Error ? e.message : String(e);
+			return false;
 		} finally {
 			planSubmitting = false;
 		}
@@ -1052,7 +725,7 @@
 			<div class="grid gap-2 text-xs sm:grid-cols-3">
 				<div class="rounded-lg border border-[var(--border-primary)] p-3"><span class="block text-[var(--text-muted)]">Model</span><strong class="text-[var(--text-primary)]">{preview.model.id ?? 'Default'} </strong><span class="block text-[var(--text-muted)]">{preview.model.capacityTokens.toLocaleString()} token capacity · {preview.model.capacitySource}</span></div>
 				<div class="rounded-lg border border-[var(--border-primary)] p-3"><span class="block text-[var(--text-muted)]">Preparation</span><strong class="text-[var(--text-primary)]">{preview.preparationMs} ms</strong><span class="block text-[var(--text-muted)]">{preview.prompt.tokenEstimate.toLocaleString()} estimated input tokens</span></div>
-				<div class="rounded-lg border border-[var(--border-primary)] p-3"><span class="block text-[var(--text-muted)]">Budgets</span><strong class="text-[var(--text-primary)]">{preview.budgets.contextTokens.toLocaleString()} context</strong><span class="block text-[var(--text-muted)]">{preview.budgets.recentDialogueTurns ?? settings.uiSettings.recentDialogueTurns} dialogue turns · {preview.budgets.memoryTokens.toLocaleString()} memory tokens</span></div>
+				<div class="rounded-lg border border-[var(--border-primary)] p-3"><span class="block text-[var(--text-muted)]">Budgets</span><strong class="text-[var(--text-primary)]">{preview.budgets.contextTokens.toLocaleString()} context</strong><span class="block text-[var(--text-muted)]">{preview.budgets.recentDialogueTurns != null ? `${preview.budgets.recentDialogueTurns} dialogue turns` : `${preview.budgets.recentDialogueTokens.toLocaleString()} dialogue tokens`} · {preview.budgets.memoryTokens.toLocaleString()} memory tokens</span></div>
 			</div>
 			<div class="mt-4 rounded-lg border border-[var(--border-primary)] p-3">
 				<h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Request sections</h3>
@@ -1176,7 +849,7 @@
 						<config.icon class="h-4 w-4" /><span><strong class="block text-sm">{config.label === 'Story' ? 'Narrate / Story' : config.label}</strong><small class="block opacity-70">{config.placeholder}</small></span>
 					</button>
 				{/each}
-				<button class="flex min-h-14 items-center gap-3 rounded-xl bg-[var(--bg-tertiary)] px-4 text-left text-[var(--text-primary)]" onclick={() => { closeModeSheet(false); openPlanModal(); }} disabled={isGenerating || planSubmitting}>
+				<button class="flex min-h-14 items-center gap-3 rounded-xl bg-[var(--bg-tertiary)] px-4 text-left text-[var(--text-primary)]" onclick={() => { closeModeSheet(false); openPlanModal(); }} disabled={startingTurn || planSubmitting || localOnlyStory}>
 					<Target class="h-4 w-4 text-[var(--text-accent)]" /><span><strong class="block text-sm">Declare Plan</strong><small class="block text-[var(--text-muted)]">Structure a longer intent</small></span>
 				</button>
 			</div>
@@ -1258,15 +931,24 @@
 		</details>
 	{/if}
 	{#if inspectedAgentSource}<section class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-xs text-[var(--text-secondary)]" aria-label="Observed source range"><strong>{inspectedAgentSource.source.path} · lines {inspectedAgentSource.source.startLine}–{inspectedAgentSource.source.endLine}</strong><p>Revision {inspectedAgentSource.source.revision}</p><pre class="max-h-64 overflow-auto whitespace-pre-wrap">{inspectedAgentSource.text}</pre><button type="button" onclick={() => { inspectedAgentSource = null; }} class="mt-2 underline">Close source</button></section>{/if}
-	{#if story.hydratingWorld}
+	{#if localOnlyStory}
+		<div class="composer-notice local-only-notice" role="status">
+			<Upload size={15} />
+			<span>This story is saved only in this browser. You can read and export it here; import it to the story server to keep playing. Your draft stays in the box.</span>
+			<button type="button" class="composer-notice-action" onclick={importLocalStory} disabled={importingStory || !online}>{importingStory ? 'Importing…' : 'Import and continue'}</button>
+		</div>
+		{#if importError}
+			<div class="composer-notice" role="alert">Import failed: {importError}</div>
+		{/if}
+	{:else if story.hydratingWorld}
 		<div class="composer-notice" role="status">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
 			<span>Loading memory and world state...</span>
 		</div>
 	{:else if story.worldHydrationError}
 		<div class="composer-notice" role="alert">
-			{#if terminalRuntimeUnavailable}
-				Terminal agent runtime required. Start the terminal process to use this campaign.
+			{#if storyServerUnavailable}
+				The story server isn't running. Start Mtherios on this computer to continue this story.
 			{:else}
 				Memory load had trouble; context may be thin.
 			{/if}
@@ -1293,7 +975,7 @@
 						<span>{config.label}</span>
 					</button>
 				{/each}
-				<button class="mode-button plan-button" onclick={openPlanModal} title="Declare a plan — turn a longer intent into stages" disabled={isGenerating || planSubmitting}>
+				<button class="mode-button plan-button" onclick={openPlanModal} title="Declare a plan — turn a longer intent into stages" disabled={startingTurn || planSubmitting || localOnlyStory}>
 					<Target class="h-3.5 w-3.5" /><span>Plan</span>
 				</button>
 			</div>
@@ -1318,8 +1000,8 @@
 			<div class="composer-hint">
 				{#if activeAgentRun || agentRestoring}
 					<span>You can prepare your next move here.</span>
-				{:else if isGenerating}
-					<Loader2 class="h-3.5 w-3.5 animate-spin" /><span>Writing the next passage…</span>
+				{:else if startingTurn}
+					<Loader2 class="h-3.5 w-3.5 animate-spin" /><span>Sending your move…</span>
 				{:else}
 					<span class="desktop-shortcut"><kbd>Enter</kbd> to send <span aria-hidden="true">·</span> <kbd>Shift + Enter</kbd> for a new line</span>
 					<span class="touch-shortcut">Your next move</span>
@@ -1327,12 +1009,8 @@
 			</div>
 			{#if activeAgentRun || agentRestoring || startingAgentRun}
 				<button class="submit-button pending-button" disabled title={turnStatusTitle}>{#if agentRun?.status === 'awaiting_input'}<MessageSquare size={15} /><span>Answer above</span>{:else}<Loader2 size={15} class="animate-spin" /><span>{agentRestoring ? 'Restoring' : 'Working'}</span>{/if}</button>
-			{:else if isGenerating}
-				<button onclick={handleStop} class="submit-button stop-button" title="Stop generation" aria-label="Stop generation">
-					<Square class="h-3.5 w-3.5" /><span>Stop</span>
-				</button>
 			{:else}
-				{#if story.currentStory?.serverStoryId}
+				{#if backendTurnEnabled}
 					<button bind:this={previewButton} onclick={requestPreview} disabled={!inputValue.trim() || sendBlocked || previewLoading} class="submit-button preview-button" title="Preview the server context for this draft" aria-label="Preview context">
 						{#if previewLoading}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<BookOpen class="h-3.5 w-3.5" />{/if}<span>Preview context</span>
 					</button>
@@ -1341,7 +1019,7 @@
 					onclick={handleSubmit}
 					disabled={!inputValue.trim() || sendBlocked}
 					class="submit-button"
-					title={!online ? 'Reconnect to send' : terminalRuntimeUnavailable ? 'Terminal agent runtime required' : story.hydratingWorld ? 'Memory is still loading' : 'Send'}
+					title={localOnlyStory ? 'Import this story to keep playing' : !online ? 'Reconnect to send' : storyServerUnavailable ? 'Story server unavailable' : story.hydratingWorld ? 'Memory is still loading' : 'Send'}
 					aria-label="Send turn"
 				>
 					<span>Send</span><Send class="h-3.5 w-3.5" />
@@ -1387,6 +1065,9 @@
 	.turn-activity-body ol { border-left: 1px solid var(--border-primary); padding-left: .85rem; }
 	.activity-runtime { color: var(--text-muted); font-size: .68rem; }
 	.composer-notice { display: flex; align-items: flex-start; gap: .5rem; padding: .6rem .85rem; border: 1px solid var(--border-primary); border-radius: .6rem; color: var(--text-secondary); background: var(--bg-secondary); font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+	.composer-notice-action { flex-shrink: 0; margin-left: auto; min-height: 2.25rem; padding: 0 .75rem; border-radius: .5rem; background: var(--text-accent); color: var(--bg-primary); font-size: .75rem; font-weight: 600; }
+	.composer-notice-action:disabled { opacity: .45; cursor: not-allowed; }
+	.local-only-notice { align-items: center; }
 	.composer-notice[role='alert'] { color: var(--text-accent); border-color: color-mix(in srgb, var(--text-accent) 35%, var(--border-primary)); }
 	.turn-composer :is(button, summary, input):focus-visible { outline: 2px solid var(--text-accent); outline-offset: 3px; }
 	.action-composer {
@@ -1422,7 +1103,6 @@
 	.preview-button { margin-left: auto; padding-inline: .75rem; border-color: var(--border-primary); background: transparent; color: var(--text-secondary); font-weight: 500; }
 	.preview-button + .submit-button { margin-left: 0; }
 	.pending-button:disabled { opacity: .65; background: var(--bg-tertiary); color: var(--text-secondary); cursor: default; }
-	.stop-button { background: color-mix(in srgb, var(--color-crimson-400) 10%, transparent); border-color: color-mix(in srgb, var(--color-crimson-400) 25%, transparent); color: var(--color-crimson-400); }
 	@media (min-width: 640px) {
 		.composer-modes { display: flex; }
 		.mobile-mode-button { display: none; }

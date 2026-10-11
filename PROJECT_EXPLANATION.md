@@ -1,5 +1,7 @@
 # Project Explanation: Mtherios
 
+> Historical description (mid-2026, browser-first era). The browser no longer builds prompts or runs turns; see [ARCHITECTURE.md](ARCHITECTURE.md) for the current system.
+
 ## What This Project Is
 
 Mtherios is a terminal-run AI interactive fiction engine with a browser frontend. It lets a player create and continue stories where the world reacts to their actions: characters remember events, locations and items change, factions move in the background, and the narrative can be guided by lorebook entries, world state, summaries, and AI-generated suggestions.

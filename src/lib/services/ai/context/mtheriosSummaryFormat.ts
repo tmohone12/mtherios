@@ -30,47 +30,6 @@ export interface MtheriosMemorySummaryInput {
 	currently?: string | null;
 }
 
-export const MTHERIOS_SUMMARY_FORMAT = `[CHECKPOINT = concise checkpoint label for this memory layer, not the main story summary.]
-[SOURCE COVERAGE =
-- transcript/source range, source event count, and any freshness note needed for audit.
-]
-[CURRENT SCENE = date/time | place | weather/conditions, if established.]
-[RECENT STORY STATE =
-- coherent chapter-synopsis memory of what happened, what changed, and what context a future narrator must keep.
-- use complete, concrete story-memory sentences instead of raw transcript dumps.
-- for chapter summaries, end this section with "Time passed in this chapter: ...".
-]
-[CHARACTER STATE =
-Character Name [entity_id]:
-- current status, pressure, relationship posture, knowledge, wounds, possessions, secrets, or unresolved intent.
-- include relevant absent characters too, especially when a POV switch may need them.
-]
-[ACTIVE THREADS =
-- unresolved promises, dangers, questions, debts, political pressures, objects, secrets, or relationship tensions.
-]
-[TONE TO CONTINUE = short tone and pressure note for the next scene.]`;
-
-export function buildMtheriosSummaryInstruction(scope: 'chapter' | 'arc' | 'saga' | 'memory' = 'memory'): string {
-	return [
-		`MTHERIOS ${scope.toUpperCase()} SUMMARY FORMAT: The JSON "summary" field must be one clean string using this bracketed continuity-memory structure exactly.`,
-		MTHERIOS_SUMMARY_FORMAT,
-		'Rules:',
-		'- The memory system is the spine of continuity. Write a useful record of what happened, not a process log.',
-		'- SOURCE COVERAGE is audit metadata only; keep machine details out of RECENT STORY STATE.',
-		'- RECENT STORY STATE must account for the entire covered source window in chronological order. Preserve every meaningful action and outcome, exchange, discovery, decision, promise, relationship change, failure, and resolution, including quiet scenes. Compress repeated wording and decoration, not events or causal context.',
-		'- For chapter summaries, include a final sentence in RECENT STORY STATE using this exact label: "Time passed in this chapter: ...". Infer it from timestamps when possible; otherwise say "not established".',
-		'- For arc summaries, synthesize the covered chapter summaries into a readable arc synopsis instead of listing clipped checkpoint fragments.',
-		'- CHARACTER STATE is mandatory for important present, recently active, or relevant absent characters.',
-		'- Use the label form "Character Name [entity_id]" whenever an entity id is available. If no id is available, use "Character Name [unknown_entity]".',
-		'- Preserve entity ids exactly as provided so POV switches, character resolvers, and canon repair can track identity without duplicating characters.',
-		'- Do not create new character canon. Mention unverified names as story evidence only until a human approves or creates them.',
-		'- Track who knows what. Separate public facts, narrator-known truths, NPC beliefs, and player-visible knowledge when the source makes that distinction.',
-		'- Prefer concrete canon: names, places, debts, injuries, reputation, known secrets, object ownership, and unresolved threats.',
-		'- Use "not established" rather than inventing clothing, weather, temperature, dates, motives, or private thoughts.',
-		'- Keep the whole summary coherent and scannable; avoid duplicate facts, raw transcript dumps, and bookkeeping language.',
-	].join('\n');
-}
-
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
