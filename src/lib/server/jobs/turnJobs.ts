@@ -1,11 +1,14 @@
 import { outsideRequestScopes } from '$lib/server/requestScopes';
-import { memoryJobTypes, nextBackendJobDueAt, projectJobTypes, worldJobTypes, type BackendJobType } from './outbox';
+import { backgroundJobTypes, memoryJobTypes, nextBackendJobDueAt, projectJobTypes, worldJobTypes, type BackendJobType } from './outbox';
+
+/** Story jobs that run after memory and never hold up a turn. */
+const afterMemoryJobTypes: readonly BackendJobType[] = [...worldJobTypes, ...backgroundJobTypes];
 
 /**
  * Queued jobs run in this process as soon as the work that queued them is saved; nothing polls.
  * Each story has a memory lane (what a turn's context reads: extraction, scene checkpoint, memory
- * nodes, chapters, search) and a world lane (faction pressure, world simulation, Director
- * forecasts) that runs after it. A turn waits for its story's memory lane before reading context
+ * nodes, chapters) and a lane that runs after it: world jobs (faction pressure, world simulation,
+ * Director forecasts) and the canonical search index, which no turn prompt reads. A turn waits for its story's memory lane before reading context
  * (`settleStoryMemory`), so memory never falls behind the story; world jobs never hold a turn up.
  * Project jobs (images, settings checks, assistant batches) have their own lane. Lanes start
  * outside the queuing request's async stores, so a job never uses a turn's provider budget,
@@ -99,7 +102,7 @@ export function createTurnJobs(deps: TurnJobDeps) {
 		const memory = memoryPass(scope.storyId);
 		void runLane(`story:${scope.storyId}:world`, async () => {
 			await memory;
-			await drain(scope, worldJobTypes);
+			await drain(scope, afterMemoryJobTypes);
 		});
 	}
 

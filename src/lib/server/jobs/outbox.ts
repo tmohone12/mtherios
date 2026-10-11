@@ -38,6 +38,11 @@ export const factionWorkerJobTypes = [
 /** Faction and Director work; runs after a story's memory jobs and never holds up a turn. */
 export const worldJobTypes = factionWorkerJobTypes;
 
+/** Runs after memory without holding up a turn: no turn prompt reads the canonical search index. */
+export const backgroundJobTypes = [
+	'index_canonical_records',
+] as const satisfies readonly BackendJobType[];
+
 /** What a turn's context reads (canon, memory nodes, checkpoint, chapters, search); the next turn waits for these. */
 export const memoryJobTypes = [
 	'refresh_scene_checkpoint',
@@ -45,7 +50,6 @@ export const memoryJobTypes = [
 	'create_memory_nodes_from_events',
 	'rebuild_retrieval_projection',
 	'embed_memory_nodes',
-	'index_canonical_records',
 	'sync_story_vault',
 	'summarize_chapter',
 	'chapter_threads',

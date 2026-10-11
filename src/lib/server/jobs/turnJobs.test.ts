@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { outsideRequestScopes, requestScope } from '$lib/server/requestScopes';
-import { memoryJobTypes, projectJobTypes, worldJobTypes, type BackendJobType } from './outbox';
+import { backgroundJobTypes, memoryJobTypes, projectJobTypes, worldJobTypes, type BackendJobType } from './outbox';
 import { createTurnJobs, type TurnJobDeps, type TurnJobScope } from './turnJobs';
 
 type Call = { scope: TurnJobScope; group: 'memory' | 'world' | 'project' };
@@ -11,7 +11,7 @@ function harness(overrides: Partial<TurnJobDeps> & { queue?: Record<string, numb
 	const logs: string[] = [];
 	// Due jobs left per lane; each runDue claims up to the batch size.
 	const queue: Record<string, number> = { memory: 0, world: 0, project: 0, ...overrides.queue };
-	const groupOf = (types: readonly BackendJobType[]) => types === memoryJobTypes ? 'memory' : types === worldJobTypes ? 'world' : 'project';
+	const groupOf = (types: readonly BackendJobType[]) => types === memoryJobTypes ? 'memory' : types === projectJobTypes ? 'project' : 'world';
 	const deps: TurnJobDeps = {
 		runDue: async (_worker, limit, scope, types) => {
 			const group = groupOf(types);
@@ -49,7 +49,7 @@ describe('turn jobs', () => {
 		const world = new Promise<void>(resolve => { releaseWorld = resolve; });
 		const { jobs, calls } = harness({
 			runDue: async (_worker, _limit, _scope, types) => {
-				if (types === worldJobTypes) { calls.push({ scope: _scope, group: 'world' }); await world; }
+				if (types !== memoryJobTypes) { calls.push({ scope: _scope, group: 'world' }); await world; }
 				return { claimed: 0 };
 			},
 		});
@@ -155,9 +155,12 @@ describe('turn jobs', () => {
 	});
 
 	it('classifies every runnable job type exactly once', () => {
-		const groups = [...memoryJobTypes, ...worldJobTypes, ...projectJobTypes];
+		const groups = [...memoryJobTypes, ...worldJobTypes, ...backgroundJobTypes, ...projectJobTypes];
 		expect(new Set(groups).size).toBe(groups.length);
 		expect(memoryJobTypes).toEqual(expect.arrayContaining(['extract_turn_state', 'refresh_scene_checkpoint', 'summarize_chapter']));
 		expect(worldJobTypes).toEqual(expect.arrayContaining(['update_faction_pressure', 'evaluate_world_sim_tick', 'plan_plot_brain']));
+		// No turn prompt reads the search index; it must not hold a turn up.
+		expect(memoryJobTypes).not.toContain('index_canonical_records');
+		expect(backgroundJobTypes).toContain('index_canonical_records');
 	});
 });
