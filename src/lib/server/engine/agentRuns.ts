@@ -14,6 +14,7 @@ import { updateContentInTransaction } from './content';
 import { MutationError } from './mutationSafety';
 import { generateServerTextWithMetrics, ServerGenerationError, type NativeToolDefinition, type ServerGenerationOptions, type ServerGenerationResult, type ServerGenerationMessage } from '$lib/server/turn/provider';
 import { applyPromptContextBudget, boundedRecallArgs, GM_RECALL_COMMANDS, normalizeGmToolArgs, prepareServerTurnContext, processServerTurn, type ProcessServerTurnOptions } from '$lib/server/turn/orchestrator';
+import { settleStoryMemory } from '$lib/server/jobs/turnJobs';
 import { countTokens } from '$lib/utils/tokens';
 import { executeEngineCommand } from './command';
 import { actorBriefArgsSchema, getActorDecisionView } from './gmTools';
@@ -899,6 +900,9 @@ async function advancePiWithQueryReuse(runId: string, storyId: string, options: 
       const [committed] = await getDb().execute(sql`select id from story_entries where story_id=${storyId} and id=${`narration_${text(run.client_turn_id)}`} limit 1`);
       if (committed) { await completeTurn(run, { ...options, signal: controller.signal }); return; }
     }
+    // The previous turn's memory jobs finish before this run reads context; the heartbeat keeps
+    // the lease and the run's time budget has not started yet.
+    await settleStoryMemory(storyId, controller.signal);
     const saved = object(run.continuation);
     const narrative = await resolveServiceGeneration('narrative');
     const limits = (saved.limits as AgentRuntimeLimits | undefined) ?? configuredAgentRuntimeLimits(narrative.setting?.metadata);

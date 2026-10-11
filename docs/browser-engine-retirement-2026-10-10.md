@@ -128,5 +128,5 @@ Verification after this pass: `svelte-check` 0/0; production build succeeds; 2,3
 
 ## Further work (prioritized)
 
-1. **The live job worker is off.** See "Second follow-up". Turning it on runs the queued backlog through the configured providers.
+1. ~~The live job worker is off.~~ Replaced by turn jobs; see [turn-jobs-2026-10-11.md](turn-jobs-2026-10-11.md).
 2. Unused per-table CRUD helpers in `services/database.ts` and command wrappers in `serverStories.ts` predate this work; trim with the IndexedDB compatibility review.

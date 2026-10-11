@@ -65,7 +65,7 @@ export interface ServiceProfile {
 }
 
 export const SERVICE_PROFILES: ServiceProfile[] = [
-	{ id: 'narrative', label: 'GameMaster', description: 'Story model; expand services for World State and other tools', icon: '✍️', serviceIds: ['narrative', 'storySetupAssist', 'smallBrain', 'actorDecision', 'continuityReview', 'characterUpdate', 'strategicWorldBrain'] },
+	{ id: 'narrative', label: 'GameMaster', description: 'Story model; expand services for World State and other tools', icon: '✍️', serviceIds: ['narrative', 'storySetupAssist', 'smallBrain', 'actorDecision', 'characterUpdate', 'strategicWorldBrain'] },
 	{ id: 'dialogue', label: 'NPC Dialogue', description: 'Optional model for spoken lines after the GameMaster draft', icon: '💬', serviceIds: ['dialogue'] },
 	{ id: 'memoryContext', label: 'Memory & Context', description: 'Turn memory extraction and chapter/arc history', icon: '🧠', serviceIds: ['classifier', 'memory', 'arcCondensation'] },
 	{ id: 'guidance', label: 'Player Guidance', description: 'Optional player-visible suggestions', icon: '🧭', serviceIds: ['suggestions'] },

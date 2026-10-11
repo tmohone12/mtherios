@@ -2,11 +2,11 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {startChapterRunner} from './mtheriosd.mjs';
 import {resolveRuntimeOptions,buildRuntimeEnv} from './runtime-config.mjs';
-test('chapter-only gate defaults off, requires one story, and roundtrips independently of global worker',()=>{
+test('chapter-only gate defaults off, requires one story, and roundtrips independently of turn jobs',()=>{
  const base=resolveRuntimeOptions([],{env:{}});assert.equal(base.chapterRunnerEnabled,false);
  assert.throws(()=>resolveRuntimeOptions(['--chapter-runner'],{env:{}}),/story ID/);
  const options=resolveRuntimeOptions(['--chapter-runner','--chapter-runner-story','fixture'],{env:{}});
- const env=buildRuntimeEnv(options,{});assert.equal(env.MTHERIOS_JOB_WORKER,'false');assert.equal(env.MTHERIOS_CHAPTER_RUNNER,'true');
+ const env=buildRuntimeEnv(options,{});assert.equal(env.MTHERIOS_TURN_JOBS,'true');assert.equal(env.MTHERIOS_CHAPTER_RUNNER,'true');
  assert.equal(resolveRuntimeOptions([],{env}).chapterRunnerStoryId,'fixture');
 });
 test('separate timer only sends one configured chapter tick; pause gate schedules nothing',async()=>{

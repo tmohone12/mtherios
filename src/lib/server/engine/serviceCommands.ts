@@ -24,7 +24,7 @@ import {
 } from '$lib/contracts/memory';
 import { retrieveMemoryPacket } from '$lib/server/memory/retrieval';
 import { applySyncOperation, getSyncChanges } from '$lib/server/memory/canonical';
-import { backendJobRetryBlockReason, enqueueBackendJob, enqueueStoryVaultSyncJob, factionWorkerJobTypes, retryBackendJob } from '$lib/server/jobs/outbox';
+import { backendJobRetryBlockReason, enqueueBackendJob, enqueueStoryVaultSyncJob, factionWorkerJobTypes, memoryJobTypes, retryBackendJob } from '$lib/server/jobs/outbox';
 import { getBackendJobStats, recoverMemoryCoverage, runBackendJobNow, runDueBackendJobs } from '$lib/server/jobs/processor';
 import { getMtheriosAppConfig } from '$lib/server/app/config';
 import { listStoryVaultFreshnessItems } from '$lib/server/wiki/storyVault';
@@ -81,7 +81,7 @@ export interface RunDueJobsCommandInput {
 	workerId?: string;
 	limit?: number;
 	allStories?: boolean;
-	scope?: 'all' | 'faction';
+	scope?: 'all' | 'faction' | 'memory';
 }
 
 export interface JobStatusCommandInput extends EngineJobStatusArgs {
@@ -1153,7 +1153,8 @@ export async function runDueBackendJobsCommand(input: RunDueJobsCommandInput | J
 	const limitValue = typeof body.limit === 'number' ? body.limit : 10;
 	const limit = Math.max(1, Math.min(100, Math.trunc(Number.isFinite(limitValue) ? limitValue : 10)));
 	const before = await getBackendJobStats(storyId);
-	const result = await runDueBackendJobs(workerId, limit, storyId, body.scope === 'faction' ? factionWorkerJobTypes : undefined);
+	const types = body.scope === 'faction' ? factionWorkerJobTypes : body.scope === 'memory' ? memoryJobTypes : undefined;
+	const result = await runDueBackendJobs(workerId, limit, storyId, types);
 	const after = await getBackendJobStats(storyId);
 	return {
 		ok: true,

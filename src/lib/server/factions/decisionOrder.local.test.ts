@@ -7,7 +7,7 @@ const live=process.env.MYTHENGINE_LOCAL_ORDER==='1'?test:test.skip;
 live('bounded labeled order/paraphrase evaluation; at most24 sequential local Kev requests',async()=>{
  const path='.codex-run/faction-decision-order-local.json';if(fs.existsSync(path))throw new Error('One bounded batch already recorded');
  const config=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
- if(config.port!==5174||config.jobWorker!==false||!config.testLocalInferenceOnly||!config.isolatedTestCopy)throw new Error('Paused isolated COPY required');
+ if(config.port!==5174||config.turnJobs!==false||!config.testLocalInferenceOnly||!config.isolatedTestCopy)throw new Error('Paused isolated COPY required');
  const ledger:any={startedAt:new Date().toISOString(),requestCap:24,concurrency:1,retries:0,paidCalls:0,labels:orderCases.map(name=>{const s=orderVariant(name,'base');return {name,...s.label,rejected:s.rejected};}),requests:[],results:[]};
  const save=()=>fs.writeFileSync(path,JSON.stringify(ledger,null,2));save();
  const original=globalThis.fetch;let active:any;

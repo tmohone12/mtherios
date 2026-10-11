@@ -1,6 +1,6 @@
 # Chapter-only runner
 
-This is a separate story-scoped workflow. The global job worker and wiki indexer can remain paused. It never claims `backend_jobs`, invokes the broad chapter processor, or generates arcs, plot state, character/campaign/faction updates, or old queued chapters.
+This is a separate story-scoped workflow; it runs whether or not turn jobs are on, and the wiki indexer can remain paused. It never claims `backend_jobs`, invokes the broad chapter processor, or generates arcs, plot state, character/campaign/faction updates, or old queued chapters.
 
 ## Activation
 

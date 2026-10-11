@@ -55,7 +55,7 @@
   <summary bind:this={inspectionSummary}><ChevronRight size={16} /><span class="inspection-title"><strong>GM / developer inspection</strong><small>Contains private plans</small></span><span class="inspection-state">{inspectionOpen ? 'Open' : 'Inspect'}</span></summary>
   <div class="toolbar"><span>Turn {data?.currentTurn ?? '—'} · {data?.worldTime ?? 'World time unset'}</span><button onclick={() => load()} disabled={busy} aria-label="Refresh faction inspection"><RefreshCw size={13} class={busy ? 'spin' : ''} /></button></div>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if data?.jobWorkerEnabled === false}<p class="review-state">Automatic faction and forecast reviews are paused because the background worker is disabled. A manual review can still run; it does not resume the worker.</p>{/if}
+  {#if data?.turnJobsEnabled === false}<p class="review-state">Automatic faction and forecast reviews are off because turn jobs are disabled. A manual review can still run.</p>{/if}
   {#each reviewMessages as message}<p class="review-state" role="status">{message}</p>{/each}
   {#if data?.inferencePolicy === 'local-only-testing'}<p class="review-state">Local-only testing is active. Normal cloud GM play and automatic planner calls are paused. A one-time model test does not enable ongoing play.</p>{/if}
   {#if lastDecision}<p class="review-state">Latest decision: <strong>{lastDecision.status}</strong> · Next review ≥ turn {lastDecision.nextReviewTurn}. Unchanged evidence keeps the current plan.</p>{:else}<p class="empty">No faction decision yet. Quiet is a valid state.</p>{/if}

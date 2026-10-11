@@ -99,7 +99,7 @@ function printBanner(options) {
 	console.log(`  default:  ${options.defaultVault}`);
 	console.log(`  qdrant:   ${options.qdrantUrl} / ${options.qdrantCollection}`);
 	console.log(`  database: ${redactDatabaseUrl(options.databaseUrl)}`);
-	console.log(`  jobs:     ${options.jobWorker ? `enabled (${options.jobWorkerScope}) every ${options.jobIntervalMs}ms, limit ${options.jobBatchLimit}, timeout ${options.jobTimeoutMs}ms` : 'disabled'}`);
+	console.log(`  jobs:     ${options.turnJobs ? 'run after each turn' : 'off (run by hand with jobs.runDue)'}`);
 	console.log(`  wiki:     ${options.wikiEmbedProvider} / ${options.wikiEmbedModel}, auto-index ${options.wikiAutoIndexStoryVaults ? 'on' : 'off'}`);
 	console.log(`  memory:   chapters every ${options.chapterThreshold} completed turns, arcs every ${options.chaptersPerArc} chapters`);
 	console.log(`  vectors:  ${options.memoryEmbeddingProvider && options.memoryEmbeddingModel ? `${options.memoryEmbeddingProvider} / ${options.memoryEmbeddingModel} (${options.memoryEmbeddingDimensions}d)` : 'disabled'}`);
@@ -131,12 +131,10 @@ async function runDevServer(options, env) {
 		windowsHide: true,
 	});
 
-	const stopJobs = startJobWorker(options);
 	const stopChapters = startChapterRunner(options);
 	try {
 		await waitForChild(child);
 	} finally {
-		stopJobs();
 		stopChapters();
 	}
 }
@@ -175,7 +173,6 @@ async function runBuiltServer(options, env) {
 	});
 
 	console.log(`MythEngine is listening on http://${options.host}:${options.port}`);
-	startJobWorker(options);
 	startChapterRunner(options);
 }
 
@@ -196,62 +193,6 @@ export function startChapterRunner(options,{request=fetch,setTimer=setTimeout}={
 	};
 	timer=setTimer(tick,60000);timer.unref?.();
 	return ()=>{stopped=true;clearTimeout(timer);};
-}
-
-function startJobWorker(options) {
-	if (!options.jobWorker) return () => {};
-	let stopped = false;
-	let timer = null;
-	let consecutiveErrors = 0;
-	const endpoint = `http://${options.host}:${options.port}/api/app/jobs/run`;
-	const workerId = `mythengined_${process.pid}`;
-
-	const schedule = (delay = options.jobIntervalMs) => {
-		if (stopped) return;
-		timer = setTimeout(tick, delay);
-		timer.unref?.();
-	};
-
-	const tick = async () => {
-		if (stopped) return;
-		try {
-			const response = await fetch(endpoint, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ workerId, limit: options.jobBatchLimit, scope: options.jobWorkerScope }),
-				signal: AbortSignal.timeout(options.jobTimeoutMs),
-			});
-			if (!response.ok) throw new Error(`HTTP ${response.status}`);
-			const result = await response.json();
-			consecutiveErrors = 0;
-			if (result.claimed || result.failed?.length) {
-				console.log(`[jobs] claimed=${result.claimed} completed=${result.completed} failed=${result.failed?.length ?? 0} ${formatJobBacklog(result.after)}`);
-			}
-		} catch (error) {
-			consecutiveErrors += 1;
-			if (consecutiveErrors === 1 || consecutiveErrors % 12 === 0) {
-				console.warn(`[jobs] waiting for app job endpoint: ${error instanceof Error ? error.message : String(error)}`);
-			}
-		} finally {
-			schedule();
-		}
-	};
-
-	schedule(1000);
-	return () => {
-		stopped = true;
-		if (timer) clearTimeout(timer);
-	};
-}
-
-function formatJobBacklog(stats) {
-	if (!stats || typeof stats !== 'object') return 'backlog=unknown';
-	const ready = Number(stats.ready ?? 0);
-	const retry = Number(stats.retry ?? 0);
-	const delayed = Number(stats.delayed ?? 0);
-	const running = Number(stats.running ?? 0);
-	const failed = Number(stats.failed ?? 0);
-	return `ready=${ready} retry=${retry} running=${running} delayed=${delayed} failedTotal=${failed}`;
 }
 
 function waitForChild(child) {

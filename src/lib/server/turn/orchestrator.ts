@@ -50,7 +50,8 @@ import { requireResolvedServiceProfile, resolveServiceGeneration } from '$lib/se
 import { generationAttemptResult, recordGenerationApiCalls } from '$lib/server/engine/generationAccounting';
 import { appendTurnEvidence } from '$lib/server/engine/campaignVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
-import { enqueueBackendJob, enqueueChapterSummaryJob, enqueueContinuityAuditJob, enqueuePlotBrainJob, enqueueTurnStateExtractionJob, recordCompletedInlineTurnMemory, turnStateSourceFingerprint } from '$lib/server/jobs/outbox';
+import { enqueueBackendJob, enqueueChapterSummaryJob, enqueuePlotBrainJob, enqueueTurnStateExtractionJob, recordCompletedInlineTurnMemory, turnStateSourceFingerprint } from '$lib/server/jobs/outbox';
+import { kickStoryJobs, settleStoryMemory } from '$lib/server/jobs/turnJobs';
 import {
 	buildEngineCacheKey,
 	engineCacheDependencyHash,
@@ -3084,6 +3085,8 @@ export async function prepareServerTurnContext(
 		});
 		return { ...cached, preparedCacheHit: true };
 	}
+	// The previous turn's memory jobs finish before this turn reads context.
+	if (!options.inspection) await recorder.time('turn.memory.settle', {}, () => settleStoryMemory(request.storyId));
 
 	const playerEntryId = `entry_${request.clientTurnId}`;
 	const warnings: string[] = [];
@@ -5218,30 +5221,8 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		timings: recorder.timings,
 	});
 	logSlowTurn(performance);
-	if (!oocMode) {
-		try {
-			const playerEntityId = asRecord(ctxWithTimeline.story.settings).playerEntityId;
-			const playerEntity = ctxWithTimeline.entities.find(entity => entity.id === playerEntityId)
-				?? ctxWithTimeline.entities.find(entity => asRecord(entity.state).isProtagonist === true
-					|| asRecord(entity.state).relationship === 'self');
-			await recorder.time('turn.continuity_audit.enqueue', {
-				serverVersion: turnVersion,
-				truncated: contextReceipt.truncated,
-			}, () => enqueueContinuityAuditJob({
-				storyId: request.storyId,
-				playerEntryId,
-				assistantEntryId,
-				clientTurnId: request.clientTurnId,
-				serverVersion: turnVersion,
-				playerName: playerEntity?.name ?? null,
-				contextReceipt: contextReceipt as unknown as Record<string, unknown>,
-				performance: performance as unknown as Record<string, unknown>,
-			}));
-		} catch (error) {
-			warnings.push(`Continuity audit enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
-		}
-
-	}
+	// This turn's memory jobs run now, in this process; the next turn waits for them.
+	kickStoryJobs(request.storyId);
 
 	return {
 		narration,

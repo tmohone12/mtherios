@@ -6,7 +6,7 @@ import { resolveServiceGeneration } from '$lib/server/engine/llmSettings';
 const verify=process.env.MYTHENGINE_OPENROUTER_CONFIG_ONLY==='1'?test:test.skip;
 verify('actual COPY OpenRouter actor setting resolves without any provider request',async()=>{
  const config=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
- expect(config).toMatchObject({port:5174,jobWorker:false,testLocalInferenceOnly:true,isolatedTestCopy:true});
+ expect(config).toMatchObject({port:5174,turnJobs:false,testLocalInferenceOnly:true,isolatedTestCopy:true});
  expect((await getDb().execute(sql`select current_database() as name`))[0].name).toBe('mythengine_faction_copy_20261001');
  const mock=vi.fn(()=>{throw new Error('No provider request authorized');});vi.stubGlobal('fetch',mock);
  try{const resolved=await resolveServiceGeneration('actorDecision');

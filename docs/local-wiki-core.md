@@ -16,7 +16,7 @@ The preferred full-system command is:
 npm run app:dev
 ```
 
-This starts Postgres and Qdrant, runs migrations, initializes the local `data/` root, launches the frontend under the Mtherios terminal process, and drains due terminal jobs through `/api/app/jobs/run`. The job worker now creates terminal-owned chapter checkpoints and arc rollups from world database rows, updates faction pressure from database events, converts high-pressure factions into deterministic world-tick events, then writes matching memory nodes for retrieval. `npm run dev` is still available for quick frontend-only work.
+This starts Postgres and Qdrant, runs migrations, initializes the local `data/` root, and launches the frontend under the Mtherios terminal process. Queued jobs run in that process right after the turn or edit that queued them (see Terminal Memory Jobs); they create terminal-owned chapter checkpoints and arc rollups from world database rows, updates faction pressure from database events, converts high-pressure factions into deterministic world-tick events, then writes matching memory nodes for retrieval. `npm run dev` is still available for quick frontend-only work.
 
 Check the running terminal process from another shell:
 
@@ -26,7 +26,7 @@ npm run app:jobs -- status --url http://127.0.0.1:5173
 npm run app:jobs -- run --until-empty --url http://127.0.0.1:5173
 ```
 
-`app:jobs` is the manual terminal drain for the job outbox. The daemon normally runs this loop for you, but the CLI is useful after importing, syncing devices, changing wiki settings, or debugging a failed queue. Add `--story <storyId>` when you want both the reported backlog and claimed jobs scoped to one story; without it, the drain is global.
+`app:jobs` is the manual drain for the job outbox. Jobs normally run after each turn, but the CLI is useful after importing, syncing devices, changing wiki settings, or debugging a failed queue. Add `--story <storyId>` when you want both the reported backlog and claimed jobs scoped to one story; without it, the drain is global.
 
 Operate terminal world databases directly through the daemon:
 
@@ -363,7 +363,7 @@ POST /api/app/jobs/world-sim
 
 `GET /api/app/status` is the terminal-process health endpoint. It returns runtime identity (`pid`, uptime, timestamp), configured data/vault/Qdrant/Ollama/job settings, service probes, Qdrant collection inventory with point counts and orphaned story-collection detection, a story-wiki freshness summary, and a terminal job summary with total/ready/delayed/running/failed counts, per-type counts, recent failures, and running job previews. `npm run app:status` prints vault and Qdrant fresh/stale/missing counts plus the first few stories that need sync or indexing. `POST /api/app/jobs/wiki` accepts either one `storyId` or `"all": true`; bulk mode selects stale/missing vaults and indexes, enqueues `sync_story_vault` jobs, and only runs them inline when `runNow` is explicitly true.
 
-`POST /api/app/jobs/run` is the daemon drain endpoint used by `mtheriosd` and `app:jobs`. When `storyId` is present, the endpoint now claims only jobs for that story; otherwise it drains the global ready queue. This keeps a manual story repair from unexpectedly processing another campaign's queued work.
+`POST /api/app/jobs/run` is the manual drain endpoint used by `app:jobs`; a `scope` of `memory` or `faction` limits it to that job group. When `storyId` is present, the endpoint now claims only jobs for that story; otherwise it drains the global ready queue. This keeps a manual story repair from unexpectedly processing another campaign's queued work.
 
 ## Terminal Memory Jobs
 
@@ -371,8 +371,7 @@ The daemon reads these optional values from `mtherios.config.json`, CLI flags, o
 
 ```json
 {
-  "jobWorker": true,
-  "jobIntervalMs": 5000,
+  "turnJobs": true,
   "chapterThreshold": 20,
   "postChapterBuffer": 10,
   "chaptersPerArc": 5,
@@ -381,7 +380,7 @@ The daemon reads these optional values from `mtherios.config.json`, CLI flags, o
 }
 ```
 
-Equivalent flags are `--job-worker`, `--no-job-worker`, `--job-interval-ms`, `--chapter-threshold`, `--post-chapter-buffer`, `--chapters-per-arc`, `--wiki-auto-index`, and `--wiki-auto-lint`. The browser can still cache story state, but terminal-bound stories get durable checkpoints and generated markdown story vaults from the terminal process. The daemon includes the remaining ready/retry/running/delayed/failed backlog in its `[jobs]` log line whenever it claims work.
+Equivalent flags are `--turn-jobs`, `--no-turn-jobs`, `--chapter-threshold`, `--post-chapter-buffer`, `--chapters-per-arc`, `--wiki-auto-index`, and `--wiki-auto-lint`. The browser can still cache story state, but terminal-bound stories get durable checkpoints and generated markdown story vaults from the terminal process. `turnJobs` defaults to on; turn it off only for tests, evals and isolated copies, and run their jobs with `app:jobs`.
 
 Database memory-node embeddings are optional and separate from the Qdrant wiki index. Configure them only with a model whose vector size matches the Postgres column:
 

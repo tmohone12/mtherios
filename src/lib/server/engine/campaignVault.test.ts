@@ -27,11 +27,9 @@ function testConfig(root: string): MtheriosAppConfig {
 		wikiEmbedBaseUrl: 'https://openrouter.ai/api/v1',
 		wikiEmbedApiKey: '',
 		wikiAutoIndexStoryVaults: false,
-		jobWorkerEnabled: true,
+		turnJobsEnabled: true,
 		chapterRunnerEnabled: false,
 		chapterRunnerStoryId: '',
-		jobWorkerScope: 'all',
-		jobIntervalMs: 5000,
 	};
 }
 

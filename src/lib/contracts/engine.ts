@@ -140,7 +140,7 @@ export const engineRunDueJobsArgsSchema = z.object({
 	workerId: z.string().min(1).optional(),
 	limit: z.number().int().min(1).max(100).default(10),
 	allStories: z.boolean().default(false),
-	scope: z.enum(['all', 'faction']).default('all'),
+	scope: z.enum(['all', 'faction', 'memory']).default('all'),
 });
 
 export const engineRollupArcJobArgsSchema = z.object({

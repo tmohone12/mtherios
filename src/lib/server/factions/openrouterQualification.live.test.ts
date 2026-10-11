@@ -10,7 +10,7 @@ live('approved one-shot four synthetic Jev requests, no retries, one cent ceilin
  const ledgerPath='.codex-run/openrouter-four-live-20261002.json';
  if(fs.existsSync(ledgerPath))throw Error('Approved one-shot ledger already exists; never repeat');
  const config=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
- if(config.port!==5174||config.jobWorker!==false||config.testLocalInferenceOnly!==true||config.isolatedTestCopy!==true)throw Error('Paused isolated COPY required');
+ if(config.port!==5174||config.turnJobs!==false||config.testLocalInferenceOnly!==true||config.isolatedTestCopy!==true)throw Error('Paused isolated COPY required');
  const proposal=JSON.parse(fs.readFileSync('.codex-run/openrouter-live-proposal.json','utf8'));
  if(proposal.requests.length!==4||proposal.requestCap!==4||proposal.requestedBudgetUsd!==.01||proposal.model!=='typesafe/jev-1.13')throw Error('Approved proposal mismatch');
  const actualFetch=globalThis.fetch,prior=process.env.MYTHENGINE_TEST_LOCAL_ONLY;
@@ -20,7 +20,7 @@ live('approved one-shot four synthetic Jev requests, no retries, one cent ceilin
  try{
   if((await getDb().execute(sql`select current_database() as name`))[0].name!=='mythengine_faction_copy_20261001')throw Error('Isolated database required');
   const copy=await(await actualFetch('http://127.0.0.1:5174/api/app/status')).json();
-  if(copy.config.jobWorkerEnabled!==false||copy.jobs.running!==0)throw Error('Paused COPY worker required');
+  if(copy.config.turnJobsEnabled!==false||copy.jobs.running!==0)throw Error('Paused COPY worker required');
   const original=await(await actualFetch('http://127.0.0.1:5173/api/app/status')).json();
   ledger.before={copyPid:copy.runtime.pid,copyBuild:copy.build,originalPid:original.runtime.pid,originalBuild:original.build,copyQueued:copy.jobs.queued};
   const catalogUrl='https://openrouter.ai/api/v1/models?output_modalities=decisions';
@@ -82,7 +82,7 @@ live('approved one-shot four synthetic Jev requests, no retries, one cent ceilin
  }finally{
   captured?.mockRestore();if(prior===undefined)delete process.env.MYTHENGINE_TEST_LOCAL_ONLY;else process.env.MYTHENGINE_TEST_LOCAL_ONLY=prior;
   const latest=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
-  ledger.after={workerPaused:latest.jobWorker===false,normalCloudPaused:latest.testLocalInferenceOnly===true,testProcessPolicyRestored:process.env.MYTHENGINE_TEST_LOCAL_ONLY===prior};
+  ledger.after={workerPaused:latest.turnJobs===false,normalCloudPaused:latest.testLocalInferenceOnly===true,testProcessPolicyRestored:process.env.MYTHENGINE_TEST_LOCAL_ONLY===prior};
   if(ledger.before){
    const copy=await(await actualFetch('http://127.0.0.1:5174/api/app/status')).json(),original=await(await actualFetch('http://127.0.0.1:5173/api/app/status')).json();
    ledger.after.copyPid=copy.runtime.pid;ledger.after.runningJobs=copy.jobs.running;ledger.after.copyQueued=copy.jobs.queued;

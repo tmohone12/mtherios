@@ -453,7 +453,7 @@ describe('claimed job order', () => {
 		const order = compiledSql(backendJobClaimPriorityOrder);
 		expect(order.sql).toContain('"backend_jobs"."type" = \'refresh_scene_checkpoint\'');
 		expect(order.sql).toContain('"backend_jobs"."type" = \'extract_turn_state\'');
-		expect(order.sql).toContain('"backend_jobs"."type" = \'continuity_audit\'');
+		expect(order.sql).not.toContain('continuity_audit');
 		expect(order.sql).toContain('"backend_jobs"."type" = \'evaluate_world_sim_tick\' then 5');
 		expect(order.sql).toContain('"backend_jobs"."payload"->>\'trigger\' = \'scheduled_refresh\'');
 		expect(order.params).toEqual([]);

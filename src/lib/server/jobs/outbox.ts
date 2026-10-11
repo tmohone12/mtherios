@@ -35,6 +35,32 @@ export const factionWorkerJobTypes = [
 	'plan_plot_brain',
 ] as const satisfies readonly BackendJobType[];
 
+/** Faction and Director work; runs after a story's memory jobs and never holds up a turn. */
+export const worldJobTypes = factionWorkerJobTypes;
+
+/** What a turn's context reads (canon, memory nodes, checkpoint, chapters, search); the next turn waits for these. */
+export const memoryJobTypes = [
+	'refresh_scene_checkpoint',
+	'extract_turn_state',
+	'create_memory_nodes_from_events',
+	'rebuild_retrieval_projection',
+	'embed_memory_nodes',
+	'index_canonical_records',
+	'sync_story_vault',
+	'summarize_chapter',
+	'chapter_threads',
+	'chapter_characters',
+	'rollup_arc',
+	'rollup_saga',
+	'rebuild_summaries',
+] as const satisfies readonly BackendJobType[];
+
+export const projectJobTypes = [
+	'validate_agent_settings',
+	'generate_image',
+	'assistant_batch_child',
+] as const satisfies readonly BackendJobType[];
+
 // These handlers upsert stable record IDs, or commit canon and an apply receipt
 // together. Keep model-driven advancement and timestamp-keyed continuations out.
 export const manuallyRetryableBackendJobTypes = [
@@ -140,7 +166,6 @@ export async function retryBackendJob(input: { storyId: string | null; projectId
 export const backendJobClaimPriorityOrder = sql<number>`case
 	when ${backendJobs.type} = 'refresh_scene_checkpoint' then 0
 	when ${backendJobs.type} = 'extract_turn_state' then 1
-	when ${backendJobs.type} = 'continuity_audit' then 2
 	when ${backendJobs.type} = 'evaluate_world_sim_tick' then 5
 	when ${backendJobs.type} = 'plan_plot_brain'
 		and ${backendJobs.payload}->>'trigger' = 'scheduled_refresh' then 5
@@ -230,6 +255,7 @@ export async function enqueueBackendJob(
 	});
 	if (input.requeueExisting === false) {
 		await insert.onConflictDoNothing();
+		kickAfterEnqueue(input);
 		return jobId;
 	}
 	await insert.onConflictDoUpdate({
@@ -248,7 +274,30 @@ export async function enqueueBackendJob(
 		},
 		setWhere: inArray(backendJobs.status, ['queued', 'retry', 'complete', 'failed']),
 	});
+	kickAfterEnqueue(input);
 	return jobId;
+}
+
+function kickAfterEnqueue(input: EnqueueBackendJobInput): void {
+	const scope = input.storyId ? { storyId: input.storyId } : { projectId: input.projectId as string };
+	// Imported lazily: the runner imports this module.
+	void import('./turnJobs').then(jobs => jobs.scheduleJobKick(scope), () => undefined);
+}
+
+/** Earliest run time (ms) among a story's or project's waiting jobs of these types. */
+export async function nextBackendJobDueAt(scope: { storyId?: string; projectId?: string }, types: readonly BackendJobType[]): Promise<number | null> {
+	const filters = [
+		inArray(backendJobs.status, ['queued', 'retry']),
+		inArray(backendJobs.type, [...types]),
+		sql`coalesce(${backendJobs.payload}->>'execution','') <> 'api'`,
+	];
+	if (scope.storyId) filters.push(eq(backendJobs.storyId, scope.storyId));
+	if (scope.projectId) filters.push(eq(backendJobs.projectId, scope.projectId));
+	const [row] = await getDb()
+		.select({ dueAt: sql<string | null>`(extract(epoch from min(${backendJobs.runAfter})) * 1000)::bigint::text` })
+		.from(backendJobs)
+		.where(and(...filters));
+	return row?.dueAt == null ? null : Number(row.dueAt);
 }
 
 export async function enqueueStoryVaultSyncJob(input: {
@@ -276,10 +325,6 @@ export function turnStateExtractionDedupeKey(input: { assistantEntryId: string }
 
 export function turnStateSourceFingerprint(playerText: string, narration: string): string {
 	return createHash('sha256').update(JSON.stringify([playerText, narration])).digest('hex');
-}
-
-export function continuityAuditDedupeKey(input: { assistantEntryId: string }): string {
-	return `continuity-audit-${input.assistantEntryId}`;
 }
 
 export async function enqueueTurnStateExtractionJob(input: {
@@ -495,33 +540,6 @@ export function backendJobFailureIsRetryable(error: unknown): boolean {
 	// separate policy; treating everything outside its blocklist as transient
 	// repeatedly dispatches unknown/deterministic summary failures.
 	return classifyBackendJobFailure(message).retryable;
-}
-
-export async function enqueueContinuityAuditJob(input: {
-	storyId: string;
-	playerEntryId: string;
-	assistantEntryId: string;
-	clientTurnId: string;
-	serverVersion: number;
-	playerName?: string | null;
-	contextReceipt?: Record<string, unknown> | null;
-	performance?: Record<string, unknown> | null;
-}): Promise<string> {
-	return enqueueBackendJob({
-		storyId: input.storyId,
-		type: 'continuity_audit',
-		dedupeKey: continuityAuditDedupeKey({ assistantEntryId: input.assistantEntryId }),
-		payload: {
-			playerEntryId: input.playerEntryId,
-			assistantEntryId: input.assistantEntryId,
-			clientTurnId: input.clientTurnId,
-			serverVersion: input.serverVersion,
-			playerName: input.playerName ?? null,
-			contextReceipt: input.contextReceipt ?? null,
-			performance: input.performance ?? null,
-		},
-		maxAttempts: 3,
-	});
 }
 
 export async function enqueueTurnProjectionJobs(input: {

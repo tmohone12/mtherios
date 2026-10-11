@@ -27,7 +27,7 @@
 		'suggestions',
 		'imageGeneration',
 	];
-	const RETIRED_SERVICES = new Set(['styleReviewer', 'wikiLint', 'actionChoices', 'activeRecall', 'worldSimulation', 'sagaCondensation', 'loreManagement', 'entryRefinement']);
+	const RETIRED_SERVICES = new Set(['styleReviewer', 'wikiLint', 'actionChoices', 'activeRecall', 'worldSimulation', 'sagaCondensation', 'loreManagement', 'entryRefinement', 'continuityReview']);
 
 	let rows = $state<LlmServiceSetting[]>([]);
 	let drafts = $state<Record<string, string>>({});

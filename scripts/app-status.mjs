@@ -59,7 +59,7 @@ function printStatus(status, url) {
 	console.log(`  data:     ${config.dataRoot || 'unknown'}`);
 	console.log(`  vaults:   ${config.vaultRoot || 'unknown'}`);
 	console.log(`  database: ${config.databaseConfigured ? 'configured' : 'not configured'}`);
-	console.log(`  jobs:     ${config.jobWorkerEnabled ? `enabled (${config.jobWorkerScope ?? 'all'}) every ${config.jobIntervalMs ?? 'unknown'}ms` : 'disabled'}`);
+	console.log(`  jobs:     ${config.turnJobsEnabled ? 'run after each turn' : 'off (run by hand with jobs.runDue)'}`);
 	console.log(`  qdrant:   ${serviceLine(qdrant)} ${config.qdrantUrl || ''}`);
 	printQdrantCollections(qdrant);
 	console.log(`  ollama:   ${serviceLine(ollama)} ${config.ollamaUrl || ''}`);
