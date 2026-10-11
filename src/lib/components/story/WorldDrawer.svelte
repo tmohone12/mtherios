@@ -1805,7 +1805,7 @@
 
 								{#if expandedChapter === chapter.id}
 									<div class="border-t border-[var(--border-primary)] px-2.5 py-2 space-y-2">
-										<p class="text-xs leading-relaxed text-[var(--text-muted)]">{chapter.summary}</p>
+										<p class="whitespace-pre-line text-xs leading-relaxed text-[var(--text-muted)]">{chapter.summary}</p>
 
 										{#if chapter.emotionalTone}
 											<div class="flex items-center gap-1.5">

@@ -28,7 +28,7 @@ import {
 import { uuid } from '$lib/utils/uuid';
 import type { PlayerSheet } from '$lib/utils/playerSheet';
 import { playerCapabilitiesSchema, readPlayerCapabilities, type PlayerCapabilities } from '$lib/contracts/playerCapabilities';
-import { summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
+import { readableMemorySummary } from '$lib/services/ai/context/mtheriosSummaryFormat';
 import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, EmbeddedImage, Agreement, FactionActionRecord, RumorRecord, Arc, Saga, Chapter, Scheme, StoryThread } from '$lib/types';
 import { projectionReconciliationPlan } from './backendProjectionSync';
 import { latestStoredContextReceipt } from '$lib/services/backendTurnContext';
@@ -1047,7 +1047,7 @@ class StoryStore {
 			endEntryId: sourceEntryIds[sourceEntryIds.length - 1] ?? asString(row.endEntryId),
 			entryCount: asNumber(metadata.entryCount, sourceEntryIds.length),
 			sourceEntryIds,
-			summary: summarizeMtheriosMemoryForRollup(asString(row.sceneOutcome, asString(row.summary))),
+			summary: readableMemorySummary(asString(row.sceneOutcome, asString(row.summary))),
 			startTime: null,
 			endTime: null,
 			keywords: asStringArray(metadata.legacyKeywords ?? row.keywords),

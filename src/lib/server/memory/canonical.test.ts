@@ -43,7 +43,7 @@ vi.mock('$lib/server/engine/canonicalSearch', () => ({
 }));
 
 import { assertSyncOpReplayMatches, listBackendShelves, listBackendStories, normalizeBootstrapOptions, restoreBackendStory, revertToContextCheckpoint, updateBackendShelf, upsertBackendArcFromLocal, upsertBackendChapterFromLocal, upsertBackendEntityFromEntry } from './canonical';
-import { summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
+import { readableMemorySummary, summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
 
 type PatchProposalRow = typeof patchProposals.$inferSelect;
 
@@ -495,6 +495,7 @@ describe('backend chapter character references', () => {
 		const existing = { id: 'chapter_yin_dinner', storyId: 'story_1', number: 12, title: 'Dinner', sceneOutcome: stored, metadata: {}, sourceEntryIds: [], sourceEventIds: [] };
 		for (const [summary, expected] of [
 			[summarizeMtheriosMemoryForRollup(stored), stored],
+			[readableMemorySummary(stored), stored],
 			['Aurion leaves the dinner early.', 'Aurion leaves the dinner early.'],
 		]) {
 			const { db, insertCalls } = createDbMock({ chapterRows: [existing] });

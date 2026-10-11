@@ -736,7 +736,7 @@
 								</button>
 							</div>
 
-							<p class="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">{chapter.summary}</p>
+							<p class="mt-2 whitespace-pre-line text-sm leading-relaxed text-[var(--text-secondary)]">{chapter.summary}</p>
 
 							{#if chapter.characters.length > 0 || chapter.locations.length > 0 || chapter.plotThreads.length > 0}
 								<div class="mt-3 flex flex-wrap gap-1.5">

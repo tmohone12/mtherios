@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractMtheriosSummarySection, formatMtheriosMemorySummary, replaceMtheriosStoryNarrative, summarizeMtheriosMemoryForContext, summarizeMtheriosMemoryForRollup } from './mtheriosSummaryFormat';
+import { extractMtheriosSummarySection, formatMtheriosMemorySummary, readableMemorySummary, replaceMtheriosStoryNarrative, summarizeMtheriosMemoryForContext, summarizeMtheriosMemoryForRollup } from './mtheriosSummaryFormat';
 
 describe('mtherios summary format', () => {
 	it('renders the continuity memory summary contract with entity ids', () => {
@@ -170,6 +170,15 @@ describe('mtherios summary format', () => {
 		expect(context).not.toContain('/roll');
 		expect(context).not.toContain('/pov');
 		expect(context).not.toContain('Veiled daughter');
+	});
+
+	it('shows a reader only the story summary, with its lines, and no checkpoint metadata', () => {
+		const summary = 'Aegon takes the Twins.\n- At the Twins: Emmon Frey yields the crossing to avoid burning.\nNow: Aegon rides for Riverrun.';
+		const stored = formatMtheriosMemorySummary({ checkpoint: 'Chapter covering 20 completed turns, transcript positions 1-40.', sourceCoverage: ['Transcript positions 1-40.'],
+			currentScene: 'Dusk | the Twins', recentStoryNarrative: summary, activeThreads: ['Edmure is still imprisoned.'] });
+		expect(readableMemorySummary(stored)).toBe(summary);
+		expect(readableMemorySummary(stored)).not.toContain('transcript positions');
+		expect(readableMemorySummary('An older free-text chapter summary.')).toBe('An older free-text chapter summary.');
 	});
 
 	it('replaces only the reader-facing story section while preserving continuity state', () => {

@@ -121,6 +121,13 @@ export function summarizeMtheriosMemoryForRollup(summary: string | null | undefi
 	].filter(Boolean).join(' ') || stripLegacyMemoryNoise(raw);
 }
 
+/** What a reader sees for a chapter or arc: its story summary with line breaks, without checkpoint metadata. */
+export function readableMemorySummary(summary: string | null | undefined): string {
+	const story = extractMtheriosSummarySection(summary, 'RECENT STORY STATE');
+	if (story && !sectionSentinel(story)) return story;
+	return summarizeMtheriosMemoryForRollup(summary);
+}
+
 export function summarizeMtheriosMemoryForContext(summary: string | null | undefined): string {
 	return summarizeMtheriosMemoryForRollup(summary);
 }
@@ -128,6 +135,13 @@ export function summarizeMtheriosMemoryForContext(summary: string | null | undef
 function clean(value: string | null | undefined, fallback = UNKNOWN): string {
 	const text = (value ?? '').replace(/\s+/g, ' ').trim();
 	return text || fallback;
+}
+
+/** Like clean(), but keeps line breaks: a summary's opening, bullets and Now line stay on their own lines. */
+function cleanLines(value: string | null | undefined): string {
+	return (value ?? '').replace(/\r\n/g, '\n').split('\n')
+		.map(line => line.replace(/[ \t]+/g, ' ').trim())
+		.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function cleanBullet(value: string): string {
@@ -184,7 +198,7 @@ export function formatMtheriosMemorySummary(input: MtheriosMemorySummaryInput): 
 	const sourceCoverage = input.sourceCoverage ?? [];
 	const currentScene = input.currentScene ?? input.currently;
 	const recentStoryState = input.recentStoryState ?? input.recent ?? [];
-	const recentStoryNarrative = clean(input.recentStoryNarrative, '');
+	const recentStoryNarrative = cleanLines(input.recentStoryNarrative);
 	const activeThreads = input.activeThreads ?? input.importantStrings ?? [];
 
 	return [

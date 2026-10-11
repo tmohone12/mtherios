@@ -550,6 +550,11 @@ export const chapterDeleteRequestSchema = z.object({
 	chapterId: z.string().min(1),
 });
 
+/** Regenerate one chapter's title, summary and accounts from its own transcript turns. */
+export const chapterRewriteSummaryRequestSchema = z.object({
+	chapterId: z.string().min(1),
+}).strict();
+
 export const chapterDeleteResponseSchema = z.object({
 	storyId: z.string(),
 	serverVersion: z.number().int().nonnegative(),

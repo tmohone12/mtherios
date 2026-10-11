@@ -46,7 +46,7 @@ import {
 } from '$lib/server/db/schema';
 import { TERMINAL_WORLD_DATABASE_SCHEMA_VERSION } from '$lib/server/db/worldDatabaseSchema';
 import { getServerMemoryConfig } from '$lib/server/env';
-import { summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
+import { readableMemorySummary, summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
 import {
 	createStoryRequestSchema,
 	indexedDbImportRequestSchema,
@@ -1238,9 +1238,10 @@ export async function upsertBackendChapterFromLocal(storyId: string, rawChapter:
 	const [story] = await db.select({ id: stories.id }).from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
 	const [existing] = await db.select().from(chapters).where(and(eq(chapters.storyId, storyId), eq(chapters.id, chapterId))).limit(1);
-	// Clients display and send back the condensed form of the stored account. When that text
-	// is unchanged (for example a title, tone or pin edit), keep the full account it came from.
-	const summary = existing && incomingSummary === summarizeMtheriosMemoryForRollup(existing.sceneOutcome).trim()
+	// Clients display and send back the reader (or older condensed) form of the stored account. When
+	// that text is unchanged (for example a title, tone or pin edit), keep the full account it came from.
+	const summary = existing && [readableMemorySummary(existing.sceneOutcome), summarizeMtheriosMemoryForRollup(existing.sceneOutcome)]
+		.some(shown => incomingSummary.replace(/\r\n/g, '\n') === shown.trim())
 		? existing.sceneOutcome
 		: incomingSummary;
 	const serverVersion = await bumpStoryVersion(storyId);
