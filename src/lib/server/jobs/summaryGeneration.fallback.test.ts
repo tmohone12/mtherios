@@ -266,3 +266,24 @@ it('halts fallbacks for a wrapped transport receipt persistence failure without 
 	await expect(generateChronologicalMemory(input)).rejects.toMatchObject({ retryable: false });
 	expect(mocks.generate).toHaveBeenCalledTimes(1);
 });
+
+it('combines oversized halves from their summaries and keeps every account', async () => {
+	const big = (label: string) => `${label} ${'Long transcript detail. '.repeat(1300)}`;
+	const sources = [{ id: 'turn_a', text: big('Mara boards.') }, { id: 'turn_b', text: big('The ship sails.') }];
+	const half = (account: string, narrative: string) => ({ model: 'same-model', finishReason: 'stop', text: JSON.stringify({ title: 'Half', narrative,
+		accounts: [{ sourceId: '1', summary: `${account} ${'Retained detail. '.repeat(1700)}` }] }) });
+	mocks.generate
+		.mockResolvedValueOnce(half('Mara boarded the ship.', 'Mara boards the ship at the harbor after paying the agreed fare to the captain, who promises passage north.'))
+		.mockResolvedValueOnce(half('The ship sailed north.', 'The ship sails north toward Braavos with Mara aboard while the crew watches for the autumn storms ahead.'))
+		.mockResolvedValueOnce({ model: 'same-model', finishReason: 'stop', text: JSON.stringify({ title: 'The Voyage North',
+			narrative: 'Mara boards at the harbor and sails north toward Braavos.\n- At the harbor: she pays the agreed fare.\nNow: at sea, storms ahead.',
+			accounts: [{ sourceId: '1', summary: 'Mara boards the ship.' }, { sourceId: '2', summary: 'The ship sails north.' }] }) });
+	const result = await generateChronologicalMemory({ storyId: 'test', kind: 'chapter', sources });
+	expect(mocks.generate).toHaveBeenCalledTimes(3);
+	expect(result.title).toBe('The Voyage North');
+	expect(result.accounts.map(account => account.sourceId)).toEqual(['turn_a', 'turn_b']);
+	expect(result.accounts[0].summary).toContain('Retained detail.');
+	const combinePrompt = mocks.generate.mock.calls[2][0].prompt as string;
+	expect(combinePrompt).toContain('paying the agreed fare');
+	expect(combinePrompt).not.toContain('Retained detail.');
+});

@@ -3,6 +3,9 @@ import { CHAPTER_TURN_COUNT } from '$lib/services/chapterCadence';
 import { summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
 type ChapterRow = typeof chapters.$inferSelect;
 
+/** One arc source must fit a single summary request (50,000 characters including instructions). */
+export const MAX_ARC_SOURCE_CHARS = 40_000;
+
 export function chapterSourceForArc(chapter: Pick<ChapterRow, 'id' | 'number' | 'title' | 'sceneOutcome' | 'sourceEntryIds' | 'metadata'>): { id: string; text: string } {
 	const accounts = chapter.metadata.sourceAccounts;
 	if (accounts !== undefined && accounts !== null) {
@@ -22,8 +25,11 @@ export function chapterSourceForArc(chapter: Pick<ChapterRow, 'id' | 'number' | 
 		}
 	}
 	// Legacy event-derived change lists are interpretations, not transcript history.
-	// Prefer retained turn accounts; use the full synopsis for chapters predating them.
-	return { id: chapter.id, text: `Chapter ${chapter.number}: ${chapter.title}\n${Array.isArray(accounts)
-		? accounts.map((raw, index) => `Turn ${index + 1}: ${(raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}).summary}`).join('\n\n')
-		: summarizeMtheriosMemoryForRollup(chapter.sceneOutcome)}` };
+	// Prefer retained turn accounts; use the full synopsis for chapters predating them, or whose
+	// accounts are too large for one summary request (long reviewed backfills).
+	const heading = `Chapter ${chapter.number}: ${chapter.title}`;
+	const synopsis = `${heading}\n${summarizeMtheriosMemoryForRollup(chapter.sceneOutcome)}`;
+	if (!Array.isArray(accounts)) return { id: chapter.id, text: synopsis };
+	const fromAccounts = `${heading}\n${accounts.map((raw, index) => `Turn ${index + 1}: ${(raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}).summary}`).join('\n\n')}`;
+	return { id: chapter.id, text: fromAccounts.length <= MAX_ARC_SOURCE_CHARS ? fromAccounts : synopsis };
 }

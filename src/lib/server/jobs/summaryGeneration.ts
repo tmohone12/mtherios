@@ -253,12 +253,17 @@ async function generateMemoryWithServices(input: MemoryInput, services: SummaryS
 			const first = await generateMemoryWithServices({ ...input, sources: input.sources.slice(0, middle), evidence: '' }, services);
 			const second = await generateMemoryWithServices({ ...input, sources: input.sources.slice(middle), evidence: '' }, services);
 			const accounts = [...first.accounts, ...second.accounts];
-			const combined = await generateMemoryWithServices({ ...input, summaryWindows: true, sources: [first, second].map((part, index) => ({
-				// Reader prose can omit conditions and quiet developments. Synthesis must read the retained facts.
-				id: `part_${index + 1}`, text: JSON.stringify({ title: part.title, accounts: part.accounts, endingScene: part.endingScene,
-					characters: part.characters, openThreads: part.openThreads, locations: part.locations,
+			// Reader prose can omit conditions and quiet developments, so synthesis reads the retained
+			// accounts. When those no longer fit one request, each part's summary stands in for its
+			// accounts; the complete accounts are still kept from the parts below.
+			const parts = (compact: boolean) => [first, second].map((part, index) => ({
+				id: `part_${index + 1}`, text: JSON.stringify({ title: part.title, ...(compact ? { summary: part.narrative } : { accounts: part.accounts }),
+					endingScene: part.endingScene, characters: part.characters, openThreads: part.openThreads, locations: part.locations,
 					keywords: part.keywords, threadChanges: part.threadChanges, newThreads: part.newThreads }),
-			})) }, services);
+			}));
+			const full = parts(false);
+			const fits = chronologicalMemoryPrompt(input.kind, full, input.evidence, input.campaignFacts, false, true).length <= MAX_SUMMARY_PROMPT_CHARS;
+			const combined = await generateMemoryWithServices({ ...input, summaryWindows: true, sources: fits ? full : parts(true) }, services);
 			validateSourceAccounts(accounts, input.sources.map(source => source.id));
 			return { ...combined, accounts, campaignFactReview: [...(first.campaignFactReview ?? []), ...(second.campaignFactReview ?? [])].slice(-8) };
 		}

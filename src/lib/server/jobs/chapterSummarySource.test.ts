@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chapterSourceForArc } from './chapterSummarySource';
+import { chapterSourceForArc, MAX_ARC_SOURCE_CHARS } from './chapterSummarySource';
 
 describe('chapter factual input to arc history', () => {
 	const chapter = { id: 'chapter_1', number: 1, title: 'The crossing', sceneOutcome: 'A short synopsis omitting the fare.',
@@ -23,6 +23,14 @@ describe('chapter factual input to arc history', () => {
 			[{ sourceId: 'foreign_turn', summary: 'An unrelated source account.' }, ...chapter.metadata.sourceAccounts.slice(1)]]) {
 			expect(() => chapterSourceForArc({ ...chapter, metadata: { sourceAccounts } })).toThrow('invalid source accounts');
 		}
+	});
+
+	it('uses the chapter synopsis when its accounts are too large for one summary request', () => {
+		const long = { ...chapter, metadata: { sourceAccounts: chapter.metadata.sourceAccounts.map(account => ({ ...account, summary: `${account.summary} ${'Detail. '.repeat(300)}` })) } };
+		const source = chapterSourceForArc(long);
+		expect(source.text).toContain(chapter.sceneOutcome);
+		expect(source.text.length).toBeLessThan(MAX_ARC_SOURCE_CHARS);
+		expect(source.text).not.toMatch(/INVENTED_/);
 	});
 
 	it('preserves the explicitly recorded size of reviewed historical backfills', () => {
