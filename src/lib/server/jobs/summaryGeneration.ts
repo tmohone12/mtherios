@@ -10,7 +10,8 @@ export interface SummarySource { id: string; text: string }
 const MAX_SUMMARY_PROMPT_CHARS = 50_000;
 // Bump for schema/validation or compiler semantics changes. Actual prompt policy
 // and generation limits also participate directly in every root/leaf identity.
-const SUMMARY_CHECKPOINT_VERSION = 'chronological-memory-v4/checkpoint-schema-2';
+// v5: an oversized split window is combined from its parts' summaries when their accounts no longer fit.
+const SUMMARY_CHECKPOINT_VERSION = 'chronological-memory-v5/checkpoint-schema-2';
 /** Reader-facing summary shape for chapters and arcs. The per-source accounts stay the complete record. */
 const CONCISE_SUMMARY_FORMAT = Object.freeze([
 	'Write the summary for a reader who wants to know quickly what happened. Start with one or two sentences: where it begins and what it is about.',
