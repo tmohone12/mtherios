@@ -47,6 +47,7 @@ import { buildBatchTurnMemoryPrompt, parseBatchTurnMemoryResult, type BatchTurnS
 import {
 	buildStateExtractionResponseSchema,
 	buildStateExtractionRepairPrompt,
+	parseRepairedStateExtraction,
 	classifierGenerationMaxTokens,
 	classifierRepairGeneration,
 	DEFAULT_STATE_EXTRACTION_SYSTEM,
@@ -3853,6 +3854,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 			});
 			extractionSystem = `${classifierSystem}\nRepair invalid extraction JSON. Return strict JSON only.`;
 			const repairGeneration = classifierRepairGeneration(classifierGeneration, extractionResult);
+			const initialExtractionText = extractionResult.text;
 			logMetadata.maxOutputTokens = repairGeneration.maxTokens;
 			logMetadata.compactRecovery = true;
 			attemptNumber += 1;
@@ -3893,7 +3895,8 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 					status: 'success', metadata: { ...logMetadata, parseOutcome: 'not_started', applyOutcome: 'skipped_source_invalid', reason: repairedSources.error } });
 				return { status: 'skipped_source_invalid', reason: repairedSources.error, operationCount: 0, chapterSummaryJobId };
 			}
-			parsedUpdate = timePhaseSync(recorder, 'job.extract_turn_state.parse_repaired_update', {}, () => parseStateExtractionResult(extractionResult.text));
+			parsedUpdate = timePhaseSync(recorder, 'job.extract_turn_state.parse_repaired_update', {}, () => parseRepairedStateExtraction(extractionResult.text, initialExtractionText));
+			if (parsedUpdate.warnings.length) Object.assign(logMetadata, { salvageWarnings: parsedUpdate.warnings });
 		}
 		const realDueEventCandidates = dueEventCandidates.filter(candidate => !isFactionCueCandidate(candidate.id));
 		const feedbackAppliedEventIds = realDueEventCandidates.length ? await applyDueEventFeedback({

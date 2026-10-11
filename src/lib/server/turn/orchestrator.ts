@@ -654,12 +654,18 @@ function normalizeStateExtractionShape(raw: unknown): unknown {
 	return wrapped ? { ...root, update: normalizedUpdate } : normalizedUpdate;
 }
 
-export function parseStateExtractionResult(text: string): {
+export interface ParsedStateExtraction {
 	update: z.infer<typeof worldStateUpdateSchema>;
 	dueEventFeedback: z.infer<typeof dueEventFeedbackSchema>[];
 	warnings: string[];
 	operationCount: number;
-} {
+}
+
+export function parseStateExtractionResult(text: string): ParsedStateExtraction {
+	return validateStateExtraction(normalizedStateExtraction(text));
+}
+
+function normalizedStateExtraction(text: string): unknown {
 	if (!text.trim()) throw new Error('Classifier returned an empty state extraction response.');
 	let raw = normalizeStateExtractionShape(parseJsonFromGeneratedText(text));
 	const root = asRecord(raw);
@@ -690,6 +696,10 @@ export function parseStateExtractionResult(text: string): {
 		if ((feedback.outcome === 'deferred' || feedback.outcome === 'uncertain') && feedback.evidenceSpan == null)
 			feedback.evidenceSpan = '';
 	}
+	return raw;
+}
+
+function validateStateExtraction(raw: unknown): ParsedStateExtraction {
 	const wrapped = strictExtractedUpdateSchema.safeParse(raw);
 	if (wrapped.success) {
 		return {
@@ -708,6 +718,81 @@ export function parseStateExtractionResult(text: string): {
 		throw new Error(`Classifier returned an invalid state extraction response: ${issues}`);
 	}
 	return { update: direct.data, dueEventFeedback: [], warnings: [], operationCount: turnUpdateOperationCount(direct.data) };
+}
+
+/**
+ * Parse a repaired extraction. If it is still invalid, keep the valid parts of it (or of the first
+ * answer): malformed list items and unknown keys are dropped and the rest is validated again.
+ */
+export function parseRepairedStateExtraction(repairedText: string, initialText?: string | null): ParsedStateExtraction {
+	try {
+		return parseStateExtractionResult(repairedText);
+	} catch (error) {
+		for (const text of [repairedText, initialText]) {
+			const salvaged = text ? salvageStateExtractionResult(text) : null;
+			if (salvaged) return salvaged;
+		}
+		throw error;
+	}
+}
+
+const SALVAGE_ROUNDS = 6;
+
+/**
+ * Drops list items and unknown keys that fail validation, then validates again. Any other invalid
+ * field, or an answer whose every change was dropped, yields null. The dropped paths are returned
+ * as a warning so the receipt shows what was not saved.
+ */
+export function salvageStateExtractionResult(text: string): ParsedStateExtraction | null {
+	let raw: unknown;
+	try { raw = normalizedStateExtraction(text); } catch { return null; }
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+	const root = raw as Record<string, unknown>;
+	const candidate = structuredClone(Object.prototype.hasOwnProperty.call(root, 'update') ? root : { update: root });
+	const dropped: string[] = [];
+	for (let round = 0; round < SALVAGE_ROUNDS; round += 1) {
+		const result = strictExtractedUpdateSchema.safeParse(candidate);
+		if (result.success) {
+			const operationCount = turnUpdateOperationCount(result.data.update);
+			const dueEventFeedback = result.data.dueEventFeedback ?? [];
+			if (dropped.length && operationCount === 0 && dueEventFeedback.length === 0) return null;
+			return { update: result.data.update, dueEventFeedback, operationCount,
+				warnings: dropped.length ? [`Dropped malformed extraction items: ${dropped.slice(0, 12).join(', ')}`] : [] };
+		}
+		const removals = new Map<string, { list: unknown[]; index: number; label: string }>();
+		for (const issue of result.error.issues) {
+			if (issue.code === 'unrecognized_keys') {
+				const target = valueAtPath(candidate, issue.path);
+				if (!target || typeof target !== 'object' || Array.isArray(target)) return null;
+				for (const key of issue.keys) {
+					delete (target as Record<string, unknown>)[key];
+					dropped.push([...issue.path, key].join('.'));
+				}
+				continue;
+			}
+			const at = issue.path.findIndex(segment => typeof segment === 'number');
+			if (at < 0) return null;
+			const list = valueAtPath(candidate, issue.path.slice(0, at));
+			if (!Array.isArray(list)) return null;
+			const listPath = issue.path.slice(0, at).join('.');
+			const index = issue.path[at] as number;
+			removals.set(`${listPath}#${index}`, { list, index, label: `${listPath}[${index}]` });
+		}
+		for (const removal of [...removals.values()].sort((left, right) => right.index - left.index)) {
+			removal.list.splice(removal.index, 1);
+			dropped.push(removal.label);
+		}
+	}
+	return null;
+}
+
+function valueAtPath(root: unknown, path: readonly PropertyKey[]): unknown {
+	let current = root;
+	for (const segment of path) {
+		if (current === null || typeof current !== 'object') return undefined;
+		current = (current as Record<PropertyKey, unknown>)[segment];
+	}
+	return current;
 }
 
 export function buildStateExtractionRepairPrompt(input: {
@@ -4744,6 +4829,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				});
 				const repairSystem = `${classifierExtractionSystem}\nRepair invalid extraction JSON. Return strict JSON only.`;
 				const repairGeneration = classifierRepairGeneration(classifierGeneration, extractionResult);
+				const initialExtractionText = extractionResult.text;
 				extractionResult = await generateServerTextWithMetrics({
 					profile: classifierProfile,
 					onAttempt: attempt => logGenerationCall({ storyId: request.storyId, clientTurnId: request.clientTurnId, serviceId: 'classifier',
@@ -4773,7 +4859,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 					totalTokens: extractionResult.usage.totalTokens,
 					retryCount: extractionResult.retryCount ?? 0,
 				});
-				parsedUpdate = recorder.timeSync('turn.validation.parse_repaired_update', {}, () => parseStateExtractionResult(extractionResult.text));
+				parsedUpdate = recorder.timeSync('turn.validation.parse_repaired_update', {}, () => parseRepairedStateExtraction(extractionResult.text, initialExtractionText));
 				warnings.push('State extraction recovered with one compact repair pass.');
 			}
 			classifierParseSucceeded = true;
