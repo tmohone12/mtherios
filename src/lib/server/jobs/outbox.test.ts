@@ -362,10 +362,10 @@ describe('job retry classification', () => {
 			expect(backendJobRetryBlockReason({ ...job, lastError: 'Server LLM request timed out after 120000ms.' }), type).toMatch(/^Manual retry is blocked/);
 			expect(backendJobRetryBlockReason({ ...job, lastError: null }), type).toMatch(/^Manual retry is blocked/);
 		}
-		expect(backendJobRetryBlockReason({ type: 'rollup_saga', status: 'failed', lockedAt: null, lockedBy: null, lastError: configuration })).toContain('effects need review');
+		// Saga rollups are deterministic stable-ID upserts, so they are replay-safe for any failure.
+		expect(backendJobRetryBlockReason({ type: 'rollup_saga', status: 'failed', lockedAt: null, lockedBy: null, lastError: 'Deadlock detected.' })).toBeNull();
 		const guard = compiledSql(backendJobRetryWhere('story_1', 'job_1', '2026-09-05 21:00:00.123456+00'));
-		expect(guard.params).toEqual(expect.arrayContaining(['summarize_chapter', 'rollup_arc']));
-		expect(guard.params).not.toContain('rollup_saga');
+		expect(guard.params).toEqual(expect.arrayContaining(['summarize_chapter', 'rollup_arc', 'rollup_saga']));
 	});
 
 	it('refuses to requeue an arc job whose failure was not configuration', async () => {

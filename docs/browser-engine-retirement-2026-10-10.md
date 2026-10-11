@@ -92,18 +92,17 @@ Removed tests: 53 in 15 deleted test files and 46 in kept files, all exercising 
 
 A second pass resolved four of the original follow-ups and removed further dead code:
 
-- **Retry after configuration failures.** `summarize_chapter` and `rollup_arc` can be retried manually when their recorded failure is a missing model configuration, which is raised before any request or write (the chapter window records `needs_configuration` and reuses its frozen inputs). Other failures of those types, and `rollup_saga` (deterministic, no model call), still need review.
+- **Retry after configuration failures.** `summarize_chapter` and `rollup_arc` can be retried manually when their recorded failure is a missing model configuration, which is raised before any request or write (the chapter window records `needs_configuration` and reuses its frozen inputs). Other failures of those types still need review. `rollup_saga` joined the replay-safe list: it builds a deterministic summary of covered arcs and upserts it under a stable saga ID with its memory node in one transaction, recomputing coverage first.
 - **Chapter edits keep the stored account.** `chapter.upsert` keeps the stored bracketed account when the incoming summary equals its condensed display form, so a title, tone or pin edit no longer replaces it; an edited summary still replaces it. The chapter memory node and character-reference proposals now receive the full account in that case.
 - **Arc record commands validate coverage.** `arc.create`/`arc.upsert` accept a new or changed chapter set only when every chapter is saved in the story, listed once, and in no other arc; an edit that leaves the chapter set unchanged is not re-checked. The memory panel now shows "Not saved: …" when a chapter or arc save is rejected instead of failing silently.
 - **Wording.** User-facing "terminal" and "Pi" labels in Settings, Agent Tools, the prompts panel and the app navigation now say "story server", "server sync" and "recoverable runtime"; "subagent" was dropped from the settings groups. Diagnostics panels and server error text keep their technical names.
 - **Retired tasks.** The model-task registry marks `sagaCondensation`, `loreManagement` and `entryRefinement` retired (their only implementations were the removed browser services); the settings groups and prompt list no longer offer them, and saved values still migrate.
 - **Dead code.** A compiler unused-locals pass removed 13 unreferenced functions and their types from `jobs/processor.ts` (an old faction-tag sync, dynastic pairing, world-tick text and memory helpers, an unused projection check; about 450 lines), the GM-authority/economy imports `promptPacket.ts` no longer uses (now owned by `narrativePreset.ts`), and smaller unused imports and locals. The only remaining unused local in non-test code is in an operator benchmark script.
 
-Verification after this pass: `svelte-check` 0/0; 2,375 tests passed, 0 failed, 297 skipped (4 new tests).
+Verification after this pass: `svelte-check` 0/0; production build succeeds; 2,375 tests passed, 0 failed, 297 skipped (4 new tests).
 
 ## Further work (prioritized)
 
 1. **Declare Plan still calls a model from the browser** with the Classifier settings. Move plan structuring behind a server command with a validated proposal.
 2. **Header time waits for extraction.** The narration header's time and location are applied with the validated state update (`applyValidatedTurnUpdate`), and browser turns defer extraction, so the clock and scene location move only after `extract_turn_state` succeeds. With the job worker off or a failed extraction they stay put (observed in the runtime check). Decide whether the header proposal should apply in the turn transaction independently of extraction.
-3. **Saga rollups cannot be retried manually.** `rollup_saga` is deterministic and upserts a stable saga ID, so it is a candidate for the replay-safe list after a review of its thread-reconciliation effects.
-4. Unused per-table CRUD helpers in `services/database.ts` and command wrappers in `serverStories.ts` predate this work; trim with the IndexedDB compatibility review.
+3. Unused per-table CRUD helpers in `services/database.ts` and command wrappers in `serverStories.ts` predate this work; trim with the IndexedDB compatibility review.
