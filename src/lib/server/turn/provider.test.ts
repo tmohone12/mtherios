@@ -457,6 +457,9 @@ describe('server generation provider cache hints', () => {
 			cacheMode: 'openrouter',
 			structuredOutputs: true,
 		});
+		// Gemini rejects strict state-patch schemas; it is sent JSON mode instead.
+		expect(getProviderCapabilities({ providerType: 'openrouter', apiKey: 'test-key' } as any, 'google/gemini-3.8-flash').structuredOutputs).toBe(false);
+		expect(getProviderCapabilities({ providerType: 'google', apiKey: 'test-key' } as any, 'gemini-2.5-pro').structuredOutputs).toBe(false);
 		expect(getProviderCapabilities({ providerType: 'z-ai', apiKey: 'test-key' } as any, 'glm-5.2')).toMatchObject({
 			cacheMode: 'none',
 			structuredOutputs: true,

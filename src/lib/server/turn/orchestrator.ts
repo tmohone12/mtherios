@@ -4473,8 +4473,9 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 						operation: 'turn.scene_header', profile: headerProfile, result: generationAttemptResult(attempt), status: attempt.status, error: attempt.error ?? undefined }),
 					model: headerService.generation.model,
 					temperature: headerService.generation.temperature ?? 0.1,
-					maxTokens: headerService.generation.maxTokens ?? 300,
-					reasoningEffort: 'off',
+					maxTokens: headerService.generation.maxTokens ?? 1500,
+					// Some models require reasoning; the profile's setting applies, as for other Classifier tasks.
+					reasoningEffort: headerService.generation.reasoningEffort,
 					system: headerRequest.system,
 					prompt: headerRequest.prompt,
 					maxRetries: 0,
