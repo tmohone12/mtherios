@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {countTokens} from '$lib/utils/tokens';
 import { getDb } from '$lib/server/db/client';
-import { agreements, backendJobs, entities, factions, factionGoals, factionMemberships, factionProjects, factionResources, npcBeliefs, npcEventLinks, relationships, stories, storyEvents, storyThreads, syncOps } from '$lib/server/db/schema';
+import { agreements, backendJobs, entities, factions, factionGoals, factionMemberships, factionProjects, factionResources, relationships, stories, storyEvents, storyThreads, syncOps } from '$lib/server/db/schema';
 import { requireResolvedServiceProfile, resolveServiceGeneration } from '$lib/server/engine/llmSettings';
 import { generateServerTextWithMetrics, parseJsonFromGeneratedText, ServerGenerationError, type ServerGenerationResult } from '$lib/server/turn/provider';
 import { chooseJevOption, isJevModel } from '$lib/server/turn/jev';

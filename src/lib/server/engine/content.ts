@@ -7,7 +7,7 @@ import { setCanonicalFolderHidden, copyCanonicalFolder, relocateCanonicalFolder,
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
-import { canonicalContentSchema, contentBundleSchema, contentImportSchema, contentListSchema, contentHistorySchema, contentRestoreSchema, contentOrganizeSchema, contentReadSchema, contentScopeSchema, contentTypeSaveSchema, contentUpdateSchema, contentWriteSchema, type ContentDefinition, type ContentField, type ContentItem, type ContentType } from '$lib/contracts/content';
+import { contentBundleSchema, contentImportSchema, contentListSchema, contentHistorySchema, contentRestoreSchema, contentOrganizeSchema, contentReadSchema, contentScopeSchema, contentTypeSaveSchema, contentUpdateSchema, contentWriteSchema, type ContentDefinition, type ContentField, type ContentItem, type ContentType } from '$lib/contracts/content';
 import { assertSafeJson, mergeJsonUpdate, MutationError } from './mutationSafety';
 import { validateContentData, validateContentDefinition, validateContentFolder } from './contentValidation';
 import { enqueueAutomaticCover } from './automaticCovers';

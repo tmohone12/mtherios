@@ -283,7 +283,7 @@
 		const existing = getProfileByProvider(providerType);
 		const normalizedKeyRef = terminalApiKeyRef.trim() || null;
 		if (normalizedKeyRef?.replace(/^env:/, '').startsWith('sk-')) {
-			testStatus = 'error'; testMessage = 'Put the secret in API Key. Terminal key ref must be a name such as env:NANOGPT_API_KEY.'; return;
+			testStatus = 'error'; testMessage = 'Put the secret in API Key. The server key name must look like env:NANOGPT_API_KEY.'; return;
 		}
 
 		if (existing) {
@@ -322,10 +322,10 @@
 			await patchTerminalLlmSettings([{ serviceId: 'narrative', providerType, baseUrl: customUrl || providerConfig?.baseUrl || null, model: settings.narrativeSettings.model || null, apiKeyRef: normalizedKeyRef || defaultTerminalApiKeyRef(providerType) }], apiKey.trim() ? [{ ref: normalizedKeyRef || defaultTerminalApiKeyRef(providerType), value: apiKey.trim() }] : []);
 			await refreshTerminalLlmSettings();
 			testStatus = 'success';
-			testMessage = 'Saved provider and synced terminal runtime settings.';
+			testMessage = 'Saved the provider and updated the server model settings.';
 		} catch (error) {
 			testStatus = 'error';
-			testMessage = `Saved locally, but terminal sync failed: ${error instanceof Error ? error.message : String(error)}`;
+			testMessage = `Saved in this browser, but the server could not be updated: ${error instanceof Error ? error.message : String(error)}`;
 		}
 	}
 
@@ -671,7 +671,7 @@
 					</div>
 
 					<!-- Generation params -->
-					<p class="text-xs text-[var(--text-muted)]">These settings mirror the terminal. API keys stay on the server unless you explicitly replace one.</p>
+					<p class="text-xs text-[var(--text-muted)]">These settings are saved on the story server. API keys stay on the server unless you explicitly replace one.</p>
 					<button class="min-h-11 text-xs text-[var(--text-accent)]" onclick={() => refreshTerminalLlmSettings().then(() => terminalSettingsError = '').catch(error => terminalSettingsError = String(error))}>Refresh from server</button>
 					<div class="space-y-1.5">
 						<label for="narrative-reasoning" class="text-xs text-[var(--text-muted)]">Reasoning (server setting)</label>
@@ -786,7 +786,7 @@
 							{/if}
 
 							<div class="space-y-1.5">
-								<label for="terminal-key-ref-{editingProvider}" class="text-xs text-[var(--text-muted)]">Terminal key ref</label>
+								<label for="terminal-key-ref-{editingProvider}" class="text-xs text-[var(--text-muted)]">Server key name</label>
 								<input
 									id="terminal-key-ref-{editingProvider}"
 									type="text"
@@ -886,12 +886,12 @@
 						<ContextWindow />
 					</div>
 					<div class="space-y-3 border-t border-[var(--border-primary)] pt-4">
-						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Terminal Runtime</h4>
+						<h4 class="font-display text-xs uppercase tracking-wider text-[var(--text-accent)]">Story server</h4>
 						<div class="flex items-start gap-3 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
 							<span class="mt-0.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">On</span>
 							<span class="min-w-0">
-								<span class="block text-xs font-medium text-[var(--text-primary)]">Terminal-bound turns</span>
-								<span class="mt-1 block text-[10px] leading-relaxed text-[var(--text-muted)]">Bound stories always route turns through the engine command gateway.</span>
+								<span class="block text-xs font-medium text-[var(--text-primary)]">Turns run on the server</span>
+								<span class="mt-1 block text-[10px] leading-relaxed text-[var(--text-muted)]">Narration, memory extraction and summaries run on the story server. A story saved only in this browser is imported before play.</span>
 							</span>
 						</div>
 					</div>

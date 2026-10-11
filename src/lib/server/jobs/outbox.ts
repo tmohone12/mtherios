@@ -52,12 +52,27 @@ export const manuallyRetryableBackendJobTypes = [
 	'update_faction_pressure',
 ] as const satisfies readonly BackendJobType[];
 
+// A missing model configuration fails these before any request or write (the chapter
+// window records `needs_configuration` and reuses its frozen inputs), so once settings
+// are fixed an explicit retry is safe. Other failures still need review.
+export const configurationRetryableBackendJobTypes = [
+	'summarize_chapter',
+	'rollup_arc',
+] as const satisfies readonly BackendJobType[];
+
+const explicitlyRetryableBackendJobTypes: readonly BackendJobType[] = [...manuallyRetryableBackendJobTypes, ...configurationRetryableBackendJobTypes];
+
 type BackendJobRetryInspection = Pick<typeof backendJobs.$inferSelect, 'status' | 'type' | 'lockedAt' | 'lockedBy'> &
 	Partial<Pick<typeof backendJobs.$inferSelect, 'lastError' | 'metadata'>>;
 
 export function backendJobRetryBlockReason(job: BackendJobRetryInspection): string | null {
 	if (job.status !== 'failed') return 'Only failed jobs can be retried.';
 	if (job.lockedAt !== null || job.lockedBy !== null) return 'This job still has a worker lock. Refresh after recovery.';
+	const cause = typeof job.lastError === 'string' ? classifyBackendJobFailure(job.lastError).cause : null;
+	if ((configurationRetryableBackendJobTypes as readonly string[]).includes(job.type)) {
+		return cause === 'configuration' ? null
+			: 'Manual retry is blocked for this job type unless it failed on missing model configuration; review its effects before another run.';
+	}
 	if (!(manuallyRetryableBackendJobTypes as readonly string[]).includes(job.type)) {
 		return 'Manual retry is not available for this job type; its effects need review before another run.';
 	}
@@ -65,7 +80,6 @@ export function backendJobRetryBlockReason(job: BackendJobRetryInspection): stri
 	const recordedRetryable = metadata?.lastFailure && typeof metadata.lastFailure === 'object' && !Array.isArray(metadata.lastFailure)
 		? (metadata.lastFailure as Record<string, unknown>).retryable
 		: undefined;
-	const cause = typeof job.lastError === 'string' ? classifyBackendJobFailure(job.lastError).cause : null;
 	// A changed classifier can repair bad output; the explicit retry remains source- and lock-guarded.
 	const correctedExtraction = job.type === 'extract_turn_state' && cause === 'provider_output';
 	// A configuration failure is permanent until settings change; then an explicit retry is the fix.
@@ -84,7 +98,7 @@ export function backendJobRetryWhere(storyId: string | null, jobId: string, expe
 		eq(backendJobs.id, jobId),
 		eq(backendJobs.status, 'failed'),
 		eq(backendJobs.updatedAt, expectedUpdatedAt),
-		inArray(backendJobs.type, [...manuallyRetryableBackendJobTypes]),
+		inArray(backendJobs.type, [...explicitlyRetryableBackendJobTypes]),
 		isNull(backendJobs.lockedAt),
 		isNull(backendJobs.lockedBy),
 	)!;

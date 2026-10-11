@@ -3,7 +3,7 @@
  * Persists all settings to IndexedDB. Loads on init.
  */
 
-import { getSetting, setSetting, getAllSettings } from '$lib/services/database';
+import { setSetting, getAllSettings } from '$lib/services/database';
 import { PROVIDERS, type ProviderConfig } from '$lib/services/ai/sdk/providers/config';
 import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET, DEFAULT_RECENT_DIALOGUE_TOKENS, DEFAULT_RECENT_DIALOGUE_TURNS, normalizeRecentDialogueTokens, normalizeRecentDialogueTurns } from '$lib/services/memorySettings';
 import { FIXED_CHAPTER_SETTINGS } from '$lib/services/chapterCadence';
@@ -67,8 +67,8 @@ export interface ServiceProfile {
 export const SERVICE_PROFILES: ServiceProfile[] = [
 	{ id: 'narrative', label: 'GameMaster', description: 'Story model; expand services for World State and other tools', icon: '✍️', serviceIds: ['narrative', 'storySetupAssist', 'smallBrain', 'actorDecision', 'continuityReview', 'characterUpdate', 'strategicWorldBrain'] },
 	{ id: 'dialogue', label: 'NPC Dialogue', description: 'Optional model for spoken lines after the GameMaster draft', icon: '💬', serviceIds: ['dialogue'] },
-	{ id: 'memoryContext', label: 'Memory & Context subagent', description: 'Turn memory, chapter/arc/saga history, lore management, and entry refinement', icon: '🧠', serviceIds: ['classifier', 'memory', 'arcCondensation', 'sagaCondensation', 'loreManagement', 'entryRefinement'] },
-	{ id: 'guidance', label: 'Player Guidance subagent', description: 'Optional player-visible suggestions', icon: '🧭', serviceIds: ['suggestions'] },
+	{ id: 'memoryContext', label: 'Memory & Context', description: 'Turn memory extraction and chapter/arc history', icon: '🧠', serviceIds: ['classifier', 'memory', 'arcCondensation'] },
+	{ id: 'guidance', label: 'Player Guidance', description: 'Optional player-visible suggestions', icon: '🧭', serviceIds: ['suggestions'] },
 	{ id: 'assistant', label: 'Authoring Assistant', description: 'Authoring model and bounded batch helpers', icon: 'A', serviceIds: ['assistant', 'batchAuthoring'] },
 	{ id: 'image', label: 'Image Generation', description: 'Scene and character image generation', icon: '🎨', serviceIds: ['imageGeneration'] },
 ];

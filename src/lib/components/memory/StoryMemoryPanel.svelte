@@ -38,6 +38,7 @@
 	let editingChapter = $state<Chapter | null>(null);
 	let editingArc = $state<Arc | null>(null);
 	let savingEdit = $state(false);
+	let editError = $state<string | null>(null);
 	let deletingRecordId = $state<string | null>(null);
 	let contextCheckpoints = $state<Array<Record<string, unknown>>>([]);
 	let checkpointLabel = $state('');
@@ -347,6 +348,7 @@
 
 	function closeChapterEditor() {
 		editingChapter = null;
+		editError = null;
 		chapterTitleDraft = '';
 		chapterSummaryDraft = '';
 		chapterKeywordsDraft = '';
@@ -360,6 +362,7 @@
 	async function saveChapterEdit() {
 		if (!editingChapter || savingEdit) return;
 		savingEdit = true;
+		editError = null;
 		const updates: Partial<Chapter> = {
 			title: chapterTitleDraft.trim() || null,
 			summary: chapterSummaryDraft.trim(),
@@ -377,6 +380,8 @@
 				chapter.id === editingChapter?.id ? updatedChapter : chapter,
 			);
 			closeChapterEditor();
+		} catch (error) {
+			editError = error instanceof Error ? error.message : String(error);
 		} finally {
 			savingEdit = false;
 		}
@@ -394,6 +399,7 @@
 
 	function closeArcEditor() {
 		editingArc = null;
+		editError = null;
 		arcTitleDraft = '';
 		arcSummaryDraft = '';
 		arcKeyPointsDraft = '';
@@ -416,6 +422,7 @@
 	async function saveArcEdit() {
 		if (!editingArc || savingEdit) return;
 		savingEdit = true;
+		editError = null;
 		const updates: Partial<Arc> = {
 			title: arcTitleDraft.trim() || `Arc ${editingArc.arcNumber}`,
 			summary: arcSummaryDraft.trim(),
@@ -431,6 +438,8 @@
 				arc.id === editingArc?.id ? updatedArc : arc,
 			);
 			closeArcEditor();
+		} catch (error) {
+			editError = error instanceof Error ? error.message : String(error);
 		} finally {
 			savingEdit = false;
 		}
@@ -898,6 +907,7 @@
 				</div>
 			</div>
 
+			{#if editError}<p class="border-t border-[var(--border-primary)] px-5 pt-3 text-xs text-rose-400" role="alert">Not saved: {editError}</p>{/if}
 			<div class="flex gap-3 border-t border-[var(--border-primary)] px-5 py-4">
 				<button onclick={closeChapterEditor} class="min-h-11 flex-1 rounded-lg border border-[var(--border-primary)] py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">Cancel</button>
 				<button onclick={saveChapterEdit} disabled={savingEdit || !chapterSummaryDraft.trim()} class="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] py-2 font-display text-xs font-semibold tracking-wide text-[var(--bg-primary)] disabled:opacity-50">
@@ -955,6 +965,7 @@
 				</div>
 			</div>
 
+			{#if editError}<p class="border-t border-[var(--border-primary)] px-5 pt-3 text-xs text-rose-400" role="alert">Not saved: {editError}</p>{/if}
 			<div class="flex gap-3 border-t border-[var(--border-primary)] px-5 py-4">
 				<button onclick={closeArcEditor} class="min-h-11 flex-1 rounded-lg border border-[var(--border-primary)] py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">Cancel</button>
 				<button onclick={saveArcEdit} disabled={savingEdit || !arcSummaryDraft.trim()} class="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] py-2 font-display text-xs font-semibold tracking-wide text-[var(--bg-primary)] disabled:opacity-50">

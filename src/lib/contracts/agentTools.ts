@@ -8,8 +8,8 @@ export type AgentTool = z.infer<typeof agentToolSchema>;
 
 export const agentSettingLabels = {
 	// gmPiRuntime is retired (every new GM turn uses Pi); the key stays readable for saved documents.
-	gmPiRuntime: 'Pi GM runtime for new turns (retired; always on)', assistantPiRuntime: 'Pi Assistant runtime for new messages',
-	gmResearch: 'GM Research', gmAdaptiveResearch: 'Adaptive GM research for direct turns', gmNames: 'GM Names', gmPlayerRolls: 'Player roll requests', gmQuestions: 'GM questions',
+	gmPiRuntime: 'Recoverable GM runtime for new turns (retired; always on)', assistantPiRuntime: 'Recoverable Assistant runtime for new messages',
+	gmResearch: 'GM Research', gmAdaptiveResearch: 'Adaptive GM research for CLI and script turns', gmNames: 'GM Names', gmPlayerRolls: 'Player roll requests', gmQuestions: 'GM questions',
 	gmImages: 'GM chat images', assistantQuestions: 'Assistant questions', assistantSubagents: 'Assistant batch helpers', assistantImages: 'Assistant chat images', automaticCovers: 'Automatic project covers',
 } as const;
 export type AgentSettingKey = keyof typeof agentSettingLabels;

@@ -18,7 +18,7 @@ import {
 	validateMemoryEmbeddingVector,
 } from '$lib/server/memory/embeddings';
 import { isNarrativeCommandInput, NARRATIVE_COMMAND_PATTERN, NARRATIVE_CONTROL_PREFIX_PATTERN } from '$lib/services/ai/context/controlInput';
-import { buildMemoryPacket, isOocControlText, lookupMentioned, MEMORY_REVISION_KEYS, MEMORY_SUPERSESSION_KEYS, memoryQueryTokens, normalizeLookup, relevantMemoryExcerpt, scoreMemoryNode } from './ranking';
+import { buildMemoryPacket, isOocControlText, MEMORY_REVISION_KEYS, MEMORY_SUPERSESSION_KEYS, memoryQueryTokens, normalizeLookup, relevantMemoryExcerpt, scoreMemoryNode } from './ranking';
 import { retrieveMemorySource } from './retrievalSource';
 import { currentServerProviderHooks, type ServerProviderRequestHooks } from '$lib/server/turn/provider';
 

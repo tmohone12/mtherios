@@ -172,11 +172,11 @@
 			const changedServices = new Set(Object.keys(editingConfigs));
 			for (const profileId of Object.keys(editingProfileModels)) for (const serviceId of SERVICE_PROFILES.find(profile => profile.id === profileId)?.serviceIds ?? []) changedServices.add(serviceId);
 			await syncTerminalLlmSettingsFromBrowser([...changedServices]);
-			terminalSyncStatus = 'Terminal runtime settings synced.';
+			terminalSyncStatus = 'Server model settings updated.';
 			editingConfigs = {};
 			editingProfileModels = {};
 		} catch (error) {
-			terminalSyncStatus = `Local settings saved; terminal sync failed: ${error instanceof Error ? error.message : String(error)}`;
+			terminalSyncStatus = `Saved in this browser, but the server could not be updated: ${error instanceof Error ? error.message : String(error)}`;
 		} finally {
 			saving = false;
 		}

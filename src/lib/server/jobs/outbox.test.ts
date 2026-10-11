@@ -354,6 +354,30 @@ describe('job retry classification', () => {
 		expect(backendJobRetryBlockReason({ ...job, lockedBy: 'worker' })).toContain('worker lock');
 	});
 
+	it('allows chapter and arc jobs to be retried only after a configuration failure', () => {
+		const configuration = 'Model configuration needed: Summaries has no model profile. Choose one in Settings → Models.';
+		for (const type of ['summarize_chapter', 'rollup_arc']) {
+			const job = { type, status: 'failed', lockedAt: null, lockedBy: null, lastError: configuration };
+			expect(backendJobRetryBlockReason(job), type).toBeNull();
+			expect(backendJobRetryBlockReason({ ...job, lastError: 'Server LLM request timed out after 120000ms.' }), type).toMatch(/^Manual retry is blocked/);
+			expect(backendJobRetryBlockReason({ ...job, lastError: null }), type).toMatch(/^Manual retry is blocked/);
+		}
+		expect(backendJobRetryBlockReason({ type: 'rollup_saga', status: 'failed', lockedAt: null, lockedBy: null, lastError: configuration })).toContain('effects need review');
+		const guard = compiledSql(backendJobRetryWhere('story_1', 'job_1', '2026-09-05 21:00:00.123456+00'));
+		expect(guard.params).toEqual(expect.arrayContaining(['summarize_chapter', 'rollup_arc']));
+		expect(guard.params).not.toContain('rollup_saga');
+	});
+
+	it('refuses to requeue an arc job whose failure was not configuration', async () => {
+		Object.assign(db.retryLookup, { type: 'rollup_arc', lastError: 'Arc summary output was invalid.' });
+		try {
+			await expect(retryBackendJob({ storyId: 'story_1', jobId: 'job_1', expectedUpdatedAt: '2026-09-05T21:00:00Z' })).rejects.toThrow(/^Manual retry is blocked/);
+			expect(db.update).not.toHaveBeenCalled();
+		} finally {
+			db.retryLookup.type = 'extract_turn_state';
+		}
+	});
+
 	it('compares story, exact observed version, status, type and both locks atomically', () => {
 		const guard = compiledSql(backendJobRetryWhere('story_1', 'job_1', '2026-09-05 21:00:00.123456+00'));
 		for (const field of ['story_id', 'id', 'status', 'updated_at', 'type', 'locked_at', 'locked_by']) expect(guard.sql).toContain(`"backend_jobs"."${field}"`);

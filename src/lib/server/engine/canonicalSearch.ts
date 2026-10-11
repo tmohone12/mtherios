@@ -162,9 +162,6 @@ function sectionTypeForSemanticPayload(payload: JsonRecord, requestedType?: stri
 	return recordType;
 }
 
-function compactList(value: unknown): string {
-	return asStringArray(value).map((item) => item.trim()).filter(Boolean).join('; ');
-}
 
 function compactMergedList(...values: unknown[]): string {
 	return [...new Set(values.flatMap((value) => asStringArray(value).map((item) => item.trim()).filter(Boolean)))].join('; ');

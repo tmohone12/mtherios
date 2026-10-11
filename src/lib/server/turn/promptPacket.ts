@@ -8,12 +8,9 @@ import { createHash } from 'node:crypto';
 import { CHARACTER_IDENTITY_FIELDS } from '$lib/contracts/automaticCharacterUpdate';
 import type { TurnContext } from './context';
 import type { GmTimelineBrief, GmTimelineBriefEvent, RetrievedMemoryPacket } from '$lib/contracts/memory';
-import { buildEconomyScaleBlock, buildWorldScaleBlock } from '$lib/services/ai/context/economyScale';
 import { summarizeMtheriosMemoryForContext } from '$lib/services/ai/context/mtheriosSummaryFormat';
-import { resolveStoryPromptPack } from '$lib/components/wizard/storyPromptPacks';
 import { appliedStrategicFrameForStory, buildStrategicNarratorBlock, normalizeStrategicFrameActivations, selectStrategicSceneCue } from '$lib/services/ai/context/strategicFramePromptCard';
 import { latestNarrationForPov, renderParallelPovDirective } from '$lib/services/ai/context/parallelPov';
-import { GM_NPC_AGENCY_BLOCK, GM_OUTCOME_AUTHORITY_BLOCK, GM_TURN_BOUNDARY_BLOCK, GM_TURN_WORKFLOW_BLOCK } from '$lib/services/ai/context/gmAuthority';
 import { isNarrativeCommandInput, isNarrativeControlInput } from '$lib/services/ai/context/controlInput';
 import { containsSceneActorMention } from '$lib/services/ai/context/sceneActorMention';
 import { isPlotBrainFrameFresh, PLOT_BRAIN_STALE_AFTER_TURNS } from '$lib/server/plotBrain/lifecycle';
@@ -731,14 +728,6 @@ function narratorHistoryEntries(ctx: TurnContext): TurnContext['recentEntries'] 
 	});
 }
 
-function latestNarrationHeader(ctx: TurnContext): string {
-	const latestNarration = latestNarrationForPov(narratorHistoryEntries(ctx), ctx.scenePov, ctx.recentEntries);
-	const firstLine = latestNarration?.content
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.find(Boolean);
-	return firstLine ? compact(firstLine, 900) : '';
-}
 
 function latestNarrationExcerpt(ctx: TurnContext): string {
 	const latestNarration = latestNarrationForPov(narratorHistoryEntries(ctx), ctx.scenePov, ctx.recentEntries);

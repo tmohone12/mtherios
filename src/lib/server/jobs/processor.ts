@@ -7,10 +7,9 @@ import { countTokens } from '$lib/utils/tokens';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '$lib/server/db/client';
-import { agreements, arcs, backendJobs, chapters, continuityWarnings, entities, factionGoals, factionMemberships, factionProjects, factionResources, factions, memoryNodes, npcBeliefs, npcEventLinks, patchProposals, relationships, sagas, stories, storyEntries, storyEvents, storyThreads } from '$lib/server/db/schema';
+import { agreements, arcs, backendJobs, chapters, continuityWarnings, entities, factionGoals, factionProjects, factionResources, factions, memoryNodes, npcBeliefs, npcEventLinks, patchProposals, relationships, sagas, stories, storyEntries, storyEvents, storyThreads } from '$lib/server/db/schema';
 import { gmTurnReceiptSchema, type MemoryNode } from '$lib/contracts/memory';
 import { campaignStateExtractionContext, type CampaignStateFact, type ChapterCampaignFactAction } from '$lib/contracts/campaignState';
-import { getServerMemoryConfig } from '$lib/server/env';
 import { CHAPTER_TURN_COUNT, CHAPTERS_PER_ARC, selectArcRollupBatches, selectCompletedChapterTurns, selectNextChapterWindow } from '$lib/services/chapterCadence';
 export { selectArcRollupBatches } from '$lib/services/chapterCadence';
 import { generateChronologicalMemory, type MemoryInput } from './summaryGeneration';
@@ -32,8 +31,7 @@ import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
 import { generationAttemptResult, recordGenerationApiCalls, reuseGenerationResult } from '$lib/server/engine/generationAccounting';
 import { publishEngineEvent } from '$lib/server/engine/events';
 import { resolveServiceGeneration } from '$lib/server/engine/llmSettings';
-import { getActorDecisionView } from '$lib/server/engine/gmTools';
-import { chooseJevOption, getJevCooldownRemainingMs, isJevModel } from '$lib/server/turn/jev';
+import { getJevCooldownRemainingMs } from '$lib/server/turn/jev';
 import { createTimingRecorder, type TimingEntry, type TimingRecorder } from '$lib/server/performance/timing';
 import { mapWithConcurrency, readGenerationConcurrency } from '$lib/server/performance/concurrency';
 import { buildTurnDebugSnapshot } from '$lib/server/turn/debugSnapshot';
@@ -69,7 +67,7 @@ import {
 	type ServerGenerationAttempt,
 } from '$lib/server/turn/provider';
 import { extractMtheriosSummarySection, formatMtheriosMemorySummary, summarizeMtheriosMemoryForContext, summarizeMtheriosMemoryForRollup, type MtheriosCharacterState } from '$lib/services/ai/context/mtheriosSummaryFormat';
-import { plotBrainLifecycleState, type PlotBrainLifecycleState } from '$lib/server/plotBrain/lifecycle';
+import { type PlotBrainLifecycleState } from '$lib/server/plotBrain/lifecycle';
 import { closeThreadPressure } from '$lib/server/engine/plotEditing';
 import { applyDueEventFeedback, applyFactionCueFeedback, dueEventCandidateSchema, isFactionCueCandidate, type DueEventCandidate } from '$lib/server/events/dueEventFeedback';
 import {
@@ -81,14 +79,8 @@ import {
 } from '$lib/server/plotBrain/chapterThreads';
 import { auditDueFactionProjects } from '$lib/server/factions/projects';
 import {
-	buildFactionMovePlan,
 	canonicalFactionIdentity,
-	eligibleFactionMoveVariants,
-	inferFactionDoctrine,
 	isWorldSimEligibleFaction,
-	isExplicitDynasticParticipant,
-	selectFactionWorldTickCandidates,
-	validFactionTag,
 	type FactionDoctrineKind,
 	type FactionMovePlan,
 } from '$lib/server/factions/autonomy';
@@ -108,10 +100,7 @@ export type BackendJobRow = AnyBackendJobRow & { storyId: string };
 type ArcRow = typeof arcs.$inferSelect;
 export type ChapterRow = typeof chapters.$inferSelect;
 type FactionRow = typeof factions.$inferSelect;
-type FactionGoalRow = typeof factionGoals.$inferSelect;
-type FactionMembershipRow = typeof factionMemberships.$inferSelect;
 type FactionProjectRow = typeof factionProjects.$inferSelect;
-type FactionResourceRow = typeof factionResources.$inferSelect;
 type EntityRow = typeof entities.$inferSelect;
 export type StoryEntryRow = typeof storyEntries.$inferSelect;
 export type StoryEventRow = typeof storyEvents.$inferSelect;
@@ -164,29 +153,6 @@ export function projectionSourceEventsMatch(expected: ProjectionEventSourceRow[]
 	});
 }
 
-async function projectionSourcesStillMatch(input: {
-	storyId: string;
-	entries?: ProjectionSourceRow[];
-	events?: ProjectionEventSourceRow[];
-}, db: Pick<ProcessorDb, 'select'> | ProcessorTransaction = getDb(), lock = false): Promise<boolean> {
-	const entryQuery = input.entries?.length
-		? db.select({ id: storyEntries.id, position: storyEntries.position, content: storyEntries.content, serverVersion: storyEntries.serverVersion,
-			type: storyEntries.type, parentId: storyEntries.parentId, branchId: storyEntries.branchId, metadata: storyEntries.metadata })
-			.from(storyEntries)
-			.where(and(eq(storyEntries.storyId, input.storyId), inArray(storyEntries.id, input.entries.map((entry) => entry.id))))
-		: null;
-	const eventQuery = input.events?.length
-		? db.select({ id: storyEvents.id, status: storyEvents.status, title: storyEvents.title, body: storyEvents.body, sourceEntryIds: storyEvents.sourceEntryIds, serverVersion: storyEvents.serverVersion })
-			.from(storyEvents)
-			.where(and(eq(storyEvents.storyId, input.storyId), inArray(storyEvents.id, input.events.map((event) => event.id))))
-		: null;
-	const [currentEntries, currentEvents] = await Promise.all([
-		entryQuery ? lock ? entryQuery.for('share') : entryQuery : Promise.resolve([]),
-		eventQuery ? lock ? eventQuery.for('share') : eventQuery : Promise.resolve([]),
-	]);
-	return (!input.entries?.length || projectionSourceEntriesMatch(input.entries, currentEntries))
-		&& (!input.events?.length || projectionSourceEventsMatch(input.events, currentEvents));
-}
 
 async function projectionChaptersStillMatch(storyId: string, expected: Array<Pick<ChapterRow, 'id' | 'serverVersion' | 'metadata' | 'sourceEntryIds' | 'sourceEventIds'>>): Promise<boolean> {
 	if (expected.length === 0) return true;
@@ -1018,191 +984,6 @@ async function bumpStoryVersion(storyId: string): Promise<number> {
 	return row?.serverVersion ?? 1;
 }
 
-async function syncCharacterFactionTags(storyId: string, now: string): Promise<{
-	createdFactions: number;
-	createdMemberships: number;
-	serverVersion: number | null;
-}> {
-	const db = getDb();
-	const [characterRows, factionRows, membershipRows] = await Promise.all([
-		db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.type, 'character'))).limit(1000),
-		db.select().from(factions).where(eq(factions.storyId, storyId)).limit(1000),
-		db.select().from(factionMemberships).where(eq(factionMemberships.storyId, storyId)).limit(3000),
-	]);
-	const existingMemberships = new Set(membershipRows
-		.filter((membership) => membership.entityId)
-		.map((membership) => `${membership.factionId}:${membership.entityId}`));
-	const taggedMembers = new Map<string, { name: string; members: EntityRow[] }>();
-	for (const character of characterRows) {
-		const state = asRecord(character.state);
-		const metadata = asRecord(character.metadata);
-		const lifeStatus = normalizedCharacterReference(typeof state.lifeStatus === 'string' ? state.lifeStatus : '');
-		if (character.status !== 'active'
-			|| character.visibility === 'secret'
-			|| state.activeEra === false
-			|| metadata.activeEra === false
-			|| ['dead', 'deceased', 'historical', 'inactive'].includes(lifeStatus)) continue;
-		const factionTags = uniqueStrings([
-			...asStringArray(state.factionTags),
-			...asStringArray(state.faction_tags),
-			...asStringArray(metadata.factionTags),
-			...asStringArray(metadata.faction_tags),
-		]);
-		for (const rawTag of factionTags) {
-			const name = rawTag.trim();
-			if (!validFactionTag(name)) continue;
-			const key = normalizedCharacterReference(name);
-			const group = taggedMembers.get(key) ?? { name, members: [] };
-			if (!group.members.some((member) => member.id === character.id)) group.members.push(character);
-			taggedMembers.set(key, group);
-		}
-	}
-	const membersByFactionId = new Map<string, Set<string>>();
-	for (const faction of factionRows) {
-		membersByFactionId.set(faction.id, new Set(asStringArray(faction.memberEntityIds)));
-	}
-	for (const membership of membershipRows) {
-		if (!membership.entityId || membership.status === 'archived') continue;
-		const members = membersByFactionId.get(membership.factionId) ?? new Set<string>();
-		members.add(membership.entityId);
-		membersByFactionId.set(membership.factionId, members);
-	}
-	const factionForTag = (key: string, group: { members: EntityRow[] }): FactionRow | undefined => {
-		const exact = factionRows.filter((faction) => factionCanReceiveCharacterTagSync(faction)
-			&& normalizedCharacterReference(faction.name) === key);
-		const canonicalExact = exact.find((faction) => asRecord(faction.metadata).sourceType !== 'character_faction_tag');
-		if (canonicalExact) return canonicalExact;
-		const groupMemberIds = new Set(group.members.map((member) => member.id));
-		const keyTokens = key.split(' ').filter(Boolean);
-		const linked = factionRows
-			.filter((faction) => factionCanReceiveCharacterTagSync(faction)
-				&& asRecord(faction.metadata).sourceType !== 'character_faction_tag')
-			.map((faction) => {
-				const candidateKey = normalizedCharacterReference(faction.name);
-				const candidateTokens = new Set(candidateKey.split(' ').filter(Boolean));
-				const sharedMembers = [...(membersByFactionId.get(faction.id) ?? [])]
-					.filter((id) => groupMemberIds.has(id)).length;
-				const nameMatch = keyTokens.length > 0 && keyTokens.every((token) => candidateTokens.has(token));
-				return { faction, candidateTokens: candidateTokens.size, sharedMembers, nameMatch };
-			})
-			.filter((item) => item.sharedMembers > 0 && item.nameMatch)
-			.sort((a, b) => (b.sharedMembers - a.sharedMembers) || (a.candidateTokens - b.candidateTokens));
-		return linked[0]?.faction ?? exact[0];
-	};
-	const changes = [...taggedMembers.entries()].filter(([key, group]) => {
-		const faction = factionForTag(key, group);
-		if (!faction) return true;
-		const metadata = asRecord(faction.metadata);
-		if (metadata.sourceType === 'character_faction_tag' && !isWorldSimEligibleFaction(faction)
-			&& (metadata.worldSimEnabled !== false || metadata.needsReview !== true
-				|| faction.pressure > 0 || asStringArray(faction.goals).length > 0)) return true;
-		const memberIds = new Set(asStringArray(faction.memberEntityIds));
-		return group.members.some((member) => !memberIds.has(member.id) || !existingMemberships.has(`${faction.id}:${member.id}`));
-	});
-	if (changes.length === 0) return { createdFactions: 0, createdMemberships: 0, serverVersion: null };
-
-	const serverVersion = await bumpStoryVersion(storyId);
-	let createdFactions = 0;
-	let createdMemberships = 0;
-	await db.transaction(async (tx) => {
-		for (const [key, group] of changes) {
-			let faction = factionForTag(key, group);
-			if (!faction) {
-				const factionId = stableId('faction_tag', [storyId, key]);
-				const memberEntityIds = group.members.map((member) => member.id);
-				await tx.insert(factions).values({
-					id: factionId,
-					storyId,
-					entityId: null,
-					name: group.name,
-					goals: [],
-					resources: {},
-					memberEntityIds,
-					territoryIds: [],
-					allies: [],
-					enemies: [],
-					pressure: 0,
-					metadata: {
-						sourceType: 'character_faction_tag',
-						worldSimEnabled: false,
-						currentStoryEvidence: true,
-						needsReview: true,
-						factionType: inferFactionDoctrine({ name: group.name }),
-					},
-					sourceEntryIds: uniqueStrings(group.members.flatMap((member) => asStringArray(member.sourceEntryIds))),
-					sourceEventIds: [],
-					sourcePatchIds: uniqueStrings(group.members.flatMap((member) => asStringArray(member.sourcePatchIds))),
-					serverVersion,
-					createdAt: now,
-					updatedAt: now,
-				}).onConflictDoNothing();
-				faction = {
-					id: factionId,
-					storyId,
-					entityId: null,
-					name: group.name,
-					goals: [],
-					resources: {},
-					memberEntityIds,
-					territoryIds: [],
-					allies: [],
-					enemies: [],
-					pressure: 0,
-					metadata: { sourceType: 'character_faction_tag', worldSimEnabled: false, currentStoryEvidence: true, needsReview: true, factionType: inferFactionDoctrine({ name: group.name }) },
-					sourceEntryIds: [], sourceEventIds: [], sourcePatchIds: [], serverVersion, createdAt: now, updatedAt: now,
-				};
-				factionRows.push(faction);
-				createdFactions += 1;
-			} else {
-				const memberEntityIds = uniqueStrings([...asStringArray(faction.memberEntityIds), ...group.members.map((member) => member.id)]);
-				const metadata = asRecord(faction.metadata);
-				const generatedTag = metadata.sourceType === 'character_faction_tag' && !isWorldSimEligibleFaction(faction);
-				await tx.update(factions).set({
-					memberEntityIds,
-					...(generatedTag ? {
-						goals: [],
-						pressure: 0,
-						metadata: {
-							...metadata,
-							worldSimEnabled: false,
-							currentStoryEvidence: true,
-							needsReview: true,
-							factionType: metadata.factionType ?? inferFactionDoctrine({ name: faction.name, metadata }),
-						},
-					} : {}),
-					sourceEntryIds: uniqueStrings([...asStringArray(faction.sourceEntryIds), ...group.members.flatMap((member) => asStringArray(member.sourceEntryIds))]),
-					sourcePatchIds: uniqueStrings([...asStringArray(faction.sourcePatchIds), ...group.members.flatMap((member) => asStringArray(member.sourcePatchIds))]),
-					serverVersion,
-					updatedAt: now,
-				}).where(and(eq(factions.storyId, storyId), eq(factions.id, faction.id)));
-			}
-			for (const member of group.members) {
-				const membershipKey = `${faction.id}:${member.id}`;
-				if (existingMemberships.has(membershipKey)) continue;
-				await tx.insert(factionMemberships).values({
-					id: stableId('faction_membership_tag', [storyId, faction.id, member.id]),
-					storyId,
-					factionId: faction.id,
-					entityId: member.id,
-					role: 'member_or_associate',
-					rank: null,
-					status: 'active',
-					visibility: 'player_known',
-					metadata: { sourceType: 'character_faction_tag', factionTag: group.name, needsReview: true },
-					sourceEntryIds: asStringArray(member.sourceEntryIds),
-					sourceEventIds: [],
-					sourcePatchIds: asStringArray(member.sourcePatchIds),
-					serverVersion,
-					createdAt: now,
-					updatedAt: now,
-				}).onConflictDoNothing();
-				existingMemberships.add(membershipKey);
-				createdMemberships += 1;
-			}
-		}
-	});
-	return { createdFactions, createdMemberships, serverVersion };
-}
 
 function generationErrorResult(error: unknown): ServerGenerationError['result'] | null {
 	return error instanceof ServerGenerationError ? error.result : null;
@@ -1694,23 +1475,8 @@ async function updateFactionPressure(job: BackendJobRow, recorder?: TimingRecord
 	};
 }
 
-function normalizedFactionResourceKey(value: string): string {
-	return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-}
 
-function numericFactionResourceEntries(value: unknown): Array<{ key: string; amount: number }> {
-	return Object.entries(asRecord(value))
-		.filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] > 0)
-		.map(([key, amount]) => ({ key, amount }));
-}
 
-function factionProjectCanPay(project: FactionProjectRow, resources: FactionResourceRow[]): boolean {
-	return numericFactionResourceEntries(project.costs).every((cost) => {
-		const key = normalizedFactionResourceKey(cost.key);
-		const resource = resources.find((row) => normalizedFactionResourceKey(row.kind) === key || normalizedFactionResourceKey(row.name) === key);
-		return typeof resource?.amount === 'number' && resource.amount >= cost.amount;
-	});
-}
 
 export function factionProjectIsAutonomous(project: Pick<FactionProjectRow, 'metadata'>): boolean {
 	const metadata = asRecord(project.metadata);
@@ -1735,16 +1501,6 @@ export function factionProjectPausesAmbient(project: Pick<FactionProjectRow, 'st
 		&& !factionProjectIsReady(project, currentTurn);
 }
 
-function linkedFactionDoctrine(faction: FactionRow, entityById: Map<string, EntityRow>): FactionDoctrineKind {
-	const entity = faction.entityId ? entityById.get(faction.entityId) : undefined;
-	return inferFactionDoctrine({
-		name: faction.name,
-		metadata: faction.metadata,
-		entityMetadata: entity?.metadata,
-		entityState: entity?.state,
-		entityDescription: entity?.description,
-	});
-}
 
 export function factionIsCurrentEra(faction: FactionRow, entityById: Map<string, EntityRow>): boolean {
 	const entity = faction.entityId ? entityById.get(faction.entityId) : undefined;
@@ -1824,191 +1580,11 @@ export function chooseFactionTarget(input: {
 		|| a.id.localeCompare(b.id))[0] ?? null;
 }
 
-function blockedMarriageParticipantKeys(
-	agreementRows: Array<typeof agreements.$inferSelect>,
-	relationshipRows: Array<typeof relationships.$inferSelect>,
-): Set<string> {
-	const blocked = new Set<string>();
-	for (const agreement of agreementRows) {
-		if (agreement.status !== 'active' || !/marriage|betrothal/i.test(agreement.category)) continue;
-		for (const party of asStringArray(agreement.parties)) {
-			blocked.add(party);
-			blocked.add(normalizedCharacterReference(party));
-		}
-	}
-	for (const relationship of relationshipRows) {
-		if (!/spouse|married|betrothed/i.test(relationship.type)) continue;
-		blocked.add(relationship.sourceEntityId);
-		blocked.add(relationship.targetEntityId);
-	}
-	return blocked;
-}
 
-function explicitDynasticCandidates(input: {
-	factionId: string;
-	memberships: FactionMembershipRow[];
-	entityById: Map<string, EntityRow>;
-	blocked: Set<string>;
-}): EntityRow[] {
-	return input.memberships
-		.filter((membership) => membership.factionId === input.factionId && membership.status === 'active' && membership.entityId)
-		.map((membership) => ({ membership, entity: input.entityById.get(membership.entityId!) }))
-		.filter((item): item is { membership: FactionMembershipRow; entity: EntityRow } => Boolean(item.entity))
-		.filter(({ membership, entity }) => isExplicitDynasticParticipant({
-			membership,
-			entity,
-			blocked: input.blocked.has(entity.id) || input.blocked.has(normalizedCharacterReference(entity.name)),
-		}))
-		.map(({ entity }) => entity)
-		.sort((a, b) => a.name.localeCompare(b.name));
-}
 
-function pairHasCloseKinRelationship(
-	subjectId: string,
-	targetId: string,
-	relationshipRows: Array<typeof relationships.$inferSelect>,
-): boolean {
-	return relationshipRows.some((relationship) => {
-		if (!/parent|child|sibling|grandparent|grandchild/i.test(relationship.type)) return false;
-		return relationship.sourceEntityId === subjectId && relationship.targetEntityId === targetId
-			|| relationship.sourceEntityId === targetId && relationship.targetEntityId === subjectId;
-	});
-}
 
-function selectDynasticPair(input: {
-	actingFactionId: string;
-	targetFactionId: string | null;
-	memberships: FactionMembershipRow[];
-	entityById: Map<string, EntityRow>;
-	agreementRows: Array<typeof agreements.$inferSelect>;
-	relationshipRows: Array<typeof relationships.$inferSelect>;
-	currentTurn: number;
-	preferredSubjectEntityId?: string | null;
-	preferredTargetEntityId?: string | null;
-	reservedEntityIds?: ReadonlySet<string>;
-}): { subjectEntityId: string; subjectName: string; targetEntityId: string; targetName: string } | null {
-	if (!input.targetFactionId || input.targetFactionId === input.actingFactionId) return null;
-	const blocked = blockedMarriageParticipantKeys(input.agreementRows, input.relationshipRows);
-	for (const entityId of input.reservedEntityIds ?? []) blocked.add(entityId);
-	const subjects = explicitDynasticCandidates({ factionId: input.actingFactionId, memberships: input.memberships, entityById: input.entityById, blocked });
-	const targets = explicitDynasticCandidates({ factionId: input.targetFactionId, memberships: input.memberships, entityById: input.entityById, blocked });
-	const pairs = subjects.flatMap((subject) => targets
-		.filter((target) => target.id !== subject.id && !pairHasCloseKinRelationship(subject.id, target.id, input.relationshipRows))
-		.map((target) => ({
-			subjectEntityId: subject.id,
-			subjectName: subject.name,
-			targetEntityId: target.id,
-				targetName: target.name,
-			})));
-	if (pairs.length === 0) return null;
-	const preferred = pairs.find((pair) =>
-		(!input.preferredSubjectEntityId || pair.subjectEntityId === input.preferredSubjectEntityId)
-		&& (!input.preferredTargetEntityId || pair.targetEntityId === input.preferredTargetEntityId));
-	if (preferred) return preferred;
-	if (input.preferredSubjectEntityId || input.preferredTargetEntityId) return null;
-	return pairs[Math.abs(input.currentTurn) % pairs.length] ?? null;
-}
 
-function worldTickBody(pressure: number, plan: FactionMovePlan, reasons: FactionPressureReason[]): string {
-	const recent = reasons.slice(-4).reverse();
-	const drivers = recent.length > 0
-		? recent.map((reason) => `- ${reason.title || reason.eventType} (+${reason.delta}, ${reason.reason})`).join('\n')
-		: '- Pressure accumulated from recent canonical events.';
-	return [
-		`${plan.action} Pressure was ${pressure}/100.`,
-		`Motivation: ${plan.motivation}`,
-		`Consequences:\n${plan.consequences.map((consequence) => `- ${consequence}`).join('\n')}`,
-		`Recent drivers:\n${drivers}`,
-	].join('\n\n');
-}
 
-async function upsertWorldTickMemoryNode(input: {
-	eventId: string;
-	faction: FactionRow;
-	title: string;
-	body: string;
-	pressure: number;
-	plan: FactionMovePlan;
-	publicSignalEventId: string;
-	serverVersion: number;
-	now: string;
-	jobId: string;
-	db?: DbWriter;
-}): Promise<void> {
-	const { plan } = input;
-	await (input.db ?? getDb()).insert(memoryNodes).values({
-		id: `mem_world_tick_${input.eventId}`,
-		storyId: input.faction.storyId,
-		type: 'faction',
-		title: input.title,
-		content: input.body,
-		summary: snippet(input.body, 360),
-		keywords: ['faction', 'world_tick', 'pressure', plan.urgency, plan.factionKind, plan.actionType],
-		entityIds: uniqueStrings([input.faction.entityId ?? '', ...asStringArray(input.faction.memberEntityIds), ...plan.actorEntityIds, ...plan.targetEntityIds]),
-		factionIds: uniqueStrings([input.faction.id, ...plan.targetFactionIds]),
-		threadIds: [],
-		locationId: null,
-		visibility: 'secret',
-		importance: clamp(0.6 + (input.pressure / 240), 0.6, 0.98),
-		sourceEntryIds: [],
-		sourceEventIds: [input.eventId],
-		sourcePatchIds: [],
-		metadata: {
-			sourceType: 'terminal_world_sim_tick',
-			jobId: input.jobId,
-			factionId: input.faction.id,
-			factionName: input.faction.name,
-			pressure: input.pressure,
-			action: plan.action,
-			actionType: plan.actionType,
-			factionKind: plan.factionKind,
-			projectKind: plan.projectKind,
-			target: plan.targetFactionNames[0] ?? null,
-			motivation: plan.motivation,
-			consequences: plan.consequences,
-			urgency: plan.urgency,
-			affectedRegions: asStringArray(input.faction.territoryIds),
-			projectId: plan.projectId,
-			publicSignalEventId: input.publicSignalEventId,
-		},
-		serverVersion: input.serverVersion,
-		createdAt: input.now,
-		updatedAt: input.now,
-	}).onConflictDoUpdate({
-		target: memoryNodes.id,
-		set: {
-			title: input.title,
-			content: input.body,
-			summary: snippet(input.body, 360),
-			keywords: ['faction', 'world_tick', 'pressure', plan.urgency, plan.factionKind, plan.actionType],
-			entityIds: uniqueStrings([input.faction.entityId ?? '', ...asStringArray(input.faction.memberEntityIds), ...plan.actorEntityIds, ...plan.targetEntityIds]),
-			factionIds: uniqueStrings([input.faction.id, ...plan.targetFactionIds]),
-			visibility: 'secret',
-			importance: clamp(0.6 + (input.pressure / 240), 0.6, 0.98),
-			sourceEventIds: [input.eventId],
-			metadata: {
-				sourceType: 'terminal_world_sim_tick',
-				jobId: input.jobId,
-				factionId: input.faction.id,
-				factionName: input.faction.name,
-				pressure: input.pressure,
-				action: plan.action,
-				actionType: plan.actionType,
-				factionKind: plan.factionKind,
-				projectKind: plan.projectKind,
-				target: plan.targetFactionNames[0] ?? null,
-				motivation: plan.motivation,
-				consequences: plan.consequences,
-				urgency: plan.urgency,
-				affectedRegions: asStringArray(input.faction.territoryIds),
-				projectId: plan.projectId,
-				publicSignalEventId: input.publicSignalEventId,
-			},
-			serverVersion: input.serverVersion,
-			updatedAt: input.now,
-		},
-	});
-}
 
 export function eligibleNpcBackgroundActors(rows: EntityRow[], narration: string, currentTurn: number, playerEntityId?: string): EntityRow[] {
 	const visibleText = narration.toLowerCase();

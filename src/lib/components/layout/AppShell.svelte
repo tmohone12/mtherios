@@ -24,7 +24,7 @@
 	const systemItems = [
 		{ id: 'database' as const, icon: Compass, label: 'World explorer' },
 		{ id: 'engine' as const, icon: Server, label: 'Runtime status' },
-		{ id: 'terminal' as const, icon: Cpu, label: 'Terminal sync' },
+		{ id: 'terminal' as const, icon: Cpu, label: 'Server sync' },
 	];
 	const activeLabel = $derived([...workspaceItems, ...systemItems].find(item => item.id === activePanel)?.label ?? 'Story library');
 	function selectPanel(id: Panel) {

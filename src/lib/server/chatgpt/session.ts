@@ -1,7 +1,7 @@
 import { randomBytes,randomUUID,createHash,createPublicKey,verify,timingSafeEqual } from 'node:crypto';
 import { createServer,type Server } from 'node:http';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { ChatgptStore,ChatgptAccount,ChatgptRecords } from './storage';
+import type { ChatgptStore,ChatgptAccount } from './storage';
 import { listChatgptPlanModels,type ChatgptPlanSession } from '$lib/server/engine/chatgptPlanAdapter';
 
 const issuer='https://auth.openai.com', resource='https://api.openai.com/v1';

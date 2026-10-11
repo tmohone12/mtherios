@@ -3364,8 +3364,6 @@ export async function prepareServerTurnContext(
 	});
 	const narrativeDebugPrompt = `${narrativeSystemDynamic}\n\n${narrativePrompt}`;
 	const promptMessageChars = prompt.messages.reduce((sum, message) => sum + message.content.length, 0);
-	const promptTotalChars = narrativeSystem.length + narrativeSystemDynamic.length + narrativePrompt.length + promptMessageChars;
-	const promptTokenEstimate = Math.max(1, Math.ceil(promptTotalChars / 4));
 	recorder.record('turn.prompt_payload', 0, {
 		systemChars: narrativeSystem.length,
 		stablePrefixTokens: countTokens(narrativeSystem),
