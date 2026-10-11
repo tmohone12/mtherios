@@ -16,9 +16,18 @@ vi.mock('node:fs/promises', async original => {
 vi.mock('./content', () => ({ readContent: mocks.readContent }));
 vi.mock('./canonicalContent', () => ({ readCanonicalWorkspace: mocks.readCanonicalWorkspace }));
 const roots: string[] = [];
+// Fixtures need a mountable parent; a worktree under a dot folder (for example .claude) is not one,
+// and the OS temp folder sits under AppData on Windows. Use the nearest ancestor without a dot segment.
+const mountableBase = (() => {
+  const { root } = path.parse(process.cwd());
+  const parts = process.cwd().slice(root.length).split(path.sep);
+  const hidden = parts.findIndex(part => part.startsWith('.'));
+  return path.join(root, ...(hidden === -1 ? parts : parts.slice(0, hidden)));
+})();
+const fixturePrefix = path.join(mountableBase, 'source-files-test-');
 const authority = { role: 'gm' as const, projectId: 'project', gameId: 'game', branchId: 'branch', povCharacter: 'Mara' };
 async function fixture(): Promise<SourceMount> {
-  const root = await realpath(await mkdtemp(path.join(process.cwd(), 'source-files-test-')));
+  const root = await realpath(await mkdtemp(fixturePrefix));
   roots.push(root);
   return { id: 'mount', project_id: 'project', name: 'References', root_path: root, revision: 1, roles: ['gm', 'assistant'] };
 }
@@ -26,7 +35,7 @@ beforeEach(() => { vi.clearAllMocks(); vi.mocked(filesystem.open).mockReset(); v
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) {
-    if (!root.startsWith(path.join(process.cwd(), 'source-files-test-'))) throw new Error('Unexpected temporary test path.');
+    if (!root.startsWith(fixturePrefix)) throw new Error('Unexpected temporary test path.');
     await rm(root, { recursive: true, force: true });
   }
 });

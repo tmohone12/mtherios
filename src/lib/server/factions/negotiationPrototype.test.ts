@@ -190,7 +190,7 @@ describe('isolated grain-for-concession negotiation', () => {
 		const fetch = vi.fn(() => { throw new Error('Network forbidden in prototype.'); }); vi.stubGlobal('fetch', fetch);
 		await runGrainNegotiationDemo(); expect(fetch).not.toHaveBeenCalled();
 		const source = readFileSync(new URL('./negotiationPrototype.ts', import.meta.url), 'utf8');
-		const runtimeImports = source.split('\n').filter(line => /^import (?!type\b)/.test(line));
+		const runtimeImports = source.split(/\r?\n/).filter(line => /^import (?!type\b)/.test(line));
 		expect(runtimeImports).toEqual(["import { z } from 'zod';"]);
 		const state = createGrainNegotiationSandbox();
 		await expect(runNegotiationStep({ ...state, scope: 'live-story' } as unknown as NegotiationSandbox, step(state), adapters('wait'))).rejects.toThrow();

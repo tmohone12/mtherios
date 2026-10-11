@@ -109,8 +109,11 @@ describe('source-linked scene continuity', () => {
 		const retrieved = emptyRetrievedMemoryPacket('story_test', 'Continue.');
 		const large = buildServerTurnPrompt(ctx, retrieved, 'next', { recentDialogueTokens: 12_000 });
 		const small = buildServerTurnPrompt(ctx, retrieved, 'next', { recentDialogueTokens: 4_000 });
+		// A token-only allowance has no turn cap: the whole history fits in 12,000 tokens, so the
+		// opening promise stays verbatim; at 4,000 tokens it survives only as a checkpoint note.
+		expect(rows.reduce((total, row) => total + countTokens(row.content), 0)).toBeLessThan(8_000);
 		expect(large.dialogueSourceIds).toContain('entry_4');
-		expect(large.dialogueSourceIds).not.toContain('entry_1');
+		expect(large.dialogueSourceIds).toContain('entry_1');
 		expect(small.dialogueSourceIds).not.toContain('entry_4');
 		expect(small.messages.reduce((total, message) => total + countTokens(message.content), 0)).toBeLessThanOrEqual(4_000);
 		expect(small.dialoguePartialSourceIds).toEqual([]);

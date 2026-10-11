@@ -2,6 +2,9 @@ import { expect,test,vi } from 'vitest';
 import { chooseJevOption } from '$lib/server/turn/jev';
 import { labeledOrderCase,orderBatch,orderVariant } from './fixtures/decisionOrderCases';
 
+// Local Kev is a startup opt-in; these cases exercise the request contract with fetch stubbed.
+vi.mock('$env/dynamic/private',()=>({env:process.env}));
+
 test.each(orderBatch)('labeled local order control $name / $variant',({name,variant})=>{
  const s=orderVariant(name,variant);expect(s.options.length).toBeGreaterThanOrEqual(2);expect(s.options.length).toBeLessThanOrEqual(5);
  expect(s.options.some(o=>o.id==='wait')).toBe(true);
@@ -29,10 +32,10 @@ test('the integration consumes probability keys by candidate ID after reversal, 
  const s=orderVariant('goodwill','reversed');
  const probabilities=Object.fromEntries(s.options.map(o=>[o.id,o.id==='offer_grain'?.9:.025]));
  const fetchMock=vi.fn().mockResolvedValue(Response.json({model:'kev-latest',answers:{selection:{type:'choice',choice:'offer_grain',confidence:.875,probabilities}}}));
- vi.stubGlobal('fetch',fetchMock);
+ vi.stubGlobal('fetch',fetchMock);vi.stubEnv('MYTHENGINE_LOCAL_KEV','true');
  try{const result=await chooseJevOption({profile:{providerType:'openai-compatible',baseUrl:'http://127.0.0.1:8008/v1',apiKey:'',customModels:[],fetchedModels:[],reasoningModels:[],hiddenModels:[],favoriteModels:[]},model:'kev-latest',evidence:s.packet,sourceIds:s.packet.sourceIds,options:s.options});
   expect(result?.optionId).toBe('offer_grain');expect(Object.keys(JSON.parse(fetchMock.mock.calls[0][1].body).questions.selection.criteria)).toEqual(s.options.map(o=>o.id));
- }finally{vi.unstubAllGlobals();}
+ }finally{vi.unstubAllGlobals();vi.unstubAllEnvs();}
 });
 test('option count affects normalized confidence even at the same top probability',()=>{
  const confidence=(p:number,k:number)=>(p-1/k)/(1-1/k);
