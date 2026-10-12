@@ -48,19 +48,27 @@ export const backgroundJobTypes = [
 	'sync_story_vault',
 ] as const satisfies readonly BackendJobType[];
 
-/** What a turn's context reads (canon, memory nodes, checkpoint, chapters, search); the next turn waits for these. */
-export const memoryJobTypes = [
-	'refresh_scene_checkpoint',
-	'extract_turn_state',
-	'create_memory_nodes_from_events',
-	'rebuild_retrieval_projection',
-	'embed_memory_nodes',
+/**
+ * History writing: chapters, their thread and character consumers, arc and saga rollups. Runs right
+ * after memory, but a turn never waits for it: until a chapter is written the narrator reads its
+ * turns verbatim (everything after the last chapter), and a chapter or arc can take minutes.
+ */
+export const historyJobTypes = [
 	'summarize_chapter',
 	'chapter_threads',
 	'chapter_characters',
 	'rollup_arc',
 	'rollup_saga',
 	'rebuild_summaries',
+] as const satisfies readonly BackendJobType[];
+
+/** What a turn's context reads right away (extracted state, memory nodes, scene checkpoint); the next turn waits for these. */
+export const memoryJobTypes = [
+	'refresh_scene_checkpoint',
+	'extract_turn_state',
+	'create_memory_nodes_from_events',
+	'rebuild_retrieval_projection',
+	'embed_memory_nodes',
 ] as const satisfies readonly BackendJobType[];
 
 export const projectJobTypes = [

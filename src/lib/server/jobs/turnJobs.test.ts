@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { outsideRequestScopes, requestScope } from '$lib/server/requestScopes';
-import { backgroundJobTypes, memoryJobTypes, projectJobTypes, worldJobTypes, type BackendJobType } from './outbox';
+import { backgroundJobTypes, historyJobTypes, memoryJobTypes, projectJobTypes, worldJobTypes, type BackendJobType } from './outbox';
 import { createTurnJobs, type TurnJobDeps, type TurnJobScope } from './turnJobs';
 
 type Call = { scope: TurnJobScope; group: 'memory' | 'world' | 'project' };
@@ -155,9 +155,15 @@ describe('turn jobs', () => {
 	});
 
 	it('classifies every runnable job type exactly once', () => {
-		const groups = [...memoryJobTypes, ...worldJobTypes, ...backgroundJobTypes, ...projectJobTypes];
+		const groups = [...memoryJobTypes, ...historyJobTypes, ...worldJobTypes, ...backgroundJobTypes, ...projectJobTypes];
 		expect(new Set(groups).size).toBe(groups.length);
-		expect(memoryJobTypes).toEqual(expect.arrayContaining(['extract_turn_state', 'refresh_scene_checkpoint', 'summarize_chapter']));
+		expect(memoryJobTypes).toEqual(expect.arrayContaining(['extract_turn_state', 'refresh_scene_checkpoint']));
+		// Chapters and arcs can take minutes; a turn reads unwritten chapters' turns verbatim and never waits for them.
+		expect(memoryJobTypes).not.toContain('summarize_chapter');
+		expect(memoryJobTypes).not.toContain('rollup_arc');
+		expect(historyJobTypes).toEqual(expect.arrayContaining(['summarize_chapter', 'chapter_threads', 'chapter_characters', 'rollup_arc', 'rollup_saga']));
+		// Vault syncs can spend minutes on embeddings; they must not hold a turn up either.
+		expect(memoryJobTypes).not.toContain('sync_story_vault');
 		expect(worldJobTypes).toEqual(expect.arrayContaining(['update_faction_pressure', 'evaluate_world_sim_tick', 'plan_plot_brain']));
 		// No turn prompt reads the search index; it must not hold a turn up.
 		expect(memoryJobTypes).not.toContain('index_canonical_records');
