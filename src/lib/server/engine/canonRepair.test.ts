@@ -565,11 +565,10 @@ describe('reviewPatchProposal', () => {
 		expect(dbMocks.enqueueStoryVaultSyncJob).toHaveBeenCalledWith(expect.objectContaining({
 			storyId: 'story_1',
 			serverVersion: 2,
-			payload: expect.objectContaining({
-				source: 'canon_repair',
-				index: true,
-			}),
+			payload: { source: 'canon_repair' },
 		}));
+		// Reviewing a proposal never forces a full re-embedding of the vault; that follows the auto-index setting.
+		expect(dbMocks.enqueueStoryVaultSyncJob.mock.calls.at(-1)?.[0].payload).not.toHaveProperty('index');
 	});
 
 	it('applies an affinity-only update without losing newer relationship history or stats', () => {

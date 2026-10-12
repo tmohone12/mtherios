@@ -715,11 +715,13 @@ async function saveCanonicalAliases(tx: Tx, input: {
 async function queueCanonRepairRefresh(storyId: string, serverVersion: number, affectedEntityIds: string[] = []): Promise<void> {
 	const entityIds = unique(affectedEntityIds).filter(Boolean);
 	await Promise.all([
+		// The vault's embedding index follows the wiki auto-index setting; a canon repair (each
+		// reviewed proposal) must not force a full re-embedding of the whole vault.
 		enqueueStoryVaultSyncJob({
 			storyId,
 			serverVersion,
 			reason: 'canon-repair',
-			payload: { source: 'canon_repair', index: true },
+			payload: { source: 'canon_repair' },
 		}),
 		...(entityIds.length
 			? entityIds.map((entityId) => enqueueBackendJob({

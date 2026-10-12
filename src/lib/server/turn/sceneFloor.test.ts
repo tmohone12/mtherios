@@ -13,7 +13,7 @@ const missandei = character('missandei', 'Missandei', {});
 const entities = [daenerys, barristan, missandei];
 const cast = entities.map(({ id, name }) => ({ id, name }));
 const narration = (content: string, id = `n_${content.length}`) => ({ id, type: 'narration', content });
-const choice = (choice: string, confidence = 0.9, others: Record<string, number> = {}) => ({ type: 'choice', choice, confidence, probabilities: { [choice]: confidence, ...others } });
+const choice = (choice: string, confidence = 0.9, others: Record<string, number> = {}) => ({ type: 'choice' as const, choice, confidence, probabilities: { [choice]: confidence, ...others } });
 
 describe('scene floor', () => {
 	it('builds candidates with their own stakes and how long since they spoke', () => {

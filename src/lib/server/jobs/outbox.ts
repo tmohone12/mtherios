@@ -38,9 +38,14 @@ export const factionWorkerJobTypes = [
 /** Faction and Director work; runs after a story's memory jobs and never holds up a turn. */
 export const worldJobTypes = factionWorkerJobTypes;
 
-/** Runs after memory without holding up a turn: no turn prompt reads the canonical search index. */
+/**
+ * Runs after memory without holding up a turn: no turn prompt reads the canonical search index, and
+ * the Markdown story vault (with its optional embedding index) is a derived copy that can be a turn
+ * behind. A vault sync that indexes a large vault can take minutes; a turn must never wait for it.
+ */
 export const backgroundJobTypes = [
 	'index_canonical_records',
+	'sync_story_vault',
 ] as const satisfies readonly BackendJobType[];
 
 /** What a turn's context reads (canon, memory nodes, checkpoint, chapters, search); the next turn waits for these. */
@@ -50,7 +55,6 @@ export const memoryJobTypes = [
 	'create_memory_nodes_from_events',
 	'rebuild_retrieval_projection',
 	'embed_memory_nodes',
-	'sync_story_vault',
 	'summarize_chapter',
 	'chapter_threads',
 	'chapter_characters',
