@@ -3,7 +3,7 @@ import { turnContextReceiptSchema, type TurnResponse } from '$lib/contracts/memo
 import type { Story } from '$lib/types';
 
 const mocks = vi.hoisted(() => ({
-	processBackendTurn: vi.fn(),
+	importLocalStoryToBackend: vi.fn(),
 	pullBackendChanges: vi.fn(),
 	pushPendingBackendOps: vi.fn(),
 	putStoryEntry: vi.fn(),
@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('$lib/services/backendMemory', async (importOriginal) => ({
 	...await importOriginal<typeof import('$lib/services/backendMemory')>(),
-	processBackendTurn: mocks.processBackendTurn,
+	importLocalStoryToBackend: mocks.importLocalStoryToBackend,
 	pullBackendChanges: mocks.pullBackendChanges,
 	pushPendingBackendOps: mocks.pushPendingBackendOps,
 }));
@@ -102,7 +102,6 @@ describe('backend turn local mirroring', () => {
 	beforeEach(() => {
 		story.clear();
 		vi.clearAllMocks();
-		mocks.processBackendTurn.mockResolvedValue(response);
 		mocks.pushPendingBackendOps.mockResolvedValue(null);
 		mocks.pullBackendChanges.mockResolvedValue(null);
 		mocks.putStoryEntry.mockRejectedValueOnce(new Error('IndexedDB write failed'));
@@ -155,18 +154,21 @@ describe('backend turn local mirroring', () => {
 		expect(mocks.updateStory).not.toHaveBeenCalled();
 	});
 
-	it('preserves a pending agent run for reload without applying a completed turn', async () => {
-		const pending = { status: 'awaiting_input', runId: 'run_pending', storyId: 'story_server', clientTurnId: 'pending_turn', interactions: [{ id: 'question' }] };
-		mocks.processBackendTurn.mockResolvedValue(pending);
-		const setItem = vi.fn();
-		vi.stubGlobal('localStorage', { setItem });
-		const apply = vi.spyOn(story, 'applyBackendTurnResponse');
-		const returned = await story.submitBackendTurn({ clientTurnId: 'pending_turn', playerText: 'Open the gate.', localVersion: 7 } as never);
-		expect(returned).toEqual(pending);
-		expect(setItem).toHaveBeenCalledWith('mythengine:agent-run:story_server', 'run_pending');
-		expect(apply).not.toHaveBeenCalled();
-		expect(mocks.putStoryEntry).not.toHaveBeenCalled();
-		expect(story.currentStory?.serverVersion).toBe(7);
+	it('imports an open browser-only save through the existing import and reloads the server copy', async () => {
+		const local = { ...currentStory, serverStoryId: null, serverVersion: null, syncStatus: 'local-only' } as Story;
+		story.currentStory = local;
+		mocks.importLocalStoryToBackend.mockResolvedValue({ serverStoryId: 'story_server', serverVersion: 3, counts: { entries: 4 } });
+		const load = vi.spyOn(story, 'loadStory').mockResolvedValue(undefined);
+		await expect(story.importCurrentStoryToServer()).resolves.toEqual({ serverStoryId: 'story_server', serverVersion: 3, counts: { entries: 4 } });
+		expect(mocks.importLocalStoryToBackend).toHaveBeenCalledWith('story_local');
+		expect(load).toHaveBeenCalledWith('story_local');
+	});
+
+	it('does not import a story that is already bound to the server', async () => {
+		const load = vi.spyOn(story, 'loadStory').mockResolvedValue(undefined);
+		await expect(story.importCurrentStoryToServer()).resolves.toMatchObject({ serverStoryId: 'story_server', counts: {} });
+		expect(mocks.importLocalStoryToBackend).not.toHaveBeenCalled();
+		expect(load).not.toHaveBeenCalled();
 	});
 
 	it('does not resurrect an imported party role after the server clears it', () => {
@@ -235,13 +237,8 @@ describe('backend turn local mirroring', () => {
 	it('keeps a committed narration when the local IndexedDB mirror fails', async () => {
 		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-		const result = await story.submitBackendTurn({
-			clientTurnId: 'turn_1',
-			playerText: 'I open the gate.',
-			actionType: 'do',
-		});
+		const result = await story.applyBackendTurnResponse(response as never, currentStory.id);
 
-		if ('status' in result) throw new Error('Expected a completed turn.');
 		expect(result.narration).toBe(response.narration);
 		expect(story.entries).toContainEqual(expect.objectContaining({
 			id: 'narration_turn_1',

@@ -3,17 +3,15 @@ import { factionResourceAvailability, intentionBrief } from '$lib/server/faction
 import { isCurrentAgreement } from '$lib/contracts/agreements';
 import { campaignStateExtractionContext, readCampaignState } from '$lib/contracts/campaignState';
 import { readPlayerCapabilities } from '$lib/contracts/playerCapabilities';
+import { isPlayerCharacterRecord, isUnplacedItem, readCampaignMeters, readCharacterConditions, readCharacterResource, readCharacterSheet, readItemHolding } from '$lib/contracts/gameplayEffects';
 import { NPC_AGENCY_FIELDS, NPC_AGENCY_EXTRACTION_INSTRUCTION, readNpcAgency } from '$lib/contracts/npcAgency';
 import { createHash } from 'node:crypto';
-import { CHARACTER_IDENTITY_FIELDS } from '$lib/contracts/automaticCharacterUpdate';
+import { CHARACTER_IDENTITY_FIELDS, readCharacterDevelopments } from '$lib/contracts/automaticCharacterUpdate';
 import type { TurnContext } from './context';
 import type { GmTimelineBrief, GmTimelineBriefEvent, RetrievedMemoryPacket } from '$lib/contracts/memory';
-import { buildEconomyScaleBlock, buildWorldScaleBlock } from '$lib/services/ai/context/economyScale';
 import { summarizeMtheriosMemoryForContext } from '$lib/services/ai/context/mtheriosSummaryFormat';
-import { resolveStoryPromptPack } from '$lib/components/wizard/storyPromptPacks';
 import { appliedStrategicFrameForStory, buildStrategicNarratorBlock, normalizeStrategicFrameActivations, selectStrategicSceneCue } from '$lib/services/ai/context/strategicFramePromptCard';
 import { latestNarrationForPov, renderParallelPovDirective } from '$lib/services/ai/context/parallelPov';
-import { GM_NPC_AGENCY_BLOCK, GM_OUTCOME_AUTHORITY_BLOCK, GM_TURN_BOUNDARY_BLOCK, GM_TURN_WORKFLOW_BLOCK } from '$lib/services/ai/context/gmAuthority';
 import { isNarrativeCommandInput, isNarrativeControlInput } from '$lib/services/ai/context/controlInput';
 import { containsSceneActorMention } from '$lib/services/ai/context/sceneActorMention';
 import { isPlotBrainFrameFresh, PLOT_BRAIN_STALE_AFTER_TURNS } from '$lib/server/plotBrain/lifecycle';
@@ -21,7 +19,7 @@ import { DEFAULT_DUE_LIMIT, isNarrativeTimelineEvent, isPlayerNpcBackgroundEvent
 import { countTokens } from '$lib/utils/tokens';
 import { DND_ABILITIES, abilityModifier, normalizePlayerSheet } from '$lib/utils/playerSheet';
 import { durableCharacterEventMemoryList, durableCharacterKnownFactList } from './characterEventMemory';
-import { normalizeCharacterCard, renderCharacterCard, type CharacterCardTier, type CharacterCardView } from './characterContext';
+import { newestWithin, normalizeCharacterCard, renderCharacterCard, type CharacterCardTier, type CharacterCardView } from './characterContext';
 import { sliceWellFormedText, toWellFormedText } from './wellFormedText';
 import { characterAliases, characterStateView, selectRelevantCharacters, type CharacterContextRecord } from '$lib/utils/characterState';
 import { sceneEvidenceExcerpt } from '$lib/utils/sceneEvidence';
@@ -101,6 +99,8 @@ export interface ServerTurnPromptPacket {
 	dynamicContextRecords: Array<{ kind: string; id: string; start: number; end: number }>;
 	requiredDueEventIds: string[];
 	dialogueActorCards: Array<{ id: string; name: string; text: string }>;
+	/** Characters (not the player) the context places in this scene, carded ones first; the floor's candidates. */
+	sceneCast: Array<{ id: string; name: string }>;
 	dialogueSourceIds: string[];
 	dialoguePartialSourceIds?: string[];
 	sceneCheckpoint?: SceneCheckpointSelection;
@@ -158,7 +158,6 @@ const RETRIEVED_MEMORY_CHAR_LIMIT = 9600;
 const WIKI_CONTEXT_PROMPT_CHAR_LIMIT = 24_000;
 const SECRET_TIMELINE_LABEL = '[secret narrator-only]';
 const SECRET_TIMELINE_INSTRUCTION = 'Secret timeline items are narrator-only context; present NPCs must not speak or act on them unless actor beliefs or scene evidence supports it.';
-const STATE_EXTRACTION_NARRATION_LIMIT = 6000;
 const CONTEXT_DATA_HEADER = '<context_data>';
 const CONTEXT_DATA_FOOTER = '</context_data>';
 const DEFAULT_CHARACTER_TEMPLATE = [
@@ -333,7 +332,8 @@ function renderPlayerCharacter(ctx: TurnContext, entity: TurnContext['entities']
 	const assetsValue = Array.isArray(state.assets) ? state.assets : metadata.assets;
 	const assets = asStringArray(assetsValue).map((item) => item.trim()).filter(Boolean).slice(0, 20);
 	const appearance = characterAppearanceValue(state, metadata);
-	const currentState = entity ? characterCurrentState(entity, state, metadata) : [];
+	// [Hit Points] below carries the player's HP with its rule.
+	const currentState = entity ? characterCurrentState(entity, state, metadata).filter((line) => !line.startsWith('HP: ')) : [];
 	const goals = characterGoals(state, metadata);
 	const eventMemory = entity ? eventMemoryLines(state, metadata, null, entity.id) : [];
 	const factions = entity ? characterFactionLines(ctx, entity, state, metadata) : [];
@@ -351,6 +351,8 @@ function renderPlayerCharacter(ctx: TurnContext, entity: TurnContext['entities']
 		identity.push(`[Personality]: ${characterPersonalityValue(state, metadata)}`);
 		identity.push(`[bio]: ${characterBioValue(entity, state, metadata, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
 		if (playerPrompt) identity.push(`[bio]: ${compact(playerPrompt, PLAYER_CHARACTER_PROMPT_CHAR_LIMIT)}`);
+		const developments = readCharacterDevelopments(state);
+		if (developments.length) identity.push(`[Developments]: ${newestWithin(developments, 12, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
 		current.push(`[Key History]: ${inlineList([
 			...currentState,
 			...goals,
@@ -364,6 +366,11 @@ function renderPlayerCharacter(ctx: TurnContext, entity: TurnContext['entities']
 			const abilities = normalizePlayerSheet(playerSheet).abilities;
 			current.push(`[Ability Scores]: ${DND_ABILITIES.map(({ id, label }) => `${label} ${abilities[id]} (${abilityModifier(abilities[id]) >= 0 ? '+' : ''}${abilityModifier(abilities[id])})`).join(', ')}. For checks, request bare 1d20; the server applies this sheet's ability modifier.`);
 		}
+		const inventory = heldItemLines(ctx.entities, entity.id, entity.id);
+		if (inventory.length) current.push(`[Inventory]: ${inlineList(inventory)}`);
+		if (ctx.gameplayNotice) current.push(`[State notice]: ${ctx.gameplayNotice} Do not restate those turns' consequences as if new.`);
+		const hp = readCharacterResource(readCharacterSheet(state, metadata), 'hp');
+		if (hp && hp.max !== null) current.push(`[Hit Points]: ${hp.current}/${hp.max}. Canonical; it changes only through damage, healing and items the narration states plainly. 0 HP is not death unless the narration makes it so.`);
 	}
 	if (assets.length > 0) current.push(`[Affiliations]: ${inlineList(assets)}`);
 	if (reputation.trim()) current.push(`[Fallible Public Reputation]: ${compact(reputation, PLAYER_REPUTATION_CHAR_LIMIT)} (what observers currently believe; rumor and perception, not objective truth)`);
@@ -523,6 +530,7 @@ function characterCurrentState(entity: TurnContext['entities'][number], state: R
 	const partyMember = state.partyMember === true || metadata.partyMember === true;
 	const partyRole = characterStringValue(state, metadata, ['partyRole'], 80);
 	return [
+		...mechanicalStateLines(state, metadata),
 		partyMember ? `active party member${partyRole ? ` (${partyRole})` : ''}` : '',
 		isPresent === null ? '' : (isPresent ? 'present in the current scene' : 'not currently visible'),
 		status && status !== 'active' ? `status: ${status}` : '',
@@ -533,7 +541,31 @@ function characterCurrentState(entity: TurnContext['entities'][number], state: R
 		disposition ? `disposition: ${disposition}` : '',
 		relationship ? `relationship: ${relationship}` : '',
 		...Array.from(new Set([...asStringArray(state.pressures), ...asStringArray(metadata.pressures)].map((item) => item.trim()).filter(Boolean))).slice(0, 2).map((item) => `pressure: ${item}`),
-	].filter(Boolean).slice(0, 8);
+	].filter(Boolean).slice(0, 12);
+}
+
+/** Canonical HP, resources and conditions; recorded by gameplay effects, never inferred from prose. */
+function mechanicalStateLines(state: Record<string, unknown>, metadata: Record<string, unknown>): string[] {
+	const sheet = readCharacterSheet(state, metadata);
+	const hp = readCharacterResource(sheet, 'hp');
+	const resources = Object.keys(asRecord(sheet?.resources)).flatMap((key) => {
+		const pool = readCharacterResource(sheet, key);
+		return pool ? [`${key.replace(/_/g, ' ')}: ${pool.current}${pool.max === null ? '' : `/${pool.max}`}`] : [];
+	}).slice(0, 4);
+	return [
+		hp && hp.max !== null ? `HP: ${hp.current}/${hp.max}` : '',
+		...resources,
+		...readCharacterConditions(state).slice(0, 6).map((condition) => `condition: ${condition.name}${condition.severity ? ` (${condition.severity})` : ''}${condition.detail ? ` - ${compact(condition.detail, 120)}` : ''}`),
+	].filter(Boolean);
+}
+
+/** What a character carries, from item records; used-up stacks are left out. */
+function heldItemLines(items: Array<{ id: string; name: string; type?: string; state?: unknown }>, holderId: string, playerId: string | null): string[] {
+	return items.filter((item) => item.type === undefined || item.type === 'item').flatMap((item) => {
+		const holding = readItemHolding(item.state, playerId);
+		if (holding.ownerId !== holderId || holding.quantity === 0) return [];
+		return [`${item.name}${holding.quantity === null ? ' (amount unknown)' : holding.quantity > 1 ? ` x${holding.quantity}` : ''}${holding.equipped ? ' (equipped)' : ''}`];
+	}).slice(0, 30);
 }
 
 function eventMemoryLines(state: Record<string, unknown>, metadata: Record<string, unknown>, gmBrief: GmTimelineBrief | null | undefined, entityId: string): string[] {
@@ -652,6 +684,7 @@ function renderCharacterBlocks(ctx: TurnContext, characters: TurnContext['entiti
 				]),
 				affiliations: inlineList(factions),
 				bio: characterBioValue(entity, state, metadata),
+				developments: inlineList(readCharacterDevelopments(state).slice(-12)),
 				background: durableCharacterIdentity(characterStringValue(state, metadata, ['bio', 'background'], 520)),
 				currentState: blockList(characterCurrentState(entity, state, metadata)),
 				goals: blockList(characterGoals(state, metadata)),
@@ -731,14 +764,6 @@ function narratorHistoryEntries(ctx: TurnContext): TurnContext['recentEntries'] 
 	});
 }
 
-function latestNarrationHeader(ctx: TurnContext): string {
-	const latestNarration = latestNarrationForPov(narratorHistoryEntries(ctx), ctx.scenePov, ctx.recentEntries);
-	const firstLine = latestNarration?.content
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.find(Boolean);
-	return firstLine ? compact(firstLine, 900) : '';
-}
 
 function latestNarrationExcerpt(ctx: TurnContext): string {
 	const latestNarration = latestNarrationForPov(narratorHistoryEntries(ctx), ctx.scenePov, ctx.recentEntries);
@@ -1855,6 +1880,8 @@ export function buildServerTurnPrompt(
 		dynamicContextRecords,
 		requiredDueEventIds,
 		dialogueActorCards,
+		sceneCast: uniqueEntities([...cardEntities, ...presentEntities.filter(entity => entity.type === 'character' && isUsableEntity(entity) && entity.id !== protagonist?.id)])
+			.slice(0, 8).map(entity => ({ id: entity.id, name: entity.name })),
 		dialogueSourceIds,
 		dialoguePartialSourceIds: renderedMessages.filter(message => message.partial).map(message => message.sourceId),
 		...(sceneCheckpoint ? { sceneCheckpoint } : {}),
@@ -1927,6 +1954,61 @@ export const ACTOR_KNOWLEDGE_EXTRACTION_INSTRUCTION = [
 		'For changed relationships or agreements, include optional known_by and evidence only when that quote explicitly establishes who knows this change. Do not assume every party learned a secret breach. These are compact deltas in this same extraction, not replacement NPC profiles; omit unchanged knowledge and whole histories.',
 ].join("\n");
 
+export const GAMEPLAY_EFFECT_EXTRACTION_INSTRUCTION = [
+	'GAMEPLAY EFFECTS: list each consequence the narration establishes as having happened in "effects". Report what the text states; the server does the arithmetic, limits and bookkeeping.',
+	'- resource_delta {op,entityId|target,resource,delta,source,mechanics?}: stated damage (negative delta) or healing (positive) to "hp" or a named resource such as mana or stamina. Use the amount the narration or its roll states; never compute a new total. A campaign meter uses scope:"campaign" with the meter name.',
+	'- resource_set {op,entityId|target,resource,value?|max?|toMax?,source}: only an exact stated value; "restored to full health" is toMax:true.',
+	'- condition_add / condition_update / condition_remove {op,entityId|target,condition,conditionId?,severity?(minor|moderate|severe|critical),detail?,source}: injuries, poison, exhaustion, curses and similar lasting states. An injury without a stated amount is a condition only; never invent HP loss. Healing one injury removes only that condition.',
+	'- item_acquire {op,entityId|target (new holder),item,itemId?,quantity?,description?,source}; item_consume {op,entityId|target (holder),item,itemId?,quantity,how?(consumed|spent|destroyed|lost),source}; item_transfer {op,entityId|target (giver),item,itemId?,toEntityId|to,quantity?,source}; item_equip / item_unequip {op,entityId|target,item,itemId?,source}. quantity is the stated count ("a potion" is 1); omit it only when the text gives no amount. Changing clothes or armor is equip/unequip and never removes injuries.',
+	'- source is {"quote": a verbatim span of the narration prose that establishes the effect}. Never quote the player action or a [Roll ...] line; put the roll in mechanics.roll. Use entityId, itemId and conditionId from CURRENT GAMEPLAY STATE; target "player" means the player character.',
+	'- Only what occurred is a consequence. A miss, a blocked blow, an offered or promised item, a threat, a plan, a hypothetical, a memory, a rumor or a dream changes nothing; if you list one, set modality to attempted, offered, threatened, planned, hypothetical, remembered or rumored. 0 HP is not death unless the narration says so.',
+	'- Never put HP, injuries, conditions, owners or item counts in characters, items or state_overrides; those fields are not applied.',
+].join('\n');
+
+export interface GameplayItemRecord { id: string; name: string; state?: unknown }
+
+/** Values before this turn for the people in the scene, so effects can cite ids instead of guessing. */
+export function buildGameplayStatePacket(characters: CharacterContextRecord[], items: GameplayItemRecord[], campaignMetadata: unknown, playerText: string, narration: string): string {
+	const player = characters.find(isPlayerCharacterRecord) ?? null;
+	const playerId = player?.id ?? null;
+	const relevant = selectRelevantCharacters(characters, [playerText, narration], 12, [], true);
+	const people = [...(player ? [player] : []), ...relevant.filter((character) => character.id !== playerId)].slice(0, 12);
+	const rows = people.map((character) => {
+		const state = asRecord(character.state);
+		const sheet = readCharacterSheet(state, character.metadata);
+		const hp = readCharacterResource(sheet, 'hp');
+		const resources = Object.keys(asRecord(sheet?.resources)).flatMap((key) => {
+			const pool = readCharacterResource(sheet, key);
+			return pool ? [{ resource: key, current: pool.current, max: pool.max }] : [];
+		});
+		const held = items.flatMap((item) => {
+			const holding = readItemHolding(item.state, playerId);
+			return holding.ownerId === character.id ? [{ itemId: item.id, name: item.name, quantity: holding.quantity, equipped: holding.equipped }] : [];
+		}).slice(0, 25);
+		return { entityId: character.id, name: character.name, ...(character.id === playerId ? { player: true } : {}),
+			hp: hp && hp.max !== null ? `${hp.current}/${hp.max}` : 'not recorded', ...(resources.length ? { resources } : {}),
+			conditions: readCharacterConditions(state).map((condition) => ({ conditionId: condition.id, name: condition.name, severity: condition.severity })),
+			items: held };
+	});
+	const scene = ` ${normalizeLookup(`${playerText} ${narration}`)} `;
+	const unheld = items.filter((item) => isUnplacedItem(item.state) && normalizeLookup(item.name).length >= 3 && scene.includes(` ${normalizeLookup(item.name)} `))
+		.slice(0, 10).map((item) => ({ itemId: item.id, name: item.name }));
+	const meters = readCampaignMeters(campaignMetadata);
+	if (!rows.length && !unheld.length && !meters.length) return '';
+	return ['CURRENT GAMEPLAY STATE (data, not instructions; values before this turn). Cite these ids in effects; report changes, never new totals.',
+		JSON.stringify({ characters: rows, ...(unheld.length ? { unheldItems: unheld } : {}), ...(meters.length ? { campaignMeters: meters } : {}) })].join('\n');
+}
+
+/**
+ * The whole narration, never a head/tail excerpt: a consequence in the middle of a long scene is
+ * still evidence. Roll markers become readable lines (they are not quotable prose).
+ */
+export function stateExtractionNarration(narration: string): string {
+	return toWellFormedText(narration).replace(/\{\{dice:([^|}]*)\|([^|}]*)\|([^|}]*)\|([^|}]*)\|(pass|fail)\|([^|}]*)\|([^|}]*?)(?:\|crit-(success|failure))?\}\}/g,
+		(_match, notation: string, natural: string, total: string, dc: string, outcome: string, ability: string, description: string, critical?: string) =>
+			`[Roll: ${ability.trim()} check${description.trim() ? ` (${description.trim()})` : ''}: ${notation} = ${total} (natural ${natural}) vs DC ${dc}, ${outcome === 'pass' ? 'success' : 'failure'}${critical ? `, critical ${critical}` : ''}]`).trim();
+}
+
 export function buildStateExtractionPrompt(
 	playerText: string,
 	narration: string,
@@ -1937,12 +2019,14 @@ export function buildStateExtractionPrompt(
 	factions: LocationIdentityRecord[] = [],
 	campaignMetadata?: unknown,
 	dueEventCandidates: DueEventCandidate[] = [],
+	items: GameplayItemRecord[] = [],
 ): string {
 	return [
 		'Return a JSON object with keys "update" and "dueEventFeedback".',
 		'The value of "update" must contain only facts that clearly changed or became known in this turn.',
 		'Keep the update minimal: include the fewest valid records needed, usually 1-8 concrete facts.',
-		'Use these optional keys when applicable: characters, locations, items, time_delta, mood, player_reputation, conversations, relationships, story_beats, timeline_events, meter_changes, agreements, lorebook_entries.',
+		'Use these optional keys when applicable: characters, locations, items, effects, time_delta, mood, player_reputation, conversations, relationships, story_beats, timeline_events, agreements, lorebook_entries. items describes an item and where it lies; who holds it and how many change only through effects.',
+		GAMEPLAY_EFFECT_EXTRACTION_INSTRUCTION,
 		buildCharacterCreationInstructions(factions, narration),
 		campaignStateExtractionContext(campaignMetadata),
 		'For established characters, include only changed durable fields: appearance, background, currentLocation, currentAction, emotionalState, goals, speechStyle, eventMemory.did/saw/knew/knows, status, relationship, traits, present, pressures, faction_tags, party_member, party_role, affinity_delta, affinity_reason. Set party_member only after a clear join, departure, or dismissal; otherwise omit it. Use affinity_delta only when an NPC\'s trust or attachment toward the player materially changed: usually 1-3, 4-7 meaningful, 8-12 major, and 13-20 life-defining. Success, power, praise, or kindness alone never guarantees affinity. Always pair a nonzero affinity_delta with concrete affinity_reason evidence.',
@@ -1953,14 +2037,15 @@ export function buildStateExtractionPrompt(
 		dueEventCandidates.length ? `For each due event candidate, report realized, signal, deferred, or uncertain. Realized means the event actually occurs in the final narration. A rumor or warning is only signal; a plan, conditional, memory, or hypothetical is not realized. Cite one exact supporting narration span for realized outcomes. Do not invent or infer an event from its title. Candidates: ${JSON.stringify(dueEventCandidates.slice(0, 16).map(candidate => ({ id: candidate.id, title: candidate.title, body: compact(candidate.body, 220) })))}` : '',
 		dueEventCandidates.some(candidate => candidate.id.startsWith('faction_cue_'))
 			? 'A faction_cue_ candidate checks whether the selected cue visibly appeared in this final narration. It is not a world event. Return signal with an exact narration evidenceSpan of at least 12 characters when shown; otherwise deferred or uncertain. Never return realized for a faction_cue_ candidate.' : '',
-		'appearance contains stable physical features; presentation contains current clothing, grooming, injuries, or disguises. Never replace physical identity with an outfit. personality and rank require explicit evidence, not inference from a single action. background contains newly established biography facts, not a replacement life story.',
+		'appearance contains stable physical features; presentation contains current clothing, grooming, or disguises (injuries are conditions in effects, and a change of clothes leaves them in place). Never replace physical identity with an outfit. personality and rank require explicit evidence, not inference from a single action. background contains newly established biography facts, not a replacement life story.',
 		buildClassifierCharacterContext(characters, playerText, narration),
+		buildGameplayStatePacket(characters, items, campaignMetadata, playerText, narration),
 		buildClassifierAgreementContext(agreements),
 		buildClassifierLocationContext(locations, narration),
 		responseSchema ? 'Return {"update":{...},"dueEventFeedback":[]} when nothing changed. Each collection is an array, even for one record. Use exactly the listed field names; omit uncertain fields instead of inventing aliases or enum values. The server validates the complete schema.' : '',
 		'Player action:',
 		playerText,
 		'Narration:',
-		sceneEvidenceExcerpt(narration, STATE_EXTRACTION_NARRATION_LIMIT),
+		stateExtractionNarration(narration),
 	].filter(Boolean).join('\n\n');
 }

@@ -9,6 +9,7 @@
 	import { story } from '$lib/stores/story.svelte';
 	import type { Character, CharacterEntryState, Entry, FactionEntryState } from '$lib/types';
 	import { DND_ABILITIES, abilityModifier, normalizePlayerSheet, type DndAbility, type PlayerSheet } from '$lib/utils/playerSheet';
+	import { readCharacterConditions } from '$lib/contracts/gameplayEffects';
 	import PlotDirectorPanel from './PlotDirectorPanel.svelte';
 	import MemoryProcessingStatus from './MemoryProcessingStatus.svelte';
 	import PlayerCapabilities from './PlayerCapabilities.svelte';
@@ -64,6 +65,16 @@
 	const selectedNpcState = $derived(selectedNpcEntry?.state?.type === 'character' ? selectedNpcEntry.state as CharacterEntryState : null);
 	const selectedNpcRelationships = $derived(selectedNpcEntry ? story.entryRelationships.filter(connection => connection.sourceEntryId === selectedNpcEntry.id || connection.targetEntryId === selectedNpcEntry.id) : []);
 	const playerSheet = $derived(normalizePlayerSheet(protagonistMetadata.playerSheet));
+	const playerConditions = $derived(readCharacterConditions({ conditions: protagonistMetadata.conditions }));
+	const characterNames = $derived(new Map(story.characters.map(character => [character.id, character.name])));
+	function itemCount(item: { quantity: number; metadata: Record<string, unknown> | null }): string {
+		if (item.metadata?.quantityKnown === false) return '';
+		return item.quantity === 0 ? ' · none left' : item.quantity > 1 ? ` ×${item.quantity}` : '';
+	}
+	function itemHolder(item: { metadata: Record<string, unknown> | null }): string {
+		const ownerId = typeof item.metadata?.ownerId === 'string' ? item.metadata.ownerId : null;
+		return ownerId && ownerId !== protagonist?.id ? characterNames.get(ownerId) ?? '' : '';
+	}
 	const hasSavedPlayerSheet = $derived(Boolean(protagonistMetadata.playerSheet && typeof protagonistMetadata.playerSheet === 'object' && !Array.isArray(protagonistMetadata.playerSheet)));
 	const playerAssets = $derived(Array.isArray(protagonistMetadata.assets) ? protagonistMetadata.assets.filter((asset): asset is string => typeof asset === 'string' && asset.trim().length > 0) : []);
 	const activeCharacters = $derived(story.characters.filter(character => character.status === 'active' && character.relationship !== 'self'));
@@ -467,6 +478,7 @@
 						<div class="grid grid-cols-2 gap-2"><article class="rounded-2xl bg-[var(--bg-tertiary)] p-3"><p class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Armor Class</p><p class="mt-1 text-2xl font-semibold text-[var(--text-primary)]">{playerSheet.armorClass}</p></article><article class="rounded-2xl bg-[var(--bg-tertiary)] p-3"><p class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Hit Points</p><p class="mt-1 text-2xl font-semibold text-[var(--text-primary)]">{playerSheet.hitPoints.current}<span class="text-sm text-[var(--text-muted)]"> / {playerSheet.hitPoints.max}</span></p></article><article class="rounded-2xl bg-[var(--bg-tertiary)] p-3"><p class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Speed</p><p class="mt-1 text-2xl font-semibold text-[var(--text-primary)]">{playerSheet.speed}<span class="text-sm text-[var(--text-muted)]"> ft.</span></p></article><article class="rounded-2xl bg-[var(--bg-tertiary)] p-3"><p class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">Proficiency</p><p class="mt-1 text-2xl font-semibold text-[var(--text-primary)]">+{playerSheet.proficiencyBonus}</p></article></div>
 						<article class="rounded-2xl bg-[var(--bg-tertiary)] p-4"><div class="flex items-baseline justify-between gap-3"><div><h3 class="font-semibold text-[var(--text-primary)]">Ability Scores</h3><span class="text-[10px] uppercase tracking-wide text-[var(--text-muted)]">D&D style</span></div><button class="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-[var(--text-accent)] hover:bg-white/8" onclick={() => { statsDraft = normalizePlayerSheet(protagonistMetadata.playerSheet); statsSaveError = null; editingStats = true; }} aria-label="Edit player stats"><Pencil class="h-3.5 w-3.5" />Edit</button></div><div class="mt-3 grid grid-cols-3 gap-2">{#each DND_ABILITIES as ability}{@const score = playerSheet.abilities[ability.id]}{@const modifier = abilityModifier(score)}<div class="rounded-xl border border-[var(--border-secondary)] bg-[var(--bg-primary)]/50 px-2 py-2 text-center" title={ability.name}><p class="text-[10px] font-semibold tracking-wide text-[var(--text-accent)]">{ability.label}</p><p class="mt-0.5 text-lg font-semibold text-[var(--text-primary)]">{score}</p><p class="text-xs text-[var(--text-muted)]">{modifier >= 0 ? '+' : ''}{modifier}</p></div>{/each}</div></article>
 					{/if}
+					{#if playerConditions.length}<article class="rounded-2xl bg-[var(--bg-tertiary)] p-4"><h3 class="font-semibold text-[var(--text-primary)]">Conditions</h3><ul class="mt-2 space-y-1.5">{#each playerConditions as condition}<li class="text-sm text-[var(--text-secondary)]"><span class="font-medium text-[var(--text-primary)]">{condition.name}</span>{#if condition.severity}<span class="ml-1.5 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">{condition.severity}</span>{/if}{#if condition.detail}<span class="block text-xs text-[var(--text-muted)]">{condition.detail}</span>{/if}</li>{/each}</ul></article>{/if}
 					{#if story.currentStory?.playerReputation || playerAssets.length}<article class="rounded-2xl bg-[var(--bg-tertiary)] p-4"><h3 class="font-semibold text-[var(--text-primary)]">Your standing</h3>{#if story.currentStory?.playerReputation}<p class="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">{story.currentStory.playerReputation}</p>{/if}{#if playerAssets.length}<div class="mt-3 border-t border-[var(--border-secondary)] pt-3"><p class="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-accent)]">Assets</p><div class="mt-2 flex flex-wrap gap-1.5">{#each playerAssets as asset}<span class="rounded-full bg-[var(--bg-primary)]/70 px-2.5 py-1 text-xs text-[var(--text-secondary)]">{asset}</span>{/each}</div></div>{/if}</article>{/if}
 					{#key protagonist.id}<PlayerCapabilities character={protagonist} />{/key}
 				{:else if tab === 'party'}
@@ -558,7 +570,7 @@
 				{:else if tab === 'director'}
 					<PlotDirectorPanel />
 				{:else}
-					{#each story.items as item}<article class="flex gap-3 rounded-2xl bg-[var(--bg-tertiary)] p-4"><Package class="mt-0.5 h-4 w-4 text-[var(--text-accent)]" /><div><h3 class="font-semibold text-[var(--text-primary)]">{item.name}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</h3>{#if item.description}<p class="mt-1 text-sm text-[var(--text-secondary)]">{item.description}</p>{/if}{#if item.equipped}<p class="mt-1 text-xs text-[var(--text-accent)]">Equipped</p>{/if}</div></article>{/each}
+					{#each story.items as item}<article class="flex gap-3 rounded-2xl bg-[var(--bg-tertiary)] p-4"><Package class="mt-0.5 h-4 w-4 text-[var(--text-accent)]" /><div><h3 class="font-semibold text-[var(--text-primary)]">{item.name}{itemCount(item)}</h3>{#if itemHolder(item)}<p class="text-xs text-[var(--text-muted)]">Held by {itemHolder(item)}</p>{/if}{#if item.description}<p class="mt-1 text-sm text-[var(--text-secondary)]">{item.description}</p>{/if}{#if item.equipped}<p class="mt-1 text-xs text-[var(--text-accent)]">Equipped</p>{/if}</div></article>{/each}
 				{/if}
 			</div>
 			<footer class="shrink-0 border-t border-[var(--border-primary)] px-5 py-4"><button class="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-xs font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--text-accent)]/50" onclick={onOpenLore}><BookOpen class="h-4 w-4 text-[var(--text-accent)]" />Open full lore archive</button></footer>

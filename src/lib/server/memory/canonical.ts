@@ -46,6 +46,7 @@ import {
 } from '$lib/server/db/schema';
 import { TERMINAL_WORLD_DATABASE_SCHEMA_VERSION } from '$lib/server/db/worldDatabaseSchema';
 import { getServerMemoryConfig } from '$lib/server/env';
+import { readableMemorySummary, summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
 import {
 	createStoryRequestSchema,
 	indexedDbImportRequestSchema,
@@ -60,6 +61,7 @@ import { deleteStoryVaultArtifacts } from '$lib/server/wiki/storyVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
 import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from './entityResolver';
 import type { EngineCampaignBootstrapArgs } from '$lib/contracts/engine';
+import { readCampaignMeters } from '$lib/contracts/gameplayEffects';
 
 type JsonRecord = Record<string, unknown>;
 type LivingMemoryKind = 'conversationMemory' | 'worldEvent' | 'factionAction' | 'rumor' | 'scheme';
@@ -801,6 +803,34 @@ export async function getStoryEntriesPage(
 	};
 }
 
+/**
+ * Gameplay effects own HP, resources, conditions and item holdings (`mechanicsRevision` counts their
+ * changes). A wiki/sheet save made from an older projection keeps the browser's other edits but
+ * not its stale copy of those values; a save from the current projection that changes them is an
+ * explicit edit and becomes the next revision.
+ */
+export function keepEffectOwnedState(existing: JsonRecord, incoming: JsonRecord): JsonRecord {
+	const state: JsonRecord = { ...existing, ...incoming };
+	const current = Math.trunc(Number(existing.mechanicsRevision ?? 0)) || 0;
+	if (!current) return state;
+	const existingSheet = asRecord(existing.playerSheet);
+	const incomingSheet = asRecord(incoming.playerSheet);
+	const seen = Math.trunc(Number(incoming.mechanicsRevision ?? 0)) || 0;
+	for (const key of ['conditions', 'resolvedConditions', 'ownerId', 'quantity', 'equipped']) {
+		if (seen !== current && Object.hasOwn(existing, key)) state[key] = existing[key];
+	}
+	state.mechanicsRevision = current;
+	if (!Object.hasOwn(incoming, 'playerSheet') || !Object.keys(existingSheet).length) return state;
+	if (seen !== current) {
+		state.playerSheet = { ...incomingSheet,
+			...(Object.hasOwn(existingSheet, 'hitPoints') ? { hitPoints: existingSheet.hitPoints } : {}),
+			...(Object.hasOwn(existingSheet, 'resources') ? { resources: existingSheet.resources } : {}) };
+	} else if (!isDeepStrictEqual(incomingSheet.hitPoints, existingSheet.hitPoints) || !isDeepStrictEqual(incomingSheet.resources ?? null, existingSheet.resources ?? null)) {
+		state.mechanicsRevision = current + 1;
+	}
+	return state;
+}
+
 function entityStateFromEntry(entry: JsonRecord): JsonRecord {
 	const state = asRecord(entry.state);
 	return {
@@ -903,7 +933,7 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 		? await loadMatchingCharacterReferenceProposals(db, storyId, [name, ...entryAliases])
 		: [];
 	const serverVersion = await bumpStoryVersion(storyId);
-	const state = { ...asRecord(existing?.state), ...incomingState };
+	const state = keepEffectOwnedState(asRecord(existing?.state), incomingState);
 	const mergedSourceEntryIds = stringList(
 		existing?.sourceEntryIds,
 		sourceEntryIds,
@@ -1231,12 +1261,18 @@ export async function upsertBackendChapterFromLocal(storyId: string, rawChapter:
 	const db = getDb();
 	const chapter = asRecord(rawChapter);
 	const chapterId = asNullableString(chapter.id) ?? id('chapter');
-	const summary = asString(chapter.summary, asString(chapter.sceneOutcome)).trim();
-	if (!summary) throw new Error('Chapter summary is required.');
+	const incomingSummary = asString(chapter.summary, asString(chapter.sceneOutcome)).trim();
+	if (!incomingSummary) throw new Error('Chapter summary is required.');
 	const now = nowIso();
 	const [story] = await db.select({ id: stories.id }).from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
 	const [existing] = await db.select().from(chapters).where(and(eq(chapters.storyId, storyId), eq(chapters.id, chapterId))).limit(1);
+	// Clients display and send back the reader (or older condensed) form of the stored account. When
+	// that text is unchanged (for example a title, tone or pin edit), keep the full account it came from.
+	const summary = existing && [readableMemorySummary(existing.sceneOutcome), summarizeMtheriosMemoryForRollup(existing.sceneOutcome)]
+		.some(shown => incomingSummary.replace(/\r\n/g, '\n') === shown.trim())
+		? existing.sceneOutcome
+		: incomingSummary;
 	const serverVersion = await bumpStoryVersion(storyId);
 	const metadata = chapterMetadataFromLocal(chapter, asRecord(existing?.metadata));
 	const sourceEntryIds = stringList(chapter.sourceEntryIds, chapter.startEntryId, chapter.endEntryId);
@@ -1331,6 +1367,23 @@ function arcMetadataFromLocal(arc: JsonRecord, existing: JsonRecord = {}): JsonR
 	};
 }
 
+/** A hand-written arc may cover any number of chapters, but only saved ones, once each, in no other arc. */
+async function assertArcChapterCoverage(storyId: string, arcId: string, chapterIds: string[]): Promise<void> {
+	if (new Set(chapterIds).size !== chapterIds.length) throw new Error('Arc chapters must be listed once each.');
+	if (chapterIds.length === 0) return;
+	const db = getDb();
+	const [chapterRows, arcRows] = await Promise.all([
+		db.select({ id: chapters.id }).from(chapters).where(and(eq(chapters.storyId, storyId), inArray(chapters.id, chapterIds))),
+		db.select({ id: arcs.id, number: arcs.number, chapterIds: arcs.chapterIds }).from(arcs).where(eq(arcs.storyId, storyId)),
+	]);
+	const known = new Set(chapterRows.map((row) => row.id));
+	const missing = chapterIds.filter((chapterId) => !known.has(chapterId));
+	if (missing.length) throw new Error(`Arc chapters are not saved in this story: ${missing.slice(0, 5).join(', ')}.`);
+	const claimed = new Set(chapterIds);
+	const overlapping = arcRows.filter((row) => row.id !== arcId && asStringArray(row.chapterIds).some((chapterId) => claimed.has(chapterId)));
+	if (overlapping.length) throw new Error(`Arc chapters already belong to arc ${overlapping.map((row) => row.number).join(', ')}.`);
+}
+
 export async function upsertBackendArcFromLocal(storyId: string, rawArc: unknown) {
 	const db = getDb();
 	const arc = asRecord(rawArc);
@@ -1343,10 +1396,13 @@ export async function upsertBackendArcFromLocal(storyId: string, rawArc: unknown
 	const [story] = await db.select({ id: stories.id }).from(stories).where(eq(stories.id, storyId)).limit(1);
 	if (!story) throw new Error(`Story not found: ${storyId}`);
 	const [existing] = await db.select().from(arcs).where(and(eq(arcs.storyId, storyId), eq(arcs.id, arcId))).limit(1);
+	const chapterIds = asStringArray(arc.chapterIds ?? existing?.chapterIds);
+	if (!existing || !isDeepStrictEqual(chapterIds, asStringArray(existing.chapterIds))) {
+		await assertArcChapterCoverage(storyId, arcId, chapterIds);
+	}
 	const serverVersion = await bumpStoryVersion(storyId);
 	const number = asNumber(arc.arcNumber ?? arc.number, asNumber(existing?.number, 1));
 	const metadata = arcMetadataFromLocal(arc, asRecord(existing?.metadata));
-	const chapterIds = asStringArray(arc.chapterIds ?? existing?.chapterIds);
 	const openThreadIds = asStringArray(arc.threadIds ?? arc.openThreadIds ?? existing?.openThreadIds);
 	const sourceEventIds = asStringArray(arc.sourceEventIds ?? existing?.sourceEventIds);
 
@@ -2908,7 +2964,7 @@ function exportStoryRow(story: typeof stories.$inferSelect): JsonRecord {
 		lastWorldSimDay: null,
 		compactedLore: null,
 		compactedLoreHistory: null,
-		meters: null,
+		meters: readCampaignMeters(metadata),
 	};
 }
 

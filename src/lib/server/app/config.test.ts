@@ -5,7 +5,7 @@ import { buildRuntimeEnv, assertRuntimeIsolation, resolveRuntimeOptions } from '
 
 describe('MythEngine wiki environment', () => {
  it('separates explicit local-only inference testing from mandatory campaign isolation', () => {
-  const options={...resolveRuntimeOptions([], {env:{}}),isolatedTestCopy:true,port:5174,jobWorker:false,
+  const options={...resolveRuntimeOptions([], {env:{}}),isolatedTestCopy:true,port:5174,turnJobs:false,
    dataRoot:path.resolve('data-faction-test'),databaseUrl:'postgres://mythengine:mythengine@127.0.0.1:5433/mythengine_faction_copy_20261001',qdrantCollection:'mythengine_faction_copy_20261001'};
   expect(buildRuntimeEnv({...options,testLocalInferenceOnly:true},{}).MYTHENGINE_TEST_LOCAL_ONLY).toBe('true');
   const authorizedCloud={...options,testLocalInferenceOnly:false};
@@ -18,7 +18,7 @@ describe('MythEngine wiki environment', () => {
 			...base,
 			defaultVault: path.join(base.vaultRoot, 'stories', 'fixture'),
 			qdrantCollection: base.qdrantCollection + '_fixture',
-			jobWorkerEnabled: false,
+			turnJobsEnabled: false,
 		};
 		const env = wikiRuntimeEnv(expected);
 		expect(env.MYTHENGINE_DEFAULT_VAULT).toBe(expected.defaultVault);
@@ -27,6 +27,6 @@ describe('MythEngine wiki environment', () => {
 		const resolved = resolveRuntimeOptions([], { env });
 		expect(resolved.defaultVault).toBe(expected.defaultVault);
 		expect(resolved.qdrantCollection).toBe(expected.qdrantCollection);
-		expect(resolved.jobWorker).toBe(false);
+		expect(resolved.turnJobs).toBe(false);
 	});
 });

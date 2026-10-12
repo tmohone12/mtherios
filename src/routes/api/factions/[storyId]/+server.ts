@@ -17,7 +17,7 @@ export const GET: RequestHandler = async ({ params,url }) => {
  const events = await getDb().select({ id: storyEvents.id, title: storyEvents.title, body: storyEvents.body, worldTime: storyEvents.worldTime, visibility: storyEvents.visibility })
   .from(storyEvents).where(and(eq(storyEvents.storyId, params.storyId), eq(storyEvents.status, 'committed'))).orderBy(desc(storyEvents.createdTurn)).limit(5);
  return json({ inspection: 'GM/developer only', currentTurn: story.currentTurn, worldTime: story.currentWorldTime, reliefWorldDay:worldDay(story.currentWorldTime), serverVersion: story.serverVersion,
-  jobWorkerEnabled: getMtheriosAppConfig().jobWorkerEnabled,
+  turnJobsEnabled: getMtheriosAppConfig().turnJobsEnabled,
   inferencePolicy: process.env.MYTHENGINE_TEST_LOCAL_ONLY === 'true' ? 'local-only-testing' : 'configured-providers',
   authoring:await reliefAuthoringOptions(params.storyId,url?.searchParams.get('evidenceQuery')??''),workflow: record(record(story.metadata).factionWorkflow), projects:await getDb().select().from(factionProjects).where(eq(factionProjects.storyId,params.storyId)),events });
 };

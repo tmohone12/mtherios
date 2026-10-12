@@ -3,6 +3,9 @@ import { matrixNames, matrixScenario } from './fixtures/decisionMatrix';
 import { actorPacket, factionDecisionOptions, validateIntentions } from './intentions';
 import { chooseJevOption } from '$lib/server/turn/jev';
 
+// Local Kev is a startup opt-in; these cases exercise the request contract with fetch stubbed.
+vi.mock('$env/dynamic/private',()=>({env:process.env}));
+
 test.each(matrixNames)('bounded decision matrix packet: %s',name=>{
  const s=matrixScenario(name);
  expect(s.options.length).toBeGreaterThanOrEqual(2);expect(s.options.length).toBeLessThanOrEqual(5);
@@ -35,8 +38,8 @@ test.each([-1,101,'95',Number.NaN])('corrupt grain reservation %s fails closed',
 });
 test('candidate order is preserved and low confidence remains abstention even for meaningful options',async()=>{
  const s=matrixScenario('goodwill_reordered'),fetchMock=vi.fn().mockResolvedValue(Response.json({model:'kev-latest',answers:{selection:{type:'choice',choice:'offer_grain',confidence:.5,probabilities:{offer_grain:.6,wait:.1,investigate:.1,relief_talk:.1,explanation:.1}}}}));
- vi.stubGlobal('fetch',fetchMock);
+ vi.stubGlobal('fetch',fetchMock);vi.stubEnv('MYTHENGINE_LOCAL_KEV','true');
  try{expect(await chooseJevOption({profile:{providerType:'openai-compatible',baseUrl:'http://127.0.0.1:8008/v1',apiKey:'',customModels:[],fetchedModels:[],reasoningModels:[],hiddenModels:[],favoriteModels:[]},model:'kev-latest',evidence:s.packet,sourceIds:s.packet.sourceIds,options:s.options})).toBeNull();
   expect(Object.keys(JSON.parse(fetchMock.mock.calls[0][1].body).questions.selection.criteria)).toEqual(s.options.map(o=>o.id));
- }finally{vi.unstubAllGlobals();}
+ }finally{vi.unstubAllGlobals();vi.unstubAllEnvs();}
 });

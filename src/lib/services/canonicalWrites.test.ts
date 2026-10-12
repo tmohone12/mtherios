@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => ({
 		createConversationMemory: vi.fn(),
 		bulkPutFactionActions: vi.fn(),
 		bulkPutRumors: vi.fn(),
-		bulkPutSchemes: vi.fn(),
 		putArc: vi.fn(),
 		putChapter: vi.fn(),
 		putSaga: vi.fn(),
@@ -35,7 +34,6 @@ const mocks = vi.hoisted(() => ({
 		deleteBackendChapter: vi.fn(),
 		upsertBackendArc: vi.fn(),
 		upsertBackendChapter: vi.fn(),
-		upsertBackendLivingMemory: vi.fn(),
 		upsertBackendSaga: vi.fn(),
 	},
 }));

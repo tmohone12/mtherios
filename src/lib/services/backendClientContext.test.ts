@@ -7,10 +7,9 @@ it('sends a turn count by default while preserving explicit legacy token request
 	expect(buildBackendClientContext({ characters: [], locations: [], recentDialogueTokens: 24000 })).toMatchObject({ recentDialogueTokens: 24000 });
 });
 
-it('replaces legacy entry thresholds and arc sizing with the20-turn and10-chapter cadence', () => {
-	expect(buildBackendClientContext({
-		characters: [], locations: [], chapterThreshold: 30, postChapterBuffer: 10, chaptersPerArc: 5,
-	})).toMatchObject({ chapterThreshold: 20, postChapterBuffer: 0, chaptersPerArc: 10 });
+it('sends the fixed 20-turn and 10-chapter cadence on the legacy wire keys', () => {
+	expect(buildBackendClientContext({ characters: [], locations: [] }))
+		.toMatchObject({ chapterThreshold: 20, postChapterBuffer: 0, chaptersPerArc: 10 });
 });
 
 describe('backend client context', () => {

@@ -39,6 +39,15 @@ describe('complete chronological summaries', () => {
 		expect(result.accounts[0].sourceId).toBe('1');
 		expect(result.characters[0]).toMatchObject({ name: 'Maera', entityId: undefined });
 	});
+	it('asks for a short summary that names places and purposes, and keeps its line structure', () => {
+		const prompt = chronologicalMemoryPrompt('chapter', [{ id: 'turn_1', text: 'The king rides to Riverrun to demand its surrender.' }]);
+		expect(prompt).toContain('name the destination and the purpose');
+		expect(prompt).toContain('120-350 words');
+		expect(prompt).not.toContain('4–12 connected paragraphs');
+		expect(SUMMARY_GENERATION_POLICY.readableInstructions.join(' ')).toContain('"Now: "');
+		const summary = 'Aegon takes the Twins and moves on Riverrun.\n- At the Twins: Emmon Frey yields the crossing.\n- At Riverrun: Lord Tully refuses entry.\nNow: Aegon waits at Riverrun.';
+		expect(normalizeReadableNarrative(summary)).toBe(summary);
+	});
 	 it('splits a model-produced wall of prose into readable paragraphs without changing its sentences', () => {
 		const wall = Array.from({ length: 32 }, (_, index) => `Sentence ${index + 1}.`).join(' ');
 		const normalized = normalizeReadableNarrative(wall);

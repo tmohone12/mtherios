@@ -14,7 +14,7 @@ const proposalPath='.codex-run/pi-live-comparison-proposal.json',ledgerPath='.co
 const hash=(body:unknown)=>createHash('sha256').update(JSON.stringify(body)).digest('hex');
 async function current(){
  const config=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
- expect(config).toMatchObject({port:5174,jobWorker:false,testLocalInferenceOnly:true,isolatedTestCopy:true});
+ expect(config).toMatchObject({port:5174,turnJobs:false,testLocalInferenceOnly:true,isolatedTestCopy:true});
  expect((await getDb().execute(sql.raw('select current_database() as name')))[0].name).toBe('mythengine_faction_copy_20261001');
  const gm=await resolveServiceGeneration('narrative');
  expect(gm.setting).toMatchObject({providerType:'openrouter',model:'z-ai/glm-5.3-flash',reasoningEffort:'high',maxTokens:8192});expect(gm.profile?.apiKey).toBeTruthy();
@@ -71,7 +71,7 @@ live('approved one-shot four live tool-free narration comparisons, no retries, t
   const proposal=JSON.parse(fs.readFileSync(proposalPath,'utf8'));expect(proposal.requests.length).toBe(4);expect(proposal.temperature).toBe(gm.generation.temperature??1);
   expect(proposal.price.pricing).toEqual(price.pricing);ledger.pricing=price;
   const copy=await actualFetch('http://127.0.0.1:5174/api/app/status').then(response=>response.json()),original=await actualFetch('http://127.0.0.1:5173/api/app/status').then(response=>response.json());
-  expect(copy.config.jobWorkerEnabled).toBe(false);expect(copy.jobs.running).toBe(0);
+  expect(copy.config.turnJobsEnabled).toBe(false);expect(copy.jobs.running).toBe(0);
   ledger.before={copyPid:copy.runtime.pid,copyBuild:copy.build,originalPid:original.runtime.pid,originalBuild:original.build,canon:await canon(),queued:copy.jobs.queued};save();
   let active:any;const seen=new Set<string>();process.env.MYTHENGINE_TEST_LOCAL_ONLY='false';
   vi.stubGlobal('fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
@@ -109,7 +109,7 @@ live('approved one-shot four live tool-free narration comparisons, no retries, t
   vi.unstubAllGlobals();if(policy===undefined)delete process.env.MYTHENGINE_TEST_LOCAL_ONLY;else process.env.MYTHENGINE_TEST_LOCAL_ONLY=policy;
   await Promise.allSettled(nativeReads);
   const copy=await actualFetch('http://127.0.0.1:5174/api/app/status').then(response=>response.json()),original=await actualFetch('http://127.0.0.1:5173/api/app/status').then(response=>response.json());
-  ledger.after={copyPid:copy.runtime.pid,workerPaused:copy.config.jobWorkerEnabled===false,cloudPaused:JSON.parse(fs.readFileSync('mythengine.config.json','utf8')).testLocalInferenceOnly===true,runningJobs:copy.jobs.running,queued:copy.jobs.queued,processPolicyRestored:process.env.MYTHENGINE_TEST_LOCAL_ONLY===policy,canon:await canon(),originalPid:original.runtime.pid,
+  ledger.after={copyPid:copy.runtime.pid,workerPaused:copy.config.turnJobsEnabled===false,cloudPaused:JSON.parse(fs.readFileSync('mythengine.config.json','utf8')).testLocalInferenceOnly===true,runningJobs:copy.jobs.running,queued:copy.jobs.queued,processPolicyRestored:process.env.MYTHENGINE_TEST_LOCAL_ONLY===policy,canon:await canon(),originalPid:original.runtime.pid,
    originalUnchanged:!ledger.before||original.runtime.pid===ledger.before.originalPid&&JSON.stringify(original.build)===JSON.stringify(ledger.before.originalBuild)};
   ledger.after.canonUnchanged=!ledger.before||JSON.stringify(ledger.before.canon)===JSON.stringify(ledger.after.canon);ledger.finishedAt=new Date().toISOString();if(ledger.before||ledger.calls.length)save();await closeDb();
  }

@@ -27,6 +27,7 @@ import { auditDueFactionProjects, dueFactionProjectFingerprint, evaluateProjectC
 import { isCharacterTitleOnlyName, resolveEntityIdentity, entityResolutionSummary, type EntityIdentityCandidate } from '$lib/server/memory/entityResolver';
 import { characterDraftSourceSnapshot } from './characterDrafts';
 import { boundCharacterIdentity } from './characterContinuity';
+import { appendCharacterDevelopments, foldAuthoredTextIntoDevelopments, readCharacterDevelopments } from '$lib/contracts/automaticCharacterUpdate';
 import { validateLocationParent } from './locationRecords';
 import { isEffectiveContainment } from '$lib/server/memory/locationLore';
 
@@ -360,7 +361,7 @@ async function applyCharacterContextUpdateProposal(tx: Tx, input: {
 	if (!proposedState) return emptyProposalApplication();
 	if (input.proposal.proposedBy === 'chapter_scribe') {
 		// Older pending chapter proposals contain full snapshots. Never replay their transient state or stats.
-		const continuityKeys = new Set(['bio', 'appearance', 'presentation', 'speechStyle', 'personality', 'rank', 'currentDisposition', 'relationship', 'motivations', 'factionTags', 'knownFacts', 'eventMemory']);
+		const continuityKeys = new Set(['bio', 'appearance', 'presentation', 'speechStyle', 'personality', 'rank', 'currentDisposition', 'relationship', 'motivations', 'factionTags', 'knownFacts', 'eventMemory', 'developments']);
 		proposedState = Object.fromEntries(Object.entries(proposedState).filter(([key]) => continuityKeys.has(key)));
 		if (!Object.keys(proposedState).length) return emptyProposalApplication();
 	}
@@ -376,18 +377,12 @@ async function applyCharacterContextUpdateProposal(tx: Tx, input: {
 		throw new Error('The character changed after this draft. Rebuild it before approving identity changes.');
 	}
 	if (!input.automatic && !/^retcon:\s*\S/i.test(input.notes?.trim() ?? '')) {
-		// Evidence for a new detail does not authorize deleting the established life story.
-		// Require an expanded biography or an explicit author decision; never invent a reconciliation.
-		const existing = asRecord(entity.state);
-		const normalized = (value: string) => value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
-		for (const field of ['bio', 'background', 'description']) {
-			const previous = field === 'description' ? entity.description : existing[field] ?? existing.bio ?? existing.background ?? entity.description;
-			const proposed = proposedState[field];
-			if (typeof previous === 'string' && previous.trim() && typeof proposed === 'string' && proposed.trim()
-				&& !normalized(proposed).includes(normalized(previous))) {
-				throw new Error('Preserve the established biography when adding details, or supply explicit author retcon notes beginning with "retcon:" to replace it.');
-			}
-		}
+		// Evidence for a new detail does not authorize deleting the established life story. The
+		// author's bio, personality, appearance and voice stay as written; what the proposal adds
+		// becomes a story development. Only notes beginning with "retcon:" replace authored text.
+		proposedState = foldAuthoredTextIntoDevelopments(asRecord(entity.state), proposedState, entity.description);
+	} else if (!input.automatic && Array.isArray(proposedState.developments)) {
+		proposedState = { ...proposedState, developments: appendCharacterDevelopments(asRecord(entity.state), readCharacterDevelopments(proposedState), entity.description) };
 	}
 	let identityConflicts: unknown[] = [];
 	let identitySourceHashes: unknown[] = [];
@@ -410,6 +405,8 @@ async function applyCharacterContextUpdateProposal(tx: Tx, input: {
 	const statePatch = { ...proposedState };
 	delete statePatch.description;
 	const state = mergeCharacterReferenceState(asRecord(entity.state), statePatch);
+	// A folded development list is already the complete list (earlier developments plus new ones).
+	if (Array.isArray(statePatch.developments)) state.developments = statePatch.developments;
 	if (typeof proposedState.bio === 'string' && proposedState.bio.trim()) state.background = proposedState.bio.trim();
 	if (input.automatic && isDeepStrictEqual(state, asRecord(entity.state))) return { ...emptyProposalApplication(), metadata: identityConflicts.length ? { forceStatus: 'needs_review', identityConflicts, identitySourceHashes, characterUpdateBaseVersion: entity.serverVersion } : {} };
 	const sourceEntryIds = unique([...(entity.sourceEntryIds ?? []), ...(input.proposal.sourceEntryIds ?? [])]);
@@ -718,11 +715,13 @@ async function saveCanonicalAliases(tx: Tx, input: {
 async function queueCanonRepairRefresh(storyId: string, serverVersion: number, affectedEntityIds: string[] = []): Promise<void> {
 	const entityIds = unique(affectedEntityIds).filter(Boolean);
 	await Promise.all([
+		// The vault's embedding index follows the wiki auto-index setting; a canon repair (each
+		// reviewed proposal) must not force a full re-embedding of the whole vault.
 		enqueueStoryVaultSyncJob({
 			storyId,
 			serverVersion,
 			reason: 'canon-repair',
-			payload: { source: 'canon_repair', index: true },
+			payload: { source: 'canon_repair' },
 		}),
 		...(entityIds.length
 			? entityIds.map((entityId) => enqueueBackendJob({

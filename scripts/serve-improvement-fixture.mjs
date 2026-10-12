@@ -30,7 +30,7 @@ try {
 		DATABASE_URL: `postgres://fixture:fixture@127.0.0.1:${port.HostPort}/fixture`,
 		MTHERIOS_CONFIG: resolve(scratch, 'config.json'), MTHERIOS_DATA_ROOT: resolve(scratch, 'data'),
 		MTHERIOS_VAULT_ROOT: resolve(scratch, 'vaults'), MTHERIOS_DEFAULT_VAULT: resolve(scratch, 'vaults/default'),
-		MTHERIOS_ALLOW_EXTERNAL_VAULTS: 'false', MTHERIOS_JOB_WORKER: 'false', MTHERIOS_WIKI_AUTO_INDEX: 'false', MTHERIOS_WIKI_AUTO_LINT: 'false', MTHERIOS_GENERATION_TIMING: 'off',
+		MTHERIOS_ALLOW_EXTERNAL_VAULTS: 'false', MTHERIOS_TURN_JOBS: 'false', MTHERIOS_WIKI_AUTO_INDEX: 'false', MTHERIOS_WIKI_AUTO_LINT: 'false', MTHERIOS_GENERATION_TIMING: 'off',
 		MEMORY_EMBEDDING_PROVIDER: '', MEMORY_EMBEDDING_MODEL: '', MEMORY_EMBEDDING_BASE_URL: '', MEMORY_EMBEDDING_URL: '', MEMORY_EMBEDDING_API_KEY: '',
 		QDRANT_URL: 'http://fixture.invalid/qdrant', OLLAMA_URL: 'http://fixture.invalid/ollama', WIKI_EMBED_API_KEY: '', UI_FIXTURE_API_KEY: 'synthetic-only',
 	});

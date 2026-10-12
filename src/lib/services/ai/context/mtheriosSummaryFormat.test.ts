@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMtheriosSummaryInstruction, extractMtheriosSummarySection, formatMtheriosMemorySummary, replaceMtheriosStoryNarrative, summarizeMtheriosMemoryForContext, summarizeMtheriosMemoryForRollup } from './mtheriosSummaryFormat';
+import { extractMtheriosSummarySection, formatMtheriosMemorySummary, readableMemorySummary, replaceMtheriosStoryNarrative, summarizeMtheriosMemoryForContext, summarizeMtheriosMemoryForRollup } from './mtheriosSummaryFormat';
 
 describe('mtherios summary format', () => {
 	it('renders the continuity memory summary contract with entity ids', () => {
@@ -53,19 +53,6 @@ describe('mtherios summary format', () => {
 		expect(summary).toContain('- The jade comb is still important.');
 		expect(summary).not.toContain('- - Aurion');
 		expect(summary).not.toContain('- * Serala');
-	});
-
-	it('tells LLM summarizers to use the same summary string shape', () => {
-		const instruction = buildMtheriosSummaryInstruction('chapter');
-
-		expect(instruction).toContain('MTHERIOS CHAPTER SUMMARY FORMAT');
-		expect(instruction).toContain('[CHECKPOINT =');
-		expect(instruction).toContain('[RECENT STORY STATE =');
-		expect(instruction).toContain('[CHARACTER STATE =');
-		expect(instruction).toContain('Character Name [entity_id]');
-		expect(instruction).toContain('Preserve entity ids');
-		expect(instruction).toContain('Time passed in this chapter:');
-		expect(instruction).toContain('entire covered source window in chronological order');
 	});
 
 	it('rolls older bracketed summaries forward without source coverage noise', () => {
@@ -183,6 +170,15 @@ describe('mtherios summary format', () => {
 		expect(context).not.toContain('/roll');
 		expect(context).not.toContain('/pov');
 		expect(context).not.toContain('Veiled daughter');
+	});
+
+	it('shows a reader only the story summary, with its lines, and no checkpoint metadata', () => {
+		const summary = 'Aegon takes the Twins.\n- At the Twins: Emmon Frey yields the crossing to avoid burning.\nNow: Aegon rides for Riverrun.';
+		const stored = formatMtheriosMemorySummary({ checkpoint: 'Chapter covering 20 completed turns, transcript positions 1-40.', sourceCoverage: ['Transcript positions 1-40.'],
+			currentScene: 'Dusk | the Twins', recentStoryNarrative: summary, activeThreads: ['Edmure is still imprisoned.'] });
+		expect(readableMemorySummary(stored)).toBe(summary);
+		expect(readableMemorySummary(stored)).not.toContain('transcript positions');
+		expect(readableMemorySummary('An older free-text chapter summary.')).toBe('An older free-text chapter summary.');
 	});
 
 	it('replaces only the reader-facing story section while preserving continuity state', () => {

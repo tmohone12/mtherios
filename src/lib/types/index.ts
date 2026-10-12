@@ -1817,8 +1817,8 @@ export interface FactionActionRecord {
 
 /**
  * A staged plan owned by an antagonist faction/NPC or by the player.
- * Birthed by `update_world_state` story beats (antagonist schemes) or by
- * the player declaring intent via /plan or the Declare Plan modal.
+ * Birthed by `update_world_state` story beats (antagonist schemes).
+ * Player schemes from older saves keep `ownerType: 'player'`.
  * Stages advance on the world clock (time conditions) or on player acts.
  * When a stage matures, its `hook` is injected into the narrator system
  * prompt — forcing weaker models to deliver the beat instead of vibing

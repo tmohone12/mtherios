@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { requestScope } from '$lib/server/requestScopes';
 import { createHash } from 'node:crypto';
 
 interface QueryEmbeddingReuseScope {
@@ -6,7 +6,7 @@ interface QueryEmbeddingReuseScope {
   revision: () => Promise<string>;
   signal?: AbortSignal;
 }
-const scopes = new AsyncLocalStorage<QueryEmbeddingReuseScope & { vectors: Map<string, number[][]> }>();
+const scopes = requestScope<QueryEmbeddingReuseScope & { vectors: Map<string, number[][]> }>();
 
 /** One GM invocation only. Searches and scene assembly are always rerun against current sources. */
 export function withQueryEmbeddingReuse<T>(scope: QueryEmbeddingReuseScope, work: () => Promise<T>): Promise<T> {

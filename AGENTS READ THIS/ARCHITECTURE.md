@@ -9,6 +9,7 @@ Use this index when choosing where to investigate. [Root AGENTS.md](../AGENTS.md
 | Startup, wrong process, wrong data directory | [Runtime and entrypoints](../ARCHITECTURE.md#runtime-and-entrypoints) | Selected checkout, actual URL/data root, dependency health |
 | Narration, context size, model/reasoning settings | [Server turn and prompt flow](../ARCHITECTURE.md#server-turn-and-prompt-flow) | Saved example, effective override/pack/provider, prepared versus sent request |
 | Missing recall, stuck processing, summaries | [Memory and durable processing](../ARCHITECTURE.md#memory-retrieval-and-durable-processing) | Source coverage, retained records, stage/version of any gap |
+| HP, conditions or items wrong after a turn | [Gameplay effects](../ARCHITECTURE.md#gameplay-effects-hp-conditions-and-items) | The turn's `gameplay_effects` receipts, its extraction job, stored entity state and the next prompt |
 | Character edits, player abilities, MCP consistency | [Canonical world editing](../ARCHITECTURE.md#canonical-world-editing) | Canonical ID, accepted update contract, persistence and projection |
 | Containing places, city rules, inherited context | [Locations and inherited lore](../ARCHITECTURE.md#locations-and-inherited-lore) | Containment edges, scoped facts, campaign turn, revision |
 | Repeated/ignored plot pressure, faction decisions | [Director and factions](../ARCHITECTURE.md#plot-director-and-autonomous-factions) | Pending/applied frame, lifecycle, source events, eligible actors |

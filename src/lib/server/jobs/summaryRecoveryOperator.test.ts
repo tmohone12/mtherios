@@ -145,7 +145,7 @@ tests('explicit operator production path with mocked HTTP and disposable DB',()=
 	it('executes the compiled CLI subprocess with actual argument/config/credential-reference flow and mocked HTTP only',async()=> {
 		const f=await fixture();await runRecoveryOperator(f.args('install-ledger',f.approve('install-ledger')),f.deps);
 		const configFile=path.join(f.directory,'config.json'),mockFile=path.join(f.directory,'mock-http.mjs');
-		fs.writeFileSync(configFile,JSON.stringify({databaseUrl:url,jobWorker:false,wikiAutoIndexStoryVaults:false}));
+		fs.writeFileSync(configFile,JSON.stringify({databaseUrl:url,turnJobs:false,wikiAutoIndexStoryVaults:false}));
 		fs.writeFileSync(mockFile,`import fs from 'node:fs';
 const m=JSON.parse(fs.readFileSync(process.env.FIXTURE_MANIFEST_PATH,'utf8'));
 globalThis.fetch=async(url,init)=> {

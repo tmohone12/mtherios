@@ -8,7 +8,7 @@ live('small sequential real local Kev decision matrix; no planner, cloud or camp
  const path='.codex-run/faction-decision-matrix-local.json';
  if(fs.existsSync(path))throw new Error('Matrix batch already recorded; no uncontrolled repeats');
  const config=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
- if(config.port!==5174||config.jobWorker!==false||!config.testLocalInferenceOnly||!config.isolatedTestCopy)throw new Error('Paused isolated COPY required');
+ if(config.port!==5174||config.turnJobs!==false||!config.testLocalInferenceOnly||!config.isolatedTestCopy)throw new Error('Paused isolated COPY required');
  const ledger:any={startedAt:new Date().toISOString(),requestCap:12,concurrency:1,retries:0,paidCalls:0,thresholds:{confidence:.7,selectedProbability:.7},scenarios:[],requests:[]};
  const save=()=>fs.writeFileSync(path,JSON.stringify(ledger,null,2));save();
  const nativeFetch=globalThis.fetch;let scenario='';

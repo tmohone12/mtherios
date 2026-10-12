@@ -18,11 +18,10 @@ export interface MtheriosAppConfig {
 	wikiEmbedBaseUrl: string;
 	wikiEmbedApiKey: string;
 	wikiAutoIndexStoryVaults: boolean;
-	jobWorkerEnabled: boolean;
+	/** Queued jobs run after the work that queued them (see server/jobs/turnJobs). */
+	turnJobsEnabled: boolean;
 	chapterRunnerEnabled: boolean;
 	chapterRunnerStoryId: string;
-	jobWorkerScope: 'all' | 'faction';
-	jobIntervalMs: number;
 }
 
 export function getMtheriosAppConfig(): MtheriosAppConfig {
@@ -35,7 +34,7 @@ export function getMtheriosAppConfig(): MtheriosAppConfig {
 		wikiEmbedProvider: options.wikiEmbedProvider, wikiEmbedModel: options.wikiEmbedModel,
 		wikiEmbedBaseUrl: options.wikiEmbedBaseUrl, wikiEmbedApiKey: options.wikiEmbedApiKey,
 		wikiAutoIndexStoryVaults: options.wikiAutoIndexStoryVaults,
-		jobWorkerEnabled: options.jobWorker, jobWorkerScope: options.jobWorkerScope === 'faction' ? 'faction' : 'all', jobIntervalMs: options.jobIntervalMs,
+		turnJobsEnabled: options.turnJobs,
 		chapterRunnerEnabled: options.chapterRunnerEnabled, chapterRunnerStoryId: options.chapterRunnerStoryId,
 	};
 }
@@ -70,7 +69,7 @@ export function resolveVaultPath(input?: string | null, config = getMtheriosAppC
 }
 
 export function wikiRuntimeEnv(config = getMtheriosAppConfig()): NodeJS.ProcessEnv {
-	return buildRuntimeEnv({ ...resolveRuntimeOptions([], { env }), ...config, jobWorker: config.jobWorkerEnabled });
+	return buildRuntimeEnv({ ...resolveRuntimeOptions([], { env }), ...config, turnJobs: config.turnJobsEnabled });
 }
 
 function isPathInside(parent: string, child: string): boolean {

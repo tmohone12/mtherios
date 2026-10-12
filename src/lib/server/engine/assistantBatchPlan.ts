@@ -26,7 +26,6 @@ export const assistantBatchPlanSchema = z.object({
   maxTargets: z.number().int().min(1).max(500).default(500),
 }).strict();
 
-type BatchPlanRequest = z.infer<typeof assistantBatchPlanSchema>;
 type BatchDb = ReturnType<typeof getDb>;
 type BatchTx = Parameters<Parameters<BatchDb['transaction']>[0]>[0];
 

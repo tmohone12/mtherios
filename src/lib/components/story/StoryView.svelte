@@ -28,8 +28,8 @@
 
 
 	let scrollContainer = $state<HTMLDivElement | null>(null);
-	let streamingContent = $state('');
-	let isStreaming = $state(false);
+	/** A turn request is in flight; the composer shows run progress once the server accepts it. */
+	let turnStarting = $state(false);
 	let readerNearBottom = $state(true);
 	let showLatestButton = $state(false);
 	let suggestions = $state<Suggestion[]>([]);
@@ -38,7 +38,7 @@
 	let enrichmentRequestId = 0;
 	let imageRequestId = 0;
 	let enrichmentStoryId = '';
-	let activeStreamStoryId = '';
+	let activeTurnStoryId = '';
 	let agentHistory = $state<BackendAgentHistory>({ interactions: [], rolls: [], images: [], research: [] });
 	let agentHistoryRequest = 0;
 	let initialScrollStoryId = '';
@@ -374,15 +374,14 @@
 		showLatestButton = false;
 	}
 
-	function handleStreamStart() {
-		activeStreamStoryId = story.currentStory?.id ?? '';
+	function handleTurnStart() {
+		activeTurnStoryId = story.currentStory?.id ?? '';
 		enrichmentRequestId += 1;
 		imageRequestId += 1;
 		suggestionRequestId += 1;
 		suggestions = [];
 		suggestionsLoading = false;
-		streamingContent = '';
-		isStreaming = true;
+		turnStarting = true;
 		story.beginGmActivity();
 		// Don't clear sceneImageUrl here — leave the previous scene visible
 		// until the new image actually arrives (or image gen is disabled,
@@ -391,23 +390,16 @@
 		scrollToBottom('auto');
 	}
 
-	function handleStreamChunk(text: string) {
-		streamingContent = text;
-		scrollToBottom('auto');
-	}
-
-	async function handleStreamEnd(fullText: string) {
-		const originStoryId = activeStreamStoryId;
+	async function handleTurnEnd(fullText: string) {
+		const originStoryId = activeTurnStoryId;
 		const requestId = enrichmentRequestId;
-		streamingContent = '';
-		isStreaming = false;
+		turnStarting = false;
 		story.clearGmActivity();
 		scrollToBottom('auto');
 		if (!fullText.trim() || !originStoryId || story.currentStory?.id !== originStoryId) return;
 		const isCurrentRequest = () => requestId === enrichmentRequestId && story.currentStory?.id === originStoryId;
 
-		// Orchestrator already updated world state in ActionInput. Here we run
-		// only optional UI enrichment services in parallel.
+		// The server already saved the turn. Here we run only optional UI enrichment in parallel.
 		const errors: string[] = [];
 		const jobs: Promise<void>[] = [];
 
@@ -455,9 +447,8 @@
 		scrollToBottom('auto');
 	}
 
-	function handleStreamClear() {
-		streamingContent = '';
-		isStreaming = false;
+	function handleTurnClear() {
+		turnStarting = false;
 		story.clearGmActivity();
 	}
 
@@ -750,7 +741,7 @@
 			<div class="flex items-center justify-center py-20">
 				<Loader2 class="h-6 w-6 animate-spin text-[var(--text-accent)]" />
 			</div>
-		{:else if story.entries.length === 0 && !isStreaming}
+		{:else if story.entries.length === 0 && !turnStarting}
 			<div class="reader-opening mx-auto flex min-h-full max-w-xl flex-col items-center justify-center gap-5 px-7 py-16 text-center">
 				<span class="opening-mark"><Feather class="h-6 w-6" /></span>
 				<div class="space-y-2">
@@ -877,6 +868,23 @@
 											{#if receipt.stateExtractionStatus === 'failed' && receipt.stateExtractionError}
 												<p class="mt-1 line-clamp-3 text-[var(--text-muted)]">{receipt.stateExtractionError}</p>
 											{/if}
+											{#if receipt.floor?.status === 'decided'}
+												{@const floor = receipt.floor}
+												{@const nameOf = (id: string) => floor.actors.find(actor => actor.id === id)?.name ?? id}
+												<p class="mt-1.5 text-[var(--text-secondary)]">Floor{floor.mode === 'shadow' ? ' (recorded only)' : ''}: {floor.actors.filter(actor => actor.role === 'answer' || actor.role === 'speak').map(actor => `${actor.name} ${actor.role === 'answer' ? 'answers' : 'may speak'}`).join(' · ') || 'no one needed to speak'}</p>
+												{#if floor.adherence?.unexpected.length || floor.adherence?.missing.length}
+													<p class="text-amber-400">{[...(floor.adherence?.unexpected ?? []).map(id => `${nameOf(id)} spoke unprompted`), ...(floor.adherence?.missing ?? []).map(id => `${nameOf(id)} did not answer`)].join(' · ')}</p>
+												{/if}
+											{:else if receipt.floor && receipt.floor.status !== 'abstained'}
+												<p class="mt-1.5 text-[var(--text-muted)]">Floor {receipt.floor.status.replace('_', ' ')}{receipt.floor.reason ? `: ${receipt.floor.reason}` : ''}</p>
+											{/if}
+											{#if receipt.effects.length}
+												<ul class="mt-1.5 space-y-0.5">
+													{#each receipt.effects as effect}
+														<li class="{effect.status === 'applied' ? 'text-[var(--text-secondary)]' : effect.status === 'rejected' || effect.status === 'unresolved' ? 'text-amber-400' : 'text-[var(--text-muted)]'}">{effect.summary}</li>
+													{/each}
+												</ul>
+											{/if}
 										</section>
 									</div>
 									{#if contextReceipt?.selection}
@@ -933,13 +941,8 @@
 					{/if}
 				{/each}
 
-				<!-- Streaming narration -->
-				{#if isStreaming && streamingContent}
-					<div class="prose-mtherios px-1 sm:px-2">
-							{@html formatNarrative(streamingContent, dialogueSpeakers)}
-							<span class="inline-block h-4 w-0.5 animate-pulse bg-[var(--text-accent)]"></span>
-					</div>
-				{:else if isStreaming}
+				<!-- Turn request in flight -->
+				{#if turnStarting}
 					<div class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/70 px-4 py-3" role="status" aria-live="polite">
 						<div class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
 							<Loader2 class="h-4 w-4 shrink-0 animate-spin text-[var(--text-accent)]" />
@@ -1061,10 +1064,9 @@
 
 				<div class="flex-1 min-w-0">
 					<ActionInput
-						onStreamStart={handleStreamStart}
-						onStreamChunk={handleStreamChunk}
-						onStreamEnd={handleStreamEnd}
-						onStreamClear={handleStreamClear}
+						onTurnStart={handleTurnStart}
+						onTurnEnd={handleTurnEnd}
+						onTurnClear={handleTurnClear}
 					/>
 				</div>
 			</div>

@@ -184,6 +184,8 @@ export function shouldRefreshCampaignProjection(event: EngineStreamEvent | null 
 		return [
 			'extract_turn_state',
 			'summarize_chapter',
+			'rollup_arc',
+			'rollup_saga',
 			'chapter_threads',
 			'chapter_characters',
 			'create_memory_nodes_from_events',

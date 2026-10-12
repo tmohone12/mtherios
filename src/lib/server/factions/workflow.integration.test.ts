@@ -103,6 +103,14 @@ integration('fails blocked delivery without fabricating betrayal or losing reser
  expect(rows.map(row=>row.amount)).toEqual([100,10]);expect(rows[0].metadata).toMatchObject({reservedGrain:0});
  expect(JSON.stringify(await getDb().execute(sql`select body from story_events where story_id=${f.key} and visibility='public'`))).not.toMatch(/betray|blocked|road|toll/);
 },30000);
+integration('shows the Director where the story stands now',async()=>{
+ const f=await fixture();let gardenerInput:any=null;controls.onGenerate=async input=>{if(input.unresolved)gardenerInput=input;};
+ await getDb().execute(sql`insert into chapters(id,story_id,number,title,scene_outcome) values(${f.key+'_ch1'},${f.key},1,'The Old Request','Older chapter.'),(${f.key+'_ch2'},${f.key},2,'Relief at the Ford','[RECENT STORY STATE =\nThe League sends grain to the ford.\nNow: the Regency weighs the offer.\n]')`);
+ expect(await reviewGardener(f.key)).toMatchObject({status:'reviewed'});
+ expect(gardenerInput.currentSituation.map((row:any)=>row.title)).toEqual(['The Old Request','Relief at the Ford']);
+ expect(gardenerInput.currentSituation[1].summary).toBe('The League sends grain to the ford.\nNow: the Regency weighs the offer.');
+ expect(controls.prompts.gardener).toContain('currentSituation is where the story stands now');
+},30000);
 integration('rejects stale/interrupted writes and releases the background lock',async()=>{
  const f=await fixture(); const interrupted:NegotiationAdapters={...adapter,plan:async input=>{await day(f.key,1);return adapter.plan(input);}};
  expect(await advanceNegotiation(f.key,'interrupted',interrupted)).toMatchObject({status:'held',reason:'stale_inventory_or_context'});
@@ -113,13 +121,19 @@ integration('rejects stale/interrupted writes and releases the background lock',
  expect(await withFactionLane(async()=>await withFactionLane(async()=>({status:'should_not_run'})))).toEqual({status:'held',reason:'background_lane_busy'});
  await getDb().execute(sql`insert into sync_ops(id,story_id,type,status) values(${f.key+'_turn'},${f.key},'turn_command','running')`);
  expect(await withFactionLane(async()=>({status:'should_not_run'}))).toEqual({status:'held',reason:'interactive_turn_has_priority'});
+ // A reservation abandoned by a stopped process no longer holds planning.
+ await getDb().execute(sql`update sync_ops set created_at=now()-interval '2 hours' where id=${f.key+'_turn'}`);
+ expect(await withFactionLane(async()=>({status:'ran'}))).toEqual({status:'ran'});
  await getDb().execute(sql`update sync_ops set status='failed' where id=${f.key+'_turn'}`);
 },30000);
 integration('records intentions and forecasts separately, coalesces unchanged input and holds missing models',async()=>{
  const f=await fixture();const count=async()=>Number((await getDb().execute(sql`select count(*) as n from story_events where story_id=${f.key}`))[0].n);
  const before=await count();expect(await reviewFactionIntentions(f.key,'review',[f.supplier])).toMatchObject({reviewed:1,createdEvents:0});
  const calls=controls.calls;expect(await reviewFactionIntentions(f.key,'repeat',[f.supplier])).toMatchObject({reviewed:0});expect(controls.calls).toBe(calls);
+ let gardenerInput:any=null;controls.onGenerate=async input=>{if(input.unresolved)gardenerInput=input;};
  expect(await reviewGardener(f.key)).toMatchObject({forecastCount:1,eventCount:0});expect(await count()).toBe(before);
+ expect(gardenerInput).toMatchObject({currentSituation:[],unresolved:[expect.objectContaining({lastUpdated:expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)})]});
+ controls.onGenerate=null;
  controls.invalidForecast=true;
  await getDb().execute(sql`update story_threads set description='A changed relief request still awaiting consent.' where story_id=${f.key}`);
  expect(await reviewGardener(f.key)).toMatchObject({status:'held',reason:'Unsupported forecast evidence.',forecastCount:0,eventCount:0});

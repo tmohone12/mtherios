@@ -953,9 +953,18 @@ describe('legacy API route gateway compatibility', () => {
 					workerId: 'manual_worker',
 					limit: 7,
 					allStories: false,
+					scope: 'all',
 				},
 			},
 		]);
+
+		commandCalls.length = 0;
+		await runDueRoute.POST({
+			request: jsonRequest({ storyId: 'story_alpha', workerId: 'faction_worker', scope: 'faction' }),
+			url: new URL('http://localhost/api/app/jobs/run'),
+		} as Parameters<typeof runDueRoute.POST>[0]);
+		expect(commandCalls).toEqual([{ storyId: 'story_alpha', command: 'jobs.runDue',
+			args: { workerId: 'faction_worker', limit: 10, allStories: false, scope: 'faction' } }]);
 	});
 
 	it('wraps story vault wiki jobs in the engine command envelope', async () => {

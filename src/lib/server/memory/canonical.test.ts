@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+	arcs,
 	chapters,
 	entities,
 	entityAliases,
@@ -41,7 +42,8 @@ vi.mock('$lib/server/engine/canonicalSearch', () => ({
 	searchCanonicalWorld: vi.fn().mockResolvedValue({ results: [] }),
 }));
 
-import { assertSyncOpReplayMatches, listBackendShelves, listBackendStories, normalizeBootstrapOptions, restoreBackendStory, revertToContextCheckpoint, updateBackendShelf, upsertBackendChapterFromLocal, upsertBackendEntityFromEntry } from './canonical';
+import { assertSyncOpReplayMatches, listBackendShelves, listBackendStories, normalizeBootstrapOptions, restoreBackendStory, revertToContextCheckpoint, updateBackendShelf, upsertBackendArcFromLocal, upsertBackendChapterFromLocal, upsertBackendEntityFromEntry } from './canonical';
+import { readableMemorySummary, summarizeMtheriosMemoryForRollup } from '$lib/services/ai/context/mtheriosSummaryFormat';
 
 type PatchProposalRow = typeof patchProposals.$inferSelect;
 
@@ -103,6 +105,7 @@ function createDbMock(options: {
 	patchProposalRows?: PatchProposalRow[];
 	entityRows?: Array<Record<string, unknown>>;
 	chapterRows?: Array<Record<string, unknown>>;
+	arcRows?: Array<Record<string, unknown>>;
 	shelfRows?: Array<Record<string, unknown>>;
 	storyRows?: Array<Record<string, unknown>>;
 	storyUpdateReturning?: Array<Record<string, unknown>>;
@@ -114,6 +117,7 @@ function createDbMock(options: {
 		if (table === stories) return options.storyRows ?? [{ id: 'story_1', serverVersion: 1 }];
 		if (table === entities) return options.entityRows ?? [];
 		if (table === chapters) return options.chapterRows ?? [];
+		if (table === arcs) return options.arcRows ?? [];
 		if (table === entityAliases) return [];
 		if (table === relationships) return [];
 		if (table === patchProposals) return options.patchProposalRows ?? [];
@@ -132,6 +136,7 @@ function createDbMock(options: {
 				where: vi.fn(() => chain),
 				orderBy: vi.fn(() => chain),
 				limit: vi.fn(() => Promise.resolve(rowsFor(selectedTable))),
+				then: (resolve: (rows: unknown[]) => unknown, reject: (error: unknown) => unknown) => Promise.resolve(rowsFor(selectedTable)).then(resolve, reject),
 			};
 			return chain;
 		}),
@@ -466,6 +471,39 @@ describe('backend chapter character references', () => {
 				sourceField: 'characters',
 			}),
 		]));
+	});
+
+	it('accepts a hand-written arc only over saved chapters that no other arc covers', async () => {
+		const write = async (options: Parameters<typeof createDbMock>[0], chapterIds: string[], id = 'arc_new') => {
+			const { db, insertCalls } = createDbMock(options);
+			dbMocks.getDb.mockReturnValue(db);
+			await upsertBackendArcFromLocal('story_1', { id, title: 'Season', summary: 'The court shifts.', chapterIds });
+			return insertCalls.filter((call) => call.table === arcs).map((call) => call.value);
+		};
+		const saved = [{ id: 'ch_1' }, { id: 'ch_2' }, { id: 'ch_3' }];
+		await expect(write({ chapterRows: saved }, ['ch_1', 'ch_2'])).resolves.toEqual([expect.objectContaining({ chapterIds: ['ch_1', 'ch_2'] })]);
+		await expect(write({ chapterRows: saved }, ['ch_1', 'ch_1'])).rejects.toThrow('listed once');
+		await expect(write({ chapterRows: [{ id: 'ch_1' }] }, ['ch_1', 'ch_missing'])).rejects.toThrow('not saved in this story: ch_missing');
+		await expect(write({ chapterRows: saved, arcRows: [{ id: 'arc_1', number: 1, chapterIds: ['ch_2', 'ch_3'] }] }, ['ch_1', 'ch_2']))
+			.rejects.toThrow('already belong to arc 1');
+		// Editing an existing arc without changing its chapters stays possible after a chapter was deleted.
+		await expect(write({ chapterRows: [], arcRows: [{ id: 'arc_1', number: 1, chapterIds: ['ch_gone'] }] }, ['ch_gone'], 'arc_1')).resolves.toHaveLength(1);
+	});
+
+	it('keeps the stored chapter account when an edit sends back its unchanged display summary', async () => {
+		const stored = '[CHECKPOINT = Chapter 12 checkpoint.]\n[SOURCE COVERAGE =\n- positions 1-40\n]\n[RECENT STORY STATE =\n- Aurion dines with Xanda beneath lapis-blue seals.\n]\n[CHARACTER STATE =\nXanda [entity_xanda]:\n- watches the Golden Dragon title.\n]';
+		const existing = { id: 'chapter_yin_dinner', storyId: 'story_1', number: 12, title: 'Dinner', sceneOutcome: stored, metadata: {}, sourceEntryIds: [], sourceEventIds: [] };
+		for (const [summary, expected] of [
+			[summarizeMtheriosMemoryForRollup(stored), stored],
+			[readableMemorySummary(stored), stored],
+			['Aurion leaves the dinner early.', 'Aurion leaves the dinner early.'],
+		]) {
+			const { db, insertCalls } = createDbMock({ chapterRows: [existing] });
+			dbMocks.getDb.mockReturnValue(db);
+			await upsertBackendChapterFromLocal('story_1', { id: 'chapter_yin_dinner', number: 12, title: 'Dinner in Yin', summary, characters: [] });
+			const chapterWrite = insertCalls.find((call) => call.table === chapters)!.value as { sceneOutcome: string; title: string };
+			expect(chapterWrite).toMatchObject({ sceneOutcome: expected, title: 'Dinner in Yin' });
+		}
 	});
 
 	it('adds later chapter evidence to existing character review proposals', async () => {

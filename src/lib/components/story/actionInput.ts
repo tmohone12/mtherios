@@ -30,6 +30,57 @@ export function decodeActionDraft(value: string | null | undefined): ActionDraft
 	return { text: value, actionType: 'do' };
 }
 
+/**
+ * Where a draft goes after its send failed. The composer gets it back only while it
+ * still shows the submitting story and nothing new was typed; after a story switch
+ * the draft returns to that story's saved slot unless a newer draft is already there.
+ */
+export function failedDraftRestoreTarget(input: {
+	submittedStoryId: string;
+	submittedRevision: number;
+	currentStoryId: string;
+	currentRevision: number;
+	storedDraftForSubmittedStory: string | null | undefined;
+}): 'composer' | 'storage' | 'none' {
+	if (input.currentStoryId === input.submittedStoryId) {
+		return input.currentRevision === input.submittedRevision ? 'composer' : 'none';
+	}
+	return decodeActionDraft(input.storedDraftForSubmittedStory).text ? 'none' : 'storage';
+}
+
+type ServerRunSnapshot = { clientTurnId: string; status: string };
+
+export type ServerTurnStart<Run extends ServerRunSnapshot> =
+	| { kind: 'run'; run: Run; restoreDraft: boolean; storyChanged: boolean }
+	| { kind: 'failed'; error: unknown; storyChanged: boolean };
+
+/**
+ * Starts one server turn and decides what the composer should do with the result.
+ * A request that fails after the server accepted it is recovered by its client turn
+ * ID instead of being sent again. `storyChanged` tells the caller not to show the run
+ * in a composer that now belongs to another story.
+ */
+export async function startServerTurn<Run extends ServerRunSnapshot>(input: {
+	serverStoryId: string;
+	clientTurnId: string;
+	stillSelected: () => boolean;
+	prepare: () => Promise<{ serverStoryId: string; serverVersion: number }>;
+	start: (request: { storyId: string; localVersion: number; clientTurnId: string }) => Promise<Run>;
+	current: (serverStoryId: string) => Promise<Run | null>;
+}): Promise<ServerTurnStart<Run>> {
+	try {
+		const prepared = await input.prepare();
+		const run = await input.start({ storyId: prepared.serverStoryId, localVersion: prepared.serverVersion, clientTurnId: input.clientTurnId });
+		return { kind: 'run', run, restoreDraft: run.status === 'failed' || run.status === 'cancelled', storyChanged: !input.stillSelected() };
+	} catch (error) {
+		const recovered = await input.current(input.serverStoryId).catch(() => null);
+		if (recovered?.clientTurnId === input.clientTurnId) {
+			return { kind: 'run', run: recovered, restoreDraft: recovered.status === 'failed' || recovered.status === 'cancelled', storyChanged: !input.stillSelected() };
+		}
+		return { kind: 'failed', error, storyChanged: !input.stillSelected() };
+	}
+}
+
 const SHORTHAND_COMMANDS: Record<string, string> = {
 	l: 'look around',
 	i: 'check my inventory',

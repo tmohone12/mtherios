@@ -203,7 +203,7 @@ try {
 		MYTHENGINE_ALLOW_SHARED_RUNTIME: 'true', // This harness owns its verified disposable DB and temporary paths.
 		DATABASE_URL: databaseUrl, MTHERIOS_CONFIG: resolve(scratch, 'config.json'), MTHERIOS_DATA_ROOT: resolve(scratch, 'data'),
 		MTHERIOS_VAULT_ROOT: resolve(scratch, 'vaults'), MTHERIOS_DEFAULT_VAULT: resolve(scratch, 'vaults/default'),
-		MTHERIOS_ALLOW_EXTERNAL_VAULTS: 'false', MTHERIOS_JOB_WORKER: 'false', MTHERIOS_WIKI_AUTO_INDEX: 'false', MTHERIOS_WIKI_AUTO_LINT: 'false', MTHERIOS_GENERATION_TIMING: 'off',
+		MTHERIOS_ALLOW_EXTERNAL_VAULTS: 'false', MTHERIOS_TURN_JOBS: 'false', MTHERIOS_WIKI_AUTO_INDEX: 'false', MTHERIOS_WIKI_AUTO_LINT: 'false', MTHERIOS_GENERATION_TIMING: 'off',
 		MEMORY_EMBEDDING_PROVIDER: '', MEMORY_EMBEDDING_MODEL: '', MEMORY_EMBEDDING_BASE_URL: '', MEMORY_EMBEDDING_URL: '', MEMORY_EMBEDDING_API_KEY: '',
 		QDRANT_URL: 'http://replay.invalid/qdrant', OLLAMA_URL: 'http://replay.invalid/ollama', WIKI_EMBED_PROVIDER: 'local-hash', WIKI_EMBED_MODEL: 'replay-local-hash', WIKI_EMBED_API_KEY: '', WIKI_EMBED_URL: '', REPLAY_API_KEY: 'synthetic-only',
 	});

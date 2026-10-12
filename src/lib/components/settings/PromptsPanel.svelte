@@ -24,13 +24,10 @@
 		'characterUpdate',
 		'memory',
 		'arcCondensation',
-		'sagaCondensation',
-		'loreManagement',
-		'entryRefinement',
 		'suggestions',
 		'imageGeneration',
 	];
-	const RETIRED_SERVICES = new Set(['styleReviewer', 'wikiLint', 'actionChoices', 'activeRecall', 'worldSimulation']);
+	const RETIRED_SERVICES = new Set(['styleReviewer', 'wikiLint', 'actionChoices', 'activeRecall', 'worldSimulation', 'sagaCondensation', 'loreManagement', 'entryRefinement', 'continuityReview']);
 
 	let rows = $state<LlmServiceSetting[]>([]);
 	let drafts = $state<Record<string, string>>({});
@@ -104,7 +101,7 @@
 	}
 
 	function serviceDescription(serviceId: string): string {
-		return SERVICE_DEFINITIONS[serviceId]?.description ?? 'Terminal LLM service';
+		return SERVICE_DEFINITIONS[serviceId]?.description ?? 'Server model task';
 	}
 
 	function draftFor(serviceId: string): string {
@@ -196,7 +193,7 @@
 				class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[var(--border-primary)] text-[var(--text-muted)] hover:text-[var(--text-accent)] disabled:opacity-50 sm:h-9 sm:w-9"
 				onclick={reload}
 				disabled={loading || saving}
-				title="Reload terminal prompts"
+				title="Reload prompts from the server"
 			>
 				<RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
 			</button>
@@ -276,7 +273,7 @@
 						if (selectedRow.serviceId === 'narrative') editingNarrative = true;
 						setDraft(selectedRow.serviceId, (e.target as HTMLTextAreaElement).value);
 					}}
-					placeholder={selectedRow.serviceId === 'dialogue' ? 'Optional voice and style guidance; core dialogue rules stay active.' : 'Leave empty to use the built-in terminal prompt.'}
+					placeholder={selectedRow.serviceId === 'dialogue' ? 'Optional voice and style guidance; core dialogue rules stay active.' : 'Leave empty to use the built-in server prompt.'}
 					disabled={loading || saving || (selectedRow.serviceId === 'narrative' && showingBuiltIn && (previewLoading || !preview))}
 					spellcheck={false}
 					class="min-h-[22rem] w-full resize-y rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-3 font-mono text-xs leading-relaxed {selectedRow.serviceId === 'narrative' && showingBuiltIn ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)]'} placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none disabled:opacity-50"

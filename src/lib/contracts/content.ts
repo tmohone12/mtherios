@@ -7,7 +7,7 @@ const key = z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/);
 export const contentScopeSchema = z.object({ projectId: id, gameId: id.optional() }).strict();
 export const contextModeSchema = z.enum(['pinned', 'partial', 'searchable']);
 export { contentFieldSchema, type ContentField } from './contentFields';
-import { contentFieldSchema, type ContentField } from './contentFields';
+import { contentFieldSchema } from './contentFields';
 export const contentDefinitionSchema = z.object({
   fields: z.record(z.string(), contentFieldSchema),
   layout: z.array(z.object({ title: z.string().max(100), fields: z.array(key).max(100) }).strict()).max(30).default([]),

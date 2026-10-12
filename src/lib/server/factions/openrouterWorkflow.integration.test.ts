@@ -22,7 +22,7 @@ const receipts:any[]=[];
 let originalPolicy:string|undefined;
 async function fixture(){
  const config=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
- expect(config).toMatchObject({port:5174,jobWorker:false,testLocalInferenceOnly:true,isolatedTestCopy:true});
+ expect(config).toMatchObject({port:5174,turnJobs:false,testLocalInferenceOnly:true,isolatedTestCopy:true});
  expect((await getDb().execute(sql`select current_database() as name`))[0].name).toBe('mythengine_faction_copy_20261001');
  originalPolicy=process.env.MYTHENGINE_TEST_LOCAL_ONLY;process.env.MYTHENGINE_TEST_LOCAL_ONLY='false';
  controls.missing=false;controls.key=true;controls.plannerCalls=0;controls.packets=[];

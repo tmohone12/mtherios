@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, asc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
-import { backendJobs, stories } from '$lib/server/db/schema';
+import { backendJobs, stories, storyEntries } from '$lib/server/db/schema';
 import { classifyBackendJobFailure, describeBackendJobError, manualRetryBlockCause } from './failureClassification';
 
 export const backendJobTypes = [
@@ -35,6 +35,40 @@ export const factionWorkerJobTypes = [
 	'plan_plot_brain',
 ] as const satisfies readonly BackendJobType[];
 
+/** Faction and Director work; runs after a story's memory jobs and never holds up a turn. */
+export const worldJobTypes = factionWorkerJobTypes;
+
+/**
+ * Runs after memory without holding up a turn: no turn prompt reads the canonical search index, and
+ * the Markdown story vault (with its optional embedding index) is a derived copy that can be a turn
+ * behind. A vault sync that indexes a large vault can take minutes; a turn must never wait for it.
+ */
+export const backgroundJobTypes = [
+	'index_canonical_records',
+	'sync_story_vault',
+] as const satisfies readonly BackendJobType[];
+
+/** What a turn's context reads (canon, memory nodes, checkpoint, chapters, search); the next turn waits for these. */
+export const memoryJobTypes = [
+	'refresh_scene_checkpoint',
+	'extract_turn_state',
+	'create_memory_nodes_from_events',
+	'rebuild_retrieval_projection',
+	'embed_memory_nodes',
+	'summarize_chapter',
+	'chapter_threads',
+	'chapter_characters',
+	'rollup_arc',
+	'rollup_saga',
+	'rebuild_summaries',
+] as const satisfies readonly BackendJobType[];
+
+export const projectJobTypes = [
+	'validate_agent_settings',
+	'generate_image',
+	'assistant_batch_child',
+] as const satisfies readonly BackendJobType[];
+
 // These handlers upsert stable record IDs, or commit canon and an apply receipt
 // together. Keep model-driven advancement and timestamp-keyed continuations out.
 export const manuallyRetryableBackendJobTypes = [
@@ -50,7 +84,20 @@ export const manuallyRetryableBackendJobTypes = [
 	'chapter_threads',
 	'chapter_characters',
 	'update_faction_pressure',
+	// Deterministic summary of covered arcs, upserted under a stable saga ID with its
+	// memory node in one transaction; a rerun recomputes coverage first.
+	'rollup_saga',
 ] as const satisfies readonly BackendJobType[];
+
+// A missing model configuration fails these before any request or write (the chapter
+// window records `needs_configuration` and reuses its frozen inputs), so once settings
+// are fixed an explicit retry is safe. Other failures still need review.
+export const configurationRetryableBackendJobTypes = [
+	'summarize_chapter',
+	'rollup_arc',
+] as const satisfies readonly BackendJobType[];
+
+const explicitlyRetryableBackendJobTypes: readonly BackendJobType[] = [...manuallyRetryableBackendJobTypes, ...configurationRetryableBackendJobTypes];
 
 type BackendJobRetryInspection = Pick<typeof backendJobs.$inferSelect, 'status' | 'type' | 'lockedAt' | 'lockedBy'> &
 	Partial<Pick<typeof backendJobs.$inferSelect, 'lastError' | 'metadata'>>;
@@ -58,6 +105,11 @@ type BackendJobRetryInspection = Pick<typeof backendJobs.$inferSelect, 'status' 
 export function backendJobRetryBlockReason(job: BackendJobRetryInspection): string | null {
 	if (job.status !== 'failed') return 'Only failed jobs can be retried.';
 	if (job.lockedAt !== null || job.lockedBy !== null) return 'This job still has a worker lock. Refresh after recovery.';
+	const cause = typeof job.lastError === 'string' ? classifyBackendJobFailure(job.lastError).cause : null;
+	if ((configurationRetryableBackendJobTypes as readonly string[]).includes(job.type)) {
+		return cause === 'configuration' ? null
+			: 'Manual retry is blocked for this job type unless it failed on missing model configuration; review its effects before another run.';
+	}
 	if (!(manuallyRetryableBackendJobTypes as readonly string[]).includes(job.type)) {
 		return 'Manual retry is not available for this job type; its effects need review before another run.';
 	}
@@ -65,7 +117,6 @@ export function backendJobRetryBlockReason(job: BackendJobRetryInspection): stri
 	const recordedRetryable = metadata?.lastFailure && typeof metadata.lastFailure === 'object' && !Array.isArray(metadata.lastFailure)
 		? (metadata.lastFailure as Record<string, unknown>).retryable
 		: undefined;
-	const cause = typeof job.lastError === 'string' ? classifyBackendJobFailure(job.lastError).cause : null;
 	// A changed classifier can repair bad output; the explicit retry remains source- and lock-guarded.
 	const correctedExtraction = job.type === 'extract_turn_state' && cause === 'provider_output';
 	// A configuration failure is permanent until settings change; then an explicit retry is the fix.
@@ -84,7 +135,7 @@ export function backendJobRetryWhere(storyId: string | null, jobId: string, expe
 		eq(backendJobs.id, jobId),
 		eq(backendJobs.status, 'failed'),
 		eq(backendJobs.updatedAt, expectedUpdatedAt),
-		inArray(backendJobs.type, [...manuallyRetryableBackendJobTypes]),
+		inArray(backendJobs.type, [...explicitlyRetryableBackendJobTypes]),
 		isNull(backendJobs.lockedAt),
 		isNull(backendJobs.lockedBy),
 	)!;
@@ -123,7 +174,6 @@ export async function retryBackendJob(input: { storyId: string | null; projectId
 export const backendJobClaimPriorityOrder = sql<number>`case
 	when ${backendJobs.type} = 'refresh_scene_checkpoint' then 0
 	when ${backendJobs.type} = 'extract_turn_state' then 1
-	when ${backendJobs.type} = 'continuity_audit' then 2
 	when ${backendJobs.type} = 'evaluate_world_sim_tick' then 5
 	when ${backendJobs.type} = 'plan_plot_brain'
 		and ${backendJobs.payload}->>'trigger' = 'scheduled_refresh' then 5
@@ -213,6 +263,7 @@ export async function enqueueBackendJob(
 	});
 	if (input.requeueExisting === false) {
 		await insert.onConflictDoNothing();
+		kickAfterEnqueue(input);
 		return jobId;
 	}
 	await insert.onConflictDoUpdate({
@@ -231,7 +282,30 @@ export async function enqueueBackendJob(
 		},
 		setWhere: inArray(backendJobs.status, ['queued', 'retry', 'complete', 'failed']),
 	});
+	kickAfterEnqueue(input);
 	return jobId;
+}
+
+function kickAfterEnqueue(input: EnqueueBackendJobInput): void {
+	const scope = input.storyId ? { storyId: input.storyId } : { projectId: input.projectId as string };
+	// Imported lazily: the runner imports this module.
+	void import('./turnJobs').then(jobs => jobs.scheduleJobKick(scope), () => undefined);
+}
+
+/** Earliest run time (ms) among a story's or project's waiting jobs of these types. */
+export async function nextBackendJobDueAt(scope: { storyId?: string; projectId?: string }, types: readonly BackendJobType[]): Promise<number | null> {
+	const filters = [
+		inArray(backendJobs.status, ['queued', 'retry']),
+		inArray(backendJobs.type, [...types]),
+		sql`coalesce(${backendJobs.payload}->>'execution','') <> 'api'`,
+	];
+	if (scope.storyId) filters.push(eq(backendJobs.storyId, scope.storyId));
+	if (scope.projectId) filters.push(eq(backendJobs.projectId, scope.projectId));
+	const [row] = await getDb()
+		.select({ dueAt: sql<string | null>`(extract(epoch from min(${backendJobs.runAfter})) * 1000)::bigint::text` })
+		.from(backendJobs)
+		.where(and(...filters));
+	return row?.dueAt == null ? null : Number(row.dueAt);
 }
 
 export async function enqueueStoryVaultSyncJob(input: {
@@ -261,10 +335,6 @@ export function turnStateSourceFingerprint(playerText: string, narration: string
 	return createHash('sha256').update(JSON.stringify([playerText, narration])).digest('hex');
 }
 
-export function continuityAuditDedupeKey(input: { assistantEntryId: string }): string {
-	return `continuity-audit-${input.assistantEntryId}`;
-}
-
 export async function enqueueTurnStateExtractionJob(input: {
 	storyId: string;
 	playerEntryId: string;
@@ -282,11 +352,17 @@ export async function enqueueTurnStateExtractionJob(input: {
 		postChapterBuffer?: number;
 		chaptersPerArc?: number;
 	};
+	/** Saved with the narration but held until its turn finishes (see releaseTurnStateExtractionJob). */
+	hold?: boolean;
+	/** Insert only: an existing job for this narration (queued, running or finished) is left untouched. */
+	keepExisting?: boolean;
 }, db: OutboxDb | OutboxTx = getDb()): Promise<string> {
 	return enqueueBackendJob({
 		storyId: input.storyId,
 		type: 'extract_turn_state',
 		dedupeKey: turnStateExtractionDedupeKey({ assistantEntryId: input.assistantEntryId }),
+		...(input.hold ? { runAfter: new Date(Date.now() + TURN_STATE_EXTRACTION_HOLD_MS).toISOString() } : {}),
+		...(input.hold || input.keepExisting ? { requeueExisting: false } : {}),
 		payload: {
 			playerEntryId: input.playerEntryId,
 			assistantEntryId: input.assistantEntryId,
@@ -304,6 +380,51 @@ export async function enqueueTurnStateExtractionJob(input: {
 		maxAttempts: 3,
 		metadata: { subagent: 'memory_context', task: 'turn_memory', sourceEntryIds: [input.playerEntryId, input.assistantEntryId] },
 	}, db);
+}
+
+/**
+ * A deferred extraction is queued in the transaction that saves its narration, held this long so
+ * it never runs before its own turn has finished. The turn releases it when it ends; if the process
+ * stops first, the next turn's state boundary (or this delay) still runs it, so no narration is
+ * left without extraction.
+ */
+export const TURN_STATE_EXTRACTION_HOLD_MS = 30 * 60_000;
+
+/** Makes a held extraction due now. Null when it already started or no held job exists. */
+export async function releaseTurnStateExtractionJob(storyId: string, assistantEntryId: string, db: Pick<OutboxDb, 'update'> = getDb()): Promise<string | null> {
+	const now = nowIso();
+	const [row] = await db.update(backendJobs).set({ runAfter: now, updatedAt: now }).where(and(
+		eq(backendJobs.id, stableJobId(storyId, 'extract_turn_state', turnStateExtractionDedupeKey({ assistantEntryId }))),
+		eq(backendJobs.status, 'queued'), eq(backendJobs.attemptCount, 0),
+	)).returning({ id: backendJobs.id });
+	return row?.id ?? null;
+}
+
+/**
+ * Before a turn reads state: extractions held or backing off for earlier turns become due now.
+ * Returns how many were released (the caller runs them before building context).
+ */
+export async function releaseEarlierTurnStateExtractions(storyId: string, db: Pick<OutboxDb, 'update'> = getDb()): Promise<number> {
+	const now = nowIso();
+	const released = await db.update(backendJobs).set({ runAfter: now, updatedAt: now }).where(and(
+		eq(backendJobs.storyId, storyId), eq(backendJobs.type, 'extract_turn_state'), inArray(backendJobs.status, ['queued', 'retry']),
+		sql`${backendJobs.runAfter} > ${now}`, sql`${backendJobs.attemptCount} < ${backendJobs.maxAttempts}`,
+	)).returning({ id: backendJobs.id });
+	return released.length;
+}
+
+/** Extractions for the story's latest narrations that have not settled (pending, running or failed). */
+export async function unsettledTurnStateExtractions(storyId: string, db: Pick<OutboxDb, 'select'> = getDb()): Promise<Array<{
+	assistantEntryId: string; status: string; lastError: string | null;
+}>> {
+	const recent = await db.select({ id: storyEntries.id }).from(storyEntries)
+		.where(and(eq(storyEntries.storyId, storyId), eq(storyEntries.type, 'narration'))).orderBy(sql`${storyEntries.position} desc`).limit(5);
+	if (!recent.length) return [];
+	const rows = await db.select({ status: backendJobs.status, lastError: backendJobs.lastError, payload: backendJobs.payload }).from(backendJobs).where(and(
+		eq(backendJobs.storyId, storyId), eq(backendJobs.type, 'extract_turn_state'), inArray(backendJobs.status, ['queued', 'retry', 'running', 'failed']),
+		inArray(sql<string>`${backendJobs.payload}->>'assistantEntryId'`, recent.map(row => row.id)),
+	));
+	return rows.map(row => ({ assistantEntryId: String((row.payload as Record<string, unknown>).assistantEntryId), status: row.status, lastError: row.lastError ?? null }));
 }
 
 export async function recordCompletedInlineTurnMemory(input: Parameters<typeof enqueueTurnStateExtractionJob>[0] & {
@@ -478,33 +599,6 @@ export function backendJobFailureIsRetryable(error: unknown): boolean {
 	// separate policy; treating everything outside its blocklist as transient
 	// repeatedly dispatches unknown/deterministic summary failures.
 	return classifyBackendJobFailure(message).retryable;
-}
-
-export async function enqueueContinuityAuditJob(input: {
-	storyId: string;
-	playerEntryId: string;
-	assistantEntryId: string;
-	clientTurnId: string;
-	serverVersion: number;
-	playerName?: string | null;
-	contextReceipt?: Record<string, unknown> | null;
-	performance?: Record<string, unknown> | null;
-}): Promise<string> {
-	return enqueueBackendJob({
-		storyId: input.storyId,
-		type: 'continuity_audit',
-		dedupeKey: continuityAuditDedupeKey({ assistantEntryId: input.assistantEntryId }),
-		payload: {
-			playerEntryId: input.playerEntryId,
-			assistantEntryId: input.assistantEntryId,
-			clientTurnId: input.clientTurnId,
-			serverVersion: input.serverVersion,
-			playerName: input.playerName ?? null,
-			contextReceipt: input.contextReceipt ?? null,
-			performance: input.performance ?? null,
-		},
-		maxAttempts: 3,
-	});
 }
 
 export async function enqueueTurnProjectionJobs(input: {

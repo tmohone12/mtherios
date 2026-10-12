@@ -1,0 +1,2 @@
+# Node entrypoints start with a shebang; a CRLF checkout breaks module loaders that import them.
+scripts/**/*.mjs text eol=lf

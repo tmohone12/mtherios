@@ -162,9 +162,6 @@ function sectionTypeForSemanticPayload(payload: JsonRecord, requestedType?: stri
 	return recordType;
 }
 
-function compactList(value: unknown): string {
-	return asStringArray(value).map((item) => item.trim()).filter(Boolean).join('; ');
-}
 
 function compactMergedList(...values: unknown[]): string {
 	return [...new Set(values.flatMap((value) => asStringArray(value).map((item) => item.trim()).filter(Boolean)))].join('; ');
@@ -623,7 +620,15 @@ async function indexCanonicalRecordsUnlocked(
 ) {
 	if (!config) {
 		let skipped = 0;
+		let unchanged = 0;
 		let retired = 0;
+		// Without embeddings each record only gets a "skipped" marker; rewriting thousands of
+		// identical markers took about a minute per run, so unchanged ones are left alone.
+		const markers = new Map((await getDb().select({ recordType: searchIndexRecords.recordType, recordId: searchIndexRecords.recordId,
+			contentHash: searchIndexRecords.contentHash, status: searchIndexRecords.status })
+			.from(searchIndexRecords)
+			.where(and(eq(searchIndexRecords.storyId, input.storyId), eq(searchIndexRecords.collection, collection))))
+			.map(marker => [`${marker.recordType}:${marker.recordId}`, marker]));
 		for (const type of selectedTypes) {
 			let foundTarget = false;
 			for await (const row of loadRows(input.storyId, type, input.recordId)) {
@@ -642,13 +647,19 @@ async function indexCanonicalRecordsUnlocked(
 					continue;
 				}
 				const text = canonicalSearchRecordText(type, row);
+				const contentHash = hashText(text);
+				const marker = markers.get(`${type}:${recordId}`);
+				if (!input.recreate && marker?.status === 'skipped' && marker.contentHash === contentHash) {
+					unchanged += 1;
+					continue;
+				}
 				const refs = sourceRefs(row);
 				await upsertIndexRow({
 					storyId: input.storyId,
 					type,
 					recordId,
 					collection,
-					contentHash: hashText(text),
+					contentHash,
 					pointId: null,
 					model: null,
 					status: 'skipped',
@@ -668,7 +679,7 @@ async function indexCanonicalRecordsUnlocked(
 				retired += 1;
 			}
 		}
-		return { indexed: 0, skipped, retired, collection, reason: 'embeddings_not_configured' };
+		return { indexed: 0, skipped, unchanged, retired, collection, reason: 'embeddings_not_configured' };
 	}
 
 	// The story collection also owns wiki chunks, so a full canonical rebuild must

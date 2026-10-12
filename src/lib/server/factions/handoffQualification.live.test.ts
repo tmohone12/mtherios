@@ -10,7 +10,7 @@ live('approved one-shot synthetic handoff, max six requests/ten cents/no retries
  const path='.codex-run/faction-handoff-six-live.json';
  if(fs.existsSync(path))throw Error('Approved one-shot ledger already exists: no repeated calls');
  const c=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
- if(c.port!==5174||c.jobWorker!==false||c.testLocalInferenceOnly!==true||c.isolatedTestCopy!==true||new URL(c.databaseUrl).pathname!=='/mythengine_faction_copy_20261001')throw Error('Paused isolated COPY required');
+ if(c.port!==5174||c.turnJobs!==false||c.testLocalInferenceOnly!==true||c.isolatedTestCopy!==true||new URL(c.databaseUrl).pathname!=='/mythengine_faction_copy_20261001')throw Error('Paused isolated COPY required');
  const proposal=JSON.parse(fs.readFileSync('.codex-run/faction-handoff-proposal.json','utf8')),prices=JSON.parse(fs.readFileSync('.codex-run/faction-handoff-pricing.json','utf8'));
  if(proposal.requestCap!==6||proposal.budgetUsd!==.1||prices.maximumRequestedTokenCostUsd>.1||Date.now()-Date.parse(prices.fetchedAt)>900000)throw Error('Fresh bounded approved pricing required');
  const actualFetch=globalThis.fetch,prior=process.env.MYTHENGINE_TEST_LOCAL_ONLY;
@@ -28,7 +28,7 @@ live('approved one-shot synthetic handoff, max six requests/ten cents/no retries
   }
   const profiles:HandoffProfiles={background:{profile:background.profile!,model:background.generation.model!,reasoningEffort:background.generation.reasoningEffort??null},decision:{profile:decision.profile!,model:decision.generation.model!},gm:{profile:gm.profile!,model:gm.generation.model!}};
   const copy=await(await actualFetch('http://127.0.0.1:5174/api/app/status')).json(),original=await(await actualFetch('http://127.0.0.1:5173/api/app/status')).json();
-  if(copy.config.jobWorkerEnabled!==false||copy.jobs.running!==0)throw Error('COPY background must remain paused');
+  if(copy.config.turnJobsEnabled!==false||copy.jobs.running!==0)throw Error('COPY background must remain paused');
   ledger.before={copyPid:copy.runtime.pid,originalPid:original.runtime.pid,originalBuild:original.build,canon:await canon(),queued:copy.jobs.queued};
   let stage='',reserved=0;const seen=new Set<string>();
   capture=vi.spyOn(globalThis,'fetch').mockImplementation(async(input,init)=>{
@@ -83,7 +83,7 @@ live('approved one-shot synthetic handoff, max six requests/ten cents/no retries
   ledger.finishedAt=new Date().toISOString();
   const copy=await(await actualFetch('http://127.0.0.1:5174/api/app/status')).json(),original=await(await actualFetch('http://127.0.0.1:5173/api/app/status')).json();
   const config=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
-  ledger.after={copyPid:copy.runtime.pid,workerPaused:copy.config.jobWorkerEnabled===false,cloudPaused:config.testLocalInferenceOnly===true,runningJobs:copy.jobs.running,queued:copy.jobs.queued,processPolicyRestored:process.env.MYTHENGINE_TEST_LOCAL_ONLY===prior,canon:await canon(),originalPid:original.runtime.pid,originalUnchanged:!ledger.before||original.runtime.pid===ledger.before.originalPid&&JSON.stringify(original.build)===JSON.stringify(ledger.before.originalBuild)};
+  ledger.after={copyPid:copy.runtime.pid,workerPaused:copy.config.turnJobsEnabled===false,cloudPaused:config.testLocalInferenceOnly===true,runningJobs:copy.jobs.running,queued:copy.jobs.queued,processPolicyRestored:process.env.MYTHENGINE_TEST_LOCAL_ONLY===prior,canon:await canon(),originalPid:original.runtime.pid,originalUnchanged:!ledger.before||original.runtime.pid===ledger.before.originalPid&&JSON.stringify(original.build)===JSON.stringify(ledger.before.originalBuild)};
   ledger.after.canonUnchanged=!ledger.before||JSON.stringify(ledger.before.canon)===JSON.stringify(ledger.after.canon);
   if(ledger.calls.length||ledger.before)save();await closeDb();
  }

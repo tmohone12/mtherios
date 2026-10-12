@@ -28,7 +28,7 @@ test('fresh install has independent targets and no automatic background work', t
 	assert.equal(config.qdrantCollection, 'mythengine_wiki');
 	assert.equal(config.vaultRoot, path.join(context.cwd, 'data', 'vaults'));
 	assert.equal(config.defaultVault, path.join(config.vaultRoot, 'default'));
-	assert.equal(config.jobWorker, false);
+	assert.equal(config.turnJobs, true);
 	assert.equal(config.wikiAutoIndexStoryVaults, false);
 	assert.equal(config.localKevEnabled, false);
 	assert.equal(config.localEmbeddingsEnabled, false);
@@ -124,12 +124,12 @@ test('path isolation follows junctions and accepts nonexistent descendants', t =
 
 test('resolved env aliases agree and config diagnostics cannot disclose credentials', t => {
 	const context = fixture(t);
-	const config = resolveRuntimeOptions([], {...context,env:{MYTHENGINE_JOB_WORKER:'true',WIKI_EMBED_API_KEY:'private-key'}});
+	const config = resolveRuntimeOptions([], {...context,env:{MYTHENGINE_TURN_JOBS:'false',WIKI_EMBED_API_KEY:'private-key'}});
 	const env = buildRuntimeEnv(config, {});
 	assert.equal(env.MYTHENGINE_DATA_ROOT,env.MTHERIOS_DATA_ROOT);
 	assert.equal(env.MYTHENGINE_DATABASE_URL,env.DATABASE_URL);
-	assert.equal(env.MYTHENGINE_JOB_WORKER,'true');
-	assert.equal(env.MTHERIOS_JOB_WORKER,'true');
+	assert.equal(env.MYTHENGINE_TURN_JOBS,'false');
+	assert.equal(env.MTHERIOS_TURN_JOBS,'false');
 	assert.equal(JSON.stringify(safeRuntimeSummary(config)).includes('private-key'),false);
 });
 

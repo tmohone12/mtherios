@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { getMtheriosAppConfig } from '$lib/server/app/config';
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { requestScope } from '$lib/server/requestScopes';
 import { isJevModel } from './jev';
 import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
 import type { TurnRequest } from '$lib/contracts/memory';
@@ -51,7 +51,7 @@ export interface ServerProviderRequestHooks {
 	signal?: AbortSignal;
 	beforeRequest: (options: ServerGenerationOptions, request: ServerGenerationRequest) => Promise<(result: ServerGenerationResult) => Promise<void>>;
 }
-const providerRequestScope = new AsyncLocalStorage<ServerProviderRequestHooks>();
+const providerRequestScope = requestScope<ServerProviderRequestHooks>();
 /** Carries one run's durable budget through existing specialist/provider transports. */
 export function withServerProviderHooks<T>(hooks: ServerProviderRequestHooks, work: () => Promise<T>): Promise<T> {
 	return providerRequestScope.run(hooks, work);
@@ -229,6 +229,9 @@ export function getProviderCapabilities(profile: ProviderProfile, model?: string
 	const provider = PROVIDERS[providerType];
 	const isAnthropic = isAnthropicProvider(profile);
 	const isDeepSeekModel = isDeepSeekRuntimeModel(providerType, model);
+	// Gemini accepts only a subset of JSON Schema: every strict state-patch schema sent to it
+	// failed with "Request contains an invalid argument", while JSON mode succeeds.
+	const isGeminiModel = /(?:^|\/)gemini-/i.test(fallbackModelFor(profile, model) ?? '');
 	const cacheMode: ProviderRuntimeCapabilities['cacheMode'] = isAnthropic
 		? 'anthropic_breakpoint'
 		: providerType === 'openai'
@@ -241,7 +244,7 @@ export function getProviderCapabilities(profile: ProviderProfile, model?: string
 	const contextWindow = getModelContextWindowInfo(fallbackModelFor(profile, model), profile.contextWindowTokens);
 	return {
 		cacheMode,
-		structuredOutputs: !isAnthropic && !isDeepSeekModel && Boolean(provider?.capabilities.structuredOutput),
+		structuredOutputs: !isAnthropic && !isDeepSeekModel && !isGeminiModel && Boolean(provider?.capabilities.structuredOutput),
 		nativeTokenCounting: ['openai', 'openrouter', 'anthropic', 'anthropic-proxy', 'google', 'google-ai-studio', 'google-vertex', 'google-agent-platform', 'z-ai'].includes(providerType),
 		maxContextTokens: contextWindow.tokens,
 		contextWindowSource: contextWindow.source,

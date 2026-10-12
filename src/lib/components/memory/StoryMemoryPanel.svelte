@@ -38,6 +38,7 @@
 	let editingChapter = $state<Chapter | null>(null);
 	let editingArc = $state<Arc | null>(null);
 	let savingEdit = $state(false);
+	let editError = $state<string | null>(null);
 	let deletingRecordId = $state<string | null>(null);
 	let contextCheckpoints = $state<Array<Record<string, unknown>>>([]);
 	let checkpointLabel = $state('');
@@ -210,13 +211,16 @@
 		backendSyncing = true;
 		backendMessage = null;
 		try {
-			const result = await importLocalStoryToBackend(selectedStory.id);
-			backendMessage = `Terminal database bound: ${Object.entries(result.counts).map(([key, value]) => `${key} ${value}`).join(', ')}`;
+			// The open story reloads from the server so the composer can continue it.
+			const result = story.currentStory?.id === selectedStory.id && !story.currentStory.serverStoryId
+				? await story.importCurrentStoryToServer()
+				: await importLocalStoryToBackend(selectedStory.id);
+			backendMessage = `Imported to the story server: ${Object.entries(result.counts).map(([key, value]) => `${key} ${value}`).join(', ')}`;
 			stories = stories.map(story => story.id === selectedStory.id
 				? { ...story, serverStoryId: result.serverStoryId, serverVersion: result.serverVersion, syncStatus: 'synced' }
 				: story);
 		} catch (error) {
-			backendMessage = error instanceof Error ? error.message : 'Terminal import failed.';
+			backendMessage = error instanceof Error ? error.message : 'Import failed.';
 		} finally {
 			backendSyncing = false;
 		}
@@ -344,6 +348,7 @@
 
 	function closeChapterEditor() {
 		editingChapter = null;
+		editError = null;
 		chapterTitleDraft = '';
 		chapterSummaryDraft = '';
 		chapterKeywordsDraft = '';
@@ -357,6 +362,7 @@
 	async function saveChapterEdit() {
 		if (!editingChapter || savingEdit) return;
 		savingEdit = true;
+		editError = null;
 		const updates: Partial<Chapter> = {
 			title: chapterTitleDraft.trim() || null,
 			summary: chapterSummaryDraft.trim(),
@@ -374,6 +380,8 @@
 				chapter.id === editingChapter?.id ? updatedChapter : chapter,
 			);
 			closeChapterEditor();
+		} catch (error) {
+			editError = error instanceof Error ? error.message : String(error);
 		} finally {
 			savingEdit = false;
 		}
@@ -391,6 +399,7 @@
 
 	function closeArcEditor() {
 		editingArc = null;
+		editError = null;
 		arcTitleDraft = '';
 		arcSummaryDraft = '';
 		arcKeyPointsDraft = '';
@@ -413,6 +422,7 @@
 	async function saveArcEdit() {
 		if (!editingArc || savingEdit) return;
 		savingEdit = true;
+		editError = null;
 		const updates: Partial<Arc> = {
 			title: arcTitleDraft.trim() || `Arc ${editingArc.arcNumber}`,
 			summary: arcSummaryDraft.trim(),
@@ -428,6 +438,8 @@
 				arc.id === editingArc?.id ? updatedArc : arc,
 			);
 			closeArcEditor();
+		} catch (error) {
+			editError = error instanceof Error ? error.message : String(error);
 		} finally {
 			savingEdit = false;
 		}
@@ -497,8 +509,8 @@
 						<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">GM memory source</div>
 						<p class="mt-1 truncate text-xs text-[var(--text-secondary)]">
 							{selectedStory.serverStoryId
-								? `Terminal database v${selectedStory.serverVersion ?? 0} (${selectedStory.syncStatus ?? 'synced'})`
-								: 'Local-only. Import to use terminal memory retrieval and sync.'}
+								? `Story server v${selectedStory.serverVersion ?? 0} (${selectedStory.syncStatus ?? 'synced'})`
+								: 'Saved only in this browser. Import it to keep playing with server memory and sync.'}
 						</p>
 						{#if selectedStory.serverStoryId}
 							<p class="mt-1 text-[10px] leading-relaxed text-[var(--text-muted)]">These chapter and arc records are refreshed from the same database used to build GM context. Each narrated turn’s receipt shows its exact final selection.</p>
@@ -508,10 +520,10 @@
 						class="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-primary)] px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:border-[var(--color-gold-600)] hover:text-[var(--text-accent)] disabled:opacity-50"
 						disabled={backendSyncing}
 						onclick={bindStoryToBackend}
-						title="Import local story to the terminal world database"
+						title="Import this browser save to the story server"
 					>
 						{#if backendSyncing}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}<CloudUpload class="h-3.5 w-3.5" />{/if}
-						{selectedStory.serverStoryId ? 'Reimport' : 'Bind'}
+						{selectedStory.serverStoryId ? 'Reimport' : 'Import'}
 					</button>
 				</div>
 				{#if backendMessage}
@@ -724,7 +736,7 @@
 								</button>
 							</div>
 
-							<p class="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">{chapter.summary}</p>
+							<p class="mt-2 whitespace-pre-line text-sm leading-relaxed text-[var(--text-secondary)]">{chapter.summary}</p>
 
 							{#if chapter.characters.length > 0 || chapter.locations.length > 0 || chapter.plotThreads.length > 0}
 								<div class="mt-3 flex flex-wrap gap-1.5">
@@ -895,6 +907,7 @@
 				</div>
 			</div>
 
+			{#if editError}<p class="border-t border-[var(--border-primary)] px-5 pt-3 text-xs text-rose-400" role="alert">Not saved: {editError}</p>{/if}
 			<div class="flex gap-3 border-t border-[var(--border-primary)] px-5 py-4">
 				<button onclick={closeChapterEditor} class="min-h-11 flex-1 rounded-lg border border-[var(--border-primary)] py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">Cancel</button>
 				<button onclick={saveChapterEdit} disabled={savingEdit || !chapterSummaryDraft.trim()} class="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] py-2 font-display text-xs font-semibold tracking-wide text-[var(--bg-primary)] disabled:opacity-50">
@@ -952,6 +965,7 @@
 				</div>
 			</div>
 
+			{#if editError}<p class="border-t border-[var(--border-primary)] px-5 pt-3 text-xs text-rose-400" role="alert">Not saved: {editError}</p>{/if}
 			<div class="flex gap-3 border-t border-[var(--border-primary)] px-5 py-4">
 				<button onclick={closeArcEditor} class="min-h-11 flex-1 rounded-lg border border-[var(--border-primary)] py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">Cancel</button>
 				<button onclick={saveArcEdit} disabled={savingEdit || !arcSummaryDraft.trim()} class="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-[var(--color-gold-400)] to-[var(--color-gold-600)] py-2 font-display text-xs font-semibold tracking-wide text-[var(--bg-primary)] disabled:opacity-50">

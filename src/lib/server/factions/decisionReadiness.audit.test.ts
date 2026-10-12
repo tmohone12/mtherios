@@ -11,7 +11,7 @@ audit('current COPY reply/decision settings reach real request assembly without 
  const policy=process.env.MYTHENGINE_TEST_LOCAL_ONLY;
  try {
   const config=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
-  expect(config).toMatchObject({port:5174,jobWorker:false,testLocalInferenceOnly:true,isolatedTestCopy:true});
+  expect(config).toMatchObject({port:5174,turnJobs:false,testLocalInferenceOnly:true,isolatedTestCopy:true});
   expect((await getDb().execute(sql.raw('select current_database() as name')))[0].name).toBe('mythengine_faction_copy_20261001');
   const response=await fetch('http://127.0.0.1:5174/api/settings/llm');
   expect(response.ok).toBe(true);

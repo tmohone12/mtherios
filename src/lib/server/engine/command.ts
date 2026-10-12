@@ -19,6 +19,7 @@ import { plotEditSchema } from '$lib/contracts/plotEditing';
 import { removeCampaignFact } from './campaignFacts';
 import { editPlotState, listPlotCommitments } from './plotEditing';
 import { findChapterCharacterCandidates, getBackendJobStats } from '$lib/server/jobs/processor';
+import { rewriteChapterSummary } from '$lib/server/jobs/chapterRewrite';
 import { z } from 'zod';
 import {
 	apiCallLogCreateSchema,
@@ -77,6 +78,7 @@ import {
 	arcUpsertRequestSchema,
 	type BootstrapResponse,
 	chapterDeleteRequestSchema,
+	chapterRewriteSummaryRequestSchema,
 	chapterUpsertRequestSchema,
 	type ArcCommandResponse,
 	type ArcDeleteResponse,
@@ -2100,6 +2102,23 @@ export async function executeEngineCommand(
 						},
 						unwrappedArcIds: result.unwrappedArcIds,
 						unwrappedArcs: result.unwrappedArcs,
+						serverVersion: result.serverVersion,
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'chapter.rewriteSummary': {
+				const args = chapterRewriteSummaryRequestSchema.parse(request.args ?? {});
+				const result = await rewriteChapterSummary(request.storyId, args.chapterId);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result,
+					projectionChanges: {
+						chapter: { id: result.chapterId, rewritten: true },
 						serverVersion: result.serverVersion,
 					},
 					updatedAt: nowIso(),

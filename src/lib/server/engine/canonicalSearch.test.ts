@@ -43,6 +43,9 @@ afterEach(() => {
 	vi.unstubAllEnvs();
 });
 
+/** No stored index markers (the marker lookup used when embeddings are off). */
+const noMarkers = (markers: unknown[] = []) => ({ from: () => ({ where: async () => markers }) });
+
 describe('canonical search indexing', () => {
 	it('rejects non-canon, merged, and terminally unusable records', () => {
 		const unusable: Array<[string, Record<string, unknown>]> = [
@@ -96,6 +99,7 @@ describe('canonical search indexing', () => {
 				content: 'GM: reset to the emperor\'s offer.', metadata: {},
 			}]);
 		mocks.getDb.mockReturnValue({
+			select: () => noMarkers(),
 			execute,
 			delete: vi.fn(() => ({ where: deleteWhere })),
 			insert,
@@ -378,6 +382,7 @@ describe('canonical search indexing', () => {
 	it('targets a requested record id during manual reindex jobs', async () => {
 		const inserted: Array<Record<string, unknown>> = [];
 		mocks.getDb.mockReturnValue({
+			select: () => noMarkers(),
 			execute: vi.fn().mockResolvedValue([
 				{ id: 'entity_old', story_id: 'story_1', type: 'character', name: 'Old' },
 				{ id: 'entity_keep', story_id: 'story_1', type: 'character', name: 'Keep' },
@@ -407,12 +412,32 @@ describe('canonical search indexing', () => {
 		});
 	});
 
+	it('leaves an unchanged skipped marker alone when embeddings are off', async () => {
+		const inserted: Array<Record<string, unknown>> = [];
+		const rows = [{ id: 'entity_keep', story_id: 'story_1', type: 'character', name: 'Keep' }];
+		const db = (markers: unknown[]) => ({
+			select: () => noMarkers(markers),
+			execute: vi.fn().mockResolvedValue(rows),
+			delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+			insert: () => ({ values: (value: Record<string, unknown>) => { inserted.push(value); return { onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) }; } }),
+		});
+		mocks.getDb.mockReturnValue(db([]));
+		await indexCanonicalRecords({ storyId: 'story_1', recordTypes: ['entities'] });
+		expect(inserted).toHaveLength(1);
+		const marker = { recordType: 'entities', recordId: 'entity_keep', contentHash: inserted[0].contentHash, status: 'skipped' };
+		inserted.length = 0;
+		mocks.getDb.mockReturnValue(db([marker]));
+		await expect(indexCanonicalRecords({ storyId: 'story_1', recordTypes: ['entities'] })).resolves.toMatchObject({ skipped: 0, unchanged: 1 });
+		expect(inserted).toHaveLength(0);
+	});
+
 	it('paginates through canonical tables instead of dropping records after the old 2000-row ceiling', async () => {
 		let page = 0;
 		const insert = vi.fn(() => ({
 			values: () => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) }),
 		}));
 		mocks.getDb.mockReturnValue({
+			select: () => noMarkers(),
 			execute: vi.fn().mockImplementation(async () => {
 				const current = page++;
 				if (current < 4) return Array.from({ length: 500 }, (_, index) => ({

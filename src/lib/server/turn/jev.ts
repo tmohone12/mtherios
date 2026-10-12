@@ -366,3 +366,12 @@ export async function generateJevReaction(input: {
 		promptChars: (evaluation?.promptChars ?? 0) + response.promptChars, responseChars: text.length, finishReason: 'stop',
 		usage: usageFields(combinedDecisionUsage(evaluation ? [evaluation.json, response.json] : [response.json])) };
 }
+
+/** One typed request carrying the scene-floor questions (see sceneFloor.ts); the caller validates the answers. */
+export async function requestSceneFloorDecision(input: {
+	profile: ServerGenerationOptions['profile']; model: string; state: unknown; questions: Record<string, unknown>;
+	signal?: AbortSignal; storyId?: string; operation?: string;
+}): Promise<{ json: unknown; durationMs: number }> {
+	const response = await requestDecision(input);
+	return { json: response.json, durationMs: response.durationMs };
+}

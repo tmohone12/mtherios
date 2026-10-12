@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { CHARACTER_IDENTITY_FIELDS } from '$lib/contracts/automaticCharacterUpdate';
+import { CHARACTER_IDENTITY_FIELDS, foldAuthoredTextIntoDevelopments, readCharacterDevelopments } from '$lib/contracts/automaticCharacterUpdate';
 import { boundCharacterIdentity } from './characterContinuity';
 import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -327,6 +327,7 @@ function coerceDraft(value: unknown): JsonRecord {
 		motivations: stringArray(draft.motivations ?? draft.goals),
 		factionTags: stringArray(draft.factionTags),
 		knownFacts: stringArray(draft.knownFacts),
+		developments: stringArray(draft.developments),
 	};
 }
 
@@ -348,7 +349,7 @@ function hasUsefulDraft(draft: JsonRecord): boolean {
 		if (typeof draft[key] === 'string' && draft[key].trim()) return true;
 	}
 	if (typeof draft.affinity === 'number') return true;
-	for (const key of ['knownFacts', 'factionTags', 'motivations']) {
+	for (const key of ['knownFacts', 'factionTags', 'motivations', 'developments']) {
 		if (stringArray(draft[key]).length) return true;
 	}
 	return false;
@@ -356,11 +357,18 @@ function hasUsefulDraft(draft: JsonRecord): boolean {
 
 function characterDraftStatePatch(currentState: JsonRecord, draft: JsonRecord): JsonRecord {
 	// Proposals may be applied later: carry only the requested changes, never a sheet snapshot.
+	// The author's bio, personality, appearance and voice are never rewritten: whatever a draft
+	// adds to them is proposed as new story developments.
 	const next: JsonRecord = {};
-	for (const key of ['bio', 'rank', 'appearance', 'presentation', 'speechStyle', 'personality', 'currentDisposition']) {
+	for (const key of ['rank', 'presentation', 'currentDisposition']) {
 		const value = typeof draft[key] === 'string' ? draft[key].trim() : '';
 		if (value && value !== currentState[key]) next[key] = value;
 	}
+	const folded = foldAuthoredTextIntoDevelopments(currentState, Object.fromEntries(['bio', 'personality', 'appearance', 'speechStyle', 'developments']
+		.map(key => [key, draft[key]]).filter(([, value]) => typeof value === 'string' ? value.trim() : stringArray(value).length)));
+	const existingDevelopments = new Set(readCharacterDevelopments(currentState).map(value => value.toLowerCase()));
+	const newDevelopments = readCharacterDevelopments(folded).filter(value => !existingDevelopments.has(value.toLowerCase()));
+	if (newDevelopments.length) next.developments = newDevelopments;
 	if (typeof draft.affinity === 'number' && draft.affinity !== asRecord(currentState.relationship).level) {
 		next.relationship = { level: draft.affinity };
 	}
@@ -424,7 +432,7 @@ function chapterCharacterPromptState(state: JsonRecord): JsonRecord {
 		if (typeof value === 'string' && value.trim()) next[key] = value.trim();
 		else if (key === 'relationship' && Object.keys(asRecord(value)).length) next[key] = value;
 	}
-	for (const key of ['motivations', 'goals', 'factionTags', 'knownFacts', 'traits', 'pressures']) {
+	for (const key of ['motivations', 'goals', 'factionTags', 'knownFacts', 'traits', 'pressures', 'developments']) {
 		const values = stringArray(state[key]).slice(-12);
 		if (values.length) next[key] = values;
 	}
@@ -490,12 +498,12 @@ export async function refineChapterCharacterUpdates(
 		`Known character candidates JSON: ${JSON.stringify(candidatePayload)}`,
 		`Source passages JSON: ${JSON.stringify(sourceEvidence)}`,
 		'Return exactly {"updates":[{"entityId":"known id","patch":{...},"evidence":["short supplied fact"],"confidence":0.0}]}',
-		'Allowed patch keys only: bio, appearance, presentation, speechStyle, personality, rank, currentDisposition, affinity, motivations, factionTags, knownFacts.',
-		'Every update needs confidence >= 0.75 and evidence containing exact quotes from the supplied material. Unsupported or uncertain changes must be omitted. Keep existing biography facts when adding new ones. appearance is stable physical identity; presentation is current clothing, grooming, or injuries.',
+		'Allowed patch keys only: developments, presentation, rank, currentDisposition, affinity, motivations, factionTags, knownFacts.',
+		'Every update needs confidence >= 0.75 and evidence containing exact quotes from the supplied material. Unsupported or uncertain changes must be omitted. Never rewrite bio, personality, appearance or voice: the author owns them. developments is a list of short new facts the story established about this character (an event, a lasting change of body, temperament or standing), each one sentence that is not already in their bio or developments. presentation is current clothing, grooming, or injuries.',
 		'Use affinity only for a clearly evidenced -100..100 relationship shift. Use motivations for durable goals.',
 		'Do not return currentAction, currentLocation, emotionalState, relationship objects, eventMemory, aliases, status, or presence; deterministic extraction owns those fields.',
 		'Only use an entityId from the candidate list. Omit unchanged characters and unsupported or uncertain claims.',
-		'Appearance, bio, rank, and personality require explicit supplied evidence; never infer them from genre or names.',
+		'Developments and rank require explicit supplied evidence about this exact character, never a relative, namesake or rumor; never infer them from genre or names.',
 	].join('\n\n');
 	const result = await generateCharacterUpdateText({
 		storyId: args.storyId,
@@ -642,10 +650,9 @@ export async function draftCharacterUpdateFromStoryContext(storyId: string, args
 		`Author update instructions (explicit additions are authorized for this draft): ${args.instructions}`,
 		'Story context:',
 		context || '(no recent transcript)',
-		'Return JSON with only these character state keys: bio, appearance, presentation, speechStyle, personality, rank, currentDisposition, affinity, motivations, factionTags, knownFacts.',
-		'Expand the existing bio rather than replacing it with a scene recap. Preserve established origins, upbringing, relationships, and skills; reconcile outdated claims when later supplied evidence or explicit author corrections supersede them. A once-hidden identity may now be revealed; unresolved parentage or rumors must remain uncertain.',
-		'Include explicit author-specified physical details and talents in both the bio and the appropriate structured field. appearance is stable physical identity; presentation is current clothing, grooming, or visible injuries. Do not replace physical identity with an outfit.',
-		'Ground personality in established upbringing and demonstrated choices, including strengths, flaws, loyalties, and tensions. Do not invent childhood events, diagnoses, or a new temperament. For the player character, describe tendencies without prescribing thoughts, speech, or future decisions.',
+		'Return JSON with only these character state keys: developments, presentation, rank, currentDisposition, affinity, motivations, factionTags, knownFacts.',
+		'The bio, personality, appearance and voice are the author\'s and stay exactly as written; never return them. developments is a list of short new facts the story (or the author instructions) established about this character that are not already in their bio, personality or developments: events, revealed identity, lasting changes of body, temperament, skills or standing. One sentence each; do not restate the bio or summarize scenes.',
+		'A once-hidden identity may now be revealed; unresolved parentage or rumors must remain uncertain. Do not invent childhood events, diagnoses, or a new temperament. For the player character, describe tendencies without prescribing thoughts, speech, or future decisions. presentation is current clothing, grooming, or visible injuries.',
 		'Distinguish accepted facts from beliefs, prophecy, dreams, historical evidence, and future intent. A passage about another POV does not establish this character knows it. Never add knowledge merely because it appears in the transcript.',
 		'Use motivations for goals. Use affinity as a -100..100 number. If the evidence has no update, return {}.',
 		'Omit unchanged or unsupported fields. For list fields, include durable supported additions; omitted fields preserve existing values.',

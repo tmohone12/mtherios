@@ -73,7 +73,7 @@ export function assertRuntimeIsolation(options) {
 	} catch { throw new Error('Invalid runtime URL; check database, Qdrant and app configuration.'); }
 	if (!['postgres:', 'postgresql:'].includes(database.protocol) || !['http:', 'https:'].includes(qdrant.protocol) || !['http:', 'https:'].includes(app.protocol)) throw new Error('Unsupported runtime URL protocol.');
 	if (options.isolatedTestCopy) {
-  if (options.jobWorker && (options.jobWorkerScope !== 'faction' || options.jobBatchLimit !== 1)) throw new Error('Test copy worker must use faction scope and batch size one.');
+  if (options.turnJobs) throw new Error('Test copy must run with turnJobs off; run its jobs by hand with jobs.runDue.');
   if (!loopback(database) || database.pathname !== '/mythengine_faction_copy_20261001' || options.port !== 5174 || !options.dataRoot.endsWith('data-faction-test') || !options.qdrantCollection.startsWith('mythengine_faction_copy_20261001')) throw new Error('Test copy isolation guard: dedicated database, data root, collection and port required.');
  }
  if (options.allowSharedRuntime) return;
@@ -99,7 +99,7 @@ export function safeRuntimeSummary(options) {
 		dataRoot: options.dataRoot, vaultRoot: options.vaultRoot, defaultVault: options.defaultVault,
 		database: { host: database.hostname, port: database.port || '5432', name: database.pathname.slice(1) },
 		qdrantUrl: safeUrl(options.qdrantUrl), qdrantCollection: options.qdrantCollection,
-		jobWorker: options.jobWorker, jobWorkerScope: options.jobWorkerScope, wikiAutoIndex: options.wikiAutoIndexStoryVaults,
+		turnJobs: options.turnJobs, wikiAutoIndex: options.wikiAutoIndexStoryVaults,
 		chapterRunnerEnabled: options.chapterRunnerEnabled, chapterRunnerStoryId: options.chapterRunnerStoryId,
 		allowSharedRuntime: options.allowSharedRuntime,
 		localKevEnabled: options.localKevEnabled, localEmbeddingsEnabled: options.localEmbeddingsEnabled,
@@ -132,15 +132,11 @@ export function resolveRuntimeOptions(argv = [], { cwd: workingDirectory = proce
 	const wikiEmbedApiKey = String(flags['wiki-embed-api-key'] ?? env.WIKI_EMBED_API_KEY ?? fileConfig.wikiEmbedApiKey ?? env.OPENROUTER_API_KEY ?? fileConfig.llmApiKeys?.OPENROUTER_API_KEY ?? '');
 	const wikiAutoIndexStoryVaults = booleanOption(flags['wiki-auto-index'], env.MTHERIOS_WIKI_AUTO_INDEX, fileConfig.wikiAutoIndexStoryVaults, false);
 	const databaseUrl = String(flags['database-url'] ?? env.DATABASE_URL ?? fileConfig.databaseUrl ?? DEFAULT_DATABASE_URL);
-	const jobWorker = booleanOption(flags['job-worker'], env.MTHERIOS_JOB_WORKER, fileConfig.jobWorker, false);
+	// Queued jobs run in the app process right after the work that queued them; off for tests and isolated copies.
+	const turnJobs = booleanOption(flags['turn-jobs'], env.MTHERIOS_TURN_JOBS, fileConfig.turnJobs, true);
 	const chapterRunnerEnabled = booleanOption(flags['chapter-runner'], env.MTHERIOS_CHAPTER_RUNNER, fileConfig.chapterRunnerEnabled, false);
 	const chapterRunnerStoryId = String(flags['chapter-runner-story'] ?? env.MTHERIOS_CHAPTER_RUNNER_STORY_ID ?? fileConfig.chapterRunnerStoryId ?? '').trim();
 	if(chapterRunnerEnabled && !chapterRunnerStoryId)throw new Error('Chapter-only runner requires an explicit story ID.');
-	const jobWorkerScope = String(flags['job-worker-scope'] ?? env.MTHERIOS_JOB_WORKER_SCOPE ?? fileConfig.jobWorkerScope ?? 'all');
-	if (!['all', 'faction'].includes(jobWorkerScope)) throw new Error('Invalid job worker scope.');
-	const jobIntervalMs = Math.max(1000, Number(flags['job-interval-ms'] ?? env.MTHERIOS_JOB_INTERVAL_MS ?? fileConfig.jobIntervalMs ?? 5000));
-	const jobTimeoutMs = Math.max(5000, Number(flags['job-timeout-ms'] ?? env.MTHERIOS_JOB_TIMEOUT_MS ?? fileConfig.jobTimeoutMs ?? 10 * 60_000));
-	const jobBatchLimit = Math.max(1, Math.min(100, Number(flags['job-batch-limit'] ?? env.MTHERIOS_JOB_BATCH_LIMIT ?? fileConfig.jobBatchLimit ?? 1)));
 	const jobStaleLockMs = Math.max(60_000, Number(flags['job-stale-lock-ms'] ?? env.MTHERIOS_JOB_STALE_LOCK_MS ?? fileConfig.jobStaleLockMs ?? 30 * 60_000));
 	const chapterThreshold = 20;
 	const postChapterBuffer = 0;
@@ -175,13 +171,9 @@ export function resolveRuntimeOptions(argv = [], { cwd: workingDirectory = proce
 		wikiEmbedApiKey,
 		wikiAutoIndexStoryVaults,
 		databaseUrl,
-		jobWorker,
+		turnJobs,
 		chapterRunnerEnabled,
 		chapterRunnerStoryId,
-		jobWorkerScope,
-		jobIntervalMs,
-		jobTimeoutMs,
-		jobBatchLimit,
 		jobStaleLockMs,
 		chapterThreshold,
 		postChapterBuffer,
@@ -282,13 +274,9 @@ export function buildRuntimeEnv(options, inputEnv = process.env) {
 		MTHERIOS_LOCAL_KEV: options.localKevEnabled ? 'true' : 'false',
 		MTHERIOS_LOCAL_EMBEDDINGS: options.localEmbeddingsEnabled ? 'true' : 'false',
 		MTHERIOS_WIKI_AUTO_INDEX: options.wikiAutoIndexStoryVaults ? 'true' : 'false',
-		MTHERIOS_JOB_WORKER: options.jobWorker ? 'true' : 'false',
+		MTHERIOS_TURN_JOBS: options.turnJobs ? 'true' : 'false',
 		MTHERIOS_CHAPTER_RUNNER: options.chapterRunnerEnabled ? 'true' : 'false',
 		MTHERIOS_CHAPTER_RUNNER_STORY_ID: options.chapterRunnerStoryId ?? '',
-		MTHERIOS_JOB_WORKER_SCOPE: options.jobWorkerScope,
-		MTHERIOS_JOB_INTERVAL_MS: String(options.jobIntervalMs),
-		MTHERIOS_JOB_TIMEOUT_MS: String(options.jobTimeoutMs),
-		MTHERIOS_JOB_BATCH_LIMIT: String(options.jobBatchLimit),
 		MTHERIOS_JOB_STALE_LOCK_MS: String(options.jobStaleLockMs),
 		MTHERIOS_CHAPTER_THRESHOLD: String(options.chapterThreshold),
 		MTHERIOS_POST_CHAPTER_BUFFER: String(options.postChapterBuffer),

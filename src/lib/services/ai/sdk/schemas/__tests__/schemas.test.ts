@@ -1,13 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { suggestionSchema, suggestionsResultSchema } from '../suggestions';
-import { loreUpdateSchema, loreManagementResultSchema } from '../lorebook';
-import { chapterSummaryResultSchema, chapterAnalysisSchema, retrievalDecisionSchema } from '../memory';
 import {
 	plotInjectionSchema, factionActionSchema, rumorSchema,
 	worldSimulationResultSchema, relationDeltaSchema, plotMomentumSchema,
 } from '../worldsim';
-import { arcSummarySchema } from '../arc';
-import { entryRefinementResultSchema } from '../entryRefinement';
 import { hasStrategicPlotContent, strategicWorldFrameSchema } from '../strategicWorldBrain';
 import {
 	applyPlotMomentumAgencyGuard,
@@ -39,89 +35,6 @@ describe('suggestionsResultSchema', () => {
 
 	it('rejects empty suggestions', () => {
 		expect(() => suggestionsResultSchema.parse({ suggestions: [] })).toThrow();
-	});
-});
-
-// ════════════════════════════════════════════════════════════════
-// Lorebook
-// ════════════════════════════════════════════════════════════════
-
-describe('loreUpdateSchema', () => {
-	it('accepts valid lore update', () => {
-		const data = {
-			action: 'create', name: 'Dragon', type: 'concept',
-			description: 'A mythical beast', keywords: ['dragon', 'fire'], reason: 'Mentioned in story',
-		};
-		expect(loreUpdateSchema.parse(data)).toBeTruthy();
-	});
-
-	it('accepts character enrichment fields', () => {
-		const data = {
-			action: 'update', entryId: '123', name: 'Jon', type: 'character',
-			description: 'Brooding hero', keywords: ['stark'], reason: 'Bio revealed',
-			bio: 'Raised in Winterfell', motivations: ['protect the realm'], personality: 'honorable',
-		};
-		const parsed = loreUpdateSchema.parse(data);
-		expect(parsed.bio).toBe('Raised in Winterfell');
-		expect(parsed.motivations).toEqual(['protect the realm']);
-	});
-
-	it('accepts null bio/motivations/personality', () => {
-		const data = {
-			action: 'create', name: 'X', type: 'item',
-			description: 'Y', keywords: [], reason: 'Z',
-			bio: null, motivations: null, personality: null,
-		};
-		expect(loreUpdateSchema.parse(data).bio).toBeNull();
-	});
-});
-
-describe('loreManagementResultSchema', () => {
-	it('accepts result with summary', () => {
-		const data = {
-			updates: [{ action: 'create', name: 'X', type: 'item', description: 'Y', keywords: [], reason: 'Z' }],
-			summary: 'One new item',
-		};
-		expect(loreManagementResultSchema.parse(data).summary).toBe('One new item');
-	});
-});
-
-// ════════════════════════════════════════════════════════════════
-// Memory
-// ════════════════════════════════════════════════════════════════
-
-describe('chapterSummaryResultSchema', () => {
-	it('accepts valid chapter summary', () => {
-		const data = {
-			title: 'The Beginning', summary: 'Hero sets out',
-			keywords: ['journey'], keyCharacters: ['Jon'], keyLocations: ['Winterfell'],
-			emotionalTone: 'hopeful',
-		};
-		expect(chapterSummaryResultSchema.parse(data)).toEqual(data);
-	});
-});
-
-describe('chapterAnalysisSchema', () => {
-	it('accepts chapter boundary decision', () => {
-		const data = { shouldCreateChapter: true, optimalEndIndex: 15, keywords: ['battle'], reason: 'Scene shift' };
-		expect(chapterAnalysisSchema.parse(data).shouldCreateChapter).toBe(true);
-	});
-
-	it('accepts false decision', () => {
-		const data = { shouldCreateChapter: false, optimalEndIndex: 0, keywords: [], reason: 'Continuing scene' };
-		expect(chapterAnalysisSchema.parse(data).shouldCreateChapter).toBe(false);
-	});
-});
-
-describe('retrievalDecisionSchema', () => {
-	it('accepts retrieval decision', () => {
-		const data = { shouldRetrieve: true, relevantChapterIds: ['ch1', 'ch2'], reason: 'Callback needed' };
-		expect(retrievalDecisionSchema.parse(data)).toEqual(data);
-	});
-
-	it('accepts without optional reason', () => {
-		const data = { shouldRetrieve: false, relevantChapterIds: [] };
-		expect(retrievalDecisionSchema.parse(data).reason).toBeUndefined();
 	});
 });
 
@@ -683,7 +596,6 @@ describe('strategicWorldFrameSchema', () => {
 	});
 });
 
-
 describe('relationDeltaSchema', () => {
 	it('accepts a normal delta', () => {
 		const parsed = relationDeltaSchema.parse({
@@ -726,109 +638,3 @@ describe('factionActionSchema relationDeltas', () => {
 		expect(parsed.relationDeltas).toHaveLength(4);
 	});
 });
-
-// ════════════════════════════════════════════════════════════════
-// Arc
-// ════════════════════════════════════════════════════════════════
-
-describe('arcSummarySchema', () => {
-	it('accepts valid arc summary', () => {
-		const data = {
-			title: 'The Fall', summary: 'Everything collapses',
-			keyPlotPoints: ['Betrayal', 'Siege'],
-			characterArcs: [{ name: 'Jon', development: 'Grew disillusioned' }],
-			unresolvedThreads: ['Missing sword'], emotionalProgression: 'hope to despair',
-		};
-		expect(arcSummarySchema.parse(data)).toEqual(data);
-	});
-
-	it('accepts empty arrays', () => {
-		const data = {
-			title: 'X', summary: 'Y', keyPlotPoints: [],
-			characterArcs: [], unresolvedThreads: [], emotionalProgression: 'flat',
-		};
-		expect(arcSummarySchema.parse(data).keyPlotPoints).toEqual([]);
-	});
-});
-
-// ════════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════════
-
-// ════════════════════════════════════════════════════════════════
-// Entry Refinement
-// ════════════════════════════════════════════════════════════════
-
-describe('entryRefinementResultSchema', () => {
-	it('accepts a description-only refinement', () => {
-		const data = {
-			description: 'Updated description with new facts appended.',
-			reasoning: 'Added the siege detail.',
-		};
-		expect(entryRefinementResultSchema.parse(data).description).toBeTruthy();
-	});
-
-	it('accepts character enrichment fields', () => {
-		const data = {
-			description: 'Old text + new text.',
-			bio: 'Born in Pyke, raised at sea.',
-			appearance: 'Salt-stiff cloak.',
-			personality: 'Steely and quiet.',
-			rank: 'princess',
-			currentDisposition: 'wary but loyal',
-			affinity: 35,
-			motivations: ['Reclaim her birthright', 'Avenge her father'],
-			factionTags: ['House Greyjoy'],
-			knownFacts: ['The player spared her brother.'],
-			reasoning: 'Character context expanded.',
-		};
-		const parsed = entryRefinementResultSchema.parse(data);
-		expect(parsed.bio).toBe('Born in Pyke, raised at sea.');
-		expect(parsed.motivations).toHaveLength(2);
-		expect(parsed.affinity).toBe(35);
-	});
-
-	it('accepts faction operational state fields', () => {
-		const data = {
-			description: 'Old text plus the port blockade.',
-			playerStanding: -45,
-			factionStatus: 'hostile',
-			knownMembers: ['Lord Harlaw', 'Asha'],
-			goals: [{
-				description: 'Break the river blockade',
-				priority: 8,
-				progress: 25,
-				type: 'military',
-				deadline: 'before winter',
-			}],
-			resources: { military: 70, wealth: 45, influence: 55, information: 35, morale: 60 },
-			disposition: 'aggressive',
-			territory: ['Pyke', 'Lordsport'],
-			reasoning: 'Faction state expanded.',
-		};
-		const parsed = entryRefinementResultSchema.parse(data);
-		expect(parsed.goals?.[0].description).toBe('Break the river blockade');
-		expect(parsed.resources?.military).toBe(70);
-	});
-
-	it('accepts all optional fields omitted except reasoning', () => {
-		const data = { reasoning: 'Nothing to change.' };
-		expect(entryRefinementResultSchema.parse(data).reasoning).toBe('Nothing to change.');
-	});
-
-	it('accepts nullable description (no change)', () => {
-		const data = { description: null, reasoning: 'Unchanged.' };
-		expect(entryRefinementResultSchema.parse(data).description).toBeNull();
-	});
-
-	it('rejects missing reasoning', () => {
-		expect(() => entryRefinementResultSchema.parse({ description: 'x' })).toThrow();
-	});
-
-	it('rejects keywords with non-string entries', () => {
-		expect(() => entryRefinementResultSchema.parse({
-			keywords: [123, 'ok'],
-			reasoning: 'test',
-		})).toThrow();
-	});
-});
-

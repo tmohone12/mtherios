@@ -1,4 +1,5 @@
 import { readCampaignState } from '$lib/contracts/campaignState';
+import { readCampaignMeters } from '$lib/contracts/gameplayEffects';
 import {
 	createStory,
 	deleteStory,
@@ -563,7 +564,7 @@ export async function cacheBackendStory(row: BackendStorySummary): Promise<Story
 		lastWorldSimDay: null,
 		compactedLore: null,
 		compactedLoreHistory: null,
-		meters: null,
+		meters: readCampaignMeters(metadata),
 	};
 
 	const existing = await getStory(localId);
@@ -579,6 +580,7 @@ export async function cacheBackendStory(row: BackendStorySummary): Promise<Story
 			settings: story.settings,
 			headerPrompt: story.headerPrompt,
 			playerReputation: story.playerReputation,
+			meters: story.meters,
 			serverStoryId: story.serverStoryId,
 			serverVersion: story.serverVersion,
 			syncStatus: 'synced',

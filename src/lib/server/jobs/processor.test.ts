@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as summaryGeneration from './summaryGeneration';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { backendJobTypes, continuityAuditDedupeKey, shouldQueueTurnStoryVaultSync, turnStateExtractionDedupeKey, turnStateSourceFingerprint } from './outbox';
+import { backendJobTypes, shouldQueueTurnStoryVaultSync, turnStateExtractionDedupeKey, turnStateSourceFingerprint } from './outbox';
 import { selectStoryMemory } from '$lib/services/ai/context/storyMemorySelector';
 import { eligibleFactionMoveVariants } from '$lib/server/factions/autonomy';
 import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
@@ -56,11 +56,6 @@ import {
 	projectionFingerprint,
 	projectionSourceEntriesMatch,
 	projectionSourceEventsMatch,
-	parseContinuityReview,
-	continuityReviewEvidence,
-	continuityReviewEventWhere,
-	continuityReviewSelectedIds,
-	continuitySentenceCandidates,
 	stableId,
 	worldTickEventId,
 	selectArcRollupBatches,
@@ -79,116 +74,6 @@ function compiledSql(value: SQL) {
 }
 
 describe('projection source revalidation', () => {
-	it('limits delayed continuity evidence to the narrated turn', () => {
-		const cutoff = '2026-09-28T00:00:00.000Z';
-		const query = compiledSql(continuityReviewEventWhere('story_1', cutoff, 7));
-		expect(query.sql).toContain('"story_events"."updated_at" <=');
-		expect(query.sql).toContain('"story_events"."server_version" <=');
-		expect(query.params).toEqual(['story_1', 'committed', cutoff, 7]);
-		const legacy = compiledSql(continuityReviewEventWhere('story_1', cutoff, null));
-		expect(legacy.sql).not.toContain('"story_events"."server_version" <=');
-		expect(legacy.params).toEqual(['story_1', 'committed', cutoff]);
-	});
-	it('keeps only source-linked shadow continuity findings', () => {
-		const findings = parseContinuityReview(JSON.stringify({ findings: [
-			{ category: 'contradiction', severity: 'warning', offendingSpan: 'The gate was never opened.', suggestion: 'Preserve the recorded opening.', sourceIds: ['event_gate'] },
-			{ category: 'secret_leak', severity: 'error', offendingSpan: 'The hidden route is known.', suggestion: 'Remove the leak.', sourceIds: ['event_unknown'] },
-		] }), new Set(['entry_player', 'event_gate']));
-		expect(findings).toEqual([expect.objectContaining({ category: 'contradiction', sourceIds: ['event_gate'] })]);
-	});
-	it('does not let a narration or its derived event cite itself as review evidence', () => {
-		const { allowedIds, evidence, focusText } = continuityReviewEvidence([
-			{ id: 'entry_player', type: 'user_action', content: 'I close the gate.' },
-			{ id: 'narration_turn', type: 'narration', content: 'The gate opens.' },
-		] as never, [
-			{ id: 'event_prior', title: 'Gate closed', body: 'The gate was closed.', actorEntityIds: [], targetEntityIds: [], sourceEntryIds: ['entry_older'] },
-			{ id: 'event_derived', title: 'Gate opens', body: 'The gate opens.', actorEntityIds: [], targetEntityIds: [], sourceEntryIds: ['narration_turn'] },
-		], 'narration_turn');
-		expect([...allowedIds]).toEqual(['entry_player', 'event_prior']);
-		expect(evidence).not.toContain('narration_turn');
-		expect(evidence).not.toContain('event_derived');
-		expect(focusText.join(' ')).not.toContain('Gate opens');
-		expect(parseContinuityReview(JSON.stringify({ findings: [
-			{ category: 'contradiction', severity: 'warning', offendingSpan: 'The gate opens.', suggestion: 'Check prior state.', sourceIds: ['event_prior'] },
-			{ category: 'contradiction', severity: 'warning', offendingSpan: 'The gate opens.', suggestion: 'Self-citation.', sourceIds: ['event_derived'] },
-		] }), allowedIds)).toHaveLength(1);
-	});
-	it('reviews only retained canonical records and excludes records derived from the narration', () => {
-		const receipt = { selection: { groups: [
-			{ kind: 'agreements', sentIds: ['agreement_passage', 'agreement_passage'], partialIds: ['agreement_partial'] },
-			{ kind: 'beliefs', sentIds: ['belief_mara'], omittedIds: ['belief_secret'] },
-			{ kind: 'memoryNodes', sentIds: ['fact_corrected'], partialIds: ['fact_partial'] },
-		] } };
-		expect(continuityReviewSelectedIds(receipt, 'agreements')).toEqual(['agreement_passage']);
-		expect(continuityReviewSelectedIds(receipt, 'beliefs')).toEqual(['belief_mara']);
-		expect(continuityReviewSelectedIds(receipt, 'memoryNodes')).toEqual(['fact_corrected']);
-		expect(continuityReviewSelectedIds({ selection: { groups: [{ kind: 'playerCorrections', sentIds: ['entry_correction'] }] } }, 'playerCorrections'))
-			.toEqual(['entry_correction']);
-		expect(continuityReviewSelectedIds({ selection: { groups: null } }, 'beliefs')).toEqual([]);
-		const { allowedIds, evidence, canonicalRows, focusText } = continuityReviewEvidence([
-			{ id: 'entry_player', type: 'user_action', content: 'I accept passage.' },
-			{ id: 'narration_turn', type: 'narration', content: 'Mara refuses.' },
-		] as never, [], 'narration_turn', {
-			agreements: [
-				{ id: 'agreement_passage', parties: ['Ilan', 'Mara'], terms: 'Mara agreed to passage.', status: 'active', sourceEntryIds: ['entry_offer'], sourceEventIds: [] },
-				{ id: 'agreement_derived', parties: ['Ilan', 'Mara'], terms: 'Mara refuses.', status: 'active', sourceEntryIds: ['narration_turn'], sourceEventIds: [] },
-			],
-			beliefs: [{ id: 'belief_mara', believerEntityId: 'mara', belief: 'Mara knows the harbor route.', confidence: 0.95,
-				sourceEntryIds: ['entry_offer'], sourceEventIds: [] }],
-			facts: [
-				{ id: 'fact_corrected', type: 'canonical', title: 'Corrected hearing date',
-					content: 'The hearing is Moonday.', summary: 'The hearing is Moonday.',
-					sourceEntryIds: ['entry_correction'], sourceEventIds: [] },
-				{ id: 'fact_derived', type: 'canonical', title: 'Mara refuses',
-					content: 'Mara refuses.', summary: null, sourceEntryIds: ['narration_turn'], sourceEventIds: [] },
-			],
-		} as never);
-		expect([...allowedIds]).toEqual(['entry_player', 'agreement_passage', 'belief_mara', 'fact_corrected']);
-		expect(canonicalRows.map(row => row.id)).toEqual(['agreement_passage', 'belief_mara', 'fact_corrected']);
-		expect(evidence).toContain('Mara agreed to passage.');
-		expect(evidence).toContain('Mara knows the harbor route.');
-		expect(evidence).toContain('The hearing is Moonday.');
-		expect(evidence).not.toContain('agreement_derived');
-		expect(evidence).not.toContain('fact_derived');
-		expect(evidence).not.toContain('narration_turn');
-		expect(focusText.join(' ')).not.toContain('fact_derived');
-		expect(focusText.join(' ')).not.toContain('Mara refuses.');
-	});
-	it('uses exact final-prose spans and marks unreviewed long-prose sentences', () => {
-		const narration = 'Mara opens the gate. “Passage is arranged,” she says.';
-		const selection = continuitySentenceCandidates(narration);
-		expect(selection?.candidates.map(item => item.span).join(' ')).toBe(narration);
-		expect(selection?.candidates.map(item => item.id)).toEqual(['sentence_0', 'sentence_1']);
-		expect(selection).toMatchObject({ sentenceCount: 2, omittedCount: 0, complete: true });
-		const long = continuitySentenceCandidates('The hall is quiet. Bread is ready. Mara waits. Ilan sits. The bell rings. The clerk writes. Mara says passage is arranged.',
-			['Mara agreed only to discuss passage.']);
-		expect(long).toMatchObject({ sentenceCount: 7, omittedCount: 6, complete: false,
-			candidates: [{ id: 'sentence_6', span: 'Mara says passage is arranged.' }] });
-		expect(continuitySentenceCandidates('One. Two. Three. Four. Five. Six. Seven.'))
-			.toMatchObject({ candidates: [], sentenceCount: 7, omittedCount: 7, complete: false });
-		expect(continuitySentenceCandidates('A'.repeat(501) + '.'))
-			.toMatchObject({ candidates: [], sentenceCount: 1, omittedCount: 1, complete: false });
-		const missed = continuitySentenceCandidates(
-			'The hall is quiet. Bread is ready. Mara waits. Ilan sits. The bell rings. The clerk writes. Her eyes are blue. You pocket the coin.',
-			['No, her eyes are green.', 'I wait beside Mara.']);
-		expect(missed?.candidates.map(item => item.id)).toEqual(['sentence_6', 'sentence_7']);
-		const priorCorrection = continuitySentenceCandidates(
-			'The hall is quiet. Bread is ready. Mara waits. Ilan sits. The bell rings. The clerk writes. Her eyes are blue.',
-			[], ['OOC: Her eyes are green.']);
-		expect(priorCorrection?.candidates.map(item => item.id)).toEqual(['sentence_6']);
-	});
-	it('retains representative late claims from every review category', () => {
-		const lead = 'The hall is quiet. Bread is ready. Mara waits. Ilan sits. The bell rings. The clerk writes.';
-		for (const [claim, evidence] of [
-			['The gate stays closed.', 'The gate opened.'],
-			['Mara names Selene as sponsor.', 'Selene secretly sponsors the fleet.'],
-			['Ilan pockets the coin.', 'I wait beside Mara.'],
-			['The ship sailed at dawn.', 'The captain plans to depart tomorrow.'],
-		]) {
-			const selection = continuitySentenceCandidates(`${lead} ${claim}`, [evidence], [], 'Ilan');
-			expect(selection?.candidates.map(item => item.id), claim).toContain('sentence_6');
-		}
-	});
 	it('accepts the loaded source snapshot and rejects changed or missing evidence', () => {
 		const entries = [{ id: 'entry_1', position: 1, content: 'The gate opens.', serverVersion: 4 }];
 		expect(projectionSourceEntriesMatch(entries, [...entries])).toBe(true);
@@ -676,8 +561,10 @@ describe('turn state extraction jobs', () => {
 		expect(retry.prompt).toContain('Compact recovery attempt 2.');
 		expect(retry.prompt).toContain('empty state extraction response');
 		expect(retry.prompt).not.toContain('exact JSON Schema');
-		expect(first.prompt.length).toBeLessThan(8_000);
-		expect(retry.prompt.length).toBeLessThan(8_000);
+		// Both carry the gameplay effects instruction (about 2,400 characters) in addition to identity rules.
+		expect(first.prompt.length).toBeLessThan(11_000);
+		expect(retry.prompt.length).toBeLessThan(11_000);
+		expect(retry.prompt).toContain('GAMEPLAY EFFECTS');
 		for (const result of [first, retry]) {
 			expect(result.prompt).toContain('creation_evidence');
 			expect(result.prompt).toContain('faction_evidence');
@@ -805,11 +692,10 @@ describe('turn state extraction jobs', () => {
 	});
 });
 
-describe('continuity audit jobs', () => {
-	it('exposes a stable background job type and dedupe key', () => {
+describe('retired job types', () => {
+	it('keeps continuity_audit readable for older rows', () => {
 		expect(backendJobTypes).toContain('continuity_audit');
 		expect(backendJobTypes).toContain('plan_plot_brain');
-		expect(continuityAuditDedupeKey({ assistantEntryId: 'entry_assistant' })).toBe('continuity-audit-entry_assistant');
 	});
 });
 

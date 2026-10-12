@@ -75,12 +75,13 @@ it('keeps canonical IDs, aliases and legacy character details through initial an
 	expect(worldStateCharacterSchema.parse(update)).toMatchObject(update);
 });
 
-it('retains the opening and final transition and promise within the extraction evidence budget', () => {
+it('gives every extraction prompt the whole narration, including its middle', () => {
 	const playerText = 'I follow Maera into the corridor.';
 	const opening = 'Maera gives Aurion the silver key before they finish speaking.';
 	const transition = 'They leave the study together and enter the north corridor.';
 	const promise = 'Maera promises to keep the key hidden until Aurion returns, even if the harbor watch demands it.';
-	const narration = `[Time: 8:00 PM | Location: the private study | Weather: ${'rain against the windows, '.repeat(45)}]\n\n${opening}\n\n${'The fire flickers as the conversation continues. '.repeat(190)}\n\n${transition}\n\n${promise}`;
+	const middle = 'Halfway through, Maera drinks the last healing potion and her wound closes.';
+	const narration = `[Time: 8:00 PM | Location: the private study | Weather: ${'rain against the windows, '.repeat(45)}]\n\n${opening}\n\n${'The fire flickers as the conversation continues. '.repeat(95)}\n\n${middle}\n\n${'The fire flickers as the conversation continues. '.repeat(95)}\n\n${transition}\n\n${promise}`;
 	const schema = buildStateExtractionResponseSchema().schema;
 	const prompts = [
 		buildStateExtractionPrompt(playerText, narration, schema),
@@ -94,6 +95,7 @@ it('retains the opening and final transition and promise within the extraction e
 		expect(evidence).toContain(opening);
 		expect(evidence).toContain(transition);
 		expect(evidence).toContain(promise);
-		expect(evidence.length).toBeLessThanOrEqual(6000);
+		expect(evidence).toContain(middle);
+		expect(evidence).toBe(narration.trim());
 	}
 });

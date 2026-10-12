@@ -46,7 +46,7 @@
 	<div class="workspace-page-heading">
 		<div>
 			<p class="workspace-eyebrow">Connected worlds</p>
-			<h2>Terminal sync.</h2>
+			<h2>Server sync.</h2>
 			<p class="workspace-subtitle">Connections, background work, and the knowledge behind your stories.</p>
 		</div>
 		<button onclick={load} disabled={loading} class="workspace-refresh">
@@ -135,6 +135,6 @@
 	</div>
 
 	<div class="text-xs text-[var(--text-muted)]">
-		Terminal sync reflects the backend gateway, job runner, and wiki indexing pipeline.
+		Server sync shows the command gateway, job runner, and wiki indexing on the story server.
 	</div>
 </div>

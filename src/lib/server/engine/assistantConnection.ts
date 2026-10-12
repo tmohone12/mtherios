@@ -1,10 +1,10 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { requestScope } from '$lib/server/requestScopes';
 import { assistantConnectionSchema,type AssistantConnection } from '$lib/contracts/assistantConnection';
 import { currentChatgptBinding } from '$lib/server/chatgpt/owner';
 import type { ChatgptBinding } from '$lib/server/chatgpt/session';
 import { resolveServiceGeneration,requireResolvedServiceProfile } from './llmSettings';
 import { agentRunHash } from './agentRunHash';
-export const assistantConnectionContext=new AsyncLocalStorage<AssistantConnection>();
+export const assistantConnectionContext=requestScope<AssistantConnection>();
 export const assistantConnectionCommands=new Set(['assistant.conversation.create','assistant.message.send','assistant.run.resume','assistant.question.answer','assistant.approval.review']);
 export function publicProviderEndpoint(value:string){try{const url=new URL(value);return url.origin+url.pathname.replace(/\/$/,'');}catch{return '';}}
 export async function readAssistantConnection(projectId:string,gameId:string):Promise<AssistantConnection>{

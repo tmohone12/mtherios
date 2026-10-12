@@ -37,7 +37,7 @@
 	<!-- Info -->
 	<div class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3">
 		<div class="text-sm font-semibold text-[var(--text-primary)]">API Log</div>
-		<p class="text-[10px] text-[var(--text-muted)]">All API calls are logged automatically. Logs clear on page reload.</p>
+		<p class="text-[10px] text-[var(--text-muted)]">Model calls made from this browser (suggestions and story setup help). Story turns run on the server and are recorded on each turn. Clears on page reload.</p>
 	</div>
 
 	{#if entries.length === 0}

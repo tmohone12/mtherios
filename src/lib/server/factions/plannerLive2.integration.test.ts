@@ -15,7 +15,7 @@ live('one additional authorized paid planner request; real actor history and loc
  const path='.codex-run/faction-planner-live2.json';
  if(process.env.MYTHENGINE_LIVE_QUALIFICATION_CAP_USD!=='1'||fs.existsSync(path))throw new Error('One-time authorization/ledger guard');
  const config=JSON.parse(fs.readFileSync('mythengine.config.json','utf8'));
- if(config.port!==5174||config.jobWorker!==false||config.testLocalInferenceOnly!==true||!config.isolatedTestCopy)throw new Error('Paused isolated copy required');
+ if(config.port!==5174||config.turnJobs!==false||config.testLocalInferenceOnly!==true||!config.isolatedTestCopy)throw new Error('Paused isolated copy required');
  const db=getDb();if((await db.execute(sql`select current_database() as name`))[0].name!=='mythengine_faction_copy_20261001')throw new Error('Isolated database required');
  const prices=JSON.parse(fs.readFileSync('.codex-run/faction-planner-live2-pricing.json','utf8'));
  if(!prices.authenticatedUsingCopyOnly||Date.now()-Date.parse(prices.fetchedAt)>3600000||prices.maximumUsd>1)throw new Error('Fresh bounded pricing required');
