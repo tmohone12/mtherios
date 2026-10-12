@@ -837,6 +837,37 @@ export const worldTimeChanges = pgTable('world_time_changes', {
 	kindCheck: check('world_time_changes_kind_check', sql`${table.kind} in ('advance','anchor','set')`),
 }));
 
+/** Gameplay effect receipts (migration 0058; see server/turn/gameplayEffects.ts). */
+export const gameplayEffects = pgTable('gameplay_effects', {
+	id: text('id').primaryKey(),
+	storyId: text('story_id').notNull().references(() => stories.id, { onDelete: 'cascade' }),
+	/** Duplicate identity: same consequence from the same passage. */
+	effectKey: text('effect_key').notNull(),
+	runId: text('run_id').notNull(),
+	sourceEntryId: text('source_entry_id').notNull(),
+	sourcePosition: integer('source_position').notNull(),
+	op: text('op').notNull(),
+	status: text('status').notNull(),
+	targetKind: text('target_kind'),
+	targetId: text('target_id'),
+	subject: text('subject'),
+	requested: jsonb('requested').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	before: jsonb('before').$type<Record<string, unknown>>(),
+	after: jsonb('after').$type<Record<string, unknown>>(),
+	revision: integer('revision'),
+	reason: text('reason'),
+	evidence: jsonb('evidence').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(jsonObject),
+	serverVersion: integer('server_version').notNull(),
+	createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, table => ({
+	appliedKey: uniqueIndex('gameplay_effects_applied_key').on(table.storyId, table.effectKey).where(sql`${table.status} = 'applied'`),
+	sourceIdx: index('gameplay_effects_source_idx').on(table.storyId, table.sourceEntryId),
+	targetIdx: index('gameplay_effects_target_idx').on(table.storyId, table.targetId, table.subject, table.sourcePosition).where(sql`${table.status} = 'applied'`),
+	statusCheck: check('gameplay_effects_status_check', sql`${table.status} in ('applied','already_applied','rejected','unresolved','no_change')`),
+	targetKindCheck: check('gameplay_effects_target_kind_check', sql`${table.targetKind} in ('character','item','campaign')`),
+}));
+
 /** Logical archival memory window: one slot per story, scope and chapter number. */
 export const chapterWindows = pgTable('chapter_windows', {
 	id: text('id').primaryKey(),

@@ -40,6 +40,7 @@ import { isWorldSimEligibleFaction } from '$lib/server/factions/autonomy';
 import { isNarrativeTimelineEvent } from '$lib/server/events/timeline';
 import { filterNarrativeContextEntries, loadCanonicalCharacters, NARRATOR_RECENT_ENTRY_LIMIT } from '$lib/server/turn/context';
 import { containsSceneActorMention } from '$lib/services/ai/context/sceneActorMention';
+import { readCampaignMeters } from '$lib/contracts/gameplayEffects';
 import type { Agreement, Arc, Chapter, Entry, FactionActionRecord, FactionGoal, POV, RumorRecord, Scheme, Story, StoryEntry, StoryMode, StoryThread, StrategicBrainTrigger, StrategicWorldFrame, Tense, WorldEvent } from '$lib/types';
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 
@@ -161,7 +162,7 @@ function mapStory(row: typeof stories.$inferSelect): Story {
 		lastWorldSimDay: null,
 		compactedLore: null,
 		compactedLoreHistory: null,
-		meters: null,
+		meters: readCampaignMeters(metadata),
 	};
 }
 

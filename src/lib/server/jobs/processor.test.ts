@@ -561,8 +561,10 @@ describe('turn state extraction jobs', () => {
 		expect(retry.prompt).toContain('Compact recovery attempt 2.');
 		expect(retry.prompt).toContain('empty state extraction response');
 		expect(retry.prompt).not.toContain('exact JSON Schema');
-		expect(first.prompt.length).toBeLessThan(8_000);
-		expect(retry.prompt.length).toBeLessThan(8_000);
+		// Both carry the gameplay effects instruction (about 2,400 characters) in addition to identity rules.
+		expect(first.prompt.length).toBeLessThan(11_000);
+		expect(retry.prompt.length).toBeLessThan(11_000);
+		expect(retry.prompt).toContain('GAMEPLAY EFFECTS');
 		for (const result of [first, retry]) {
 			expect(result.prompt).toContain('creation_evidence');
 			expect(result.prompt).toContain('faction_evidence');

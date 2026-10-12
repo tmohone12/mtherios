@@ -437,7 +437,7 @@ describe('applyValidatedTurnUpdate', () => {
 			enqueueProjectionJobs: false,
 		});
 
-		expect(result).toEqual({ eventIds: [], patchIds: [], memoryNodeIds: [], warnings: [] });
+		expect(result).toEqual({ eventIds: [], patchIds: [], memoryNodeIds: [], warnings: [], effects: [] });
 		expect(selectLocks).toEqual([
 			expect.objectContaining({ source: 'tx', table: stories, strength: 'update' }),
 		]);
@@ -1715,6 +1715,7 @@ describe('applyValidatedTurnUpdate', () => {
 			patchIds: [],
 			memoryNodeIds: [],
 			warnings: [],
+			effects: [],
 		});
 		expect(insertCalls).toEqual([]);
 		expect(updateCalls).toEqual([]);

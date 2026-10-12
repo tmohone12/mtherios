@@ -3,6 +3,7 @@ import { actorPsychologySchema } from './actorPsychology';
 import { sceneCheckpointSelectionSchema } from './sceneCheckpoint';
 import { modelTaskProvenanceSchema } from './modelTasks';
 import { promptPresetUseSchema } from './promptPresets';
+import { gameplayEffectSummarySchema } from './gameplayEffects';
 
 export const jsonObjectSchema = z.record(z.string(), z.unknown());
 export const jsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
@@ -1048,6 +1049,8 @@ export const gmTurnReceiptSchema = z.object({
 		events: z.number().int().nonnegative(),
 		memoryNodes: z.number().int().nonnegative(),
 	}).strict(),
+	/** Gameplay effect outcomes (HP, conditions, items) for this turn's narration. */
+	effects: z.array(gameplayEffectSummarySchema).max(32).default([]),
 	stateExtractionMode: z.enum(['deferred', 'sync', 'none']),
 	stateExtractionStatus: z.enum(['skipped', 'queued', 'running', 'succeeded', 'failed']).default('skipped'),
 	stateExtractionJobId: z.string().nullable().default(null),

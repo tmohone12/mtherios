@@ -30,6 +30,8 @@ import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentit
 import { worldStateUpdateSchema, worldStateTimelineEventSchema, type WorldStateTimelineEvent, type WorldStateUpdate } from '$lib/services/ai/tools/schemas';
 import { isParallelPovEntry } from '$lib/services/ai/context/parallelPov';
 import { durableCharacterEventMemoryList } from './characterEventMemory';
+import { applyGameplayEffects, hasGameplayEffects } from './gameplayEffects';
+import { removeMisplacedMechanics, type GameplayEffectReceipt } from '$lib/contracts/gameplayEffects';
 import { boundCharacterIdentity } from '$lib/server/engine/characterContinuity';
 
 type TurnPersistenceDb = Pick<ReturnType<typeof getDb>, 'delete' | 'insert' | 'select' | 'update'>;
@@ -449,8 +451,10 @@ async function insertSourceRefs(db: TurnPersistenceDb, input: unknown): Promise<
 }
 
 export function parseTurnUpdate(input: unknown): { update: WorldStateUpdate; warnings: string[] } {
-	const parsed = extractedUpdateSchema.safeParse('update' in recordValue(input) ? input : { update: input });
-	if (parsed.success) return { update: parsed.data.update, warnings: [] };
+	const wrapped = structuredClone('update' in recordValue(input) ? input : { update: input }) as Record<string, unknown>;
+	const misplaced = removeMisplacedMechanics(wrapped.update);
+	const parsed = extractedUpdateSchema.safeParse(wrapped);
+	if (parsed.success) return { update: parsed.data.update, warnings: misplaced };
 	return {
 		update: worldStateUpdateSchema.parse({}),
 		warnings: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`),
@@ -578,6 +582,16 @@ async function upsertEntity(
 		? await db.select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.id, resolvedEntityId))).for('update').limit(1)
 		: [];
 	const existing = existingRows.find(row => row.id === resolvedEntityId && row.storyId === storyId && row.type === type);
+	// A same-named record of another kind (an item called like a place) is a different thing; never overwrite it.
+	const otherKind = existingRows.find(row => row.id === resolvedEntityId && row.type !== type);
+	if (otherKind) {
+		queueUnresolvedEntityReference(continuityLedger, {
+			storyId, type, name, description: description ?? null, state, sourceEntryIds, sourceEventIds, sourcePatchIds,
+			sourceField: options.sourceField ?? 'structured_update', serverVersion, now: createdAt,
+			metadata: { entityResolver: entityResolutionSummary(resolution), typeConflict: { entityId: otherKind.id, type: otherKind.type } },
+		});
+		return null;
+	}
 	const canonicalName = existing && (type === 'character' || normalizeName(existing.name) !== normalizeName(name) && existing.name.length >= name.length)
 		? existing.name
 		: name;
@@ -789,6 +803,7 @@ function makeOperations(update: WorldStateUpdate): Array<Record<string, unknown>
 	for (const beat of update.story_beats) operations.push({ op: 'add', path: '/story_events', value: beat });
 	for (const event of update.timeline_events) operations.push({ op: event.status === 'committed' ? 'add' : 'upsert', path: '/story_events/timeline', value: event });
 	for (const meter of update.meter_changes) operations.push({ op: 'replace', path: '/stories/meters', value: meter });
+	for (const effect of update.effects ?? []) operations.push({ op: effect.op, path: '/effects', value: effect });
 	if (update.time_delta) operations.push({ op: 'replace', path: '/stories/time', value: update.time_delta });
 	return operations;
 }
@@ -897,6 +912,8 @@ export interface ApplyTurnUpdateResult {
 	patchIds: string[];
 	memoryNodeIds: string[];
 	warnings: string[];
+	/** One receipt per proposed gameplay effect or meter change (also stored in gameplay_effects). */
+	effects: GameplayEffectReceipt[];
 }
 
 export interface ApplyTurnUpdateOptions {
@@ -913,6 +930,7 @@ export async function applyValidatedTurnUpdate(
 	const eventIds: string[] = [];
 	const memoryNodeIds: string[] = [];
 	const affectedEntityIds: string[] = [];
+	const effectReceipts: GameplayEffectReceipt[] = [];
 	const warnings = [...input.parseWarnings];
 	const operations = makeOperations(input.update);
 	const continuityLedger: TurnContinuityLedgerBundle = { patchProposals: [] };
@@ -1303,9 +1321,13 @@ export async function applyValidatedTurnUpdate(
 		}
 
 		for (const item of input.update.items) {
+			// An item record describes the item and where it lies. Once it exists, its count and
+			// equipped state change only through item effects (owner-aware, with receipts).
+			const existingItem = item.quantity !== undefined || item.equipped !== undefined
+				? await findEntityByName(tx, input.storyId, item.name, 'item') : null;
+			if (existingItem) warnings.push(`Item "${item.name}": quantity and equipped change only through item effects; its other fields were saved.`);
 			const entityId = await upsertEntity(tx, input.storyId, 'item', item.name, item.description, {
-				quantity: item.quantity,
-				equipped: item.equipped,
+				...(existingItem ? {} : { quantity: item.quantity, equipped: item.equipped }),
 				location: item.location,
 			}, [input.assistantEntryId], [], patchIds, input.serverVersion, createdAt, continuityLedger, warnings.length > 0);
 			if (entityId) affectedEntityIds.push(entityId);
@@ -1527,6 +1549,24 @@ export async function applyValidatedTurnUpdate(
 					});
 				}
 			}
+		}
+
+		// Gameplay consequences (HP, resources, conditions, items, campaign meters) change state only
+		// here, after this turn's characters and items exist, and every proposal gets a receipt.
+		if (hasGameplayEffects(input.update)) {
+			const applied = await applyGameplayEffects(tx, {
+				storyId: input.storyId,
+				runId: patchId ?? id('effects_run'),
+				source: { id: input.assistantEntryId, position: narrationSource?.position ?? -1, content: canonicalNarration,
+					canonical: Boolean(canonicalNarration), primaryScene },
+				effects: input.update.effects ?? [],
+				meterChanges: input.update.meter_changes,
+				serverVersion: input.serverVersion,
+				now: createdAt,
+			});
+			effectReceipts.push(...applied.receipts);
+			warnings.push(...applied.warnings);
+			affectedEntityIds.push(...applied.receipts.flatMap(receipt => receipt.status === 'applied' && receipt.targetKind !== 'campaign' && receipt.targetId ? [receipt.targetId] : []));
 		}
 
 		for (const rel of input.update.relationships) {
@@ -2420,11 +2460,11 @@ export async function applyValidatedTurnUpdate(
 	}
 
 	if (eventIds.length === 0 && memoryNodeIds.length === 0 && patchIds.length === 0) {
-		return { eventIds, patchIds, memoryNodeIds, warnings };
+		return { eventIds, patchIds, memoryNodeIds, warnings, effects: effectReceipts };
 	}
 
 	if (options.enqueueProjectionJobs === false) {
-		return { eventIds, patchIds, memoryNodeIds, warnings };
+		return { eventIds, patchIds, memoryNodeIds, warnings, effects: effectReceipts };
 	}
 
 	try {
@@ -2441,5 +2481,5 @@ export async function applyValidatedTurnUpdate(
 		warnings.push(`Queued projection jobs failed: ${error instanceof Error ? error.message : String(error)}`);
 	}
 
-	return { eventIds, patchIds, memoryNodeIds, warnings };
+	return { eventIds, patchIds, memoryNodeIds, warnings, effects: effectReceipts };
 }

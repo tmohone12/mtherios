@@ -1,5 +1,5 @@
 import { outsideRequestScopes } from '$lib/server/requestScopes';
-import { backgroundJobTypes, memoryJobTypes, nextBackendJobDueAt, projectJobTypes, worldJobTypes, type BackendJobType } from './outbox';
+import { backgroundJobTypes, memoryJobTypes, nextBackendJobDueAt, projectJobTypes, releaseEarlierTurnStateExtractions, worldJobTypes, type BackendJobType } from './outbox';
 
 /** Story jobs that run after memory and never hold up a turn. */
 const afterMemoryJobTypes: readonly BackendJobType[] = [...worldJobTypes, ...backgroundJobTypes];
@@ -140,12 +140,14 @@ function scopeKey(scope: TurnJobScope): string {
 	return scope.projectId ? `project:${scope.projectId}` : `story:${scope.storyId}`;
 }
 
+const turnJobsEnabled = () => process.env.MTHERIOS_TURN_JOBS !== 'false';
+
 const turnJobs = createTurnJobs({
 	// Loaded lazily: the job processor reaches the turn pipeline, which uses this module.
 	runDue: async (workerId, limit, scope, types) => (await import('./processor'))
 		.runDueBackendJobs(workerId, limit, scope.storyId ?? null, types, scope.projectId),
 	nextDueAt: nextBackendJobDueAt,
-	enabled: () => process.env.MTHERIOS_TURN_JOBS !== 'false',
+	enabled: turnJobsEnabled,
 	setTimer: (run, ms) => { const timer = setTimeout(run, ms); timer.unref?.(); return timer; },
 	clearTimer: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
 	now: () => Date.now(),
@@ -156,3 +158,15 @@ const turnJobs = createTurnJobs({
 export const kickStoryJobs = (storyId: string) => turnJobs.kick({ storyId });
 export const scheduleJobKick = turnJobs.scheduleKick;
 export const settleStoryMemory = turnJobs.settleStoryMemory;
+
+/**
+ * What a turn waits for before it reads context: the story's due memory jobs, then any extraction
+ * still held or backing off for an earlier turn (a turn that stopped before releasing its own, or a
+ * retry), so HP, conditions and items include every earlier turn. Agent runs and direct turns both
+ * call this before their first model request.
+ */
+export async function settleStoryForTurn(storyId: string, signal?: AbortSignal): Promise<void> {
+	if (!turnJobsEnabled()) return;
+	await settleStoryMemory(storyId, signal);
+	if (await releaseEarlierTurnStateExtractions(storyId)) await settleStoryMemory(storyId, signal);
+}

@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import { campaignStateChangeSchema } from '$lib/contracts/campaignState';
 import { npcAgencySchema } from '$lib/contracts/npcAgency';
+import { GAMEPLAY_EFFECT_LIMIT, gameplayEffectSchema } from '$lib/contracts/gameplayEffects';
 
 // ── Zod Validation Schemas ──
 
@@ -252,6 +253,8 @@ export const worldStateUpdateSchema = z.object({
 	story_beats: z.array(worldStateStoryBeatSchema).optional().default([]),
 	timeline_events: z.array(worldStateTimelineEventSchema).optional().default([]),
 	meter_changes: z.array(worldStateMeterChangeSchema).optional().default([]),
+	/** Typed consequences (HP, resources, conditions, items); see contracts/gameplayEffects. */
+	effects: z.array(gameplayEffectSchema).max(GAMEPLAY_EFFECT_LIMIT).optional().default([]),
 	agreements: z.array(worldStateAgreementChangeSchema).optional().default([]),
 	lorebook_entries: z.array(worldStateLorebookEntrySchema).optional().default([]),
 });

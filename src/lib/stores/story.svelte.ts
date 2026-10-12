@@ -27,6 +27,7 @@ import {
 } from '$lib/services/canonicalWrites';
 import { uuid } from '$lib/utils/uuid';
 import type { PlayerSheet } from '$lib/utils/playerSheet';
+import { projectItemState } from '$lib/utils/itemProjection';
 import { playerCapabilitiesSchema, readPlayerCapabilities, type PlayerCapabilities } from '$lib/contracts/playerCapabilities';
 import { readableMemorySummary } from '$lib/services/ai/context/mtheriosSummaryFormat';
 import type { Story, StoryEntry, Character, Location, Item, Entry, EntryRelationship, ConversationMemoryEntry, WorldEvent, FactionEntryState, CharacterEntryState, LocationEntryState, ItemEntryState, EmbeddedImage, Agreement, FactionActionRecord, RumorRecord, Arc, Saga, Chapter, Scheme, StoryThread } from '$lib/types';
@@ -906,6 +907,8 @@ class StoryStore {
 			...(typeof state.playerPrompt === 'string' ? { playerPrompt: state.playerPrompt } : {}),
 			...(Array.isArray(state.assets) ? { assets: state.assets } : {}),
 			...(state.playerSheet && typeof state.playerSheet === 'object' && !Array.isArray(state.playerSheet) ? { playerSheet: state.playerSheet } : {}),
+			...(Array.isArray(state.conditions) ? { conditions: state.conditions } : {}),
+			...(typeof state.mechanicsRevision === 'number' ? { mechanicsRevision: state.mechanicsRevision } : {}),
 			...(Object.prototype.hasOwnProperty.call(state, 'playerCapabilities') ? { playerCapabilities: readPlayerCapabilities(state.playerCapabilities) } : {}),
 			...(Array.isArray(state.aliases) ? { aliases: state.aliases } : {}),
 			...(typeof state.partyMember === 'boolean' ? { partyMember: state.partyMember } : {}),
@@ -966,16 +969,16 @@ class StoryStore {
 		const id = asString(row.id);
 		const name = asString(row.name).trim();
 		if (!id || !name) return null;
-		const state = asRecord(row.state);
+		const { quantity, equipped, location, ownerId, quantityKnown, mechanicsRevision } = projectItemState(row.state);
 		return {
 			id,
 			storyId: this.currentStory.id,
 			name,
 			description: asNullableString(row.description),
-			quantity: Math.max(1, asNumber(state.quantity, 1)),
-			equipped: asBoolean(state.equipped) || asBoolean(state.inInventory),
-			location: asString(state.currentLocation, asBoolean(state.inInventory) ? 'inventory' : ''),
-			metadata: asRecord(row.metadata),
+			quantity,
+			equipped,
+			location,
+			metadata: { ...asRecord(row.metadata), ownerId, quantityKnown, mechanicsRevision },
 			branchId: null,
 		};
 	}

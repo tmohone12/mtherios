@@ -15,6 +15,7 @@ import { gmTurnReceiptSchema, turnContextReceiptSchema, turnRequestSchema, type 
 import { getSyncChanges } from '$lib/server/memory/canonical';
 import { retrieveMemoryPacket } from '$lib/server/memory/retrieval';
 import { worldStateUpdateSchema } from '$lib/services/ai/tools/schemas';
+import { removeMisplacedMechanics, summarizeGameplayEffect, type GameplayEffectSummary } from '$lib/contracts/gameplayEffects';
 import { DEFAULT_BACKEND_MEMORY_TOKEN_BUDGET, normalizeRecentDialogueTokens, normalizeRecentDialogueTurns, RECENT_DIALOGUE_SAFETY_TOKENS } from '$lib/services/memorySettings';
 import { FIXED_CHAPTER_SETTINGS } from '$lib/services/chapterCadence';
 import { isNarrativeControlInput } from '$lib/services/ai/context/controlInput';
@@ -24,8 +25,8 @@ import {
 	loadGmTimelineBrief,
 	promoteDueTimelineEvents,
 } from '$lib/server/events/timeline';
-import { loadCanonicalCharacters, loadClassifierAgreements, loadClassifierLocations, loadClassifierFactions, loadTurnContext } from './context';
-import { ACTOR_KNOWLEDGE_EXTRACTION_INSTRUCTION, buildCharacterCreationInstructions, buildClassifierLocationContext, type LocationIdentityRecord } from './promptPacket';
+import { loadCanonicalCharacters, loadClassifierAgreements, loadClassifierLocations, loadClassifierFactions, loadGameplayItems, loadTurnContext } from './context';
+import { ACTOR_KNOWLEDGE_EXTRACTION_INSTRUCTION, GAMEPLAY_EFFECT_EXTRACTION_INSTRUCTION, buildCharacterCreationInstructions, buildClassifierLocationContext, buildGameplayStatePacket, stateExtractionNarration, type GameplayItemRecord, type LocationIdentityRecord } from './promptPacket';
 import { buildServerTurnPrompt, buildPromptSectionTrace, buildStateExtractionPrompt, buildClassifierCharacterContext, buildClassifierAgreementContext, chaptersForPromptContinuity, selectProtagonistEntity, type AgreementContextRecord, type PromptSectionTrace } from './promptPacket';
 import { sceneEvidenceExcerpt } from '$lib/utils/sceneEvidence';
 import type { CharacterContextRecord } from '$lib/utils/characterState';
@@ -50,8 +51,8 @@ import { requireResolvedServiceProfile, resolveServiceGeneration } from '$lib/se
 import { generationAttemptResult, recordGenerationApiCalls } from '$lib/server/engine/generationAccounting';
 import { appendTurnEvidence } from '$lib/server/engine/campaignVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
-import { enqueueBackendJob, enqueueChapterSummaryJob, enqueuePlotBrainJob, enqueueTurnStateExtractionJob, recordCompletedInlineTurnMemory, turnStateSourceFingerprint } from '$lib/server/jobs/outbox';
-import { kickStoryJobs, settleStoryMemory } from '$lib/server/jobs/turnJobs';
+import { enqueueBackendJob, enqueueChapterSummaryJob, enqueuePlotBrainJob, enqueueTurnStateExtractionJob, recordCompletedInlineTurnMemory, releaseTurnStateExtractionJob, turnStateSourceFingerprint, unsettledTurnStateExtractions } from '$lib/server/jobs/outbox';
+import { kickStoryJobs, settleStoryForTurn } from '$lib/server/jobs/turnJobs';
 import {
 	buildEngineCacheKey,
 	engineCacheDependencyHash,
@@ -149,6 +150,16 @@ export function playerSheetForTurn(ctx: Pick<TurnContext, 'entities'>): Record<s
 		if (sheet && typeof sheet === 'object' && !Array.isArray(sheet)) return sheet as Record<string, unknown>;
 	}
 	return null;
+}
+
+/** What the GM and player are told when an earlier turn's state has not been saved yet. */
+export function unsettledStateNotice(rows: Array<{ status: string; lastError: string | null }>): string | null {
+	if (!rows.length) return null;
+	const failed = rows.filter(row => row.status === 'failed');
+	const pending = rows.length - failed.length;
+	return [failed.length ? `State from ${failed.length} recent turn(s) could not be saved (${(failed[0].lastError ?? 'extraction failed').slice(0, 160)}).` : '',
+		pending ? `State from ${pending} recent turn(s) is still being saved.` : '',
+		'HP, conditions and items may not include those turns yet.'].filter(Boolean).join(' ');
 }
 
 export function shouldQueueChapterSummaryWithoutState(
@@ -662,7 +673,16 @@ export interface ParsedStateExtraction {
 }
 
 export function parseStateExtractionResult(text: string): ParsedStateExtraction {
-	return validateStateExtraction(normalizedStateExtraction(text));
+	const raw = normalizedStateExtraction(text);
+	// Nested objects strip unknown keys silently; a misplaced HP or condition change is reported instead.
+	const misplaced = removeMisplacedMechanics(extractionUpdateRecord(raw));
+	const parsed = validateStateExtraction(raw);
+	return misplaced.length ? { ...parsed, warnings: [...misplaced, ...parsed.warnings] } : parsed;
+}
+
+function extractionUpdateRecord(raw: unknown): unknown {
+	const root = asRecord(raw);
+	return Object.prototype.hasOwnProperty.call(root, 'update') ? root.update : root;
 }
 
 function normalizedStateExtraction(text: string): unknown {
@@ -749,6 +769,7 @@ export function salvageStateExtractionResult(text: string): ParsedStateExtractio
 	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
 	const root = raw as Record<string, unknown>;
 	const candidate = structuredClone(Object.prototype.hasOwnProperty.call(root, 'update') ? root : { update: root });
+	const misplaced = removeMisplacedMechanics(candidate.update);
 	const dropped: string[] = [];
 	for (let round = 0; round < SALVAGE_ROUNDS; round += 1) {
 		const result = strictExtractedUpdateSchema.safeParse(candidate);
@@ -757,7 +778,7 @@ export function salvageStateExtractionResult(text: string): ParsedStateExtractio
 			const dueEventFeedback = result.data.dueEventFeedback ?? [];
 			if (dropped.length && operationCount === 0 && dueEventFeedback.length === 0) return null;
 			return { update: result.data.update, dueEventFeedback, operationCount,
-				warnings: dropped.length ? [`Dropped malformed extraction items: ${dropped.slice(0, 12).join(', ')}`] : [] };
+				warnings: [...misplaced, ...(dropped.length ? [`Dropped malformed extraction items: ${dropped.slice(0, 12).join(', ')}`] : [])] };
 		}
 		const removals = new Map<string, { list: unknown[]; index: number; label: string }>();
 		for (const issue of result.error.issues) {
@@ -807,6 +828,7 @@ export function buildStateExtractionRepairPrompt(input: {
 	agreements?: AgreementContextRecord[];
 	locations?: LocationIdentityRecord[];
 	factions?: LocationIdentityRecord[];
+	items?: GameplayItemRecord[];
 }): string {
 	const clip = (value: string, max: number) => toWellFormedText(value).trim().slice(0, max);
 	return [
@@ -818,14 +840,16 @@ export function buildStateExtractionRepairPrompt(input: {
 		campaignStateExtractionContext(input.campaignMetadata),
 		NPC_AGENCY_EXTRACTION_INSTRUCTION,
 		ACTOR_KNOWLEDGE_EXTRACTION_INSTRUCTION,
+		GAMEPLAY_EFFECT_EXTRACTION_INSTRUCTION,
 		buildClassifierCharacterContext(input.characters ?? [], input.playerText, input.narration),
+		buildGameplayStatePacket(input.characters ?? [], input.items ?? [], input.campaignMetadata, input.playerText, input.narration),
 		buildClassifierAgreementContext(input.agreements),
 		buildClassifierLocationContext(input.locations, input.narration),
 		input.dueEventCandidates?.length ? `Due event candidates: ${JSON.stringify(input.dueEventCandidates.slice(0, 16).map(item => ({ id: item.id, title: item.title, body: clip(item.body, 220) })))}. Return realized, signal, deferred, or uncertain with an exact final narration evidenceSpan for realized outcomes; hypothetical or reported events are not realized.` : '',
 		input.dueEventCandidates?.some(item => item.id.startsWith('faction_cue_'))
 			? 'For faction_cue_ presentation checks, return signal with an exact narration evidenceSpan of at least 12 characters only if the cue is visible in this final narration. Otherwise return deferred or uncertain. Never mark a faction_cue_ as realized.' : '',
 		`Player action:\n${clip(input.playerText, 2_000)}`,
-		`Narration:\n${sceneEvidenceExcerpt(input.narration, 6_000)}`,
+		`Narration:\n${stateExtractionNarration(input.narration)}`,
 		`Prior output:\n${clip(input.attemptedOutput ?? '', 3_000) || '(empty)'}`,
 	].filter(Boolean).join('\n\n');
 }
@@ -1336,6 +1360,7 @@ export function buildGmTurnReceipt(input: {
 	warningCount: number;
 	modelTasks?: Array<ModelTaskProvenance | undefined | null>;
 	promptPreset?: PromptPresetUse | null;
+	effects?: GameplayEffectSummary[];
 }): GmTurnReceipt {
 	const extractionStatus = input.stateExtractionStatus ?? (input.stateExtractionMode === 'none' ? 'skipped' : 'succeeded');
 	const contextProblems = input.contextReceipt.skipped
@@ -1392,6 +1417,7 @@ export function buildGmTurnReceipt(input: {
 			totalTokens: input.contextReceipt.included.totalTokens,
 			truncated: input.contextReceipt.truncated,
 		},
+		effects: (input.effects ?? []).slice(0, 32),
 		changes: {
 			statePatches: input.statePatchCount,
 			events: input.eventCount,
@@ -2306,11 +2332,13 @@ function generationTimeToFirstToken(generationTimings: GenerationTiming[], opera
 }
 
 const DURABLE_STATE_SIGNAL_PATTERN = /\b(accepts?|allies?|arrives?|attacks?|betrays?|burns?|buys?|dead|dies?|discovers?|destroys?|enters?|exits?|finds?|gives?|gave|hands?|injures?|kills?|learns?|leaves?|locks?|moves?|oaths?|opens?|promises?|reveals?|sells?|steals?|takes?|travels?|unlocks?|wounds?)\b/i;
+/** Gameplay consequences: any of these sends the turn to the Classifier for effects. */
+const GAMEPLAY_SIGNAL_PATTERN = /\b(damage[ds]?|heal(?:s|ed|ing)?|hp|hit points?|hurt|bleed(?:s|ing)?|poison(?:s|ed)?|drinks?|drank|consum(?:e|es|ed)|potions?|equip(?:s|ped)?|unequip(?:s|ped)?|wields?|don(?:s|ned)?|loot(?:s|ed)?|pockets?|receives?|loses?|lost|spends?|spent|strikes?|struck|hits?|stabs?|stabbed|slash(?:es|ed)?|wounded|broken|fractured?|exhaust(?:ed|ion)|cursed?|cured?|restores?|restored|used up)\b/i;
 const EXPLICIT_NO_DURABLE_STATE_PATTERN = /\b(no durable|no lasting|nothing lasting changes|nothing changes|remains unchanged|state does not change|without lasting change)\b/i;
 
 export function shouldExtractDurableState(playerText: string, narration: string): boolean {
 	const text = `${playerText}\n${narration}`;
-	if (DURABLE_STATE_SIGNAL_PATTERN.test(text)) return true;
+	if (DURABLE_STATE_SIGNAL_PATTERN.test(text) || GAMEPLAY_SIGNAL_PATTERN.test(text) || text.includes('{{dice:')) return true;
 	return !EXPLICIT_NO_DURABLE_STATE_PATTERN.test(text);
 }
 
@@ -3170,8 +3198,10 @@ export async function prepareServerTurnContext(
 		});
 		return { ...cached, preparedCacheHit: true };
 	}
-	// The previous turn's memory jobs finish before this turn reads context.
-	if (!options.inspection) await recorder.time('turn.memory.settle', {}, () => settleStoryMemory(request.storyId));
+	// The previous turn's memory jobs finish before this turn reads context. Extractions for earlier
+	// turns that are held or backing off run now too: HP, conditions and items must be current.
+	if (!options.inspection) await recorder.time('turn.memory.settle', {}, () => settleStoryForTurn(request.storyId));
+	const gameplayNotice = options.inspection ? null : unsettledStateNotice(await unsettledTurnStateExtractions(request.storyId).catch(() => []));
 
 	const playerEntryId = `entry_${request.clientTurnId}`;
 	const warnings: string[] = [];
@@ -3337,7 +3367,9 @@ export async function prepareServerTurnContext(
 		...ctx,
 		events: parallelPov ? ctx.events.filter(event => event.visibility === 'public' || event.visibility === 'player_known') : ctx.events,
 		gmBrief,
+		gameplayNotice,
 	};
+	if (gameplayNotice) warnings.push(gameplayNotice);
 	const wikiContext: ServerWikiContext = wikiContextResult.value;
 	if (wikiContextResult.ok) {
 		if (wikiContextResult.budgetExceeded) {
@@ -4203,7 +4235,9 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		inlineMemoryError = inlineTurnMemoryEnabled ? memoryOutput.error : null;
 		if (inlineMemoryEnvelope) {
 			if (inlineMemoryEnvelope.changes.length === 0) {
-				inlineMemoryAccepted = !DURABLE_STATE_SIGNAL_PATTERN.test(`${request.playerText}\n${narration}`);
+				// The GM footer carries no gameplay effects, so a possible consequence goes to the Classifier.
+				inlineMemoryAccepted = !DURABLE_STATE_SIGNAL_PATTERN.test(`${request.playerText}\n${narration}`)
+					&& !GAMEPLAY_SIGNAL_PATTERN.test(`${request.playerText}\n${narration}`);
 				if (!inlineMemoryAccepted) inlineMemoryError = 'possible_durable_change_missing_from_footer';
 			}
 			else {
@@ -4693,6 +4727,15 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 			storyId: request.storyId, type: 'refresh_scene_checkpoint',
 			dedupeKey: `scene-${assistantEntryId}`, requeueExisting: false, maxAttempts: 3,
 		}, tx);
+		// The extraction is saved with its narration (held until this turn ends), so a stop between
+		// here and the end of the turn cannot leave the narration without state extraction.
+		if (stateExtractionMode === 'deferred') await enqueueTurnStateExtractionJob({
+			storyId: request.storyId, playerEntryId, assistantEntryId, playerText: request.playerText, narration,
+			clientTurnId: request.clientTurnId, timelineTurn: gmBrief.currentTurn, serverVersion: turnVersion,
+			retrievedMemoryIds: retrieved.nodes.map((node) => node.id), dueEventCandidates,
+			...(cueCandidate && prompt.factionCueSelection ? { factionCue: prompt.factionCueSelection } : {}),
+			memorySettings, hold: true,
+		}, tx);
 		await tx.update(syncOps).set({
 			payload: {
 				playerText: request.playerText,
@@ -4762,6 +4805,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		const classifierAgreements = await loadClassifierAgreements(request.storyId, `${request.playerText}\n${narration}`);
 		const classifierLocations = await loadClassifierLocations(request.storyId);
 		const classifierFactions = await loadClassifierFactions(request.storyId);
+		const classifierItems = await loadGameplayItems(request.storyId);
 		classifierExtractionSystem = classifierService.systemPromptOverride?.trim() || DEFAULT_STATE_EXTRACTION_SYSTEM;
 		classifierExtractionPrompt = buildStateExtractionPrompt(
 			request.playerText,
@@ -4773,6 +4817,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 			classifierFactions,
 			prepared.ctxWithTimeline.story.metadata,
 			dueEventCandidates,
+			classifierItems,
 		);
 		try {
 			let extractionResult = await generateServerTextWithMetrics({
@@ -4822,6 +4867,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 					agreements: classifierAgreements,
 					locations: classifierLocations,
 					factions: classifierFactions,
+					items: classifierItems,
 					playerText: request.playerText,
 					narration,
 					attemptedOutput: extractionResult.text,
@@ -4924,6 +4970,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		patchIds: [],
 		memoryNodeIds: [],
 		warnings: [],
+		effects: [],
 	};
 	let stateApplySucceeded = true;
 	try {
@@ -5073,7 +5120,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 				retrievedMemoryIds: retrieved.nodes.length,
 			}, () => publishDeferredGmReceipt({
 				transaction: (work) => db.transaction((tx) => work({
-					enqueue: () => enqueueTurnStateExtractionJob({
+					enqueue: async () => await releaseTurnStateExtractionJob(request.storyId, assistantEntryId, tx) ?? enqueueTurnStateExtractionJob({
 						storyId: request.storyId,
 						playerEntryId,
 						assistantEntryId,
@@ -5237,6 +5284,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		warningCount: warnings.length,
 		modelTasks: [narrativeService.provenance, classifierService.provenance, actorDecisionProvenance, dialogueService?.provenance],
 		promptPreset: prepared.narrativePresetUse,
+		effects: applied.effects.map(summarizeGameplayEffect),
 	});
 	// A synchronous cue verdict may already have replaced the initial selection receipt.
 	// The final GM receipt merge must not restore its earlier "selected" status.

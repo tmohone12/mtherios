@@ -64,6 +64,8 @@ export interface TurnContext {
 	arcs: Array<typeof arcs.$inferSelect>;
 	sagas: Array<typeof sagas.$inferSelect>;
 	gmBrief: GmTimelineBrief | null;
+	/** Set when an earlier turn's gameplay state is still pending or failed (see unsettledStateNotice). */
+	gameplayNotice?: string | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -116,6 +118,13 @@ export function attachEntityAliases(
 			},
 		};
 	});
+}
+
+/** Item records for the classifier's gameplay state: held stacks first, then the rest (bounded). */
+export async function loadGameplayItems(storyId: string): Promise<Array<typeof entities.$inferSelect>> {
+	return getDb().select().from(entities).where(and(eq(entities.storyId, storyId), eq(entities.type, 'item'), ne(entities.status, 'deleted')))
+		.orderBy(desc(sql`case when ${entities.state}->>'ownerId' is not null or ${entities.state}->>'inInventory' = 'true' then 1 else 0 end`), desc(entities.updatedAt))
+		.limit(300);
 }
 
 export async function loadClassifierAgreements(storyId: string, text: string): Promise<Array<typeof agreements.$inferSelect>> {

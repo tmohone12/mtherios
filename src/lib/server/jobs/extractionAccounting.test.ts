@@ -21,7 +21,6 @@ vi.mock('$lib/server/turn/provider', async original => ({
 
 import { extractTurnState } from './processor';
 import { ServerGenerationError, type ServerGenerationResult } from '$lib/server/turn/provider';
-import { reuseGenerationResult } from '$lib/server/engine/generationAccounting';
 
 const playerText = 'I offer the envoy the key.';
 const narration = 'The envoy accepts the key and promises to guard the gate.';
@@ -63,7 +62,7 @@ beforeEach(() => {
 	mocks.getDb.mockReturnValue({ select: () => {
 		let table: unknown;
 		const query = {
-			from: (value: unknown) => { table = value; return query; }, where: () => query, limit: () => query,
+			from: (value: unknown) => { table = value; return query; }, where: () => query, orderBy: () => query, limit: () => query,
 			then: (resolve: (rows: unknown[]) => unknown) => {
 				const rows = table === storyEntries ? ++sourceReads >= invalidateAt ? [] : structuredClone(entries)
 					: table === stories ? [{ metadata: {} }] : [];
@@ -144,10 +143,4 @@ describe('deferred extraction provider accounting', () => {
 		expect(mocks.log.mock.lastCall?.[0]).toMatchObject({ status: 'error', metadata: { extractionAttempt: 2, parseOutcome: 'error' } });
 	});
 
-	it('does not bill per-job applications of an already logged batch result again', async () => {
-		const reused = reuseGenerationResult(generation('{"update":{}}', 'batch', 0.07), { operation: 'job.extract_turn_state.batch' });
-		await expect(extractTurnState(job, undefined, reused)).resolves.toMatchObject({ status: 'no_changes' });
-		expect(mocks.generate).not.toHaveBeenCalled();
-		expect(mocks.log).not.toHaveBeenCalled();
-	});
 });

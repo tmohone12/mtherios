@@ -1301,7 +1301,7 @@
 						{#each story.items as item}
 							<div class="flex items-center gap-2 rounded-lg bg-[var(--bg-tertiary)] px-2.5 py-2">
 								<span class="text-xs">🗡️</span>
-								<span class="text-sm text-[var(--text-primary)]">{item.name}</span>
+								<span class="text-sm text-[var(--text-primary)]">{item.name}{item.metadata?.quantityKnown === false ? '' : item.quantity === 0 ? ' · none left' : item.quantity > 1 ? ` ×${item.quantity}` : ''}</span>
 								{#if item.equipped}
 									<span class="rounded bg-amber-500/10 px-1 py-0.5 text-[9px] text-amber-400">equipped</span>
 								{/if}

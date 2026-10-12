@@ -61,6 +61,7 @@ import { deleteStoryVaultArtifacts } from '$lib/server/wiki/storyVault';
 import { getCampaignProjection } from '$lib/server/engine/projections';
 import { entityResolutionSummary, isCharacterTitleOnlyName, resolveEntityIdentity, shouldReuseResolvedEntity } from './entityResolver';
 import type { EngineCampaignBootstrapArgs } from '$lib/contracts/engine';
+import { readCampaignMeters } from '$lib/contracts/gameplayEffects';
 
 type JsonRecord = Record<string, unknown>;
 type LivingMemoryKind = 'conversationMemory' | 'worldEvent' | 'factionAction' | 'rumor' | 'scheme';
@@ -802,6 +803,34 @@ export async function getStoryEntriesPage(
 	};
 }
 
+/**
+ * Gameplay effects own HP, resources, conditions and item holdings (`mechanicsRevision` counts their
+ * changes). A wiki/sheet save made from an older projection keeps the browser's other edits but
+ * not its stale copy of those values; a save from the current projection that changes them is an
+ * explicit edit and becomes the next revision.
+ */
+export function keepEffectOwnedState(existing: JsonRecord, incoming: JsonRecord): JsonRecord {
+	const state: JsonRecord = { ...existing, ...incoming };
+	const current = Math.trunc(Number(existing.mechanicsRevision ?? 0)) || 0;
+	if (!current) return state;
+	const existingSheet = asRecord(existing.playerSheet);
+	const incomingSheet = asRecord(incoming.playerSheet);
+	const seen = Math.trunc(Number(incoming.mechanicsRevision ?? 0)) || 0;
+	for (const key of ['conditions', 'resolvedConditions', 'ownerId', 'quantity', 'equipped']) {
+		if (seen !== current && Object.hasOwn(existing, key)) state[key] = existing[key];
+	}
+	state.mechanicsRevision = current;
+	if (!Object.hasOwn(incoming, 'playerSheet') || !Object.keys(existingSheet).length) return state;
+	if (seen !== current) {
+		state.playerSheet = { ...incomingSheet,
+			...(Object.hasOwn(existingSheet, 'hitPoints') ? { hitPoints: existingSheet.hitPoints } : {}),
+			...(Object.hasOwn(existingSheet, 'resources') ? { resources: existingSheet.resources } : {}) };
+	} else if (!isDeepStrictEqual(incomingSheet.hitPoints, existingSheet.hitPoints) || !isDeepStrictEqual(incomingSheet.resources ?? null, existingSheet.resources ?? null)) {
+		state.mechanicsRevision = current + 1;
+	}
+	return state;
+}
+
 function entityStateFromEntry(entry: JsonRecord): JsonRecord {
 	const state = asRecord(entry.state);
 	return {
@@ -904,7 +933,7 @@ export async function upsertBackendEntityFromEntry(storyId: string, rawEntry: un
 		? await loadMatchingCharacterReferenceProposals(db, storyId, [name, ...entryAliases])
 		: [];
 	const serverVersion = await bumpStoryVersion(storyId);
-	const state = { ...asRecord(existing?.state), ...incomingState };
+	const state = keepEffectOwnedState(asRecord(existing?.state), incomingState);
 	const mergedSourceEntryIds = stringList(
 		existing?.sourceEntryIds,
 		sourceEntryIds,
@@ -2935,7 +2964,7 @@ function exportStoryRow(story: typeof stories.$inferSelect): JsonRecord {
 		lastWorldSimDay: null,
 		compactedLore: null,
 		compactedLoreHistory: null,
-		meters: null,
+		meters: readCampaignMeters(metadata),
 	};
 }
 

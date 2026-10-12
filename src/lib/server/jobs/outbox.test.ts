@@ -42,6 +42,9 @@ import {
 	enqueueStoryVaultSyncJob,
 	enqueueTurnStateExtractionJob,
 	enqueueTurnProjectionJobs,
+	releaseEarlierTurnStateExtractions,
+	releaseTurnStateExtractionJob,
+	TURN_STATE_EXTRACTION_HOLD_MS,
 	markBackendJobComplete,
 	markBackendJobFailed,
 	orderClaimedBackendJobs,
@@ -123,6 +126,32 @@ describe('job enqueue conflicts', () => {
 			serverVersion: 2, retrievedMemoryIds: [] });
 		expect(db.values).toHaveBeenCalledWith(expect.objectContaining({ type: 'extract_turn_state',
 			metadata: { subagent: 'memory_context', task: 'turn_memory', sourceEntryIds: ['player_1', 'gm_1'] } }));
+	});
+
+	it('saves a held extraction with its narration that never replaces a job already queued or run', async () => {
+		const before = Date.now();
+		await enqueueTurnStateExtractionJob({ storyId: 'story_1', playerEntryId: 'player_1', assistantEntryId: 'gm_1',
+			playerText: 'I enter.', narration: 'The door opens.', clientTurnId: 'client_1', timelineTurn: 1,
+			serverVersion: 2, retrievedMemoryIds: [], hold: true });
+		const row = db.values.mock.calls.at(-1)![0];
+		expect(Date.parse(row.runAfter) - before).toBeGreaterThanOrEqual(TURN_STATE_EXTRACTION_HOLD_MS - 1000);
+		expect(db.onConflictDoNothing).toHaveBeenCalled();
+		expect(db.onConflictDoUpdate).not.toHaveBeenCalled();
+	});
+
+	it('releases only a held extraction that has not started, and earlier turns\' held or backing-off ones', async () => {
+		db.updateReturning.mockResolvedValueOnce([{ id: 'job_1' }]);
+		await expect(releaseTurnStateExtractionJob('story_1', 'gm_1')).resolves.toBe('job_1');
+		const release = compiledSql(db.updateWhere.mock.calls.at(-1)![0]);
+		expect(release.sql).toContain('"status" = $');
+		expect(release.sql).toContain('"attempt_count" = $');
+		expect(release.params).toEqual(expect.arrayContaining([stableJobId('story_1', 'extract_turn_state', 'turn-state-gm_1'), 'queued', 0]));
+		await expect(releaseTurnStateExtractionJob('story_1', 'gm_2')).resolves.toBeNull();
+		db.updateReturning.mockResolvedValueOnce([{ id: 'job_a' }, { id: 'job_b' }]);
+		await expect(releaseEarlierTurnStateExtractions('story_1')).resolves.toBe(2);
+		const earlier = compiledSql(db.updateWhere.mock.calls.at(-1)![0]);
+		expect(earlier.params).toEqual(expect.arrayContaining(['story_1', 'extract_turn_state', 'queued', 'retry']));
+		expect(earlier.sql).toContain('"run_after" >');
 	});
 
 	it('deduplicates scheduled refreshes by story turn instead of caller-specific scope', async () => {

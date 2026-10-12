@@ -162,6 +162,8 @@ function characterToEntry(character: Character, existing?: Entry | null): Entry 
 		playerPrompt,
 		assets,
 		...(Object.keys(playerSheet).length > 0 ? { playerSheet } : {}),
+		// The effect revision this projection saw; the server keeps newer HP and conditions.
+		...(typeof metadata.mechanicsRevision === 'number' ? { mechanicsRevision: metadata.mechanicsRevision } : {}),
 		...(playerCapabilities !== undefined ? { playerCapabilities: playerCapabilitiesSchema.parse(playerCapabilities) } : {}),
 		bio,
 		appearance,

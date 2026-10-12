@@ -868,6 +868,13 @@
 											{#if receipt.stateExtractionStatus === 'failed' && receipt.stateExtractionError}
 												<p class="mt-1 line-clamp-3 text-[var(--text-muted)]">{receipt.stateExtractionError}</p>
 											{/if}
+											{#if receipt.effects.length}
+												<ul class="mt-1.5 space-y-0.5">
+													{#each receipt.effects as effect}
+														<li class="{effect.status === 'applied' ? 'text-[var(--text-secondary)]' : effect.status === 'rejected' || effect.status === 'unresolved' ? 'text-amber-400' : 'text-[var(--text-muted)]'}">{effect.summary}</li>
+													{/each}
+												</ul>
+											{/if}
 										</section>
 									</div>
 									{#if contextReceipt?.selection}

@@ -3,13 +3,12 @@ import { validateProjectAgentSettings } from '$lib/server/engine/agentSettings';
 import { processImageJob } from '$lib/server/engine/imageJobs';
 import { processAssistantBatchJob } from '$lib/server/engine/assistantBatchWorker';
 import { createHash } from 'node:crypto';
-import { countTokens } from '$lib/utils/tokens';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '$lib/server/db/client';
 import { agreements, arcs, backendJobs, chapters, continuityWarnings, entities, factionGoals, factionProjects, factionResources, factions, memoryNodes, npcBeliefs, npcEventLinks, patchProposals, relationships, sagas, stories, storyEntries, storyEvents, storyThreads } from '$lib/server/db/schema';
 import { gmTurnReceiptSchema, type MemoryNode } from '$lib/contracts/memory';
-import { campaignStateExtractionContext, type CampaignStateFact, type ChapterCampaignFactAction } from '$lib/contracts/campaignState';
+import { type CampaignStateFact, type ChapterCampaignFactAction } from '$lib/contracts/campaignState';
 import { CHAPTER_TURN_COUNT, CHAPTERS_PER_ARC, selectArcRollupBatches, selectCompletedChapterTurns, selectNextChapterWindow } from '$lib/services/chapterCadence';
 export { selectArcRollupBatches } from '$lib/services/chapterCadence';
 import { generateChronologicalMemory, type MemoryInput } from './summaryGeneration';
@@ -28,22 +27,22 @@ import { claimBackendJobs, enqueueBackendJob, enqueueChapterSummaryJob, enqueueP
 import { refreshSceneCheckpoint } from '$lib/server/memory/sceneCheckpoint';
 import { indexCanonicalRecords } from '$lib/server/engine/canonicalSearch';
 import { recordApiCallLog } from '$lib/server/engine/apiCallLogs';
-import { generationAttemptResult, recordGenerationApiCalls, reuseGenerationResult } from '$lib/server/engine/generationAccounting';
+import { generationAttemptResult, recordGenerationApiCalls } from '$lib/server/engine/generationAccounting';
 import { publishEngineEvent } from '$lib/server/engine/events';
 import { resolveServiceGeneration } from '$lib/server/engine/llmSettings';
 import { getJevCooldownRemainingMs } from '$lib/server/turn/jev';
 import { createTimingRecorder, type TimingEntry, type TimingRecorder } from '$lib/server/performance/timing';
 import { mapWithConcurrency, readGenerationConcurrency } from '$lib/server/performance/concurrency';
 import { buildTurnDebugSnapshot } from '$lib/server/turn/debugSnapshot';
-import { filterNarrativeContextEntries, loadCanonicalCharacters, loadClassifierAgreements, loadClassifierLocations, loadClassifierFactions } from '$lib/server/turn/context';
+import { filterNarrativeContextEntries, loadCanonicalCharacters, loadClassifierAgreements, loadClassifierLocations, loadClassifierFactions, loadGameplayItems } from '$lib/server/turn/context';
 import type { CharacterContextRecord } from '$lib/utils/characterState';
 import { classifyBackendJobFailure, describeBackendJobError, type BackendJobFailureCause, type BackendJobFailureClass } from './failureClassification';
 export { classifyBackendJobFailure } from './failureClassification';
 export type { BackendJobFailureCause, BackendJobFailureClass } from './failureClassification';
-import { applyValidatedTurnUpdate, turnUpdateOperationCount } from '$lib/server/turn/patchValidator';
+import { applyValidatedTurnUpdate, turnUpdateOperationCount, type ApplyTurnUpdateResult } from '$lib/server/turn/patchValidator';
+import { gameplayEffectSummarySchema, summarizeGameplayEffect, type GameplayEffectSummary } from '$lib/contracts/gameplayEffects';
 import type { WorldStateUpdate } from '$lib/services/ai/tools/schemas';
-import { buildCharacterCreationInstructions, buildClassifierAgreementContext, buildClassifierCharacterContext, buildClassifierLocationContext, buildStateExtractionPrompt, isPlayerCorrectionEntry, type AgreementContextRecord, type LocationIdentityRecord } from '$lib/server/turn/promptPacket';
-import { buildBatchTurnMemoryPrompt, parseBatchTurnMemoryResult, type BatchTurnSource } from './batchTurnMemory';
+import { buildStateExtractionPrompt, isPlayerCorrectionEntry, type AgreementContextRecord, type GameplayItemRecord, type LocationIdentityRecord } from '$lib/server/turn/promptPacket';
 import {
 	buildStateExtractionResponseSchema,
 	buildStateExtractionRepairPrompt,
@@ -592,6 +591,7 @@ type DeferredExtractionAppliedReceipt = {
 	warnings: string[];
 	appliedAt: string | null;
 	sourceFingerprint?: string;
+	effects?: GameplayEffectSummary[];
 };
 
 const DEFERRED_STALE_TRANSIENT_WARNING = 'Skipped obsolete transient state because a later canonical turn exists; durable facts were preserved.';
@@ -621,6 +621,8 @@ export function deferredExtractionAppliedReceipt(
 		warnings: asStringArray(marker.warnings),
 		appliedAt: typeof marker.appliedAt === 'string' ? marker.appliedAt : null,
 	};
+	const effects = z.array(gameplayEffectSummarySchema).safeParse(marker.effects);
+	if (effects.success && effects.data.length) receipt.effects = effects.data;
 	if (markerFingerprint) receipt.sourceFingerprint = markerFingerprint;
 	return receipt;
 }
@@ -792,10 +794,11 @@ export function buildDeferredStateExtractionPrompt(input: {
 	locations?: LocationIdentityRecord[];
 	factions?: LocationIdentityRecord[];
 	dueEventCandidates?: DueEventCandidate[];
+	items?: GameplayItemRecord[];
 }): { prompt: string; compactRecovery: boolean } {
 	if (input.attemptCount <= 1) {
 		return {
-			prompt: buildStateExtractionPrompt(input.playerText, input.narration, input.responseSchema, input.characters, input.agreements, input.locations, input.factions, input.campaignMetadata, input.dueEventCandidates),
+			prompt: buildStateExtractionPrompt(input.playerText, input.narration, input.responseSchema, input.characters, input.agreements, input.locations, input.factions, input.campaignMetadata, input.dueEventCandidates, input.items),
 			compactRecovery: false,
 		};
 	}
@@ -807,6 +810,7 @@ export function buildDeferredStateExtractionPrompt(input: {
 			agreements: input.agreements,
 			locations: input.locations,
 			factions: input.factions,
+			items: input.items,
 			playerText: input.playerText,
 			narration: input.narration,
 			validationError: input.lastError,
@@ -848,6 +852,7 @@ async function reconcileDeferredExtractionReceipt(
 				events: count('eventIds'),
 				memoryNodes: count('memoryNodeIds'),
 			} : parsed.data.changes,
+			effects: status === 'succeeded' ? z.array(gameplayEffectSummarySchema).max(32).catch([]).parse(result.effects ?? []) : parsed.data.effects,
 			steps: parsed.data.steps.map((step) => step.id === 'canon' ? {
 				...step,
 				status: status === 'queued' || status === 'running' ? 'running' as const : status,
@@ -3570,76 +3575,7 @@ async function indexCanonicalRecordsJob(job: BackendJobRow): Promise<Record<stri
 	return result;
 }
 
-export async function prepareBatchTurnMemory(jobs: BackendJobRow[]): Promise<Map<string, ServerGenerationResult> | null> {
-	if (jobs.length < 2 || jobs.length > 5 || jobs.some(job => job.type !== 'extract_turn_state' || job.attemptCount !== 1)) return null;
-	const storyId = jobs[0].storyId;
-	if (jobs.some(job => job.storyId !== storyId || deferredExtractionAppliedReceipt(job))) return null;
-	const sources: BatchTurnSource[] = [];
-	for (const job of jobs) {
-		const payload = asRecord(job.payload);
-		const playerEntryId = typeof payload.playerEntryId === 'string' ? payload.playerEntryId : '';
-		const assistantEntryId = typeof payload.assistantEntryId === 'string' ? payload.assistantEntryId : '';
-		const playerText = typeof payload.playerText === 'string' ? payload.playerText : '';
-		const narration = typeof payload.narration === 'string' ? payload.narration : '';
-		if (!playerEntryId || !assistantEntryId || !narration || playerText.length + narration.length > 5_000) return null;
-		const pair = await loadDeferredExtractionSourcePair({ storyId, playerEntryId, assistantEntryId, playerText, narration });
-		const assistant = pair.entries.find(entry => entry.id === assistantEntryId);
-		if (pair.error || !assistant || typeof assistant.position !== 'number' || assistant.branchId || asRecord(assistant.metadata).narrativeMode === 'parallel_pov') return null;
-		sources.push({ assistantEntryId, playerText, narration, position: assistant.position });
-	}
-	const [latest] = await getDb().select({ position: storyEntries.position }).from(storyEntries)
-		.where(and(eq(storyEntries.storyId, storyId), eq(storyEntries.type, 'narration')))
-		.orderBy(desc(storyEntries.position)).limit(1);
-	if (!latest || sources.some(source => source.position >= latest.position)) return null;
-	sources.sort((a, b) => a.position - b.position);
-	if (sources.reduce((total, source) => total + source.playerText.length + source.narration.length, 0) > 15_000) return null;
-	const combinedText = sources.map(source => `${source.playerText}\n${source.narration}`).join('\n');
-	const [classifierService, characters, agreements, locations, factions, story] = await Promise.all([
-		resolveServiceGeneration('classifier'), loadCanonicalCharacters(storyId),
-		loadClassifierAgreements(storyId, combinedText), loadClassifierLocations(storyId),
-		loadClassifierFactions(storyId), getDb().select({ metadata: stories.metadata }).from(stories).where(eq(stories.id, storyId)).limit(1),
-	]);
-	if (classifierService.setting?.enabled === false) return null;
-	const profile = classifierService.profile;
-	const generation = classifierService.generation;
-	if (!profile) return null;
-	const sharedContext = [
-		buildCharacterCreationInstructions(factions, combinedText), campaignStateExtractionContext(story[0]?.metadata),
-		buildClassifierCharacterContext(characters, combinedText, combinedText),
-		buildClassifierAgreementContext(agreements), buildClassifierLocationContext(locations, combinedText),
-	].filter(Boolean).join('\n\n');
-	const prompt = buildBatchTurnMemoryPrompt(sources, sharedContext);
-	if (countTokens(prompt) > 12_000) return null;
-	let generated: ServerGenerationResult | null = null;
-	try {
-		generated = await generateServerTextWithMetrics({ profile, model: generation.model,
-			temperature: 0, maxTokens: Math.min(8192, classifierGenerationMaxTokens(generation) * sources.length),
-			reasoningEffort: generation.reasoningEffort ?? 'off',
-			system: 'You are Memory & Context. Return complete, source-separated strict JSON only.',
-			prompt, responseFormat: 'json_object', maxRetries: 0,
-			onAttempt: attempt => recordGenerationApiCalls({ storyId, serviceId: 'classifier', operation: 'job.extract_turn_state.batch',
-				profile, result: generationAttemptResult(attempt), status: attempt.status, error: attempt.error ?? undefined,
-				metadata: { assistantEntryIds: sources.map(source => source.assistantEntryId), sourceCount: sources.length, parseOutcome: 'not_started' } }),
-		});
-		const parsed = parseBatchTurnMemoryResult(generated.text, sources.map(source => source.assistantEntryId));
-		await recordGenerationApiCalls({ storyId, serviceId: 'classifier', operation: 'job.extract_turn_state.batch',
-			profile, result: generated, status: 'success',
-			metadata: { assistantEntryIds: sources.map(source => source.assistantEntryId), sourceCount: sources.length } });
-		return new Map(jobs.map(job => {
-			const assistantEntryId = String(asRecord(job.payload).assistantEntryId);
-			const text = parsed.get(assistantEntryId)!;
-			return [job.id, { ...reuseGenerationResult(generated!, { operation: 'job.extract_turn_state.batch' }), text, responseChars: text.length }];
-		}));
-	} catch (error) {
-		const failedResult = generationErrorResult(error) ?? generated;
-		if (failedResult) await recordGenerationApiCalls({ storyId, serviceId: 'classifier', operation: 'job.extract_turn_state.batch',
-			profile, result: failedResult, status: 'error', error,
-			metadata: { assistantEntryIds: sources.map(source => source.assistantEntryId), sourceCount: sources.length } });
-		throw error;
-	}
-}
-
-export async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder, prefetched?: ServerGenerationResult): Promise<Record<string, unknown>> {
+export async function extractTurnState(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const payload = asRecord(job.payload);
 	const priorReceipt = deferredExtractionAppliedReceipt(job);
 	if (priorReceipt) {
@@ -3717,6 +3653,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 	const classifierAgreements = await loadClassifierAgreements(job.storyId, `${playerText}\n${narration}`);
 	const classifierLocations = await loadClassifierLocations(job.storyId);
 	const classifierFactions = await loadClassifierFactions(job.storyId);
+	const classifierItems = await loadGameplayItems(job.storyId);
 	const [campaignStory] = await getDb().select({ metadata: stories.metadata }).from(stories).where(eq(stories.id, job.storyId)).limit(1);
 	const extractionPlan = buildDeferredStateExtractionPrompt({
 		campaignMetadata: campaignStory?.metadata,
@@ -3724,6 +3661,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 		agreements: classifierAgreements,
 		locations: classifierLocations,
 		factions: classifierFactions,
+		items: classifierItems,
 		dueEventCandidates,
 		playerText,
 		narration,
@@ -3771,7 +3709,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 	});
 	let extractionResult: ServerGenerationResult;
 	try {
-		extractionResult = prefetched ?? await timePhase(recorder, 'job.extract_turn_state.llm', {
+		extractionResult = await timePhase(recorder, 'job.extract_turn_state.llm', {
 			serviceId: 'classifier',
 			effectiveServiceId,
 			model: classifierGeneration.model ?? null,
@@ -3828,8 +3766,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 		try {
 			parsedUpdate = timePhaseSync(recorder, 'job.extract_turn_state.parse_update', {}, () => parseStateExtractionResult(extractionResult.text));
 		} catch (validationError) {
-			if (prefetched) throw validationError;
-			if (extractionPlan.compactRecovery) throw validationError;
+			// A retried (compact recovery) answer gets the same repair and salvage as a first answer.
 			await logAttempt({ job, clientTurnId, profile: classifierProfile, result: extractionResult,
 				status: 'error', error: validationError, metadata: {
 					...logMetadata, parseOutcome: 'error', applyOutcome: 'not_started', repairPlanned: true,
@@ -3847,6 +3784,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 				agreements: classifierAgreements,
 				locations: classifierLocations,
 				factions: classifierFactions,
+				items: classifierItems,
 				playerText,
 				narration,
 				attemptedOutput: extractionResult.text,
@@ -4018,6 +3956,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 					patchIds: [] as string[],
 					memoryNodeIds: [] as string[],
 					warnings: [] as string[],
+					effects: [] as ApplyTurnUpdateResult['effects'],
 				};
 				if (suppressedTransientState) applied.warnings.push(DEFERRED_STALE_TRANSIENT_WARNING);
 				await persistApplyReceipt({
@@ -4028,6 +3967,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 					noChanges: true,
 					sourceFingerprint,
 					...applied,
+					effects: [],
 				});
 				return {
 					serverVersion: story.serverVersion,
@@ -4082,6 +4022,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 				memoryNodeIds: applied.memoryNodeIds,
 				warnings: applied.warnings,
 				sourceFingerprint,
+				effects: applied.effects.map(summarizeGameplayEffect),
 			});
 			return {
 				serverVersion: versionRow.serverVersion,
@@ -4143,6 +4084,7 @@ export async function extractTurnState(job: BackendJobRow, recorder?: TimingReco
 			eventIds: applied.eventIds,
 			patchIds: applied.patchIds,
 			memoryNodeIds: applied.memoryNodeIds,
+			effects: applied.effects.map(summarizeGameplayEffect),
 			chapterSummaryJobId,
 		};
 	} catch (error) {
@@ -4214,7 +4156,7 @@ async function planPlotBrain(job: BackendJobRow, recorder?: TimingRecorder): Pro
  return reviewGardener(job.storyId);
 }
 
-async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder, prefetched?: ServerGenerationResult): Promise<Record<string, unknown>> {
+async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const type = job.type as BackendJobType;
 	return timePhase(recorder, `job.${type}.total`, {
 		attemptCount: job.attemptCount,
@@ -4255,7 +4197,7 @@ async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder, 
 			case 'sync_story_vault':
 				return syncStoryVault(job, recorder);
 			case 'extract_turn_state':
-				return extractTurnState(job, recorder, prefetched);
+				return extractTurnState(job, recorder);
 			case 'continuity_audit':
 				// Retired: nothing reads its warnings. Older queued rows complete without work.
 				return { status: 'retired' };
@@ -4280,7 +4222,7 @@ function jobTimingReport(job: AnyBackendJobRow, status: BackendJobTimingReport['
 	};
 }
 
-async function runClaimedJob(job: AnyBackendJobRow, prefetched?: ServerGenerationResult, batchError?: unknown): Promise<{
+async function runClaimedJob(job: AnyBackendJobRow): Promise<{
 	completed: boolean;
 	result?: Record<string, unknown>;
 	error?: string;
@@ -4297,11 +4239,10 @@ async function runClaimedJob(job: AnyBackendJobRow, prefetched?: ServerGeneratio
 	const campaignJob = job.storyId ? { ...job, storyId: job.storyId } : null;
 	try {
 		publishBackendJobStatus(job, 'running');
-		if (batchError) throw batchError;
 		if (job.type === 'extract_turn_state' && campaignJob) await reconcileDeferredExtractionReceipt(campaignJob, 'running');
 		const result = job.type === 'generate_image' ? await processImageJob(job)
 			: job.type === 'assistant_batch_child' ? await processAssistantBatchJob(job)
-			: campaignJob ? await processBackendJob(campaignJob, recorder, prefetched)
+			: campaignJob ? await processBackendJob(campaignJob, recorder)
 				: job.type === 'validate_agent_settings' ? await validateProjectAgentSettings(job.projectId)
 					: (() => { throw new Error('Campaign job requires a game.'); })();
 		await timePhase(recorder, 'job.mark_complete', {}, () => markBackendJobComplete(job));
@@ -4349,26 +4290,12 @@ export async function runDueBackendJobs(workerId = `worker_${Date.now()}`, limit
 	}
 	const concurrency = readGenerationConcurrency();
 	await mapWithConcurrency([...byStory.values()], concurrency, async (storyJobs) => {
-		for (let index = 0; index < storyJobs.length;) {
-			const group: AnyBackendJobRow[] = [];
-			for (const job of storyJobs.slice(index, index + 5)) {
-				if (job.type !== 'extract_turn_state' || !job.storyId) break;
-				group.push(job);
-			}
-			let prefetched: Map<string, ServerGenerationResult> | null = null;
-			let batchError: unknown = null;
-			if (group.length >= 2) {
-				try { prefetched = await prepareBatchTurnMemory(group as BackendJobRow[]); }
-				catch (error) { batchError = error; }
-			}
-			const selected = prefetched || batchError ? group : [storyJobs[index]];
-			for (const job of selected) {
-				const result = await runClaimedJob(job, prefetched?.get(job.id), batchError);
-				timings.push(result.timing);
-				if (result.completed) completed += 1;
-				else failed.push({ jobId: job.id, error: result.error ?? 'unknown error' });
-			}
-			index += selected.length;
+		// One turn per extraction, in order: each gets its own state packet, receipts and failure.
+		for (const job of storyJobs) {
+			const result = await runClaimedJob(job);
+			timings.push(result.timing);
+			if (result.completed) completed += 1;
+			else failed.push({ jobId: job.id, error: result.error ?? 'unknown error' });
 		}
 	});
 	return { claimed: jobs.length, completed, failed, timings };

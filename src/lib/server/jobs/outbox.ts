@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, asc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '$lib/server/db/client';
-import { backendJobs, stories } from '$lib/server/db/schema';
+import { backendJobs, stories, storyEntries } from '$lib/server/db/schema';
 import { classifyBackendJobFailure, describeBackendJobError, manualRetryBlockCause } from './failureClassification';
 
 export const backendJobTypes = [
@@ -348,11 +348,14 @@ export async function enqueueTurnStateExtractionJob(input: {
 		postChapterBuffer?: number;
 		chaptersPerArc?: number;
 	};
+	/** Saved with the narration but held until its turn finishes (see releaseTurnStateExtractionJob). */
+	hold?: boolean;
 }, db: OutboxDb | OutboxTx = getDb()): Promise<string> {
 	return enqueueBackendJob({
 		storyId: input.storyId,
 		type: 'extract_turn_state',
 		dedupeKey: turnStateExtractionDedupeKey({ assistantEntryId: input.assistantEntryId }),
+		...(input.hold ? { runAfter: new Date(Date.now() + TURN_STATE_EXTRACTION_HOLD_MS).toISOString(), requeueExisting: false } : {}),
 		payload: {
 			playerEntryId: input.playerEntryId,
 			assistantEntryId: input.assistantEntryId,
@@ -370,6 +373,51 @@ export async function enqueueTurnStateExtractionJob(input: {
 		maxAttempts: 3,
 		metadata: { subagent: 'memory_context', task: 'turn_memory', sourceEntryIds: [input.playerEntryId, input.assistantEntryId] },
 	}, db);
+}
+
+/**
+ * A deferred extraction is queued in the transaction that saves its narration, held this long so
+ * it never runs before its own turn has finished. The turn releases it when it ends; if the process
+ * stops first, the next turn's state boundary (or this delay) still runs it, so no narration is
+ * left without extraction.
+ */
+export const TURN_STATE_EXTRACTION_HOLD_MS = 30 * 60_000;
+
+/** Makes a held extraction due now. Null when it already started or no held job exists. */
+export async function releaseTurnStateExtractionJob(storyId: string, assistantEntryId: string, db: Pick<OutboxDb, 'update'> = getDb()): Promise<string | null> {
+	const now = nowIso();
+	const [row] = await db.update(backendJobs).set({ runAfter: now, updatedAt: now }).where(and(
+		eq(backendJobs.id, stableJobId(storyId, 'extract_turn_state', turnStateExtractionDedupeKey({ assistantEntryId }))),
+		eq(backendJobs.status, 'queued'), eq(backendJobs.attemptCount, 0),
+	)).returning({ id: backendJobs.id });
+	return row?.id ?? null;
+}
+
+/**
+ * Before a turn reads state: extractions held or backing off for earlier turns become due now.
+ * Returns how many were released (the caller runs them before building context).
+ */
+export async function releaseEarlierTurnStateExtractions(storyId: string, db: Pick<OutboxDb, 'update'> = getDb()): Promise<number> {
+	const now = nowIso();
+	const released = await db.update(backendJobs).set({ runAfter: now, updatedAt: now }).where(and(
+		eq(backendJobs.storyId, storyId), eq(backendJobs.type, 'extract_turn_state'), inArray(backendJobs.status, ['queued', 'retry']),
+		sql`${backendJobs.runAfter} > ${now}`, sql`${backendJobs.attemptCount} < ${backendJobs.maxAttempts}`,
+	)).returning({ id: backendJobs.id });
+	return released.length;
+}
+
+/** Extractions for the story's latest narrations that have not settled (pending, running or failed). */
+export async function unsettledTurnStateExtractions(storyId: string, db: Pick<OutboxDb, 'select'> = getDb()): Promise<Array<{
+	assistantEntryId: string; status: string; lastError: string | null;
+}>> {
+	const recent = await db.select({ id: storyEntries.id }).from(storyEntries)
+		.where(and(eq(storyEntries.storyId, storyId), eq(storyEntries.type, 'narration'))).orderBy(sql`${storyEntries.position} desc`).limit(5);
+	if (!recent.length) return [];
+	const rows = await db.select({ status: backendJobs.status, lastError: backendJobs.lastError, payload: backendJobs.payload }).from(backendJobs).where(and(
+		eq(backendJobs.storyId, storyId), eq(backendJobs.type, 'extract_turn_state'), inArray(backendJobs.status, ['queued', 'retry', 'running', 'failed']),
+		inArray(sql<string>`${backendJobs.payload}->>'assistantEntryId'`, recent.map(row => row.id)),
+	));
+	return rows.map(row => ({ assistantEntryId: String((row.payload as Record<string, unknown>).assistantEntryId), status: row.status, lastError: row.lastError ?? null }));
 }
 
 export async function recordCompletedInlineTurnMemory(input: Parameters<typeof enqueueTurnStateExtractionJob>[0] & {
