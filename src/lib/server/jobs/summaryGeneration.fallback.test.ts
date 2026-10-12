@@ -176,6 +176,21 @@ it('splits oversized arcs and carries complete accounts into synthesis', async (
 	for (const [call] of mocks.generate.mock.calls) expect(call.prompt.length).toBeLessThanOrEqual(50_000);
 });
 
+it('combines arc halves even when the model lists their inner chapter accounts', async () => {
+	const sources = Array.from({ length: 9 }, (_, index) => ({ id: `chapter_${index + 1}`, text: `Chapter ${index + 1}: ${'chapter evidence '.repeat(450)}` }));
+	mocks.generate.mockImplementation(async ({ prompt }: { prompt: string }) => {
+		const count = (prompt.match(/^SOURCE \d+ \| sourceId:/gm) ?? []).length;
+		const combining = prompt.includes('consecutive arc subwindows');
+		// When combining two subwindows, answer with one account per chapter (9), not per subwindow (2).
+		return { model: 'same-model', finishReason: 'stop', text: JSON.stringify({ title: 'An arc',
+			narrative: 'The party crossed the river, negotiated passage, and reached the far bank with their agreement and companions intact.',
+			accounts: Array.from({ length: combining ? 9 : count }, (_, index) => ({ sourceId: String(index + 1), summary: `Chapter account ${index + 1} kept its consequences.` })) }) };
+	});
+	const memory = await generateChronologicalMemory({ storyId: 'test', kind: 'arc', sources });
+	expect(memory.accounts.map(account => account.sourceId)).toEqual(sources.map(source => source.id));
+	expect(mocks.generate).toHaveBeenCalledTimes(3);
+});
+
 function completeResponse(prompt: string, model = 'same-model') {
 	const count = (prompt.match(/^SOURCE \d+ \| sourceId:/gm) ?? []).length;
 	return { model, finishReason: 'stop', text: JSON.stringify({ title: 'Verified journey',

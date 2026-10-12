@@ -1,8 +1,8 @@
 import { outsideRequestScopes } from '$lib/server/requestScopes';
-import { backgroundJobTypes, memoryJobTypes, nextBackendJobDueAt, projectJobTypes, releaseEarlierTurnStateExtractions, worldJobTypes, type BackendJobType } from './outbox';
+import { backgroundJobTypes, historyJobTypes, memoryJobTypes, nextBackendJobDueAt, projectJobTypes, releaseEarlierTurnStateExtractions, worldJobTypes, type BackendJobType } from './outbox';
 
 /** Story jobs that run after memory and never hold up a turn. */
-const afterMemoryJobTypes: readonly BackendJobType[] = [...worldJobTypes, ...backgroundJobTypes];
+const afterMemoryJobTypes: readonly BackendJobType[] = [...historyJobTypes, ...worldJobTypes, ...backgroundJobTypes];
 
 /**
  * Queued jobs run in this process as soon as the work that queued them is saved; nothing polls.

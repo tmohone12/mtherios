@@ -11,7 +11,7 @@ const MAX_SUMMARY_PROMPT_CHARS = 50_000;
 // Bump for schema/validation or compiler semantics changes. Actual prompt policy
 // and generation limits also participate directly in every root/leaf identity.
 // v5: an oversized split window is combined from its parts' summaries when their accounts no longer fit.
-const SUMMARY_CHECKPOINT_VERSION = 'chronological-memory-v5/checkpoint-schema-2';
+const SUMMARY_CHECKPOINT_VERSION = 'chronological-memory-v6/checkpoint-schema-2';
 /** Reader-facing summary shape for chapters and arcs. The per-source accounts stay the complete record. */
 const CONCISE_SUMMARY_FORMAT = Object.freeze([
 	'Write the summary for a reader who wants to know quickly what happened. Start with one or two sentences: where it begins and what it is about.',
@@ -276,6 +276,12 @@ async function generateChronologicalMemoryCore(input: MemoryInput, services: Sum
 	const labeledSources = input.sources.map((source, index) => ({ ...source, id: String(index + 1) }));
 	const sourceIds = input.sources.map(source => source.id);
 	const localIds = labeledSources.map(source => source.id);
+	// Combining two subwindows keeps their own accounts (see generateMemoryWithServices); only the
+	// combined title, narrative and structured fields are used. A model that lists the subwindows'
+	// inner accounts instead of one per subwindow must not fail the combine.
+	const windowAccounts = (decoded: unknown) => input.summaryWindows && decoded && typeof decoded === 'object' && !Array.isArray(decoded)
+		? { ...(decoded as Record<string, unknown>), accounts: localIds.map(id => ({ sourceId: id, summary: 'Combined subwindow; its accounts are kept from the subwindow summary.' })) }
+		: decoded;
 	const prompt = chronologicalMemoryPrompt(input.kind, labeledSources, input.evidence, input.campaignFacts, false, input.summaryWindows);
 	if (prompt.length > MAX_SUMMARY_PROMPT_CHARS) throw new SummaryGenerationError(`${input.kind} summary prompt exceeds its budget; history was not advanced.`, 'summary_input_capacity');
 	const failures: SummaryGenerationError[] = [];
@@ -297,7 +303,8 @@ async function generateChronologicalMemoryCore(input: MemoryInput, services: Sum
 			prepared = await summaryRequest(input, service, { stage: 'summary', maxTokens: SUMMARY_GENERATION_POLICY.summaryTokens,
 				system: SUMMARY_GENERATION_POLICY.summarySystem,
 				prompt: failures.length ? `${prompt}\n\nPrevious attempt failed validation: ${failureGuidance(failures.at(-1)!)} Return the complete required object and all ${input.sources.length} accounts with the exact source labels shown above.` : prompt,
-				validate: (decoded, model) => {
+				validate: (raw, model) => {
+					const decoded = windowAccounts(raw);
 					const accounts = validateChronologicalAccounts(decoded, localIds);
 					const prose = readableNarrativeSchema.safeParse(decoded);
 					return toMemory({ ...accounts, ...(prose.success ? { narrative: prose.data.narrative } : {}) }, model);
@@ -322,7 +329,7 @@ async function generateChronologicalMemoryCore(input: MemoryInput, services: Sum
 			const accounts = await summaryRequest(input, fallbackService, { stage: 'accounts', maxTokens: SUMMARY_GENERATION_POLICY.summaryTokens,
 				system: SUMMARY_GENERATION_POLICY.accountsSystem,
 				prompt: chronologicalMemoryPrompt(input.kind, labeledSources, input.evidence, input.campaignFacts, true, input.summaryWindows),
-				validate: (decoded, model) => ({ ...validateChronologicalAccounts(decoded, localIds), model }),
+				validate: (decoded, model) => ({ ...validateChronologicalAccounts(windowAccounts(decoded), localIds), model }),
 				validateStored: value => ({ ...validateChronologicalAccounts(value, localIds), model: z.object({ model: z.string().min(1) }).parse(value).model }) });
 			const readable = await readableWithServices({ storyId: input.storyId, kind: input.kind,
 				sources: accounts.accounts.map((account, index) => ({ id: input.sources[index].id, text: account.summary })) }, services);
