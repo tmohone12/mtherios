@@ -139,6 +139,15 @@ describe('job enqueue conflicts', () => {
 		expect(db.onConflictDoUpdate).not.toHaveBeenCalled();
 	});
 
+	it('never requeues an extraction that already exists when the turn publishes its receipt', async () => {
+		await enqueueTurnStateExtractionJob({ storyId: 'story_1', playerEntryId: 'player_1', assistantEntryId: 'gm_1',
+			playerText: 'I enter.', narration: 'The door opens.', clientTurnId: 'client_1', timelineTurn: 1,
+			serverVersion: 2, retrievedMemoryIds: [], keepExisting: true });
+		expect(db.onConflictDoNothing).toHaveBeenCalled();
+		expect(db.onConflictDoUpdate).not.toHaveBeenCalled();
+		expect(Date.parse(db.values.mock.calls.at(-1)![0].runAfter)).toBeLessThanOrEqual(Date.now());
+	});
+
 	it('releases only a held extraction that has not started, and earlier turns\' held or backing-off ones', async () => {
 		db.updateReturning.mockResolvedValueOnce([{ id: 'job_1' }]);
 		await expect(releaseTurnStateExtractionJob('story_1', 'gm_1')).resolves.toBe('job_1');

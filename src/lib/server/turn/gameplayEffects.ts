@@ -117,6 +117,9 @@ export async function applyGameplayEffects(db: Db, input: ApplyGameplayEffectsIn
 		try {
 			await record(await adjudicate(db, input, effect, legacyMeter));
 		} catch (error) {
+			// A database error has aborted the turn's transaction: nothing more can be written, so it
+			// fails the extraction (which retries) instead of being recorded as a rejected effect.
+			if (isDatabaseError(error)) throw error;
 			await record({ status: 'rejected', reason: `Could not apply: ${error instanceof Error ? error.message : String(error)}` });
 		}
 	}
@@ -503,6 +506,15 @@ export function isPlayerCharacter(row: Pick<EntityRow, 'state' | 'metadata'>): b
 
 function normalizeName(value: string): string {
 	return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** A Postgres error (SQLSTATE code), directly or wrapped by the query builder. */
+export function isDatabaseError(error: unknown): boolean {
+	for (let current = error, depth = 0; current && typeof current === 'object' && depth < 4; current = (current as { cause?: unknown }).cause, depth += 1) {
+		const value = current as { code?: unknown; name?: unknown };
+		if (value.name === 'PostgresError' || (typeof value.code === 'string' && /^[0-9A-Z]{5}$/.test(value.code))) return true;
+	}
+	return false;
 }
 
 function signed(value: number): string {

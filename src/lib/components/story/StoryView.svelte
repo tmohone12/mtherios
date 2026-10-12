@@ -868,6 +868,16 @@
 											{#if receipt.stateExtractionStatus === 'failed' && receipt.stateExtractionError}
 												<p class="mt-1 line-clamp-3 text-[var(--text-muted)]">{receipt.stateExtractionError}</p>
 											{/if}
+											{#if receipt.floor?.status === 'decided'}
+												{@const floor = receipt.floor}
+												{@const nameOf = (id: string) => floor.actors.find(actor => actor.id === id)?.name ?? id}
+												<p class="mt-1.5 text-[var(--text-secondary)]">Floor{floor.mode === 'shadow' ? ' (recorded only)' : ''}: {floor.actors.filter(actor => actor.role === 'answer' || actor.role === 'speak').map(actor => `${actor.name} ${actor.role === 'answer' ? 'answers' : 'may speak'}`).join(' · ') || 'no one needed to speak'}</p>
+												{#if floor.adherence?.unexpected.length || floor.adherence?.missing.length}
+													<p class="text-amber-400">{[...(floor.adherence?.unexpected ?? []).map(id => `${nameOf(id)} spoke unprompted`), ...(floor.adherence?.missing ?? []).map(id => `${nameOf(id)} did not answer`)].join(' · ')}</p>
+												{/if}
+											{:else if receipt.floor && receipt.floor.status !== 'abstained'}
+												<p class="mt-1.5 text-[var(--text-muted)]">Floor {receipt.floor.status.replace('_', ' ')}{receipt.floor.reason ? `: ${receipt.floor.reason}` : ''}</p>
+											{/if}
 											{#if receipt.effects.length}
 												<ul class="mt-1.5 space-y-0.5">
 													{#each receipt.effects as effect}

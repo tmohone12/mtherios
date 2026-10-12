@@ -155,6 +155,17 @@
 									decisionMode: (event.target as HTMLInputElement).checked ? 'psychology_then_action' : 'action' } })} />
 							Evaluate psychology first (two requests per actor; stops after one if unusable)
 						</label>
+						<label class="flex flex-col gap-1 text-xs text-[var(--text-secondary)]">
+							<span>Scene floor: decide who speaks before the GM writes (one request per turn)</span>
+							<select class="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-2 py-1 text-xs" disabled={saving}
+								value={primaryTask.override?.metadata?.floorMode === 'off' || primaryTask.override?.metadata?.floorMode === 'shadow' ? primaryTask.override.metadata.floorMode : 'on'}
+								onchange={(event) => taskOverride(primaryTask, { metadata: { ...(primaryTask.override?.metadata ?? {}),
+									floorMode: (event.target as HTMLSelectElement).value } })}>
+								<option value="on">On: guide the GM</option>
+								<option value="shadow">Record only (compare without guiding)</option>
+								<option value="off">Off</option>
+							</select>
+						</label>
 					{/if}
 					{#if profileId}
 						<button class="text-[10px] text-[var(--text-accent)] underline" onclick={() => { const profile = view?.profiles.find(p => p.id === profileId); if (profile) editProfile(profile); }}>Edit profile (shared by {view.roles.filter(r => r.setting?.profileId === profileId).map(r => r.label).join(', ')})</button>

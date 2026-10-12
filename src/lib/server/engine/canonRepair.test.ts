@@ -1003,10 +1003,12 @@ describe('reviewPatchProposal', () => {
 		const sourceRefInsert = insertCalls.find((call) => call.table === sourceRefs)?.value as Record<string, unknown> | undefined;
 		const proposalUpdate = updateCalls.find((call) => call.table === patchProposals)?.value;
 
+		// The authored description stays; what the proposal adds becomes a story development.
+		expect(entityUpdate).not.toHaveProperty('description');
+		expect((entityUpdate as { state: Record<string, unknown> }).state).not.toHaveProperty('bio');
 		expect(entityUpdate).toMatchObject({
-			description: 'A harbor broker. Mira now guards the ledger at Yin.',
 			state: {
-				bio: 'A harbor broker. Mira now guards the ledger at Yin.',
+				developments: ['Mira now guards the ledger at Yin.'],
 				currentLocation: 'Yin harbor counting room',
 				currentAction: 'guarding the ledger',
 				goals: ['keep the trading post open', 'protect Aurion'],
@@ -1076,6 +1078,88 @@ describe('reviewPatchProposal', () => {
 			}),
 		}));
 	});
+	it('replaces the authored bio only when the reviewer writes an explicit retcon note', async () => {
+		const contextProposal: typeof patchProposals.$inferSelect = {
+			id: 'proposal_mira_context',
+			storyId: 'story_1',
+			proposalType: 'character_context_update',
+			targetTable: 'entities',
+			targetRecordId: 'entity_mira',
+			proposedBy: 'llm',
+			operations: [{
+				op: 'replace',
+				path: '/characters/entity_mira/state',
+				value: {
+					bio: 'A harbor broker. Mira now guards the ledger at Yin.',
+					currentLocation: 'Yin harbor counting room',
+					currentAction: 'guarding the ledger',
+					goals: ['protect Aurion'],
+					eventMemory: {
+						knows: ['the ledger names Zhen'],
+					},
+				},
+			}],
+			reason: 'Refresh Mira from recent harbor context.',
+			suggestion: 'Review this NPC update before applying it to canon.',
+			status: 'pending',
+			decision: null,
+			validatedBy: null,
+			affectedEntityIds: ['entity_mira'],
+			confidence: 0.75,
+			sourceEntryIds: ['entry_harbor'],
+			sourceEventIds: ['event_harbor'],
+			sourcePatchIds: ['patch_harbor'],
+			metadata: { sourceType: 'character_context_update' },
+			serverVersion: 1,
+			createdAt: '2026-06-13T00:00:00.000Z',
+			updatedAt: '2026-06-13T00:00:00.000Z',
+		};
+		const existingCharacter: typeof entities.$inferSelect = {
+			id: 'entity_mira',
+			storyId: 'story_1',
+			type: 'character',
+			name: 'Mira',
+			description: 'A harbor broker.',
+			status: 'active',
+			visibility: 'player_known',
+			state: {
+				goals: ['keep the trading post open'],
+				eventMemory: {
+					saw: ['Mira saw the old oath sworn.'],
+					knew: ['Mira knew the market code.'],
+				},
+			},
+			metadata: { createdFrom: 'manual' },
+			sourceEntryIds: ['entry_canon'],
+			sourceEventIds: [],
+			sourcePatchIds: ['patch_canon'],
+			serverVersion: 1,
+			createdAt: '2026-06-13T00:00:00.000Z',
+			updatedAt: '2026-06-13T00:00:00.000Z',
+		};
+		const { db, insertCalls, updateCalls } = createDbMock({
+			patchProposalRows: [contextProposal],
+			entityRows: [existingCharacter],
+		});
+		dbMocks.getDb.mockReturnValue(db);
+
+		const result = await reviewPatchProposal({
+			storyId: 'story_1',
+			proposalId: 'proposal_mira_context',
+			decision: 'approved',
+			reviewer: 'human',
+			notes: 'retcon: Mira was never a broker; she guards the ledger.',
+		});
+
+		const entityUpdate = updateCalls.find((call) => call.table === entities)?.value as Record<string, unknown> | undefined;
+		expect(entityUpdate).toMatchObject({
+			description: 'A harbor broker. Mira now guards the ledger at Yin.',
+			state: { bio: 'A harbor broker. Mira now guards the ledger at Yin.', background: 'A harbor broker. Mira now guards the ledger at Yin.' },
+		});
+		expect(entityUpdate?.state).not.toHaveProperty('developments');
+		expect(result).toBeTruthy();
+	});
+
 
 	it('leaves a chapter refresh for review when the character changed during generation', async () => {
 		const proposal = {

@@ -90,3 +90,17 @@ describe('character contract in turn context', () => {
 		expect(metadata).toEqual(snapshot);
 	});
 });
+
+describe('story developments on character cards', () => {
+	it('shows the newest developments that fit, after the authored bio', () => {
+		const developments = Array.from({ length: 10 }, (_, index) => `Development ${index + 1} happened at the harbor.`);
+		const entity = character('npc_dev', 'Mira', { bio: 'Raised behind the Black Walls.', personality: 'Patient.', developments });
+		const scene = renderCharacterCard(normalizeCharacterCard({ entity }), { tier: 'scene', view: 'narrator' }).text;
+		expect(scene).toContain('[bio]: Mira of the harbor.; Raised behind the Black Walls.');
+		expect(scene).toContain('[Developments]: ');
+		expect(scene).toContain('Development 10 happened at the harbor.');
+		expect(scene).not.toContain('Development 1 happened');
+		const addressed = renderCharacterCard(normalizeCharacterCard({ entity }), { tier: 'addressed', view: 'narrator' }).text;
+		expect(addressed).toContain('Development 1 happened at the harbor.; Development 2');
+	});
+});

@@ -478,6 +478,17 @@ async function findEntityByName(db: TurnPersistenceDb, storyId: string, name: st
 	return entity?.id === matches[0].entityId ? entity : null;
 }
 
+/** Any item record already named so (or aliased so), even when several share the name. */
+async function itemRecordExists(db: TurnPersistenceDb, storyId: string, name: string): Promise<boolean> {
+	const [byName] = await db.select({ id: entities.id }).from(entities)
+		.where(and(eq(entities.storyId, storyId), eq(entities.type, 'item'), sql`lower(${entities.name}) = lower(${name})`)).limit(1);
+	if (byName) return true;
+	const [byAlias] = await db.select({ id: entities.id }).from(entityAliases)
+		.innerJoin(entities, eq(entities.id, entityAliases.entityId))
+		.where(and(eq(entityAliases.storyId, storyId), eq(entityAliases.normalizedAlias, normalizeName(name)), eq(entities.type, 'item'))).limit(1);
+	return Boolean(byAlias);
+}
+
 async function findCharacterEntityByName(db: TurnPersistenceDb, storyId: string, name: string): Promise<typeof entities.$inferSelect | null> {
 	const rows = await db
 		.select()
@@ -1324,7 +1335,7 @@ export async function applyValidatedTurnUpdate(
 			// An item record describes the item and where it lies. Once it exists, its count and
 			// equipped state change only through item effects (owner-aware, with receipts).
 			const existingItem = item.quantity !== undefined || item.equipped !== undefined
-				? await findEntityByName(tx, input.storyId, item.name, 'item') : null;
+				? await itemRecordExists(tx, input.storyId, item.name) : false;
 			if (existingItem) warnings.push(`Item "${item.name}": quantity and equipped change only through item effects; its other fields were saved.`);
 			const entityId = await upsertEntity(tx, input.storyId, 'item', item.name, item.description, {
 				...(existingItem ? {} : { quantity: item.quantity, equipped: item.equipped }),

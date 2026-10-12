@@ -350,12 +350,15 @@ export async function enqueueTurnStateExtractionJob(input: {
 	};
 	/** Saved with the narration but held until its turn finishes (see releaseTurnStateExtractionJob). */
 	hold?: boolean;
+	/** Insert only: an existing job for this narration (queued, running or finished) is left untouched. */
+	keepExisting?: boolean;
 }, db: OutboxDb | OutboxTx = getDb()): Promise<string> {
 	return enqueueBackendJob({
 		storyId: input.storyId,
 		type: 'extract_turn_state',
 		dedupeKey: turnStateExtractionDedupeKey({ assistantEntryId: input.assistantEntryId }),
-		...(input.hold ? { runAfter: new Date(Date.now() + TURN_STATE_EXTRACTION_HOLD_MS).toISOString(), requeueExisting: false } : {}),
+		...(input.hold ? { runAfter: new Date(Date.now() + TURN_STATE_EXTRACTION_HOLD_MS).toISOString() } : {}),
+		...(input.hold || input.keepExisting ? { requeueExisting: false } : {}),
 		payload: {
 			playerEntryId: input.playerEntryId,
 			assistantEntryId: input.assistantEntryId,

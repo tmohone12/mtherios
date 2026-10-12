@@ -1051,6 +1051,18 @@ export const gmTurnReceiptSchema = z.object({
 	}).strict(),
 	/** Gameplay effect outcomes (HP, conditions, items) for this turn's narration. */
 	effects: z.array(gameplayEffectSummarySchema).max(32).default([]),
+	/** Scene floor: who the Decisions model expected to speak, and who actually spoke. */
+	floor: z.object({
+		mode: z.enum(['on', 'shadow']),
+		status: z.enum(['decided', 'abstained', 'unavailable', 'timed_out', 'invalid']),
+		reason: z.string().nullable(),
+		model: z.string().nullable(),
+		addresseeId: z.string().nullable(),
+		addressesRoom: z.boolean(),
+		actors: z.array(z.object({ id: z.string(), name: z.string(), role: z.enum(['answer', 'speak', 'gesture', 'silent', 'undecided']),
+			confidence: z.number().nullable(), reason: z.string().nullable(), heldBack: z.boolean() }).strict()).max(8),
+		adherence: z.object({ spoke: z.array(z.string()), unexpected: z.array(z.string()), missing: z.array(z.string()) }).strict().nullable(),
+	}).strict().nullable().default(null),
 	stateExtractionMode: z.enum(['deferred', 'sync', 'none']),
 	stateExtractionStatus: z.enum(['skipped', 'queued', 'running', 'succeeded', 'failed']).default('skipped'),
 	stateExtractionJobId: z.string().nullable().default(null),

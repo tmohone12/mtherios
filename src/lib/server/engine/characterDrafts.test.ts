@@ -231,7 +231,8 @@ describe('draftCharacterUpdateFromStoryContext', () => {
 		expect(proposal.metadata).toMatchObject({ characterUpdateBaseVersion: 17, authorInstructions: 'Six feet tall; violet eyes; sword prodigy.' });
 		expect(proposal.sourceEntryIds).toContain('origin');
 		expect(proposal.sourceEntryIds).not.toContain('ooc');
-		expect((proposal.operations as Array<{ value: unknown }>)[0].value).toEqual({ bio: 'Raised behind the Black Walls, he is a six-foot sword prodigy.', appearance: 'Six feet tall; violet eyes.', personality: 'Proud and independent.' });
+		// The author's bio, appearance and personality stay as written; what the draft adds is proposed as developments.
+		expect((proposal.operations as Array<{ value: unknown }>)[0].value).toEqual({ developments: ['He is a six-foot sword prodigy.', 'Personality: Proud and independent.', 'Appearance: Six feet tall; violet eyes.'] });
 	});
 
 	it('drafts current lorebook character state without erasing existing facts', async () => {
@@ -248,7 +249,8 @@ describe('draftCharacterUpdateFromStoryContext', () => {
 		expect(mocks.resolveServiceGeneration).toHaveBeenNthCalledWith(1, 'characterUpdate');
 		expect(generationArgs.responseFormat).toBe('json_object');
 		expect(generationArgs.reasoningEffort).toBe('off');
-		expect(generationArgs.prompt).toContain('bio, appearance, presentation, speechStyle, personality, rank, currentDisposition, affinity, motivations, factionTags, knownFacts');
+		expect(generationArgs.prompt).toContain('developments, presentation, rank, currentDisposition, affinity, motivations, factionTags, knownFacts');
+		expect(generationArgs.prompt).toContain('stay exactly as written; never return them');
 		expect(generationArgs.prompt).toContain('Use motivations for goals.');
 		expect(generationArgs.prompt).not.toContain('personalOpinion');
 		expect(generationArgs.prompt).not.toContain('mannerisms');
@@ -280,8 +282,9 @@ describe('draftCharacterUpdateFromStoryContext', () => {
 			}),
 			serverVersion: 42,
 		});
+		expect(state).not.toHaveProperty('appearance');
 		expect(state).toMatchObject({
-			appearance: 'Ink-stained silk gloves and a salt-dark cloak.',
+			developments: ['Appearance: Ink-stained silk gloves and a salt-dark cloak.'],
 			currentDisposition: 'guarding the ledger and blocking the quay',
 			relationship: { level: 35 },
 			knownFacts: ['the ledger names Zhen'],
@@ -477,7 +480,7 @@ describe('refineChapterCharacterUpdates', () => {
 		const text = JSON.stringify({ updates: [{ entityId: 'mira', patch: { appearance: 'Grey eyes' }, confidence: 0.9, evidence: 'She has grey eyes.' }] });
 		mocks.generateServerTextWithMetrics.mockResolvedValueOnce({ text, model: 'test', endpoint: 'mock', durationMs: 1, promptChars: 20, responseChars: text.length, usage: {} });
 		const result = await refineChapterCharacterUpdates({ storyId: 'story_alpha', chapterWindow: [1, 2], sourceEvidence: [{ id: 'original', content: 'Mira stands at the quay. She has grey eyes.' }], candidates: [{ entityId: 'mira', name: 'Mira', description: 'She has grey eyes.', state: {} }] });
-		expect(result.updates[0]).toMatchObject({ evidence: ['She has grey eyes.'], state: { appearance: 'Grey eyes' } });
+		expect(result.updates[0]).toMatchObject({ evidence: ['She has grey eyes.'], state: { developments: ['Appearance: Grey eyes'] } });
 	});
 	it.each(['', 'null', '[]', '{}', '{"updates":"wrong shape"}'])('rejects blank or wrong-shaped responses: %s', async text => {
 		mocks.generateServerTextWithMetrics.mockResolvedValueOnce({ text, model: 'test', endpoint: 'mock', durationMs: 1, promptChars: 20, responseChars: text.length, usage: {} });
@@ -500,8 +503,9 @@ describe('refineChapterCharacterUpdates', () => {
 		expect(prompt).toContain('She has grey eyes.');
 		expect(prompt).toContain('"bio":"A harbor broker."');
 		expect(prompt).toContain('"personality":"patient"');
-		expect(result.updates[0]).toMatchObject({ evidence: ['She has grey eyes.'], confidence: 0.9, state: { appearance: 'Grey eyes' } });
+		expect(result.updates[0]).toMatchObject({ evidence: ['She has grey eyes.'], confidence: 0.9, state: { developments: ['Appearance: Grey eyes'] } });
 		expect(result.updates[0].state).not.toHaveProperty('speechStyle');
+		expect(result.updates[0].state).not.toHaveProperty('appearance');
 	});
 
 	it('uses one character-update call and only merges allowed fields for known ids', async () => {

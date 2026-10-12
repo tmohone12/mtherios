@@ -6,7 +6,7 @@ import { readPlayerCapabilities } from '$lib/contracts/playerCapabilities';
 import { isPlayerCharacterRecord, isUnplacedItem, readCampaignMeters, readCharacterConditions, readCharacterResource, readCharacterSheet, readItemHolding } from '$lib/contracts/gameplayEffects';
 import { NPC_AGENCY_FIELDS, NPC_AGENCY_EXTRACTION_INSTRUCTION, readNpcAgency } from '$lib/contracts/npcAgency';
 import { createHash } from 'node:crypto';
-import { CHARACTER_IDENTITY_FIELDS } from '$lib/contracts/automaticCharacterUpdate';
+import { CHARACTER_IDENTITY_FIELDS, readCharacterDevelopments } from '$lib/contracts/automaticCharacterUpdate';
 import type { TurnContext } from './context';
 import type { GmTimelineBrief, GmTimelineBriefEvent, RetrievedMemoryPacket } from '$lib/contracts/memory';
 import { summarizeMtheriosMemoryForContext } from '$lib/services/ai/context/mtheriosSummaryFormat';
@@ -19,7 +19,7 @@ import { DEFAULT_DUE_LIMIT, isNarrativeTimelineEvent, isPlayerNpcBackgroundEvent
 import { countTokens } from '$lib/utils/tokens';
 import { DND_ABILITIES, abilityModifier, normalizePlayerSheet } from '$lib/utils/playerSheet';
 import { durableCharacterEventMemoryList, durableCharacterKnownFactList } from './characterEventMemory';
-import { normalizeCharacterCard, renderCharacterCard, type CharacterCardTier, type CharacterCardView } from './characterContext';
+import { newestWithin, normalizeCharacterCard, renderCharacterCard, type CharacterCardTier, type CharacterCardView } from './characterContext';
 import { sliceWellFormedText, toWellFormedText } from './wellFormedText';
 import { characterAliases, characterStateView, selectRelevantCharacters, type CharacterContextRecord } from '$lib/utils/characterState';
 import { sceneEvidenceExcerpt } from '$lib/utils/sceneEvidence';
@@ -99,6 +99,8 @@ export interface ServerTurnPromptPacket {
 	dynamicContextRecords: Array<{ kind: string; id: string; start: number; end: number }>;
 	requiredDueEventIds: string[];
 	dialogueActorCards: Array<{ id: string; name: string; text: string }>;
+	/** Characters (not the player) the context places in this scene, carded ones first; the floor's candidates. */
+	sceneCast: Array<{ id: string; name: string }>;
 	dialogueSourceIds: string[];
 	dialoguePartialSourceIds?: string[];
 	sceneCheckpoint?: SceneCheckpointSelection;
@@ -349,6 +351,8 @@ function renderPlayerCharacter(ctx: TurnContext, entity: TurnContext['entities']
 		identity.push(`[Personality]: ${characterPersonalityValue(state, metadata)}`);
 		identity.push(`[bio]: ${characterBioValue(entity, state, metadata, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
 		if (playerPrompt) identity.push(`[bio]: ${compact(playerPrompt, PLAYER_CHARACTER_PROMPT_CHAR_LIMIT)}`);
+		const developments = readCharacterDevelopments(state);
+		if (developments.length) identity.push(`[Developments]: ${newestWithin(developments, 12, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
 		current.push(`[Key History]: ${inlineList([
 			...currentState,
 			...goals,
@@ -680,6 +684,7 @@ function renderCharacterBlocks(ctx: TurnContext, characters: TurnContext['entiti
 				]),
 				affiliations: inlineList(factions),
 				bio: characterBioValue(entity, state, metadata),
+				developments: inlineList(readCharacterDevelopments(state).slice(-12)),
 				background: durableCharacterIdentity(characterStringValue(state, metadata, ['bio', 'background'], 520)),
 				currentState: blockList(characterCurrentState(entity, state, metadata)),
 				goals: blockList(characterGoals(state, metadata)),
@@ -1875,6 +1880,8 @@ export function buildServerTurnPrompt(
 		dynamicContextRecords,
 		requiredDueEventIds,
 		dialogueActorCards,
+		sceneCast: uniqueEntities([...cardEntities, ...presentEntities.filter(entity => entity.type === 'character' && isUsableEntity(entity) && entity.id !== protagonist?.id)])
+			.slice(0, 8).map(entity => ({ id: entity.id, name: entity.name })),
 		dialogueSourceIds,
 		dialoguePartialSourceIds: renderedMessages.filter(message => message.partial).map(message => message.sourceId),
 		...(sceneCheckpoint ? { sceneCheckpoint } : {}),

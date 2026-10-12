@@ -1741,6 +1741,10 @@
 										<span>Known Facts</span>
 										<textarea value={linesValue(characterState.knownFacts)} oninput={(event) => updateCharacterState('knownFacts', lineArray(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
 									</label>
+									<label class="space-y-1 text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+										<span>Story developments (one per line)</span>
+										<textarea value={linesValue(characterState.developments)} oninput={(event) => updateCharacterState('developments', lineArray(textValue(event)))} class="h-24 w-full resize-y rounded border border-[var(--border-secondary)] bg-[var(--bg-secondary)] p-2 text-xs normal-case tracking-normal text-[var(--text-secondary)]"></textarea>
+									</label>
 								</div>
 
 								<div class="grid gap-2 sm:grid-cols-3">

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildGameplayStatePacket, buildStateExtractionPrompt, stateExtractionNarration } from './promptPacket';
 import { parseStateExtractionResult, shouldExtractDurableState, unsettledStateNotice } from './orchestrator';
 import { keepEffectOwnedState } from '$lib/server/memory/canonical';
+import { isDatabaseError } from './gameplayEffects';
 import { projectItemState } from '$lib/utils/itemProjection';
 
 const mira = { id: 'entity_mira', name: 'Mira', state: { relationship: 'self', playerSheet: { hitPoints: { current: 11, max: 18 } },
@@ -14,6 +15,9 @@ describe('gameplay extraction', () => {
 		expect(shouldExtractDurableState('I wait.', 'The blade struck true. Nothing changes.')).toBe(true);
 		expect(shouldExtractDurableState('I wait.', 'Nothing changes. {{dice:1d20|4|4|12|fail|Dexterity|dodge}}')).toBe(true);
 		expect(shouldExtractDurableState('I wait.', 'Nothing changes; the night is quiet.')).toBe(false);
+		// Ordinary dialogue words are not consequences ("don't", "lost in thought").
+		expect(shouldExtractDurableState("I don't know.", "He is lost in thought; nothing changes.")).toBe(false);
+		expect(shouldExtractDurableState('I wait.', 'She is donning her cloak. Nothing changes.')).toBe(true);
 	});
 
 	it('shows roll results to the Classifier as readable lines', () => {
@@ -80,5 +84,13 @@ describe('effect-owned state and the browser', () => {
 		expect(projectItemState({ ownerId: 'mira', quantity: null })).toMatchObject({ quantityKnown: false });
 		expect(projectItemState({ inInventory: true })).toMatchObject({ equipped: false, location: 'inventory', quantity: 1 });
 		expect(projectItemState({ location: 'altar' })).toMatchObject({ location: 'altar', ownerId: null });
+	});
+});
+
+describe('effect application errors', () => {
+	it('recognizes database errors, directly or wrapped', () => {
+		expect(isDatabaseError(Object.assign(new Error('duplicate key'), { code: '23505' }))).toBe(true);
+		expect(isDatabaseError(new Error('Failed query', { cause: Object.assign(new Error('aborted'), { name: 'PostgresError', code: '25P02' }) }))).toBe(true);
+		expect(isDatabaseError(new Error('Unexpected effect shape'))).toBe(false);
 	});
 });

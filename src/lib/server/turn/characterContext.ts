@@ -19,7 +19,8 @@ export interface CharacterCardV1 {
 	entityId: string;
 	name: string;
 	aliases: string[];
-	identity: { description: string; biography: string; appearance: string; presentation: string; culture: string };
+	/** `developments`: what the story established about the character since the biography, oldest first. */
+	identity: { description: string; biography: string; developments: string[]; appearance: string; presentation: string; culture: string };
 	personality: { summary: string; descriptors: string[]; motives: string[]; goals: string[] };
 	voice: { guidance: string; mannerisms: string[]; examples: string[] };
 	/** Current scene state, including the relationship to the player. */
@@ -141,6 +142,7 @@ export function normalizeCharacterCard(input: CharacterCardInput): CharacterCard
 		identity: {
 			description,
 			biography: durableIdentityText(pick(provenance, 'identity.biography', [['state.bio', state.bio], ['state.background', state.background], ['metadata.bio', metadata.bio], ['metadata.background', metadata.background]])),
+			developments: list(provenance, 'identity.developments', [['state.developments', state.developments]]),
 			appearance: pick(provenance, 'identity.appearance', [['state.appearance', state.appearance], ['metadata.appearance', metadata.appearance]]),
 			presentation: pick(provenance, 'identity.presentation', [['state.presentation', state.presentation], ['metadata.presentation', metadata.presentation]]),
 			culture: pick(provenance, 'identity.culture', [['state.culture', state.culture], ['metadata.culture', metadata.culture]]),
@@ -184,6 +186,18 @@ const TIERS: Record<CharacterCardTier, TierLimits> = {
 	scene: { budget: 1400, budgetWithContinuity: 1800, appearance: 140, personality: 260, biography: 280, goals: 180, keyHistoryItem: 95, affiliations: 100, voice: 200, continuityLines: 5, continuityLine: 220, examples: 0 },
 	addressed: { budget: 4200, budgetWithContinuity: 4200, appearance: 500, personality: 1200, biography: 900, goals: 500, keyHistoryItem: 160, affiliations: 300, voice: 900, continuityLines: 8, continuityLine: 320, examples: 900 },
 };
+
+/** The newest items (at most `count`) that fit in `cap` characters, kept in story order. */
+export function newestWithin(items: string[], count: number, cap: number): string {
+	const kept: string[] = [];
+	let length = 0;
+	for (const item of items.slice(-count).reverse()) {
+		if (kept.length && length + item.length + 2 > cap) break;
+		kept.unshift(kept.length ? item : capped(item, cap));
+		length += item.length + 2;
+	}
+	return kept.join('; ');
+}
 
 function capped(text: string, cap: number): string {
 	if (text.length <= cap) return text;
@@ -231,6 +245,9 @@ export function renderCharacterCard(card: CharacterCardV1, options: { tier: Char
 		// Required for portrayal; "." marks a personality that has not been recorded.
 		{ id: 'Personality', priority: 1, required: true, text: `[Personality]: ${personality ? capped(personality, limits.personality) : '.'}` },
 		{ id: 'Biography', priority: 6, text: biography ? `[bio]: ${capped(biography, limits.biography)}` : '' },
+		// Newest developments first when the budget is short; they are what the story changed.
+		{ id: 'Developments', priority: 5, text: card.identity.developments.length
+			? `[Developments]: ${newestWithin(card.identity.developments, options.tier === 'addressed' ? 12 : 4, limits.biography)}` : '' },
 		{ id: 'Goals', priority: 5, text: goals.length ? `[Goals]: ${capped(goals.join('; '), limits.goals)}` : '' },
 		{ id: 'Current state', priority: 4, text: card.scene.length ? `[Key History]: ${card.scene.map(line => capped(line, limits.keyHistoryItem)).join('; ')}` : '' },
 		{ id: 'Affiliations', priority: 8, text: card.affiliations.length ? `[Affiliations]: ${capped(card.affiliations.join('; '), limits.affiliations)}` : '' },
