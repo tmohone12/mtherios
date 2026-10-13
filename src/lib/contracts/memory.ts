@@ -661,6 +661,8 @@ export const memoryRetrieveRequestSchema = z.object({
 	sourceTypes: z.array(memoryNodeTypeSchema).optional(),
 	includeSecret: z.boolean().default(false),
 	includeSemantic: z.boolean().optional(),
+	/** Leave out chapter, arc and saga summary nodes; a GM turn already sends them in its canon timeline. */
+	excludeHistorySummaries: z.boolean().optional(),
 	tokenBudget: z.number().int().min(160).max(2400).default(1200),
 });
 

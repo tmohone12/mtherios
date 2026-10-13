@@ -5,6 +5,7 @@ import { buildPromptHarnessReport, evaluatePromptHarness } from './promptHarness
 import { buildServerNarrativeSystemPrompt, buildServerTurnPrompt, buildStateExtractionPrompt, dialogueRhythmGuidance, shouldUseStrategicFrame } from './promptPacket';
 import { resolveLocationLore } from '$lib/server/memory/locationLore';
 import { applyNarrativePromptOverride } from '$lib/services/ai/context/gmAuthority';
+import { countTokens } from '$lib/utils/tokens';
 
 const now = '2026-05-23T12:00:00.000Z';
 
@@ -961,7 +962,7 @@ describe('turn prompt harness', () => {
 						overallTone: 'paranoid court politics',
 						sourceEventIds: [],
 						openThreadIds: ['thread_letter_courier'],
-						metadata: {},
+						metadata: { summarySource: 'llm' },
 					}),
 				],
 			}),
@@ -978,9 +979,11 @@ describe('turn prompt harness', () => {
 		expect(report.messages.at(-2)?.content).toContain('Conversation beat 128');
 		expect(report.messages.at(-1)?.content).toContain('Conversation beat 129');
 		expect(report.system).toContain('NPCs act from independent motives, knowledge, boundaries, emotions, and costs');
-		expect(report.prompt).toContain('Saga memory');
-		expect(report.prompt).toContain('Arc memory');
-		expect(report.prompt).toContain('do not rediscover this as if new');
+		expect(report.prompt).toContain('<canon_timeline>');
+		expect(report.prompt).toContain('- Saga 1: Old Blood Pressure (arc 1, chapter 3)');
+		expect(report.prompt).toContain('The first saga is about Old Blood houses');
+		// The saga stands in for its arc, and the arc for its chapter.
+		expect(report.prompt).not.toContain('do not rediscover this as if new');
 		expect(report.prompt).not.toContain('Chapter 3 outcome: Vaelar exposed the same purple-sealed letter once and only once');
 	});
 
@@ -1007,7 +1010,42 @@ describe('turn prompt harness', () => {
 		expect(report.tokens.messages).toBeLessThanOrEqual(24_000);
 	});
 
-	it('keeps the newest uncovered chapter and reports older omitted accounts', () => {
+	it('sends the history as one canon timeline in the middle of the request, each period once', () => {
+		const chapter = (number: number) => row({ id: `chapter_${number}`, storyId: 'story_balaerys', number, title: `Passage ${number}`,
+			sceneOutcome: `Chapter ${number} sentinel.`, irreversibleChanges: [], npcKnowledgeChanges: [], promisesDebtsOaths: [], discoveredClues: [],
+			relationshipChanges: [], factionChanges: [], openThreads: [], sourceEntryIds: [], sourceEventIds: [], metadata: {} });
+		const arc = (number: number) => row({ id: `arc_${number}`, storyId: 'story_balaerys', number, title: `Season ${number}`,
+			summary: `Arc ${number} sentinel.`, chapterIds: [`chapter_${number * 2 - 1}`, `chapter_${number * 2}`], sourceEventIds: [], openThreadIds: [], metadata: {} });
+		const saga = (number: number, arcIds: string[], metadata: Record<string, unknown> = { summarySource: 'llm' }) => row({ id: `saga_${number}`, storyId: 'story_balaerys', number,
+			title: `Saga ${number}: Era ${number}`, summary: `Period: 296 AC\n\nThe Journey\nSaga ${number} sentinel.\n\nSaga consequence: Era ${number} ended.`, arcIds,
+			keyFactionShifts: [], majorPowerChanges: [], lingeringThreads: [], overallTone: '', sourceEventIds: [], openThreadIds: [], metadata });
+		const report = buildPromptHarnessReport({
+			name: 'canon-timeline',
+			playerText: 'Continue.',
+			ctx: baseContext({
+				chapters: Array.from({ length: 9 }, (_, index) => chapter(index + 1)),
+				arcs: [arc(4), arc(3), arc(2), arc(1)],
+				// Saga 2 is the old concatenation; saga 3 names a missing arc. Neither may hide an arc.
+				sagas: [saga(1, ['arc_1', 'arc_2']), saga(2, ['arc_3'], {}), saga(3, ['arc_4', 'arc_missing'])],
+			}),
+			retrieved: packet('continue', []),
+		});
+		const history = report.compiledPrompt.stablePrefix.find(section => section.id === 'campaign_history')!.content;
+		const timeline = history.slice(history.indexOf('<canon_timeline>'), history.indexOf('</canon_timeline>'));
+		expect(timeline).toContain('Canon timeline: the accepted history of this campaign, oldest first.');
+		expect(timeline).toContain('- Saga 1: Era 1 (arcs 1-2, chapters 1-4)\nPeriod: 296 AC');
+		expect(timeline).toContain('Saga consequence: Era 1 ended.');
+		for (const hidden of ['Arc 1 sentinel.', 'Arc 2 sentinel.', 'Chapter 1 sentinel.', 'Chapter 8 sentinel.', 'Saga 2 sentinel.', 'Saga 3 sentinel.']) expect(timeline).not.toContain(hidden);
+		const order = ['- Saga 1: Era 1', '- Arc 3: Season 3 (chapters 5-6)', '- Arc 4: Season 4 (chapters 7-8)', '- Chapter 9: Passage 9'].map(text => timeline.indexOf(text));
+		expect(order.every(index => index >= 0)).toBe(true);
+		expect(order).toEqual([...order].sort((a, b) => a - b));
+		expect(timeline).toContain('The timeline ends with chapter 9; the recent dialogue continues from there.');
+		// Between the player identity and the dialogue: the cached history prefix, never the per-turn scene context.
+		expect(history.indexOf('<canon_timeline>')).toBeGreaterThan(0);
+		expect(report.compiledPrompt.dynamicTail[0].content).not.toContain('<canon_timeline>');
+	});
+
+	it('sends every chapter outside an arc whole, however long', () => {
 		const report = buildPromptHarnessReport({
 			name: 'chapter-memory-budget',
 			playerText: 'I ask what the latest chapter changed.',
@@ -1035,10 +1073,12 @@ describe('turn prompt harness', () => {
 			retrieved: packet('latest chapter', []),
 		});
 
-		expect(report.prompt).toContain('Chapter 9 sentinel.');
-		expect(report.prompt).toContain('Chapter 9 final consequence.');
-		expect(report.prompt).not.toContain('Chapter 1 sentinel.');
-		expect(report.prompt).toContain('Historical summaries omitted');
+		for (const number of [1, 5, 9]) {
+			expect(report.prompt).toContain(`Chapter ${number} sentinel.`);
+			expect(report.prompt).toContain(`Chapter ${number} final consequence.`);
+		}
+		expect(report.prompt).not.toContain('omitted');
+		expect(report.prompt.indexOf('- Chapter 1:')).toBeLessThan(report.prompt.indexOf('- Chapter 9:'));
 	});
 
 	it('renders uncovered checkpoint chapters as readable chapter memory', () => {
@@ -1086,7 +1126,7 @@ describe('turn prompt harness', () => {
 			retrieved: packet('Arlan gate promise', []),
 		});
 
-		expect(report.prompt).toContain('Chapter memory');
+		expect(report.prompt).toContain('- Chapter 9: The Gate Promise');
 		expect(report.prompt).toContain('Arlan admits he promised to open the postern gate before dawn.');
 		expect(report.prompt).toContain('Characters: Arlan [npc_arlan]:');
 		expect(report.prompt).toContain('Whether Arlan keeps the gate promise.');
@@ -1158,7 +1198,7 @@ describe('turn prompt harness', () => {
 			retrieved: packet('Eastern Rise Aurion Xanda', []),
 		});
 
-		expect(report.prompt).toContain('Arc memory');
+		expect(report.prompt).toContain('- Arc 2: Eastern Rise (chapters 7-8)');
 		expect(report.prompt).toContain('summary: Aurion begins making a name in Yi Ti.');
 		expect(report.prompt).not.toContain('chapters:');
 		expect(report.prompt).not.toContain('Chapter 7: Arrival in Yin');
@@ -1166,7 +1206,7 @@ describe('turn prompt harness', () => {
 		expect(report.prompt).not.toContain('Chapter 8: Xanda at Dinner');
 	});
 
-	it('retains both ends of an oversized arc as a marked excerpt', () => {
+	it('retains the complete oversized arc and all character history and open threads', () => {
 		const report = buildPromptHarnessReport({
 			name: 'oversized-arc-summary',
 			playerText: 'Continue from the arc.',
@@ -1177,11 +1217,15 @@ describe('turn prompt harness', () => {
 						storyId: 'story_balaerys',
 						number: 3,
 						title: 'Oversized Arc',
-						summary: `Arc opening fact survives. ${'raw chapter wall '.repeat(20000)} Arc prompt tail sentinel.`,
+						summary: `Arc opening fact survives. ${'raw chapter wall '.repeat(1000)} Arc middle fact survives. ${'raw chapter wall '.repeat(1000)} Arc prompt tail sentinel.`,
 						chapterIds: [],
 						sourceEventIds: [],
-						openThreadIds: [`thread start ${'thread filler '.repeat(2000)} thread tail sentinel`],
-						metadata: {},
+						openThreadIds: Array.from({ length: 12 }, (_, i) => `Thread ${i + 1}: thread start ${'thread filler '.repeat(40)} thread middle sentinel ${i + 1}. thread tail sentinel`),
+						metadata: { characterArcs: Array.from({ length: 9 }, (_, i) => ({
+							name: `Character ${i + 1}`,
+							development: `Development start ${'character detail '.repeat(50)} development middle sentinel ${i + 1}. ${'character detail '.repeat(50)} development end.`,
+							sourceChapterIds: [],
+						})) },
 					}),
 				],
 			}),
@@ -1189,27 +1233,30 @@ describe('turn prompt harness', () => {
 		});
 
 		expect(report.prompt).toContain('- Arc 3: Oversized Arc');
-		expect(report.prompt).toContain('summary excerpt (retrieve the full arc for omitted middle detail)');
+		expect(report.prompt).not.toContain('summary excerpt');
 		expect(report.prompt).toContain('Arc opening fact survives.');
+		expect(report.prompt).toContain('Arc middle fact survives.');
 		expect(report.prompt).toContain('Arc prompt tail sentinel');
 		expect(report.prompt).toContain('thread tail sentinel');
+		expect(report.prompt).toContain('thread middle sentinel 12.');
+		expect(report.prompt).toContain('development middle sentinel 9.');
 	});
 
-	it('budgets rendered arc memory without repeating covered chapters', () => {
-		const arcs = Array.from({ length: 9 }, (_, index) => row({
+	it('loads every full arc chronologically beyond 30k tokens without repeating covered chapters', () => {
+		const arcs = Array.from({ length: 12 }, (_, index) => row({
 			id: `arc_${index + 1}`,
 			storyId: 'story_balaerys',
 			number: index + 1,
 			title: `Arc ${index + 1}`,
-			summary: `Arc ${index + 1} summary sentinel. ${'large arc detail '.repeat(5000)}Arc ${index + 1} final consequence.`,
+			summary: `Arc ${index + 1} summary sentinel. ${'large arc detail '.repeat(700)}Arc ${index + 1} middle consequence. ${'large arc detail '.repeat(700)}Arc ${index + 1} final consequence.`,
 			chapterIds: index === 0 ? ['chapter_1'] : [],
 			sourceEventIds: [],
 			openThreadIds: [],
 			metadata: {},
 		}));
 		const report = buildPromptHarnessReport({
-			name: 'arc-count-cap-covered-chapters',
-			playerText: 'Continue with compact memory.',
+			name: 'all-arcs-covered-chapters',
+			playerText: 'Continue with the complete arc history.',
 			ctx: baseContext({
 				chapters: [
 					row({
@@ -1230,17 +1277,21 @@ describe('turn prompt harness', () => {
 						metadata: {},
 					}),
 				],
-				arcs,
+				arcs: [...arcs].reverse(),
 			}),
 			retrieved: packet('compact memory', []),
 		});
 
-		expect(report.prompt).not.toContain('Arc 1 summary sentinel.');
-		expect(report.prompt).not.toContain('Arc 5 summary sentinel.');
-		expect(report.prompt).toContain('Arc 9 summary sentinel.');
-		expect(report.prompt).toContain('Arc 9 final consequence.');
+		const history = report.compiledPrompt.stablePrefix.find(section => section.id === 'campaign_history')!;
+		expect(countTokens(history.content)).toBeGreaterThan(30_000);
+		for (const arc of arcs) {
+			expect(history.content).toContain(arc.summary);
+			expect(history.sourceIds).toContain(arc.id);
+		}
+		expect(history.content.indexOf('- Arc 1:')).toBeLessThan(history.content.indexOf('- Arc 12:'));
+		expect(report.compiledPrompt.dynamicTail[0].content).not.toContain('Arc 1 summary sentinel.');
 		expect(report.prompt).not.toContain('Covered chapter sentinel should not render.');
-		expect(report.prompt).toContain('Historical summaries omitted for the context budget:');
+		expect(report.prompt).not.toContain('Historical summaries omitted for the context budget:');
 	});
 
 	it('keeps the tail of long narration messages so continue prompts do not restart', () => {

@@ -428,6 +428,7 @@ async function candidateNodes(request: MemoryRetrieveRequest): Promise<{ nodes: 
 		))`,
 		visibilityFilter,
 		sourceTypeFilter,
+		request.excludeHistorySummaries ? sql`${memoryNodes.id} !~ '^mem_(chapter|arc|saga)_'` : undefined,
 	].filter(Boolean);
 	const expandedRequest = { ...searchRequest, sceneEntityIds };
 	const debug: string[] = [];

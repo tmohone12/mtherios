@@ -1109,6 +1109,8 @@ class StoryStore {
 		if (!id) return null;
 		const metadata = asRecord(row.metadata);
 		const sagaNumber = asNumber(row.number ?? row.sagaNumber, 1);
+		const startArcNumber = asNumber(metadata.startArcNumber, 0);
+		const endArcNumber = asNumber(metadata.endArcNumber, 0);
 		return {
 			id,
 			storyId: this.currentStory.id,
@@ -1116,7 +1118,9 @@ class StoryStore {
 			title: asString(row.title, `Saga ${sagaNumber}`),
 			summary: asString(row.summary).trim(),
 			arcIds: asStringArray(row.arcIds),
-			arcRange: asString(row.arcRange ?? metadata.legacyRange, `Arcs ${sagaNumber}`),
+			arcRange: startArcNumber > 0 && endArcNumber >= startArcNumber
+				? `Arcs ${startArcNumber}-${endArcNumber}`
+				: asString(row.arcRange ?? metadata.legacyRange),
 			keyFactionShifts: asStringArray(row.keyFactionShifts),
 			majorPowerChanges: asStringArray(row.majorPowerChanges),
 			lingeringThreads: asStringArray(row.lingeringThreads),

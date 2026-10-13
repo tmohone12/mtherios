@@ -961,7 +961,7 @@
 									<span class="text-center">{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[8])}</span>
 									<span class="text-right">{formatTokenBudgetCompact(CONTEXT_BUDGET_STEPS[CONTEXT_BUDGET_STEPS.length - 1])}</span>
 								</div>
-								<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">0 uses the compiler's built-in section limits. Recent dialogue has its own allowance below; this is not the total model context size.</p>
+								<p class="text-[10px] leading-relaxed text-[var(--text-muted)]">All arc memories are always included, separately from this scene budget. 0 uses the available model capacity. Recent dialogue has its own allowance below; the whole request must fit the model's context window.</p>
 							</div>
 
 							{#each liveContextDials as dial (dial.key)}

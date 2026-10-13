@@ -124,21 +124,18 @@ const AGREEMENT_LIMIT = 8;
 const EVENT_LIMIT = 8;
 const GM_EVENT_SECTION_LIMIT = 4;
 const GM_NPC_EVENT_LIMIT = 4;
-// Continuity is evidence for the current scene, not a second transcript.
-// Keep enough room for the current un-arc'd chapter window and compact arc
-// history, leaving the rest to source-linked retrieval.
-const CONTINUITY_MEMORY_TOKEN_BUDGET = 6_500;
-const ARC_MEMORY_TOKEN_BUDGET = 2_000;
-const CHAPTER_OUTCOME_CONTEXT_CHAR_LIMIT = 3_500;
+// The canon timeline sends every saga, every arc outside a saga and every chapter outside an
+// arc whole; only a chapter's supplementary change lists are bounded.
 const CHAPTER_DETAIL_CONTEXT_CHAR_LIMIT = 280;
 const CHAPTER_DETAIL_CONTEXT_LIMIT = 10;
-const ARC_SUMMARY_CONTEXT_CHAR_LIMIT = 2_500;
-const ARC_CHARACTER_CONTEXT_CHAR_LIMIT = 240;
-const ARC_CHARACTER_CONTEXT_LIMIT = 6;
-const ARC_THREAD_CONTEXT_CHAR_LIMIT = 240;
-const SAGA_MEMORY_SUMMARY_CHAR_LIMIT = 2600;
-const SAGA_MEMORY_LIST_CHAR_LIMIT = 900;
-const SAGA_MEMORY_LIMIT = 4;
+const CANON_TIMELINE_INSTRUCTION = [
+	'Canon timeline: the accepted history of this campaign, oldest first.',
+	'Each period appears once, at the most detailed level kept for it: a saga stands in for its arcs, an arc for its chapters, and the recent dialogue continues after the last chapter listed here.',
+	'All of this already happened. Build on it; do not replay, contradict or re-narrate it.',
+	'Later entries override earlier states, titles, numbers, plans and open threads, and the recent dialogue and current scene override all of it.',
+	'Prophecies, dreams, visions, rumours and beliefs keep their uncertain status, and private knowledge belongs only to the person who holds it.',
+	'A detail missing here is not evidence that it did not happen.',
+].join(' ');
 const CURRENT_SCENE_CHAR_LIMIT = 1400;
 const CURRENT_SCENE_PARAGRAPH_LIMIT = 4;
 const PLAYER_DESCRIPTION_CHAR_LIMIT = 2200;
@@ -189,14 +186,6 @@ function compactBlock(value: string | null | undefined, max = 7500): string {
 	const text = toWellFormedText(value ?? '').trim();
 	if (text.length <= max) return text;
 	return `${sliceWellFormedText(text, max - 3).trimEnd()}...`;
-}
-
-function compactMemoryEnds(value: string, max: number): string {
-	const text = toWellFormedText(value).trim();
-	if (text.length <= max) return text;
-	const start = sliceWellFormedText(text, Math.floor((max - 5) / 2)).trimEnd();
-	const end = toWellFormedText(text.slice(-(max - start.length - 5))).trimStart();
-	return `${start} ... ${end}`;
 }
 
 function hashText(value: string): string {
@@ -1098,10 +1087,6 @@ export function dialogueRhythmGuidance(messages: Pick<DialogueMessage, 'role' | 
 	return `Dialogue continuity: ${questionEndings} of the last ${recentNarration.length} narrator turns ended with a question. The player can act without another prompt. In this turn, let NPCs answer, act, or pause unless a new question genuinely follows from their own need; do not restate an already pending choice.`;
 }
 
-function renderList(values: string[], max = 220, limit = 12): string {
-	return values.length ? values.slice(0, limit).map((value) => `    - ${compact(value, max)}`).join('\n') : '';
-}
-
 function readableChapterOutcome(value: string | null | undefined): string {
 	const raw = value?.trim() ?? '';
 	if (!raw) return '';
@@ -1117,7 +1102,7 @@ export function chaptersForPromptContinuity<T extends { id: string }>(chapters: 
 }
 
 function renderChapterMemory(chapter: TurnContext['chapters'][number]): string {
-	const outcome = compactMemoryEnds(readableChapterOutcome(chapter.sceneOutcome), CHAPTER_OUTCOME_CONTEXT_CHAR_LIMIT);
+	const outcome = readableChapterOutcome(chapter.sceneOutcome);
 	const details = [
 		...(chapter.irreversibleChanges ?? []),
 		...(chapter.npcKnowledgeChanges ?? []).map(change => JSON.stringify(change)),
@@ -1194,96 +1179,95 @@ function selectRelevantAgreements(ctx: TurnContext, sceneEntityIds: Set<string>,
 		.slice(0, AGREEMENT_LIMIT);
 }
 
+/** "chapters 3-12" from the chapter numbers a record covers, when they are known. */
+function chapterRange(numbers: number[]): string {
+	if (!numbers.length) return '';
+	const first = Math.min(...numbers);
+	const last = Math.max(...numbers);
+	return first === last ? `chapter ${first}` : `chapters ${first}-${last}`;
+}
+
 export function renderArcMemory(arc: TurnContext['arcs'][number], chapters: Array<{ id: string; number: number }> = []): string {
-	const fullSummary = readableChapterOutcome(arc.summary);
-	const summary = compactMemoryEnds(fullSummary, ARC_SUMMARY_CONTEXT_CHAR_LIMIT);
+	const summary = readableChapterOutcome(arc.summary);
+	const covered = chapterRange(arc.chapterIds.flatMap(id => chapters.find(chapter => chapter.id === id)?.number ?? []));
 	const metadata = asRecord(arc.metadata);
 	const characterLines = (Array.isArray(metadata.characterArcs) ? metadata.characterArcs : []).map(asRecord)
 		.filter(item => typeof item.name === 'string' && typeof item.development === 'string')
-		.slice(0, ARC_CHARACTER_CONTEXT_LIMIT)
 		.map(item => {
 			const sourceIds = asStringArray(item.sourceChapterIds);
-			// Long, repeated projection IDs consumed more than the entire arc allowance.
-			// Keep verified human-readable references here; full IDs remain on the arc
-			// record and in captured provenance for retrieval.
-			const numbers = sourceIds.slice(0, 10).flatMap(id => {
+			// Keep human-readable chapter references; canonical IDs remain on the arc.
+			const numbers = sourceIds.flatMap(id => {
 				const chapter = chapters.find(chapter => chapter.id === id);
 				return chapter ? [chapter.number] : [];
 			});
-			const unresolved = Math.min(sourceIds.length, 10) - numbers.length;
+			const unresolved = sourceIds.length - numbers.length;
 			const references = [numbers.length ? `source chapters: ${numbers.join(',')}` : '',
-				unresolved ? `${unresolved} unresolved references available in the full arc` : ''].filter(Boolean).join('; ');
-			return `    - ${item.name}: ${compact(String(item.development), ARC_CHARACTER_CONTEXT_CHAR_LIMIT)}${references ? ` [${references}]` : ''}`;
+				unresolved ? `${unresolved} unresolved source references` : ''].filter(Boolean).join('; ');
+			return `    - ${item.name}: ${item.development}${references ? ` [${references}]` : ''}`;
 		});
 	const openThreads = arc.openThreadIds.filter(thread => thread && !summary.includes(thread));
 	return [
-		`- Arc ${arc.number}: ${arc.title}`,
-		`  ${fullSummary.length > ARC_SUMMARY_CONTEXT_CHAR_LIMIT ? 'summary excerpt (retrieve the full arc for omitted middle detail)' : 'summary'}: ${summary}`,
+		`- Arc ${arc.number}: ${arc.title}${covered ? ` (${covered})` : ''}`,
+		`  summary: ${summary}`,
 		characterLines.length ? `  Character history (knowledge belongs to the named actor):\n${characterLines.join('\n')}` : '',
-		openThreads.length ? `  open threads: ${openThreads.slice(0, 8).map(thread => compactMemoryEnds(thread, ARC_THREAD_CONTEXT_CHAR_LIMIT)).join('; ')}` : '',
+		openThreads.length ? `  open threads: ${openThreads.join('; ')}` : '',
 	].filter(Boolean).join('\n');
 }
 
-export function renderCampaignMemory(ctx: TurnContext, capture?: CapturePromptRecord): string {
-	const selectedChapters = new Map<string, string>();
-	const selectedArcs = new Map<string, string>();
-	let remaining = CONTINUITY_MEMORY_TOKEN_BUDGET;
-	let arcRemaining = ARC_MEMORY_TOKEN_BUDGET;
-	const include = (id: string, text: string, selected: Map<string, string>) => {
-		const tokens = countTokens(text) + 2;
-		if (!text.trim() || tokens > remaining) return;
-		selected.set(id, text);
-		remaining -= tokens;
-	};
-	const storedArcCoverage = new Set(ctx.arcs.flatMap(arc => arc.chapterIds));
-	// The incomplete arc has no other historical account. Keep these chapters
-	// first, then spend the remaining allowance on whole completed arcs.
-	for (const chapter of [...ctx.chapters].reverse()) {
-		if (!storedArcCoverage.has(chapter.id)) {
-			const rendered = renderChapterMemory(chapter);
-			if (countTokens(rendered) + 2 <= remaining - ARC_MEMORY_TOKEN_BUDGET) include(chapter.id, rendered, selectedChapters);
-		}
+/**
+ * The campaign's history as one chronological block: every saga, every arc outside a saga and
+ * every chapter outside an arc, each whole. Each period appears once, at the most detailed level
+ * kept for it: a model-written saga stands in for its arcs, an arc for its chapters. Sagas that
+ * are not model-written, or that name a missing or already covered arc, do not stand in for
+ * anything, so their arcs stay. The recent dialogue continues after the last chapter.
+ */
+export function renderCanonTimeline(ctx: Pick<TurnContext, 'sagas' | 'arcs' | 'chapters'>, capture?: CapturePromptRecord): string {
+	const byNumber = <T extends { number: number }>(a: T, b: T) => a.number - b.number;
+	const chapterNumbers = new Map(ctx.chapters.map(chapter => [chapter.id, chapter.number]));
+	const arcById = new Map(ctx.arcs.map(arc => [arc.id, arc]));
+	const arcChapterNumbers = (arc: TurnContext['arcs'][number]) => arc.chapterIds.flatMap(id => chapterNumbers.get(id) ?? []);
+	const sagaArcs = new Set<string>();
+	const sagas = [...ctx.sagas].sort(byNumber).filter(saga => {
+		const arcIds = asStringArray(saga.arcIds);
+		if (asRecord(saga.metadata).summarySource !== 'llm' || !arcIds.length || arcIds.some(id => !arcById.has(id) || sagaArcs.has(id))) return false;
+		for (const id of arcIds) sagaArcs.add(id);
+		return true;
+	});
+	const arcChapters = new Set(ctx.arcs.flatMap(arc => arc.chapterIds));
+	const items: Array<{ start: number | null; text: string }> = [];
+	for (const saga of sagas) {
+		const arcs = asStringArray(saga.arcIds).map(id => arcById.get(id)!).sort(byNumber);
+		const arcNumbers = arcs.map(arc => arc.number);
+		const chapters = arcs.flatMap(arcChapterNumbers);
+		const covered = [`arc${arcNumbers.length > 1 ? `s ${arcNumbers[0]}-${arcNumbers.at(-1)}` : ` ${arcNumbers[0]}`}`, chapterRange(chapters)].filter(Boolean).join(', ');
+		const text = `- Saga ${saga.number}: ${saga.title.replace(/^Saga \d+:\s*/i, '')} (${covered})\n${readableChapterOutcome(saga.summary)}`;
+		items.push({ start: chapters.length ? Math.min(...chapters) : null, text: capture?.('sagas', saga.id, text) ?? text });
 	}
-	for (const arc of [...ctx.arcs].reverse()) {
-		const rendered = renderArcMemory(arc, ctx.chapters);
-		const tokens = countTokens(rendered) + 2;
-		if (tokens > arcRemaining) continue;
-		include(arc.id, rendered, selectedArcs);
-		if (selectedArcs.has(arc.id)) arcRemaining -= tokens;
+	for (const arc of [...ctx.arcs].sort(byNumber).filter(arc => !sagaArcs.has(arc.id))) {
+		const chapters = arcChapterNumbers(arc);
+		const text = renderArcMemory(arc, ctx.chapters);
+		items.push({ start: chapters.length ? Math.min(...chapters) : null, text: capture?.('arcs', arc.id, text) ?? text });
 	}
-	const includedArcs = ctx.arcs.filter(arc => selectedArcs.has(arc.id));
-	for (const chapter of [...ctx.chapters].reverse()) {
-		if (!selectedChapters.has(chapter.id) && !storedArcCoverage.has(chapter.id)) {
-			include(chapter.id, renderChapterMemory(chapter), selectedChapters);
-		}
+	// The chapters after the last arc have no other account; every one goes in whole.
+	for (const chapter of [...ctx.chapters].sort(byNumber).filter(chapter => !arcChapters.has(chapter.id))) {
+		const text = renderChapterMemory(chapter);
+		items.push({ start: chapter.number, text: capture?.('chapters', chapter.id, text) ?? text });
 	}
-	const chapterLines = ctx.chapters.filter(chapter => selectedChapters.has(chapter.id)).map(chapter =>
-		capture?.('chapters', chapter.id, selectedChapters.get(chapter.id)!) ?? selectedChapters.get(chapter.id)!);
-	const arcLines = includedArcs.map(arc => capture?.('arcs', arc.id, selectedArcs.get(arc.id)!) ?? selectedArcs.get(arc.id)!);
-	const omittedChapters = ctx.chapters.filter(chapter => !selectedChapters.has(chapter.id) && !storedArcCoverage.has(chapter.id));
-	const omittedArcs = ctx.arcs.filter(arc => !selectedArcs.has(arc.id));
-	const omissions = [
-		omittedChapters.length ? `${omittedChapters.length} chapters (${omittedChapters.slice(0, 12).map(chapter => chapter.number).join(', ')}${omittedChapters.length > 12 ? ', …' : ''})` : '',
-		omittedArcs.length ? `${omittedArcs.length} arcs (${omittedArcs.slice(0, 12).map(arc => arc.number).join(', ')}${omittedArcs.length > 12 ? ', …' : ''})` : '',
-	].filter(Boolean);
+	if (!items.length) return '';
+	// Strict chronology even when a layer has a gap: an entry without known chapters keeps its place after the one before it.
+	let previous = 0;
+	const ordered = items.map((item, index) => {
+		previous = item.start ?? previous;
+		return { text: item.text, index, start: previous };
+	}).sort((a, b) => a.start - b.start || a.index - b.index);
+	const lastChapter = ctx.chapters.reduce((latest, chapter) => Math.max(latest, chapter.number), 0);
 	return [
-		arcLines.length || chapterLines.length ? 'Historical continuity: these accounts describe their covered period. Later events supersede older states, plans, and unresolved threads; private knowledge belongs only to its named actor.' : '',
-		arcLines.length ? `Arc memory:\n${arcLines.join('\n')}` : '',
-		chapterLines.length ? `Chapter memory:\n${chapterLines.join('\n')}` : '',
-		omissions.length ? `Historical summaries omitted for the context budget: ${omissions.join('; ')}. Stored summaries remain available for retrieval. Missing context does not mean an event did not happen.` : '',
+		'<canon_timeline>',
+		CANON_TIMELINE_INSTRUCTION,
+		...ordered.map(item => item.text),
+		lastChapter ? `The timeline ends with chapter ${lastChapter}; the recent dialogue continues from there.` : '',
+		'</canon_timeline>',
 	].filter(Boolean).join('\n\n');
-}
-
-function renderSagaMemory(ctx: TurnContext): string {
-	const lines = ctx.sagas.slice(-SAGA_MEMORY_LIMIT).map((saga) => [
-		`- Saga ${saga.number}: ${saga.title}`,
-		`  summary: ${compactBlock(saga.summary, SAGA_MEMORY_SUMMARY_CHAR_LIMIT)}`,
-		saga.keyFactionShifts.length ? `  faction shifts:\n${renderList(saga.keyFactionShifts, SAGA_MEMORY_LIST_CHAR_LIMIT, 8)}` : '',
-		saga.majorPowerChanges.length ? `  power changes:\n${renderList(saga.majorPowerChanges, SAGA_MEMORY_LIST_CHAR_LIMIT, 8)}` : '',
-		saga.lingeringThreads.length ? `  lingering threads:\n${renderList(saga.lingeringThreads, SAGA_MEMORY_LIST_CHAR_LIMIT, 8)}` : '',
-		saga.overallTone ? `  tone: ${saga.overallTone}` : '',
-	].filter(Boolean).join('\n'));
-	return lines.length ? `Saga memory:\n${lines.join('\n')}` : '';
 }
 
 function selectRelevantFactions(
@@ -1646,8 +1630,7 @@ export function buildServerTurnPrompt(
 		renderGmEventSection('Due events', narratorBrief.dueEvents, capture, DEFAULT_DUE_LIMIT),
 	].filter(Boolean).join('\n') : '';
 	const gmTimelineBrief = renderGmTimelineBrief(narratorBrief ? { ...narratorBrief, dueEvents: [] } : null, capture);
-	const sagaMemory = renderSagaMemory(ctx);
-	const campaignMemory = renderCampaignMemory(ctx, capture);
+	const canonTimeline = renderCanonTimeline(ctx, capture);
 
 	const portrayalMode = presentEntities.length > 6 ? 'compact' : 'rich';
 	const cardedEntityIds = new Set(characterBlockEntities.slice(0, CHARACTER_BLOCK_LIMIT).map(entity => entity.id));
@@ -1800,8 +1783,7 @@ export function buildServerTurnPrompt(
 		threadLines.length ? `Local plot ledger (background reference; introduce no new hook unless the action or an immediate established effect calls for it):\n${threadLines.join('\n')}` : '',
 		gmTimelineBrief || (eventLines.length ? `Recent source-linked events:\n${eventLines.join('\n')}` : ''),
 		retrievedMemory,
-		{ stable: sagaMemory },
-		{ stable: campaignMemory },
+		{ stable: canonTimeline },
 		{ stable: authoredReference },
 		options.stableWikiContext ? { stable: terminalWikiContext } : terminalWikiContext,
 		factionLines.length ? `Faction canon:\n${factionLines.join('\n')}` : '',
@@ -1811,7 +1793,7 @@ export function buildServerTurnPrompt(
 	];
 	const prompt = promptParts.map(part => typeof part === 'string' ? part : part.stable).filter(Boolean).join('\n\n');
 	const stableContext = promptParts.flatMap(part => typeof part === 'string' ? [] : [part.stable]).filter(Boolean).join('\n\n');
-	const stableHistoryContext = [premise, playerCharacter.identity, sagaMemory, campaignMemory, authoredReference].filter(Boolean).join('\n\n');
+	const stableHistoryContext = [premise, playerCharacter.identity, canonTimeline, authoredReference].filter(Boolean).join('\n\n');
 	const stableWikiContext = options.stableWikiContext ? terminalWikiContext : '';
 	const dynamicPrompt = promptParts.filter((part): part is string => typeof part === 'string').filter(Boolean).join('\n\n');
 

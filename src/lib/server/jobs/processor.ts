@@ -11,7 +11,7 @@ import { gmTurnReceiptSchema, type MemoryNode } from '$lib/contracts/memory';
 import { type CampaignStateFact, type ChapterCampaignFactAction } from '$lib/contracts/campaignState';
 import { CHAPTER_TURN_COUNT, CHAPTERS_PER_ARC, selectArcRollupBatches, selectCompletedChapterTurns, selectNextChapterWindow } from '$lib/services/chapterCadence';
 export { selectArcRollupBatches } from '$lib/services/chapterCadence';
-import { generateChronologicalMemory, type MemoryInput } from './summaryGeneration';
+import { generateChronologicalMemory, generateSagaMemory, type MemoryInput, type SagaMemory, type SagaSource } from './summaryGeneration';
 import { chapterSourceForArc } from './chapterSummarySource';
 export { chapterSourceForArc } from './chapterSummarySource';
 import {
@@ -116,8 +116,10 @@ const ARC_ROLLUP_THREAD_LIMIT = 20;
 export const CHARACTER_CONTEXT_AUTO_APPLY_CHAPTER_INTERVAL = 1;
 export const CHAPTER_PROJECTION_COMPILER = 'chapter-projection-v3';
 export const ARC_PROJECTION_COMPILER = 'arc-projection-v3';
-export const SAGA_PROJECTION_COMPILER = 'saga-projection-v1';
-const SAGA_ROLLUP_ARCS = 5;
+// v2: a model-written saga of two arcs replaces the v1 five-arc concatenation.
+export const SAGA_PROJECTION_COMPILER = 'saga-projection-v2';
+/** Two arcs (about twenty chapters) per saga. */
+export const SAGA_ROLLUP_ARCS = 2;
 
 type ProjectionSourceRow = Pick<StoryEntryRow, 'id' | 'position' | 'content' | 'serverVersion'>
 	& Partial<Pick<StoryEntryRow, 'type' | 'parentId' | 'branchId' | 'metadata'>>;
@@ -693,18 +695,6 @@ export function preserveDurableDeferredState(update: WorldStateUpdate): WorldSta
 
 function deferredStateUpdateHasOperations(update: WorldStateUpdate): boolean {
 	return turnUpdateOperationCount(update) > 0;
-}
-
-function arcSummarySnippet(value: string, max: number): string {
-	const clean = compactWhitespace(value).replace(/\s*\.\.\.$/u, '');
-	if (clean.length <= max) return clean;
-	const slice = clean.slice(0, max).trimEnd();
-	const sentence = [...slice.matchAll(/[.!?]["')\]]?(?=\s|$)/g)].at(-1);
-	if (sentence && sentence.index !== undefined && sentence.index > max * 0.45) {
-		return slice.slice(0, sentence.index + sentence[0].length).trim();
-	}
-	const wordBreak = slice.lastIndexOf(' ');
-	return slice.slice(0, wordBreak > max * 0.45 ? wordBreak : max).replace(/[,:;("-]+$/u, '').trim();
 }
 
 export function backendJobStatusEventData(
@@ -3283,17 +3273,23 @@ export function buildSagaMemoryFields(sagaArcs: SagaSummaryArc[]): SagaMemoryFie
 	};
 }
 
-export function buildSagaSummary(sagaArcs: SagaSummaryArc[]): string {
-	const fields = buildSagaMemoryFields(sagaArcs);
-	const overview = sagaArcs.map((arc) => `Arc ${arc.number} (${arc.title}): ${arc.summary}`).join(' ');
-	const sections = [
-		`Saga overview:\n${arcSummarySnippet(overview, 1600)}`,
-		fields.keyFactionShifts.length ? `Faction shifts:\n${fields.keyFactionShifts.slice(0, 8).map((item) => `- ${arcSummarySnippet(item, 180)}`).join('\n')}` : '',
-		fields.majorPowerChanges.length ? `Power changes:\n${fields.majorPowerChanges.slice(0, 8).map((item) => `- ${arcSummarySnippet(item, 180)}`).join('\n')}` : '',
-		fields.lingeringThreads.length ? `Lingering threads:\n${fields.lingeringThreads.slice(0, 10).map((item) => `- ${arcSummarySnippet(item, 180)}`).join('\n')}` : '',
-		`Tone to carry forward:\n${arcSummarySnippet(fields.overallTone, 320)}`,
-	];
-	return sections.join('\n\n');
+/** An arc as saga input: its number, title and chapter range, then its full stored summary. */
+export function sagaSourceForArc(arc: SagaSummaryArc): SagaSource {
+	const metadata = asRecord(arc.metadata);
+	const first = asNumber(metadata.startChapterNumber, 0);
+	const last = asNumber(metadata.endChapterNumber, 0);
+	return { id: arc.id, label: `Arc ${arc.number}: ${arc.title}${first && last ? ` (chapters ${first}-${last})` : ''}`, text: arc.summary };
+}
+
+/** The saga as stored and shown: period, titled sections, consequence, continuity notes, open threads. */
+export function renderSagaSummary(saga: Pick<SagaMemory, 'period' | 'sections' | 'consequence' | 'continuity' | 'openThreads'>): string {
+	return [
+		saga.period ? `Period: ${saga.period}` : '',
+		...saga.sections.map((section) => `${section.heading}\n${section.text}`),
+		`Saga consequence: ${saga.consequence}`,
+		saga.continuity.length ? `Continuity:\n${saga.continuity.map((note) => `- ${note}`).join('\n')}` : '',
+		saga.openThreads.length ? `Open threads:\n${saga.openThreads.map((thread) => `- ${thread}`).join('\n')}` : '',
+	].filter(Boolean).join('\n\n');
 }
 
 export async function upsertSagaMemoryNode(input: {
@@ -3365,16 +3361,22 @@ export async function upsertSagaMemoryNode(input: {
 	});
 }
 
+/** Sagas from another compiler (the v1 five-arc concatenation) are replaced; their arcs count as uncovered. */
+function isCurrentSaga(saga: { metadata: unknown }): boolean {
+	return asRecord(saga.metadata).projectionCompiler === SAGA_PROJECTION_COMPILER;
+}
+
 async function rollupSaga(job: BackendJobRow, recorder?: TimingRecorder): Promise<Record<string, unknown>> {
 	const db = getDb();
 	const [arcRows, sagaRows, canonicalThreadRows] = await timePhase(recorder, 'job.rollup_saga.load_context', { arcsPerSaga: SAGA_ROLLUP_ARCS }, () => Promise.all([
 		db.select().from(arcs).where(eq(arcs.storyId, job.storyId)).orderBy(asc(arcs.number)).limit(200),
-		 db.select().from(sagas).where(eq(sagas.storyId, job.storyId)).orderBy(asc(sagas.number)).limit(100),
+		db.select().from(sagas).where(eq(sagas.storyId, job.storyId)).orderBy(asc(sagas.number)).limit(100),
 		db.select({ id: storyThreads.id, status: storyThreads.status }).from(storyThreads).where(eq(storyThreads.storyId, job.storyId)),
 	]));
-	const coveredSagaArcs = new Set(sagaRows.flatMap((saga) => asStringArray(saga.arcIds)));
+	const currentSagas = sagaRows.filter(isCurrentSaga);
+	const coveredSagaArcs = new Set(currentSagas.flatMap((saga) => asStringArray(saga.arcIds)));
 	const uncoveredArcs = arcRows.filter((arc) => !coveredSagaArcs.has(arc.id));
-	const batches = selectSagaRollupBatches(arcRows, sagaRows, SAGA_ROLLUP_ARCS);
+	const batches = selectSagaRollupBatches(arcRows, currentSagas, SAGA_ROLLUP_ARCS);
 	if (batches.length === 0) return { created: false, reason: 'saga_threshold_not_met', uncoveredArcs: uncoveredArcs.length, arcsPerSaga: SAGA_ROLLUP_ARCS };
 
 	const createdSagas: Array<{ sagaId: string; number: number; arcCount: number }> = [];
@@ -3383,11 +3385,12 @@ async function rollupSaga(job: BackendJobRow, recorder?: TimingRecorder): Promis
 		const last = sagaArcs[sagaArcs.length - 1];
 		const arcIds = sagaArcs.map((arc) => arc.id);
 		const sagaId = stableId('saga', [first.id, last.id]);
-		const [existing] = await db.select().from(sagas).where(and(eq(sagas.storyId, job.storyId), eq(sagas.id, sagaId))).limit(1);
-		const number = existing?.number ?? ((sagaRows[sagaRows.length - 1]?.number ?? 0) + createdSagas.length + 1);
-		const title = `Saga ${number}: ${first.title} to ${last.title}`;
+		// Each saga commits on its own, so a later failure keeps the sagas already written.
+		const generated = await timePhase(recorder, 'job.rollup_saga.generate', { arcs: sagaArcs.length }, () =>
+			generateSagaMemory({ storyId: job.storyId, sources: sagaArcs.map(sagaSourceForArc) }));
+		const title = generated.title;
+		const summary = renderSagaSummary(generated);
 		const fields = buildSagaMemoryFields(sagaArcs);
-		const summary = buildSagaSummary(sagaArcs);
 		const sourceEntryIds = uniqueStrings(sagaArcs.flatMap((arc) => asStringArray(asRecord(arc.metadata).sourceEntryIds))).slice(0, 500);
 		const sourceEventIds = uniqueStrings(sagaArcs.flatMap((arc) => asStringArray(arc.sourceEventIds))).slice(0, 500);
 		const sourceStart = Math.min(...sagaArcs.map((arc) => asNumber(asRecord(arc.metadata).sourceStart, Number.MAX_SAFE_INTEGER)));
@@ -3405,16 +3408,19 @@ async function rollupSaga(job: BackendJobRow, recorder?: TimingRecorder): Promis
 		}, () => projectionArcsStillMatch(job.storyId, sagaArcs));
 		if (!arcsStillMatch) {
 			return {
-				created: false,
+				created: createdSagas.length > 0,
 				reason: 'projection_dependencies_changed',
 				uncoveredArcs: uncoveredArcs.length,
 				arcsPerSaga: SAGA_ROLLUP_ARCS,
+				sagas: createdSagas,
 			};
 		}
 		const now = nowIso();
 		const serverVersion = await timePhase(recorder, 'job.rollup_saga.bump_version', {}, () => bumpStoryVersion(job.storyId));
 		const metadata = {
 			sourceType: 'terminal_saga_job',
+			summarySource: 'llm',
+			summaryModel: generated.model,
 			jobId: job.id,
 			projectionCompiler: SAGA_PROJECTION_COMPILER,
 			projectionFingerprint: sourceFingerprint,
@@ -3422,9 +3428,29 @@ async function rollupSaga(job: BackendJobRow, recorder?: TimingRecorder): Promis
 			sourceStart: Number.isFinite(sourceStart) ? sourceStart : null,
 			sourceEnd,
 			pov: 'primary',
+			sourceEntryIds,
 			trackedEntityIds: fields.trackedEntityIds,
+			startArcNumber: first.number,
+			endArcNumber: last.number,
+			startChapterNumber: asNumber(asRecord(first.metadata).startChapterNumber, 0) || null,
+			endChapterNumber: asNumber(asRecord(last.metadata).endChapterNumber, 0) || null,
+			period: generated.period ?? null,
+			sections: generated.sections,
+			consequence: generated.consequence,
+			continuity: generated.continuity,
 		};
 		const [saga] = await timePhase(recorder, 'job.rollup_saga.persist_projection', { arcCount: sagaArcs.length }, () => db.transaction(async (tx) => {
+			await tx.select({ id: stories.id }).from(stories).where(eq(stories.id, job.storyId)).for('update');
+			// Another rollup may have covered these arcs while this saga was being written.
+			const currentRows = await tx.select({ id: sagas.id, number: sagas.number, arcIds: sagas.arcIds, metadata: sagas.metadata }).from(sagas).where(eq(sagas.storyId, job.storyId));
+			const current = currentRows.filter(isCurrentSaga);
+			if (current.some((row) => asStringArray(row.arcIds).some((arcId) => arcIds.includes(arcId)))) return [];
+			const outdatedIds = currentRows.filter((row) => !isCurrentSaga(row)).map((row) => row.id);
+			if (outdatedIds.length) {
+				await tx.delete(memoryNodes).where(and(eq(memoryNodes.storyId, job.storyId), inArray(memoryNodes.id, outdatedIds.map((id) => `mem_saga_${id}`))));
+				await tx.delete(sagas).where(and(eq(sagas.storyId, job.storyId), inArray(sagas.id, outdatedIds)));
+			}
+			const number = current.reduce((latest, row) => Math.max(latest, row.number), 0) + 1;
 			const [savedSaga] = await tx.insert(sagas).values({
 				id: sagaId,
 				storyId: job.storyId,
@@ -3434,24 +3460,24 @@ async function rollupSaga(job: BackendJobRow, recorder?: TimingRecorder): Promis
 				arcIds,
 				keyFactionShifts: fields.keyFactionShifts,
 				majorPowerChanges: fields.majorPowerChanges,
-				lingeringThreads: fields.lingeringThreads,
+				lingeringThreads: generated.openThreads,
 				overallTone: fields.overallTone,
 				sourceEventIds,
 				openThreadIds,
 				metadata,
 				serverVersion,
-				createdAt: existing?.createdAt ?? now,
+				createdAt: now,
 				updatedAt: now,
 			}).onConflictDoUpdate({
 				target: sagas.id,
-				set: { number, title, summary, arcIds, keyFactionShifts: fields.keyFactionShifts, majorPowerChanges: fields.majorPowerChanges, lingeringThreads: fields.lingeringThreads, overallTone: fields.overallTone, sourceEventIds, openThreadIds, metadata, serverVersion, updatedAt: now },
+				set: { number, title, summary, arcIds, keyFactionShifts: fields.keyFactionShifts, majorPowerChanges: fields.majorPowerChanges, lingeringThreads: generated.openThreads, overallTone: fields.overallTone, sourceEventIds, openThreadIds, metadata, serverVersion, updatedAt: now },
 				setWhere: sql`${sagas.serverVersion} <= excluded.server_version`,
 			}).returning();
 			if (savedSaga) await upsertSagaMemoryNode({
 				db: tx,
 				storyId: job.storyId,
 				sagaId: savedSaga.id,
-				title,
+				title: `Saga ${number}: ${title}`,
 				summary,
 				arcIds,
 				sourceEntryIds,

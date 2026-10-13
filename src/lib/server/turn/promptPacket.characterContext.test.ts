@@ -484,7 +484,7 @@ describe('server turn prompt character context', () => {
 		expect(prompt.contextRecords.filter(record => record.kind === 'chapters').map(record => record.id)).toEqual(['chapter_2']);
 	});
 
-	it('keeps oversized chapter and arc records from becoming a second transcript', () => {
+	it('sends an oversized arc whole in the cached history, never its covered chapters again', () => {
 		const ctx = context();
 		ctx.chapters = Array.from({ length: 10 }, (_, index) => row({
 			id: `chapter_${index + 1}`, storyId: 'story_test', number: index + 1, title: `Chapter ${index + 1}`,
@@ -497,12 +497,11 @@ describe('server turn prompt character context', () => {
 			summary: `Arc account. ${'historical detail '.repeat(6_000)}`, openThreadIds: [], sourceEventIds: [], metadata: {},
 		})];
 		const prompt = buildServerTurnPrompt(ctx, packet('What does Maera know?'), 'entry_current');
-		const records = prompt.contextRecords.filter(record => record.kind === 'arcs' || record.kind === 'chapters');
-		for (const record of records) {
-			const chars = record.end - record.start;
-			expect(chars).toBeLessThan(record.kind === 'arcs' ? 8_500 : 5_500);
-		}
-		expect(countTokens(prompt.prompt)).toBeLessThan(16_500);
+		// Complete arc history is mandatory context; the arc stands in for its chapters.
+		expect(prompt.contextRecords.filter(record => record.kind === 'chapters')).toEqual([]);
+		expect(prompt.stableHistoryContext).toContain(ctx.arcs[0].summary.trim());
+		expect(prompt.dynamicPrompt).not.toContain('historical detail');
+		expect(countTokens(prompt.dynamicPrompt)).toBeLessThan(16_500);
 	});
 
 	it('preserves what an NPC learned after a long conversation recap without sharing it with another actor', () => {

@@ -3272,6 +3272,8 @@ export async function prepareServerTurnContext(
 		threadIds: request.clientContext?.threadIds ?? [],
 		currentFactionId: request.clientContext?.currentFactionId ?? null,
 		tokenBudget: memoryTokenBudget,
+		// The canon timeline already sends each saga, unrolled arc and unrolled chapter once.
+		excludeHistorySummaries: true,
 	};
 	const turnContextPromise = recorder.time('turn.context_load', {
 			presentNpcIds: request.clientContext?.presentNpcIds?.length ?? 0,
@@ -3466,12 +3468,10 @@ export async function prepareServerTurnContext(
 	const contextAfterDialogue = ['nanogpt', 'openrouter'].includes(narrativeProfile.providerType) && !oocMode;
 	const modelCapacityTokens = narrativeCapabilities.maxContextTokens;
 	const requestedContextBudget = request.clientContext?.contextBudget;
-	const stableContextCost = countTokens(`\n\n<context_data>\n${prompt.stableContext}\n</context_data>`);
-	const baseFixedTokens = countTokens([narrativeInstructions, narrativePrompt, ...prompt.messages.map(message => message.content)].join('\n\n'));
-	const canCacheHistory = !oocMode && Boolean(prompt.stableContext)
-		&& (typeof requestedContextBudget !== 'number' || requestedContextBudget <= 0 || stableContextCost + 1024 < requestedContextBudget)
-		&& baseFixedTokens + stableContextCost + (narrativeGeneration.maxTokens ?? 4096) + 1536 < modelCapacityTokens;
-	const stableContextSent = canCacheHistory ? prompt.stableContext : '';
+	// Complete arc history is mandatory GM context. Keep it in the stable prefix
+	// regardless of the scene budget; model capacity checks must fail explicitly
+	// rather than falling back to a clipped history in the dynamic prompt.
+	const stableContextSent = !oocMode ? prompt.stableContext : '';
 	const narrativeSystem = stableContextSent
 		? `${narrativeInstructions}\n\n<context_data>\n${stableContextSent}\n</context_data>` : narrativeInstructions;
 	const systemCacheBoundary = stableContextSent && prompt.stableHistoryContext
@@ -3486,13 +3486,13 @@ export async function prepareServerTurnContext(
 	const dynamicContextBudget = calculateDynamicContextBudget({
 		contextWindowTokens: modelCapacityTokens,
 		configuredContextBudget: typeof requestedContextBudget === 'number' && requestedContextBudget > 0
-			? Math.max(1, requestedContextBudget - (stableContextSent ? stableContextCost : 0)) : null,
+			? requestedContextBudget : null,
 		fixedInputTokens,
 		outputReserveTokens: narrativeGeneration.maxTokens ?? 4096,
 		framingReserveTokens: 512,
 	});
 	if (!oocMode && dynamicContextBudget.maxDynamicContextTokens < 64 && narrativeContextSource.trim()) {
-		throw new Error(`Narrative request cannot fit the effective model capacity (${modelCapacityTokens} tokens) after reserving ${narrativeGeneration.maxTokens ?? 4096} output tokens and provider framing. Reduce the action/context or set an explicit larger model capacity.`);
+		throw new Error(`Narrative request including complete arc history cannot fit the effective model capacity (${modelCapacityTokens} tokens) after reserving ${narrativeGeneration.maxTokens ?? 4096} output tokens and provider framing. Reduce recent dialogue or use a model with a larger context window; arc history will not be silently omitted.`);
 	}
 	if (!oocMode && dynamicContextBudget.clamped) {
 		warnings.push(`Dynamic context budget clamped to ${dynamicContextBudget.maxDynamicContextTokens} tokens by the effective model capacity.`);
@@ -3501,7 +3501,7 @@ export async function prepareServerTurnContext(
 	let retainedRanges: RetainedRange[] = [];
 	const requiredDueRecords = narrativeContextRecords.filter(record => record.kind === 'timelineEvents' && prompt.requiredDueEventIds.includes(record.id));
 	const promptBudget = applyPromptContextBudget(narrativeContextSource, oocMode ? 0 : dynamicContextBudget.maxDynamicContextTokens, ranges => { retainedRanges = ranges; },
-		narrativeContextRecords.filter(record => ['campaignState', 'locationLore', 'locationPlaces', 'entities', 'chapters', 'arcs', 'timelineEvents', 'playerCorrections', 'requiredPlayer', 'requiredScene', 'requiredActors', 'requiredBeliefs', 'contentPinned', 'contentPartial'].includes(record.kind)),
+		narrativeContextRecords.filter(record => ['campaignState', 'locationLore', 'locationPlaces', 'entities', 'chapters', 'arcs', 'sagas', 'timelineEvents', 'playerCorrections', 'requiredPlayer', 'requiredScene', 'requiredActors', 'requiredBeliefs', 'contentPinned', 'contentPartial'].includes(record.kind)),
 		[...narrativeContextRecords.filter(record => ['playerCorrections', 'requiredPlayer', 'requiredScene', 'requiredActors', 'requiredBeliefs', 'contentPinned', 'contentPartial'].includes(record.kind)), ...requiredDueRecords]);
 	if (!oocMode && narrativeContextRecords.some(record => record.kind === 'campaignState'
 		&& !retainedRanges.some(range => range.start <= record.start && range.end >= record.end))) {
@@ -3644,7 +3644,7 @@ export async function prepareServerTurnContext(
 			recentEntries: ctxWithTimeline.recentEntries.length, memoryNodes: retrieved.nodes.length,
 			sceneCheckpointNotes: ctxWithTimeline.sceneCheckpoint?.notes.length ?? 0,
 			timelineEvents: new Set([...ctxWithTimeline.events, ...gmBrief.dueEvents, ...gmBrief.recentEvents, ...gmBrief.scheduledEvents].map(item => item.id)).size,
-			chapters: ctxWithTimeline.chapters.length, arcs: ctxWithTimeline.arcs.length,
+			chapters: ctxWithTimeline.chapters.length, arcs: ctxWithTimeline.arcs.length, sagas: ctxWithTimeline.sagas.length,
 			factionSheets: ctxWithTimeline.factions.length, beliefs: ctxWithTimeline.beliefs.length,
 			agreements: ctxWithTimeline.agreements.length, threads: ctxWithTimeline.threads.length,
 			wikiBlocks: wikiContext?.markdown.trim() ? 1 : 0,
@@ -4200,7 +4200,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 			let finalRetainedRanges: RetainedRange[] = [];
 			const revised = applyPromptContextBudget(narrativeContextSource, finalDynamicBudget,
 				ranges => { finalRetainedRanges = ranges; },
-				narrativeContextRecords.filter(record => ['campaignState', 'locationLore', 'locationPlaces', 'entities', 'chapters', 'arcs', 'timelineEvents', 'playerCorrections', 'requiredPlayer', 'requiredScene', 'requiredActors', 'requiredBeliefs', 'contentPinned', 'contentPartial'].includes(record.kind)),
+				narrativeContextRecords.filter(record => ['campaignState', 'locationLore', 'locationPlaces', 'entities', 'chapters', 'arcs', 'sagas', 'timelineEvents', 'playerCorrections', 'requiredPlayer', 'requiredScene', 'requiredActors', 'requiredBeliefs', 'contentPinned', 'contentPartial'].includes(record.kind)),
 				[...narrativeContextRecords.filter(record => ['playerCorrections', 'requiredPlayer', 'requiredScene', 'requiredActors', 'requiredBeliefs', 'contentPinned', 'contentPartial'].includes(record.kind)), ...requiredDueRecords]);
 			const omitted = narrativeContextRecords.filter(record => (['campaignState', 'playerCorrections', 'requiredPlayer', 'requiredScene', 'requiredActors', 'requiredBeliefs', 'contentPinned', 'contentPartial'].includes(record.kind) || requiredDueRecords.includes(record))
 				&& !finalRetainedRanges.some(range => range.start <= record.start && range.end >= record.end));

@@ -426,7 +426,7 @@ async function planNext(run: Row): Promise<Decision> {
   const plannerInstruction = `${MAX_AGENT_TOOL_CALLS - priorCalls.length} tool calls remain. Avoid repeating completed lookups. For world.actor.brief supply args.actorId or args.name from known context. ${instruction}`;
   const plannerBudgeted = prepared.narrativeSystemDynamic ? applyPromptContextBudget(prepared.prompt.prompt,
     Math.min(5_000, countTokens(prepared.narrativeSystemDynamic)), undefined,
-    prepared.prompt.contextRecords.filter(record => ['campaignState', 'locationLore', 'locationPlaces', 'entities', 'chapters', 'arcs', 'requiredPlayer', 'requiredScene', 'requiredActors', 'requiredBeliefs', 'contentPinned', 'contentPartial'].includes(record.kind)),
+    prepared.prompt.contextRecords.filter(record => ['campaignState', 'locationLore', 'locationPlaces', 'entities', 'chapters', 'arcs', 'sagas', 'requiredPlayer', 'requiredScene', 'requiredActors', 'requiredBeliefs', 'contentPinned', 'contentPartial'].includes(record.kind)),
     prepared.prompt.contextRecords.filter(record => ['requiredPlayer', 'requiredScene', 'requiredActors', 'requiredBeliefs', 'contentPinned', 'contentPartial'].includes(record.kind))) : null;
   const plannerContext = plannerBudgeted?.value ?? '';
   const options = { profile, model: plannerService.generation.model ?? undefined, temperature: 0, reasoningEffort: 'off', maxTokens: 8192, timeoutMs: 120_000, maxRetries: 0, system: plannerInstruction, systemDynamic: plannerContext, messages: prepared.prompt.messages, prompt };

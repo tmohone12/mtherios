@@ -7,12 +7,13 @@ import { arcs, backendJobs, chapters, entities, memoryNodes, sagas, stories, sto
 import { CHAPTERS_PER_ARC, CHAPTER_TURN_COUNT, selectCompletedChapterTurns, selectNextChapterWindow } from '$lib/services/chapterCadence';
 import { SUMMARY_REBUILD_GENERATION_POLICY } from '$lib/contracts/engine';
 import {
-	ARC_PROJECTION_COMPILER, CHAPTER_PROJECTION_COMPILER, SAGA_PROJECTION_COMPILER,
-	buildArcMemoryFields, buildChapterMemoryDigest, buildSagaMemoryFields, buildSagaSummary, canonicalArcOpenThreadIds,
+	ARC_PROJECTION_COMPILER, CHAPTER_PROJECTION_COMPILER, SAGA_ROLLUP_ARCS,
+	buildArcMemoryFields, buildChapterMemoryDigest, canonicalArcOpenThreadIds,
 	chapterMemoryEntityIds, isNarrativeChapterEvent, projectionFingerprint, stableId,
 	summarizeArcMemoryWithLlm, summarizeChapterMemoryWithLlm,
-	upsertArcMemoryNode, upsertChapterMemoryNode, upsertSagaMemoryNode,
+	upsertArcMemoryNode, upsertChapterMemoryNode,
 } from './processor';
+import { enqueueBackendJob } from './outbox';
 import { generateReadableNarrative } from './summaryGeneration';
 import { recordHistoricalChapterWindows } from './chapterWindows';
 import { replaceMtheriosStoryNarrative } from '$lib/services/ai/context/mtheriosSummaryFormat';
@@ -76,7 +77,7 @@ export function buildSummaryRebuildPlan(entries: Entry[]) {
 		remainingTurns,
 		chapterCount: windows.length,
 		arcCount: Math.floor(windows.length / CHAPTERS_PER_ARC),
-		sagaCount: Math.floor(windows.length / CHAPTERS_PER_ARC / 5),
+		sagaCount: Math.floor(windows.length / CHAPTERS_PER_ARC / SAGA_ROLLUP_ARCS),
 	};
 }
 
@@ -200,7 +201,6 @@ export async function rebuildStorySummaries(job: Job): Promise<Record<string, un
 	await writeFile(path.join(backupPath, 'plan.json'), JSON.stringify(preview, null, 2), { flag: 'wx' });
 	const draftChapters: Chapter[] = [];
 	const draftArcs: Arc[] = [];
-	const draftSagas: Saga[] = [];
 	const now = new Date().toISOString();
 	const serverVersion = snapshot.story.serverVersion + 1;
 	const originalEntries = new Map(snapshot.entries.map(entry => [entry.id, entry]));
@@ -315,24 +315,6 @@ export async function rebuildStorySummaries(job: Job): Promise<Record<string, un
 		if (failed?.status === 'rejected') throw failed.reason;
 	}
 	draftArcs.sort((left, right) => left.number - right.number);
-	for (let offset = 0; offset + 5 <= draftArcs.length; offset += 5) {
-		const sourceArcs = draftArcs.slice(offset, offset + 5);
-		const arcIds = sourceArcs.map(arc => arc.id);
-		const fields = buildSagaMemoryFields(sourceArcs);
-		const number = draftSagas.length + 1;
-		const row: Saga = {
-			id: stableId('saga', [arcIds[0], arcIds[arcIds.length - 1]]), storyId: job.storyId, number,
-			title: `Saga ${number}: ${sourceArcs[0].title} to ${sourceArcs[sourceArcs.length - 1].title}`, summary: buildSagaSummary(sourceArcs), arcIds,
-			keyFactionShifts: fields.keyFactionShifts, majorPowerChanges: fields.majorPowerChanges, lingeringThreads: fields.lingeringThreads, overallTone: fields.overallTone,
-			sourceEventIds: unique(sourceArcs.flatMap(arc => arc.sourceEventIds)), openThreadIds: unique(sourceArcs.flatMap(arc => arc.openThreadIds)),
-			metadata: { sourceType: 'terminal_saga_job', jobId: job.id, rebuild: true, projectionCompiler: SAGA_PROJECTION_COMPILER, projectionFingerprint: projectionFingerprint(sourceArcs), campaignId: job.storyId,
-				sourceStart: sourceArcs[0].metadata.sourceStart, sourceEnd: sourceArcs[sourceArcs.length - 1].metadata.sourceEnd,
-				sourceEntryIds: unique(sourceArcs.flatMap(arc => strings(arc.metadata.sourceEntryIds))), trackedEntityIds: fields.trackedEntityIds, pov: 'primary' },
-			serverVersion, createdAt: now, updatedAt: now,
-		};
-		await writeFile(path.join(backupPath, `saga-${number}.json`), JSON.stringify(row, null, 2), { flag: 'wx' });
-		draftSagas.push(row);
-	}
 	const result = { ...preview, backupPath, dryRun: false, applied: true, serverVersion, reusedChapters, reusedArcs };
 	await db.transaction(async tx => {
 		const [claim] = await tx.select({ id: backendJobs.id }).from(backendJobs).where(leaseWhere(job)).for('update');
@@ -350,7 +332,9 @@ export async function rebuildStorySummaries(job: Job): Promise<Record<string, un
 		await recordHistoricalChapterWindows(tx, { storyId: job.storyId, jobId: job.id, committedAt: now,
 			chapters: draftChapters.map(row => ({ id: row.id, number: row.number, sourceEntryIds: row.sourceEntryIds, metadata: row.metadata })), entries: current.entries });
 		if (draftArcs.length) await tx.insert(arcs).values(draftArcs);
-		if (draftSagas.length) await tx.insert(sagas).values(draftSagas);
+		// The model writes sagas after the rebuild commits; until then the arcs stand in for them.
+		if (draftArcs.length >= SAGA_ROLLUP_ARCS) await enqueueBackendJob({ storyId: job.storyId, type: 'rollup_saga', dedupeKey: `saga-rollup-rebuild-${job.id}`,
+			payload: { sourceJobId: job.id, rebuild: true }, maxAttempts: 3, requeueExisting: false }, tx);
 		const shared = { db: tx, storyId: job.storyId, serverVersion, now, jobId: job.id };
 		for (const row of draftChapters) await upsertChapterMemoryNode({ ...shared, chapterId: row.id, title: row.title ?? `Chapter ${row.number}`, summary: row.sceneOutcome,
 			keywords: strings(row.metadata.legacyKeywords), entityIds: strings(row.metadata.trackedEntityIds), sourceEntryIds: row.sourceEntryIds, sourceEventIds: row.sourceEventIds,
@@ -358,9 +342,6 @@ export async function rebuildStorySummaries(job: Job): Promise<Record<string, un
 		for (const row of draftArcs) await upsertArcMemoryNode({ ...shared, arcId: row.id, title: row.title, summary: row.summary, chapterIds: row.chapterIds,
 			entityIds: strings(row.metadata.trackedEntityIds), sourceEntryIds: strings(row.metadata.sourceEntryIds), sourceEventIds: row.sourceEventIds, openThreadIds: row.openThreadIds,
 			sourceFingerprint: String(row.metadata.projectionFingerprint), sourceStart: Number(row.metadata.sourceStart), sourceEnd: Number(row.metadata.sourceEnd), branchIds: strings(row.metadata.branchIds) });
-		for (const row of draftSagas) await upsertSagaMemoryNode({ ...shared, sagaId: row.id, title: row.title, summary: row.summary, arcIds: row.arcIds,
-			entityIds: strings(row.metadata.trackedEntityIds), sourceEntryIds: strings(row.metadata.sourceEntryIds), sourceEventIds: row.sourceEventIds, openThreadIds: row.openThreadIds,
-			sourceFingerprint: String(row.metadata.projectionFingerprint), sourceStart: Number(row.metadata.sourceStart), sourceEnd: Number(row.metadata.sourceEnd) });
 		await tx.update(stories).set({ serverVersion, updatedAt: new Date().toISOString() }).where(and(eq(stories.id, job.storyId), eq(stories.serverVersion, snapshot.story.serverVersion)));
 		await tx.update(backendJobs).set({ metadata: sql`${backendJobs.metadata} || ${JSON.stringify({ summaryRebuild: result })}::jsonb` }).where(leaseWhere(job));
 	});

@@ -7,8 +7,9 @@
 	import { normalizeRelation } from '$lib/services/ai/tools/helpers';
 	import { runBackendArcRollup, runBackendWorldSimTick } from '$lib/services/backendMemory';
 	import { selectArcRollupBatches } from '$lib/services/chapterCadence';
+	import { sagaBlocks, sagaSpan as describeSagaSpan } from '$lib/utils/sagaDisplay';
 	import { story } from '$lib/stores/story.svelte';
-	import { getChapters, getArcs, getSyncOpsForStory } from '$lib/services/database';
+	import { getChapters, getArcs, getSagas, getSyncOpsForStory } from '$lib/services/database';
 	import { fetchEngineCacheStatus } from '$lib/services/serverStories';
 	import { DND_ABILITIES, normalizePlayerSheet, type PlayerSheet } from '$lib/utils/playerSheet';
 	import { downloadStoryAsWiki } from '$lib/services/wikiExport';
@@ -16,7 +17,7 @@
 	import { terminalSyncDisplay, terminalSyncToneClass } from './terminalSyncDisplay';
 	import PlotDirectorPanel from './PlotDirectorPanel.svelte';
 	import type { EngineCacheSegmentDiagnostics } from '$lib/contracts/engine';
-	import type { Arc, Character, Entry, FactionActionRecord, FactionEntryState, Story, SyncOutboxOp } from '$lib/types';
+	import type { Arc, Character, Entry, FactionActionRecord, FactionEntryState, Saga, Story, SyncOutboxOp } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import type { Chapter } from '$lib/types';
 
@@ -177,12 +178,25 @@
 	let arcRollupNotice = $state<{ tone: 'info' | 'error'; text: string } | null>(null);
 	let expandedArc = $state<string | null>(null);
 
+	// Sagas (two arcs each); the GM's canon timeline sends these instead of their arcs.
+	let sagas = $state<Saga[]>([]);
+	let expandedSaga = $state<string | null>(null);
+
 	async function loadMemoryRecords(storyId: string): Promise<void> {
-		const [chapterRows, arcRows] = await Promise.all([getChapters(storyId), getArcs(storyId)]);
+		const [chapterRows, arcRows, sagaRows] = await Promise.all([getChapters(storyId), getArcs(storyId), getSagas(storyId)]);
 		if (story.currentStory?.id !== storyId) return;
 		chapters = chapterRows.sort((a, b) => a.number - b.number);
 		arcs = arcRows;
+		sagas = sagaRows;
 	}
+
+	function toggleSaga(id: string) {
+		expandedSaga = expandedSaga === id ? null : id;
+	}
+
+	// Which saga holds each arc, and each saga's arc and chapter span.
+	const sagaByArc = $derived(new Map(sagas.flatMap(saga => saga.arcIds.map(id => [id, saga.sagaNumber] as const))));
+	const sagaSpan = $derived(new Map(sagas.map(saga => [saga.id, describeSagaSpan(saga, arcs, chapters)])));
 
 	$effect(() => {
 		if (open && story.currentStory) void loadMemoryRecords(story.currentStory.id);
@@ -233,6 +247,7 @@
 		const data = {
 			storyTitle: story.currentStory?.title ?? 'Untitled',
 			exportedAt: new Date().toISOString(),
+			sagas: sagas.map(s => ({ sagaNumber: s.sagaNumber, title: s.title, span: sagaSpan.get(s.id) ?? s.arcRange, summary: s.summary })),
 			arcs: arcs.map(a => ({
 				arcNumber: a.arcNumber,
 				title: a.title,
@@ -1685,14 +1700,61 @@
 						<span class="world-section-title font-display text-xs tracking-wider uppercase text-orange-400">Story Memory</span>
 					</div>
 					{#if arcs.length > 0 || chapters.length > 0}
-						<button onclick={exportArcsAsJson} class="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" title="Export arcs & chapters">
+						<button onclick={exportArcsAsJson} class="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]" title="Export sagas, arcs & chapters">
 							<Download class="h-3.5 w-3.5" />
 						</button>
 					{/if}
 				</div>
 
 				{#if arcs.length === 0 && chapters.length === 0}
-					<p class="text-xs text-[var(--text-muted)]">No chapters yet. Each chapter summarizes 20 completed turns, and each arc summarizes 10 chapters.</p>
+					<p class="text-xs text-[var(--text-muted)]">No chapters yet. Each chapter summarizes 20 completed turns, each arc summarizes 10 chapters, and each saga condenses 2 arcs.</p>
+				{/if}
+
+				<!-- Sagas (two arcs each; the GM reads these instead of their arcs) -->
+				{#if sagas.length > 0}
+					<div class="mb-2 flex items-center gap-2">
+						<ScrollText class="h-3.5 w-3.5 text-amber-400" />
+						<span class="text-[10px] tracking-wider uppercase text-amber-400">Sagas ({sagas.length})</span>
+					</div>
+					<div class="space-y-1.5 mb-3">
+						{#each sagas as saga (saga.id)}
+							<div class="rounded-lg bg-[var(--bg-tertiary)] overflow-hidden border-l-2 border-amber-500/50">
+								<button
+									class="flex w-full items-center gap-2 px-2.5 py-2 text-left"
+									onclick={() => toggleSaga(saga.id)}
+									aria-expanded={expandedSaga === saga.id}
+								>
+									{#if expandedSaga === saga.id}
+										<ChevronDown class="h-3 w-3 shrink-0 text-amber-400" />
+									{:else}
+										<ChevronRight class="h-3 w-3 shrink-0 text-amber-400" />
+									{/if}
+									<span class="shrink-0 text-[10px] font-bold text-amber-400/80">SAGA {saga.sagaNumber}</span>
+									<span class="text-sm text-[var(--text-primary)] truncate">{saga.title}</span>
+									<span class="ml-auto shrink-0 text-[9px] text-[var(--text-muted)]">{sagaSpan.get(saga.id)}</span>
+								</button>
+
+								{#if expandedSaga === saga.id}
+									<div class="border-t border-[var(--border-primary)] px-2.5 py-2 space-y-2.5">
+										{#each sagaBlocks(saga.summary) as block}
+											<div>
+												{#if block.heading}
+													<div class="mb-0.5 text-[11px] font-semibold text-amber-300/90">{block.heading}</div>
+												{/if}
+												{#each block.lines as line}
+													{#if line.startsWith('- ')}
+														<p class="pl-2 border-l border-amber-500/20 text-[11px] leading-relaxed text-[var(--text-muted)]">{line.slice(2)}</p>
+													{:else}
+														<p class="text-xs leading-relaxed text-[var(--text-secondary)]">{line}</p>
+													{/if}
+												{/each}
+											</div>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
 				{/if}
 
 				<!-- Arcs (condensed chapter groups) -->
@@ -1711,7 +1773,10 @@
 									{/if}
 									<span class="text-[10px] font-bold text-orange-400/70">ARC {arc.arcNumber}</span>
 									<span class="text-sm text-[var(--text-primary)] truncate">{arc.title}</span>
-									<span class="ml-auto text-[9px] text-[var(--text-muted)]">Ch.{arc.chapterRange}</span>
+									{#if sagaByArc.has(arc.id)}
+										<span class="ml-auto shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-400" title="The GM reads this arc through its saga">Saga {sagaByArc.get(arc.id)}</span>
+									{/if}
+									<span class="{sagaByArc.has(arc.id) ? '' : 'ml-auto '}shrink-0 text-[9px] text-[var(--text-muted)]">Ch.{arc.chapterRange}</span>
 								</button>
 
 								{#if expandedArc === arc.id}

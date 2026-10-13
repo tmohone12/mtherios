@@ -22,7 +22,7 @@ vi.mock('$lib/server/engine/llmSettings', () => ({
 vi.mock('$lib/server/engine/generationAccounting', () => ({ recordGenerationApiCalls: mocks.log, generationAttemptResult: (value: unknown) => value }));
 vi.mock('$lib/server/turn/provider', () => ({ generateServerTextWithMetrics: mocks.generate,
 	parseJsonFromGeneratedText: (text: string) => { try { return JSON.parse(text); } catch { return null; } } }));
-import { generateChronologicalMemory, generateReadableNarrative } from './summaryGeneration';
+import { generateChronologicalMemory, generateReadableNarrative, generateSagaMemory } from './summaryGeneration';
 beforeEach(() => { vi.clearAllMocks(); mocks.generate.mockReset(); mocks.log.mockReset(); mocks.clearStore(); mocks.modelVersion = ''; mocks.reasoning = 'low'; mocks.secret = 'test'; });
 
 it.each(['chronological', 'readable'])('skips duplicate fallback endpoints and avoids nested retries for %s summaries', async kind => {
@@ -176,6 +176,21 @@ it('splits oversized arcs and carries complete accounts into synthesis', async (
 	for (const [call] of mocks.generate.mock.calls) expect(call.prompt.length).toBeLessThanOrEqual(50_000);
 });
 
+it('combines arc halves even when the model lists their inner chapter accounts', async () => {
+	const sources = Array.from({ length: 9 }, (_, index) => ({ id: `chapter_${index + 1}`, text: `Chapter ${index + 1}: ${'chapter evidence '.repeat(450)}` }));
+	mocks.generate.mockImplementation(async ({ prompt }: { prompt: string }) => {
+		const count = (prompt.match(/^SOURCE \d+ \| sourceId:/gm) ?? []).length;
+		const combining = prompt.includes('consecutive arc subwindows');
+		// When combining two subwindows, answer with one account per chapter (9), not per subwindow (2).
+		return { model: 'same-model', finishReason: 'stop', text: JSON.stringify({ title: 'An arc',
+			narrative: 'The party crossed the river, negotiated passage, and reached the far bank with their agreement and companions intact.',
+			accounts: Array.from({ length: combining ? 9 : count }, (_, index) => ({ sourceId: String(index + 1), summary: `Chapter account ${index + 1} kept its consequences.` })) }) };
+	});
+	const memory = await generateChronologicalMemory({ storyId: 'test', kind: 'arc', sources });
+	expect(memory.accounts.map(account => account.sourceId)).toEqual(sources.map(source => source.id));
+	expect(mocks.generate).toHaveBeenCalledTimes(3);
+});
+
 function completeResponse(prompt: string, model = 'same-model') {
 	const count = (prompt.match(/^SOURCE \d+ \| sourceId:/gm) ?? []).length;
 	return { model, finishReason: 'stop', text: JSON.stringify({ title: 'Verified journey',
@@ -286,4 +301,39 @@ it('combines oversized halves from their summaries and keeps every account', asy
 	const combinePrompt = mocks.generate.mock.calls[2][0].prompt as string;
 	expect(combinePrompt).toContain('paying the agreed fare');
 	expect(combinePrompt).not.toContain('Retained detail.');
+});
+
+it('writes a saga from whole arcs, retries a rejected answer once with the reason, and replays stored outcomes', async () => {
+	const saga = { title: 'The Hidden Dragon', period: '296 AC',
+		sections: [{ heading: 'The Journey East', text: 'Aurion sailed east with twenty ships and a thousand men, and at Leng Yi a seer foretold a hidden dragon.' },
+			{ heading: 'Asshai and the Three Eggs', text: 'At Asshai a keeper gave Aurion a letter written before his birth, and a chest held three warm dragon eggs.' }],
+		consequence: 'The expedition ended with the fleet lost and Aegon taken into the Between.',
+		continuity: ['The red Yi Tish egg is not one of the three Asshai eggs.'], openThreads: ['Who wrote the Asshai letter?'] };
+	mocks.generate.mockResolvedValueOnce({ model: 'same-model', text: JSON.stringify({ ...saga, sections: [] }), finishReason: 'stop' })
+		.mockResolvedValueOnce({ model: 'same-model', text: JSON.stringify(saga), finishReason: 'stop' });
+	const sources = [{ id: 'arc_1', label: 'Arc 1: Leng Yi (chapters 1-10)', text: `Arc overview:\n${'Aurion trades in Leng Yi. '.repeat(500)}arc one tail` },
+		{ id: 'arc_2', label: 'Arc 2: Asshai (chapters 11-20)', text: 'Arc overview:\nAurion reaches Asshai. arc two tail' }];
+	const result = await generateSagaMemory({ storyId: 'test', sources });
+	expect(result).toMatchObject({ ...saga, model: 'same-model' });
+	expect(mocks.generate).toHaveBeenCalledTimes(2);
+	const [first, second] = mocks.generate.mock.calls.map(([call]) => call);
+	// Whole arcs, labelled, in order; nothing is cut.
+	expect(first.prompt).toContain('ARC 1 | Arc 1: Leng Yi (chapters 1-10)');
+	expect(first.prompt).toContain('arc one tail');
+	expect(first.prompt.indexOf('arc one tail')).toBeLessThan(first.prompt.indexOf('ARC 2 | Arc 2: Asshai'));
+	expect(first).toMatchObject({ model: 'same-model', responseFormat: 'json_object', maxRetries: 0 });
+	expect(second.prompt).toContain('Previous attempt failed: The previous response failed the required JSON');
+	expect(mocks.log.mock.calls.some(([call]) => call.operation === 'saga.summary' && call.status === 'success')).toBe(true);
+	// A rerun of the same arcs reuses the stored saga without another request.
+	await expect(generateSagaMemory({ storyId: 'test', sources })).resolves.toMatchObject({ title: 'The Hidden Dragon' });
+	expect(mocks.generate).toHaveBeenCalledTimes(2);
+});
+
+it('moves a saga to the next service when a provider fails, and fails without writing when all answers are rejected', async () => {
+	mocks.generate.mockRejectedValueOnce(new Error('timeout'))
+		.mockResolvedValue({ model: 'classifier', text: JSON.stringify({ title: 'Untitled' }), finishReason: 'stop' });
+	await expect(generateSagaMemory({ storyId: 'test', sources: [{ id: 'arc_1', label: 'Arc 1', text: 'Arc overview.' }] }))
+		.rejects.toThrow('Saga summarization failed; the arcs stay in the prompt.');
+	// same-model timed out (no answer, next service); classifier and narrative each rejected twice.
+	expect(mocks.generate.mock.calls.map(([call]) => call.model)).toEqual(['same-model', 'classifier', 'classifier', 'narrative', 'narrative']);
 });
