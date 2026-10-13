@@ -1,15 +1,17 @@
 <script lang="ts">
 	import { isCurrentAgreement } from '$lib/contracts/agreements';
 	import { onMount } from 'svelte';
-	import { BookOpen, CloudUpload, Edit3, GitBranch, Loader2, RotateCcw, Save, Search, Shield, Trash2, X } from 'lucide-svelte';
+	import { BookOpen, CloudUpload, Edit3, GitBranch, Loader2, RotateCcw, Save, ScrollText, Search, Shield, Trash2, X } from 'lucide-svelte';
 	import {
 		getAgreements,
 		getArcs,
 		getChapters,
 		getConversationMemory,
 		getFactionActions,
+		getSagas,
 		getStoryThreads,
 	} from '$lib/services/database';
+	import { sagaBlocks, sagaSpan, splitSagaConsequence } from '$lib/utils/sagaDisplay';
 	import { importLocalStoryToBackend } from '$lib/services/backendMemory';
 	import { deleteCanonicalArc, deleteCanonicalChapter, saveCanonicalArc, saveCanonicalChapter } from '$lib/services/canonicalWrites';
 	import {
@@ -19,16 +21,17 @@
 		revertToContextCheckpoint,
 	} from '$lib/services/serverStories';
 	import { story } from '$lib/stores/story.svelte';
-	import type { Agreement, Arc, Chapter, ConversationMemoryEntry, FactionActionRecord, Story, StoryThread } from '$lib/types';
+	import type { Agreement, Arc, Chapter, ConversationMemoryEntry, FactionActionRecord, Saga, Story, StoryThread } from '$lib/types';
 
 	let { storyId = null }: { storyId?: string | null } = $props();
 	let stories = $state<Story[]>([]);
 	let selectedStoryId = $state<string | null>(null);
 	let chapters = $state<Chapter[]>([]);
 	let arcs = $state<Arc[]>([]);
+	let sagas = $state<Saga[]>([]);
 	let loading = $state(false);
 	let searchQuery = $state('');
-	let viewMode = $state<'ledger' | 'chapters' | 'arcs'>('chapters');
+	let viewMode = $state<'ledger' | 'chapters' | 'arcs' | 'sagas'>('chapters');
 	let backendSyncing = $state(false);
 	let backendMessage = $state<string | null>(null);
 	let storyThreads = $state<StoryThread[]>([]);
@@ -109,6 +112,7 @@
 		if (!selectedStoryId) {
 			chapters = [];
 			arcs = [];
+			sagas = [];
 			storyThreads = [];
 			agreements = [];
 			factionActions = [];
@@ -127,9 +131,10 @@
 			const terminalStoryId = story.currentStory?.id === selectedStoryId
 				? story.currentStory.serverStoryId
 				: selectedStory?.serverStoryId;
-			const [loadedChapters, loadedArcs, loadedThreads, loadedAgreements, loadedFactionActions, loadedConversationMemory, loadedCheckpoints] = await Promise.all([
+			const [loadedChapters, loadedArcs, loadedSagas, loadedThreads, loadedAgreements, loadedFactionActions, loadedConversationMemory, loadedCheckpoints] = await Promise.all([
 				getChapters(selectedStoryId),
 				getArcs(selectedStoryId),
+				getSagas(selectedStoryId),
 				getStoryThreads(selectedStoryId),
 				getAgreements(selectedStoryId),
 				getFactionActions(selectedStoryId),
@@ -138,6 +143,7 @@
 			]);
 			chapters = loadedChapters;
 			arcs = loadedArcs;
+			sagas = loadedSagas;
 			storyThreads = loadedThreads;
 			agreements = loadedAgreements;
 			factionActions = loadedFactionActions;
@@ -182,6 +188,10 @@
 		...arc.unresolvedThreads,
 		...arc.characterArcs.flatMap(characterArc => [characterArc.name, characterArc.development]),
 	])));
+
+	const filteredSagas = $derived.by(() => sagas.filter(saga => includesQuery([saga.title, saga.summary])));
+	// Arcs a saga stands in for; the GM's canon timeline sends the saga instead.
+	const sagaByArc = $derived(new Map(sagas.flatMap(saga => saga.arcIds.map(id => [id, saga.sagaNumber] as const))));
 
 	const openThreads = $derived(storyThreads.filter(thread => thread.status !== 'closed' && thread.status !== 'abandoned'));
 	const openThreadCount = $derived(openThreads.length || arcs.reduce((count, arc) => count + arc.unresolvedThreads.length, 0));
@@ -451,13 +461,13 @@
 		<div class="workspace-page-heading">
 			<div class="min-w-0">
 				<p class="workspace-eyebrow">The story so far</p>
-				<h2>Chapters & arcs.</h2>
+				<h2>Chapters, arcs & sagas.</h2>
 				{#if selectedStory}
 					<p class="workspace-subtitle">{selectedStory.title} <span aria-hidden="true">·</span> The moments, memories, and threads that shape your world.</p>
 				{/if}
 			</div>
 
-			<div class="flex items-center gap-1 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-1">
+			<div class="flex flex-wrap items-center gap-1 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-1">
 				<button
 					class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors {viewMode === 'ledger' ? 'bg-[rgba(212,168,83,0.14)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
 					onclick={() => viewMode = 'ledger'}
@@ -482,6 +492,15 @@
 				>
 					<GitBranch class="h-3.5 w-3.5" />
 					Arcs
+				</button>
+				<button
+					class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors {viewMode === 'sagas' ? 'bg-[rgba(212,168,83,0.14)] text-[var(--text-accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+					onclick={() => viewMode = 'sagas'}
+					aria-pressed={viewMode === 'sagas'}
+					title="Two arcs each; the GM reads these instead of their arcs"
+				>
+					<ScrollText class="h-3.5 w-3.5" />
+					Sagas
 				</button>
 			</div>
 		</div>
@@ -583,7 +602,7 @@
 			</details>
 		{/if}
 
-		<div class="memory-stats mb-3 grid grid-cols-3 gap-2">
+		<div class="memory-stats mb-3 grid grid-cols-4 gap-2">
 			<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
 				<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Chapters</div>
 				<div class="mt-1 font-mono text-sm text-[var(--text-primary)]">{chapters.length}</div>
@@ -591,6 +610,10 @@
 			<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
 				<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Arcs</div>
 				<div class="mt-1 font-mono text-sm text-[var(--text-primary)]">{arcs.length}</div>
+			</div>
+			<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
+				<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Sagas</div>
+				<div class="mt-1 font-mono text-sm text-[var(--text-primary)]">{sagas.length}</div>
 			</div>
 			<div class="rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
 				<div class="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Open Threads</div>
@@ -604,8 +627,8 @@
 			<input
 				type="text"
 				bind:value={searchQuery}
-				aria-label="Search chapters and arcs"
-				placeholder={viewMode === 'chapters' ? 'Find a chapter...' : 'Find an arc...'}
+				aria-label="Search chapters, arcs and sagas"
+				placeholder={viewMode === 'chapters' ? 'Find a chapter...' : viewMode === 'sagas' ? 'Find a saga...' : 'Find an arc...'}
 				class="w-full rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)] py-2 pl-9 pr-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--color-gold-600)] focus:outline-none"
 			/>
 		</div>
@@ -755,6 +778,47 @@
 					{/each}
 				</div>
 			{/if}
+		{:else if viewMode === 'sagas'}
+			{#if filteredSagas.length === 0}
+				<p class="py-10 text-center text-sm text-[var(--text-muted)]">{searchQuery ? 'No saga matches.' : 'No sagas yet. Each saga condenses two arcs once both are written.'}</p>
+			{:else}
+				<div class="space-y-3">
+					{#each filteredSagas as saga (saga.id)}
+						{@const parts = splitSagaConsequence(sagaBlocks(saga.summary))}
+						<article class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-4">
+							<div class="flex items-start justify-between gap-3">
+								<div class="min-w-0">
+									<div class="font-mono text-[10px] uppercase tracking-wider text-[var(--text-accent)]">Saga {saga.sagaNumber} - {sagaSpan(saga, arcs, chapters)}</div>
+									<h3 class="mt-1 font-story text-lg font-semibold text-[var(--text-primary)]">{saga.title}</h3>
+								</div>
+								<div class="shrink-0 text-right text-[10px] text-[var(--text-muted)]">{formatDate(saga.createdAt)}</div>
+							</div>
+							{#if parts.consequence}
+								<p class="mt-3 text-sm leading-relaxed text-[var(--text-secondary)]"><span class="font-semibold text-[var(--text-accent)]">Saga consequence:</span> {parts.consequence}</p>
+							{/if}
+							<details class="mt-3" open={Boolean(searchQuery.trim())}>
+								<summary class="cursor-pointer text-xs text-[var(--text-accent)] hover:underline">Read the full saga</summary>
+							<div class="mt-3 space-y-3">
+								{#each parts.rest as block}
+									<section>
+										{#if block.heading}
+											<h4 class="mb-1 font-story text-sm font-semibold text-[var(--text-accent)]">{block.heading}</h4>
+										{/if}
+										{#each block.lines as line}
+											{#if line.startsWith('- ')}
+												<p class="mt-1 border-l border-[rgba(212,168,83,0.3)] pl-2 text-xs leading-relaxed text-[var(--text-muted)]">{line.slice(2)}</p>
+											{:else}
+												<p class="text-sm leading-relaxed text-[var(--text-secondary)]">{line}</p>
+											{/if}
+										{/each}
+									</section>
+								{/each}
+							</div>
+							</details>
+						</article>
+					{/each}
+				</div>
+			{/if}
 		{:else}
 			{#if filteredArcs.length === 0}
 				<p class="py-10 text-center text-sm text-[var(--text-muted)]">{searchQuery ? 'No arc matches.' : 'No arcs yet. Arcs appear after enough chapters are condensed.'}</p>
@@ -764,7 +828,7 @@
 						<article class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-3">
 							<div class="flex items-start justify-between gap-3">
 								<div class="min-w-0">
-									<div class="font-mono text-[10px] uppercase tracking-wider text-[var(--text-accent)]">Arc {arc.arcNumber} - Chapters {arc.chapterRange}</div>
+									<div class="font-mono text-[10px] uppercase tracking-wider text-[var(--text-accent)]">Arc {arc.arcNumber} - Chapters {arc.chapterRange}{#if sagaByArc.has(arc.id)} - In saga {sagaByArc.get(arc.id)}{/if}</div>
 									<h3 class="mt-1 font-story text-base font-semibold text-[var(--text-primary)]">{arc.title}</h3>
 								</div>
 								<div class="shrink-0 text-right text-[10px] text-[var(--text-muted)]">

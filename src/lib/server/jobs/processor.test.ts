@@ -33,7 +33,6 @@ import {
 	buildArcMemoryFields,
 	buildArcSummary,
 	buildSagaMemoryFields,
-	buildSagaSummary,
 	buildEventMemoryNodeValues,
 	chapterCharacterContextPatch,
 	chapterCharacterContextProposalValues,
@@ -59,7 +58,10 @@ import {
 	stableId,
 	worldTickEventId,
 	selectArcRollupBatches,
+	renderSagaSummary,
+	sagaSourceForArc,
 	selectSagaRollupBatches,
+	SAGA_ROLLUP_ARCS,
 	shouldAutoApplyChapterCharacterContext,
 	shouldProjectEventToMemory,
 	stalePlotBrainPendingFrameId,
@@ -1320,6 +1322,25 @@ describe('deterministic arc summaries', () => {
 		expect(batches.map((batch) => batch.map((arc) => arc.id))).toEqual([
 			['arc_6', 'arc_7', 'arc_8', 'arc_9', 'arc_10'],
 		]);
+		// Two arcs (about twenty chapters) per saga: twelve arcs make six sagas.
+		expect(SAGA_ROLLUP_ARCS).toBe(2);
+		expect(selectSagaRollupBatches(arcs, [{ arcIds: ['arc_1', 'arc_2'] }])).toHaveLength(4);
+	});
+
+	it('gives the saga writer each arc in full with its chapter range, and stores the saga as sections', () => {
+		const arc = { id: 'arc_3', number: 3, title: 'The Doom', summary: `Arc overview:\n${'Aegon walks out of Valyria. '.repeat(400)}tail sentinel`, chapterIds: [],
+			sourceEventIds: [], openThreadIds: [], metadata: { startChapterNumber: 21, endChapterNumber: 30 } } as any;
+		expect(sagaSourceForArc(arc)).toEqual({ id: 'arc_3', label: 'Arc 3: The Doom (chapters 21-30)', text: arc.summary });
+		const text = renderSagaSummary({ period: '296-297 AC', sections: [{ heading: 'Apotheosis', text: 'Aegon emerged from the Between.' }, { heading: 'Love and Law', text: 'The betrothal collapsed.' }],
+			consequence: 'Aegon was remade.', continuity: ['The red egg is not one of the three.'], openThreads: ["The second blade's debt."] });
+		expect(text).toBe([
+			'Period: 296-297 AC',
+			'Apotheosis\nAegon emerged from the Between.',
+			'Love and Law\nThe betrothal collapsed.',
+			'Saga consequence: Aegon was remade.',
+			'Continuity:\n- The red egg is not one of the three.',
+			"Open threads:\n- The second blade's debt.",
+		].join('\n\n'));
 	});
 
 	it('keeps saga fields source-derived and preserves lingering thread evidence', () => {
@@ -1332,7 +1353,6 @@ describe('deterministic arc summaries', () => {
 		}] as any;
 		const fields = buildSagaMemoryFields(arcs);
 		expect(fields).toMatchObject({ keyFactionShifts: ['The Watch mobilized.'], majorPowerChanges: ['The gate changed hands.'], lingeringThreads: ['thread_1', 'The debt remains.'], trackedEntityIds: ['mara'], overallTone: 'tense' });
-		expect(buildSagaSummary(arcs)).toContain('The gate opened.');
 	});
 
 	it('derives the editable arc fields from covered chapter memory', () => {

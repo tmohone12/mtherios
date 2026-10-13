@@ -92,8 +92,8 @@ export const manuallyRetryableBackendJobTypes = [
 	'chapter_threads',
 	'chapter_characters',
 	'update_faction_pressure',
-	// Deterministic summary of covered arcs, upserted under a stable saga ID with its
-	// memory node in one transaction; a rerun recomputes coverage first.
+	// Its model call is checkpointed (a rerun replays a saved saga or failure instead of
+	// buying it again) and each saga commits under a stable ID after rechecking coverage.
 	'rollup_saga',
 ] as const satisfies readonly BackendJobType[];
 

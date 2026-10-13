@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { renderArcMemory, renderCampaignMemory } from './promptPacket';
+import { renderArcMemory, renderCanonTimeline } from './promptPacket';
 import { countTokens } from '$lib/utils/tokens';
 
 // Eight completed arcs of ten chapters with long opaque chapter IDs repeated in every
@@ -22,33 +22,27 @@ function recoveryShapedFixture() {
 	return { arcs, chapters };
 }
 
-it('removes repeated opaque IDs without changing the budget or ranking',()=> {
+it('renders every arc whole, in order, with readable chapter references instead of opaque IDs',()=> {
 	const { arcs, chapters } = recoveryShapedFixture();
-	let remaining=2000;
-	const trace=[...arcs].reverse().map(a=> {
-		const rendered=renderArcMemory(a as never,chapters),tokens=countTokens(rendered)+2;
-		const sourceIdChars=(a.metadata.characterArcs??[]).slice(0,6).reduce((n:number,c:any)=>n+(c.sourceChapterIds??[]).slice(0,10).join(',').length,0);
-		const result={number:a.number,id:a.id,tokens,remainingBefore:remaining,sourceIdChars,selected:tokens<=remaining,
-			reason:tokens<=remaining?'fits current arc allowance':'rendered arc exceeds remaining arc allowance'};
-		if(result.selected)remaining-=tokens;return result;
-	});
-	const selected:string[]=[]; const rendered=renderCampaignMemory({arcs,chapters} as any,(table,id,text)=>{if(table==='arcs')selected.push(id);return text;});
-	expect(selected).toEqual(trace.filter(a=>a.selected).map(a=>a.id).reverse());
-	// Rendering the raw IDs would make even the newest arc exceed the whole allowance.
+	const selected:string[]=[];
+	const rendered=renderCanonTimeline({arcs,chapters,sagas:[]} as any,(table:string,id:string,text:string)=>{if(table==='arcs')selected.push(id);return text;});
+	expect(selected).toEqual(arcs.map(arc=>arc.id));
+	// Rendering the raw IDs would have cost more than an arc's whole text.
 	const rawIdTokens=countTokens(arcs[7].metadata.characterArcs.map(c=>c.sourceChapterIds.slice(0,10).join(',')).join('\n'));
 	expect(rawIdTokens).toBeGreaterThan(2000);
-	expect(trace.filter(a=>a.selected).length).toBeGreaterThanOrEqual(2);
-	expect(rendered).toContain('Chapter 81'); expect(rendered).toContain('Arc 8:'); expect(rendered).not.toContain('Arc 1:');
+	expect(rendered).toContain('- Arc 1: Season 1 (chapters 1-10)');
+	expect(rendered).toContain('- Arc 8: Season 8 (chapters 71-80)');
+	expect(rendered.indexOf('- Arc 8:')).toBeLessThan(rendered.indexOf('Chapter 81'));
 	expect(rendered).toContain('[source chapters: 71,72,73');
 	expect(rendered).not.toContain(arcs[7].chapterIds[0]);
-	expect(rendered).toMatch(/Historical summaries omitted for the context budget: .*arcs \(1,/);
+	expect(rendered).not.toContain('omitted');
 });
 it('preserves ordered repeated references and separate actor knowledge; unresolved IDs remain discoverable',()=> {
 	const metadata={characterArcs:[{name:'Alice',development:'Alice heard a rumor; it remains uncertain.',sourceChapterIds:['c2','c1','c1','missing']},
 		{name:'Bob',development:'Bob privately learned a different report.',sourceChapterIds:['c1']}]};
 	const arc={id:'a',number:1,title:'Attributed reports',summary:'The actors heard separate reports.',metadata,chapterIds:['c1','c2'],openThreadIds:[]} as any;
 	const before=JSON.stringify(arc),text=renderArcMemory(arc,[{id:'c1',number:1},{id:'c2',number:2}]);
-	expect(text).toContain('Alice heard a rumor; it remains uncertain. [source chapters: 2,1,1; 1 unresolved references available in the full arc]');
+	expect(text).toContain('Alice heard a rumor; it remains uncertain. [source chapters: 2,1,1; 1 unresolved source references]');
 	expect(text).toContain('Bob privately learned a different report. [source chapters: 1]');
 	expect(JSON.stringify(arc)).toBe(before);
 });

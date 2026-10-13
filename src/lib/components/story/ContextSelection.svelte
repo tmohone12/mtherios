@@ -6,7 +6,7 @@
 		const params = new URLSearchParams({ source: id, project: projectId, game: gameId });
 		return `/?${params}`;
 	};
-	const labels: Record<string, string> = { playerCorrections: 'Player corrections', requiredPlayer: 'Required player state', requiredScene: 'Required current scene', requiredActors: 'Required active actors', requiredBeliefs: 'Required NPC beliefs', contentPinned: 'Authored pinned full text', contentPartial: 'Authored partial directory', recentEntries: 'Dialogue', sceneCheckpointNotes: 'Scene continuity notes', memoryNodes: 'Retrieved memories', timelineEvents: 'Timeline', chapters: 'Chapters', arcs: 'Arcs', factionSheets: 'Factions', beliefs: 'NPC beliefs', agreements: 'Agreements', threads: 'Open threads', wikiBlocks: 'Wiki blocks', locationPlaces: 'Containing places', locationLore: 'Location lore' };
+	const labels: Record<string, string> = { playerCorrections: 'Player corrections', requiredPlayer: 'Required player state', requiredScene: 'Required current scene', requiredActors: 'Required active actors', requiredBeliefs: 'Required NPC beliefs', contentPinned: 'Authored pinned full text', contentPartial: 'Authored partial directory', recentEntries: 'Dialogue', sceneCheckpointNotes: 'Scene continuity notes', memoryNodes: 'Retrieved memories', timelineEvents: 'Timeline', chapters: 'Chapters', arcs: 'Arcs', sagas: 'Sagas', factionSheets: 'Factions', beliefs: 'NPC beliefs', agreements: 'Agreements', threads: 'Open threads', wikiBlocks: 'Wiki blocks', locationPlaces: 'Containing places', locationLore: 'Location lore' };
 	const checkpointGroup = $derived(selection.groups.find(group => group.kind === 'sceneCheckpointNotes'));
 </script>
 
