@@ -75,7 +75,7 @@ export interface AgentRuntimeOptions extends Partial<AgentRuntimeState> {
   onGeneration?: (result: ServerGenerationResult, index: number, options: ServerGenerationOptions) => Promise<void> | void;
   onEvent?: (event: AgentEvent) => Promise<void> | void;
   onContext?: (projection: AgentRuntimeContextProjection) => Promise<void> | void;
-  prepareContext?: (state: AgentRuntimeState) => Promise<{ system?: string; systemDynamic?: string; messages?: ServerGenerationMessage[] }>;
+  prepareContext?: (state: AgentRuntimeState) => Promise<{ system?: string; systemDynamic?: string; systemCacheBoundaries?: number[]; messages?: ServerGenerationMessage[] }>;
   /** Investigation may finish after recorded tools to preserve one final, validated completion. */
   completionReserve?: () => { tokens: number; requests: number };
 }
@@ -263,6 +263,7 @@ export async function runAgentRuntime(input: AgentRuntimeOptions): Promise<Agent
   if (budget.pausedAt != null) { budget.deadlineAt = Date.now() + Math.max(0, limits.timeoutMs - budget.elapsedMs); delete budget.pausedAt; }
   let reason: string | null = budget.stopReason ?? null, paused = false, handedOff = false, persistenceError: unknown;
   let system = input.system, systemDynamic = input.generation.systemDynamic;
+  let systemCacheBoundaries = input.generation.systemCacheBoundaries;
   let preparedMessages: ServerGenerationMessage[] | undefined;
   const generations: ServerGenerationResult[] = [];
   const lifecycle = new AbortController();
@@ -326,7 +327,7 @@ export async function runAgentRuntime(input: AgentRuntimeOptions): Promise<Agent
         guard();
         if (budget.modelRequests >= limits.maxRequests) { fail('request_budget_exhausted'); throw new Error(reason!); }
         const messages = context.messages.flatMap(message => { const native = nativeMessage(message); return native ? [native] : []; });
-        const generation: ServerGenerationOptions = { ...input.generation, system, systemDynamic, messages, prompt: '', appendPrompt: false,
+        const generation: ServerGenerationOptions = { ...input.generation, system, systemDynamic, systemCacheBoundaries, messages, prompt: '', appendPrompt: false,
           tools: input.tools, parallelToolCalls: false, maxRetries: 0, providerOutputLimit: false, agentBudgetManaged: true,
           signal: lifecycle.signal, timeoutMs: Math.max(1, Math.min(input.generation.timeoutMs ?? limits.timeoutMs, budget.deadlineAt - Date.now())), onTextDelta: input.tools.length ? undefined : input.generation.onTextDelta,
           onBeforeRequest: async request => {
@@ -418,6 +419,7 @@ export async function runAgentRuntime(input: AgentRuntimeOptions): Promise<Agent
       guard();
       if (prepared?.system !== undefined) system = prepared.system;
       if (prepared?.systemDynamic !== undefined) systemDynamic = prepared.systemDynamic;
+      if (prepared?.systemCacheBoundaries !== undefined) systemCacheBoundaries = prepared.systemCacheBoundaries;
       preparedMessages = prepared?.messages;
       return undefined;
     },

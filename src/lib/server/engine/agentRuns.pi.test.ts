@@ -119,6 +119,27 @@ beforeEach(() => {
 });
 
 describe('durable production GM Pi owner with scripted transport', () => {
+  it('passes the shared cache ordering and refreshed stable boundaries to browser GM requests', async () => {
+    const prepared = await mocks.prepare();
+    prepared.narrativeProfile = { ...profile, providerType: 'openrouter' };
+    prepared.narrativeGeneration.model = 'google/gemini-4-argon';
+    prepared.narrativeSystem = 'Stable project reference. Accepted history. Wiki.';
+    prepared.narrativeSystemDynamic = 'Current scene snapshot.';
+    prepared.narrativeSystemCacheBoundaries = [24, 42];
+    prepared.prompt.messages = [{ role: 'user', content: 'Earlier action.' }, { role: 'assistant', content: 'Earlier narration.' }];
+    let preparations = 0;
+    mocks.prepare.mockImplementation(async () => ({ ...prepared, narrativeSystemCacheBoundaries: preparations++ ? [25, 43] : [24, 42] }));
+    scripted(response('The scene continues.'), response('Final scene.'));
+    const completed = await startAgentRun({ turn }, 'game');
+    expect(completed.status, String(completed.error)).toBe('completed');
+    const request = mocks.provider.mock.calls[0][0] as ServerGenerationOptions;
+    expect(request).toMatchObject({ contextAfterDialogue: true, appendPrompt: false,
+      systemDynamic: 'Current scene snapshot.', systemCacheBoundaries: [25, 43] });
+    expect(request.messages!.slice(0, 2)).toEqual(prepared.prompt.messages);
+    expect(request.messages!.at(-1)).toEqual({ role: 'user', content: turn.playerText });
+    expect(mocks.prepare.mock.calls.length).toBeGreaterThan(1);
+  });
+
   it('completes a large-context dice turn by preserving narration capacity instead of requesting an extra draft', async () => {
     const prepared = await mocks.prepare();
     prepared.narrativePrompt = 'Saved campaign evidence. '.repeat(6500);

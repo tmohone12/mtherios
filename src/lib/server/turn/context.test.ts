@@ -203,13 +203,13 @@ function createDbMock() {
 				if (selectedTable === agreements) agreementOrders.push(order);
 				return chain;
 			}),
-			then: (resolve: (rows: unknown[]) => unknown) => Promise.resolve(selectedTable === factions ? factionRows : selectedTable === agreements ? agreementRows : []).then(resolve),
+			then: (resolve: (rows: unknown[]) => unknown) => Promise.resolve(selectedTable === factions ? factionRows : selectedTable === agreements ? agreementRows : selectedTable === storyEntries ? recentEntriesDesc : []).then(resolve),
 			limit: vi.fn((limit: number) => {
 				if (selectedTable === stories) return Promise.resolve([storyRow]);
 				if (selectedTable === storyEntries) {
 					storyEntryConditions.push(selectedCondition);
 					storyEntryLimits.push(limit);
-					return Promise.resolve(recentEntriesDesc);
+					return Promise.resolve(recentEntriesDesc.slice(0, limit));
 				}
 				if (selectedTable === entities) {
 					entityLimits.push(limit);
@@ -368,6 +368,19 @@ describe('loadTurnContext', () => {
 			storyEntries.type,
 			['user_action', 'narration'],
 		))).toBe(true);
+	});
+
+	it('expands beyond the initial tail instead of sliding away unfinished chapter dialogue', async () => {
+		const { db, recentEntriesDesc } = createDbMock();
+		dbMocks.getDb.mockReturnValue(db);
+		recentEntriesDesc.splice(0, recentEntriesDesc.length, ...Array.from({ length: NARRATOR_RECENT_ENTRY_LIMIT + 8 }, (_, index) => ({
+			id: `growing_entry_${NARRATOR_RECENT_ENTRY_LIMIT + 8 - index}`, storyId: 'story_1', type: 'narration',
+			content: `Narration ${NARRATOR_RECENT_ENTRY_LIMIT + 8 - index}.`, position: NARRATOR_RECENT_ENTRY_LIMIT + 8 - index,
+		})));
+		const ctx = await loadTurnContext('story_1');
+		expect(ctx.recentEntries).toHaveLength(NARRATOR_RECENT_ENTRY_LIMIT + 8);
+		expect(ctx.recentEntries[0].id).toBe('growing_entry_1');
+		expect(ctx.recentEntries.at(-1)?.position).toBe(NARRATOR_RECENT_ENTRY_LIMIT + 8);
 	});
 
 	it('keeps repair/audit proposal rows out of normal turn context', async () => {
