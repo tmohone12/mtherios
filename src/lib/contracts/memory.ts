@@ -71,8 +71,11 @@ export const factSchema = z.object({
 	updatedAt: z.string(),
 });
 
+// Stored patch history is read-only audit data. Gameplay effects (item_acquire,
+// condition_add, …), agreement actions and review proposals add op names over
+// time; a fixed list here rejected the whole story bootstrap on the first new one.
 export const jsonPatchOperationSchema = z.object({
-	op: z.enum(['add', 'remove', 'replace', 'move', 'copy', 'test', 'upsert', 'create', 'update', 'break', 'fulfill', 'expire']),
+	op: z.string().min(1),
 	path: z.string().min(1),
 	from: z.string().optional(),
 	value: z.unknown().optional(),
