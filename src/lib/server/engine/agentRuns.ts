@@ -1020,6 +1020,8 @@ async function advancePiWithQueryReuse(runId: string, storyId: string, options: 
       generation: { profile: prepared.narrativeProfile, model: prepared.narrativeGeneration.model,
         temperature: prepared.narrativeGeneration.temperature, reasoningEffort: prepared.narrativeGeneration.reasoningEffort,
         maxTokens: prepared.narrativeGeneration.maxTokens ?? 4096, systemDynamic: prepared.narrativeSystemDynamic,
+        contextAfterDialogue: !prepared.oocMode,
+        systemCacheBoundaries: prepared.narrativeSystemCacheBoundaries,
         systemCacheBoundary: prepared.narrativeSystemCacheBoundary ?? undefined, cache: { key: prepared.narrativePromptCacheKey, retention: 'in_memory' },
         onAttempt: attempt => recordGenerationApiCalls({ storyId, serviceId: 'narrative', operation: 'turn.pi.investigation',
           profile: prepared.narrativeProfile, result: generationAttemptResult(attempt), status: attempt.status, error: attempt.error ?? undefined,
@@ -1045,7 +1047,8 @@ async function advancePiWithQueryReuse(runId: string, storyId: string, options: 
         const currentScene = hash({ turn: prepared.ctxWithTimeline.story.currentTurn, location: prepared.ctxWithTimeline.story.currentLocationId,
           pov: prepared.ctxWithTimeline.scenePov?.character ?? null, branch: prepared.ctxWithTimeline.recentEntries.at(-1)?.branchId ?? null });
         if (currentScene !== originalScene) throw new Error('Scene changed during the agent investigation.');
-        return { system: prepared.narrativeSystem + '\n' + instruction, systemDynamic: prepared.narrativeSystemDynamic };
+        return { system: prepared.narrativeSystem + '\n' + instruction, systemDynamic: prepared.narrativeSystemDynamic,
+          systemCacheBoundaries: prepared.narrativeSystemCacheBoundaries };
       },
       onContext: async context => {
         projection = context;

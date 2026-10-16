@@ -2173,6 +2173,7 @@ interface PreparedServerTurnContext {
 	narrativeGeneration: ResolvedGenerationService['generation'];
 	narrativeSystem: string;
 	narrativeSystemCacheBoundary: number | null;
+	narrativeSystemCacheBoundaries: number[];
 	narrativeSystemDynamic: string;
 	narrativeContextSource: string;
 	narrativeContextRecords: ServerTurnPrompt['contextRecords'];
@@ -3444,7 +3445,7 @@ export async function prepareServerTurnContext(
 		sceneEntityIds: request.clientContext?.sceneEntityIds ?? [],
 		presentNpcIds: request.clientContext?.presentNpcIds ?? [],
 		wikiContextMarkdown: wikiContext?.markdown ?? null,
-		stableWikiContext: !oocMode && buildAutomaticWikiQuery(ctxWithTimeline, request.playerText) === buildSceneLoreQuery(ctxWithTimeline, ''),
+		appendOnlyDialogue: true,
 		authoredContext: oocMode ? undefined : authoredContext,
 		recentDialogueTokens: request.clientContext?.recentDialogueTokens,
 		recentDialogueTurns: request.clientContext?.recentDialogueTurns,
@@ -3465,7 +3466,7 @@ export async function prepareServerTurnContext(
 		? `OOC request:\n${request.playerText}\n\nAdvisory current anchor: story=${ctxWithTimeline.story.title}; turn=${gmBrief.currentTurn}; time=${gmBrief.currentWorldTime ?? 'unknown'}; location=${currentLocation}. The player correction wins when it says this anchor is stale.${oocResearchMode ? `\n\nSearch query: ${retrieved.query}\nSource-linked story memory:\n${(retrieved.renderedItems ?? []).slice(0, 4).map(item => `[${item.id}] ${item.text.slice(0, 1500)}`).join('\n') || 'No matching memory was retrieved.'}` : ''}`
 		: `${modeDirective ? `${modeDirective}\n\n` : ''}${parallelPov ? 'OOC parallel POV command' : 'Player action'}:\n${request.playerText}`;
 	const narrativeCapabilities = getProviderCapabilities(narrativeProfile, narrativeGeneration.model);
-	const contextAfterDialogue = ['nanogpt', 'openrouter'].includes(narrativeProfile.providerType) && !oocMode;
+	const contextAfterDialogue = !oocMode;
 	const modelCapacityTokens = narrativeCapabilities.maxContextTokens;
 	const requestedContextBudget = request.clientContext?.contextBudget;
 	// Complete arc history is mandatory GM context. Keep it in the stable prefix
@@ -3476,6 +3477,10 @@ export async function prepareServerTurnContext(
 		? `${narrativeInstructions}\n\n<context_data>\n${stableContextSent}\n</context_data>` : narrativeInstructions;
 	const systemCacheBoundary = stableContextSent && prompt.stableHistoryContext
 		? `${narrativeInstructions}\n\n<context_data>\n${prompt.stableHistoryContext}`.length : -1;
+	const referenceCacheBoundary = stableContextSent && prompt.stableReferenceContext
+		? `${narrativeInstructions}\n\n<context_data>\n${prompt.stableReferenceContext}`.length : narrativeInstructions.length;
+	const systemCacheBoundaries = stableContextSent
+		? [referenceCacheBoundary, systemCacheBoundary].filter(offset => offset > 0 && offset < narrativeSystem.length) : [];
 	const narrativeContextSource = stableContextSent ? prompt.dynamicPrompt : prompt.prompt;
 	const narrativeContextRecords = stableContextSent ? prompt.dynamicContextRecords : prompt.contextRecords;
 	const fixedInputTokens = countTokens([
@@ -3523,13 +3528,14 @@ export async function prepareServerTurnContext(
 		warnings.push(`Dynamic prompt context budget applied: ${countTokens(narrativeContextSource)} -> ${countTokens(promptBudget.value)} tokens.`);
 	}
 	const narrativeSystemDynamic = oocMode ? '' : promptBudget.value;
-	const narrativeStablePromptHash = hashText(systemCacheBoundary > 0
-		? narrativeSystem.slice(0, systemCacheBoundary) : narrativeSystem);
+	const narrativeStablePromptHash = hashText(narrativeSystem.slice(0, referenceCacheBoundary));
 	const narrativePromptCacheKey = buildProviderPromptCacheKey({
 		providerType: narrativeProfile.providerType,
 		model: narrativeGeneration.model ?? null,
 		storyId: request.storyId,
-		stablePromptHash: narrativeStablePromptHash,
+		// Routing affinity must survive chapter, character and lore edits. Exact
+		// provider prefix matching still invalidates any content that changed.
+		stablePromptHash: hashText(narrativeInstructions),
 		storyStaticHash: prompt.compiledPrompt.stablePrefix[0]?.contentHash ?? null,
 	});
 	const narrativeDebugPrompt = `${narrativeSystemDynamic}\n\n${narrativePrompt}`;
@@ -3744,6 +3750,7 @@ export async function prepareServerTurnContext(
 		narrativeGeneration,
 		narrativeSystem,
 		narrativeSystemCacheBoundary: systemCacheBoundary > 0 ? systemCacheBoundary : null,
+		narrativeSystemCacheBoundaries: systemCacheBoundaries,
 		narrativeSystemDynamic,
 		narrativeContextSource,
 		narrativeContextRecords,
@@ -3968,6 +3975,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		narrativeGeneration,
 		narrativeSystem,
 		narrativeSystemCacheBoundary,
+		narrativeSystemCacheBoundaries,
 		narrativeSystemDynamic: preparedNarrativeSystemDynamic,
 		narrativeContextSource,
 		narrativeContextRecords,
@@ -3985,7 +3993,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 		ctxWithTimeline,
 	} = prepared;
 	let narrativeSystemDynamic = preparedNarrativeSystemDynamic;
-	const contextAfterDialogue = ['nanogpt', 'openrouter'].includes(narrativeProfile.providerType) && !oocMode;
+	const contextAfterDialogue = !oocMode;
 	let finalRetainedMappings = preparedRetainedMappings;
 	let narrativeDebugPrompt = preparedNarrativeDebugPrompt;
 	const warnings: string[] = [...prepared.warnings];
@@ -4282,6 +4290,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 			reasoningEffort: narrativeGeneration.reasoningEffort,
 			system: narrativeSystem,
 			systemCacheBoundary: narrativeSystemCacheBoundary ?? undefined,
+			systemCacheBoundaries: narrativeSystemCacheBoundaries,
 			systemDynamic: narrativeSystemDynamic,
 			contextAfterDialogue,
 			messages: prompt.messages,
@@ -4414,6 +4423,7 @@ export async function processServerTurn(input: unknown, options: ProcessServerTu
 					reasoningEffort: narrativeGeneration.reasoningEffort,
 					system: narrativeSystem,
 					systemCacheBoundary: narrativeSystemCacheBoundary ?? undefined,
+					systemCacheBoundaries: narrativeSystemCacheBoundaries,
 					systemDynamic: continuationDynamic,
 					contextAfterDialogue,
 					messages: continuationMessages,

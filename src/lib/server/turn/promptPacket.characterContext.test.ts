@@ -266,6 +266,32 @@ describe('server turn prompt character context', () => {
 		expect(buildServerTurnPrompt(ctx, packet(), 'entry_current', { recentDialogueTurns: 1 }).messages.map(message => message.content))
 			.toEqual(['Action 13', 'Narration 13']);
 	});
+	it('keeps the production dialogue prefix append-only beyond 20 turns despite checkpoint and budget changes', () => {
+		const ctx = context();
+		const exchange = (turn: number) => [
+			row({ id: `stable_action_${turn}`, storyId: ctx.story.id, type: 'user_action', content: ` Action ${turn}. `,
+				position: turn * 2 - 1, parentId: null, branchId: null, metadata: {} }),
+			row({ id: `stable_reply_${turn}`, storyId: ctx.story.id, type: 'narration', content: ` Narration ${turn}. `,
+				position: turn * 2, parentId: `stable_action_${turn}`, branchId: null, metadata: {} }),
+		] as TurnContext['recentEntries'];
+		ctx.recentEntries = Array.from({ length: 21 }, (_, index) => exchange(index + 1)).flat();
+		const options = { appendOnlyDialogue: true, recentDialogueTurns: 20, recentDialogueTokens: 512 };
+		const first = buildServerTurnPrompt(ctx, packet('Look.'), 'entry_current', options);
+		expect(first.messages).toHaveLength(42);
+		expect(first.messages[0].content).toBe(' Action 1. ');
+		ctx.recentEntries.push(...exchange(22));
+		ctx.sceneCheckpoint = { version: 1, id: 'checkpoint_changed', storyId: ctx.story.id, locationId: null,
+			scene: 'Changed scene', branchId: null, pov: 'primary', sourceStart: 1, sourceEnd: 44,
+			sourceEntryIds: ['stable_reply_21'], sourceHash: 'a'.repeat(32), createdAt: now,
+			notes: [{ sourceEntryId: 'stable_reply_21', position: 42, kind: 'statement', text: 'A refreshed scene note.' }] };
+		const next = buildServerTurnPrompt(ctx, packet('Search elsewhere.'), 'entry_current', options);
+		expect(next.messages.slice(0, first.messages.length)).toEqual(first.messages);
+		expect(next.messages.slice(first.messages.length)).toEqual([
+			{ role: 'user', content: ' Action 22. ' }, { role: 'assistant', content: ' Narration 22. ' },
+		]);
+		expect(next.stableContext).toBe(first.stableContext);
+	});
+
 	it('keeps an earlier player action paired with its reply after the chapter boundary', () => {
 		const ctx = context();
 		ctx.recentEntries = [

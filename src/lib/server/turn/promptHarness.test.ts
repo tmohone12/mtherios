@@ -780,6 +780,27 @@ describe('turn prompt harness', () => {
 		expect(edited.stableHistoryContext).not.toBe(first.stableHistoryContext);
 	});
 
+	it('preserves authored reference before changing chapters and player developments', () => {
+		const ctx = baseContext();
+		ctx.entities[1].state = { present: true, relationship: { status: 'self', level: 100 } };
+		const authoredContext = { fingerprint: 'project-lore', records: [{ id: 'lore@1', title: 'Setting rules',
+			mode: 'pinned' as const, text: 'Stable project setting reference.', tokens: 8 }] };
+		const first = buildServerTurnPrompt(ctx, packet('Listen.', []), 'current', { authoredContext });
+		const chapter = row({ id: 'chapter_new', storyId: ctx.story.id, number: 1, title: 'A new chapter',
+			sceneOutcome: 'The bridge opens.', openThreads: [], irreversibleChanges: [], npcKnowledgeChanges: [],
+			promisesDebtsOaths: [], discoveredClues: [], relationshipChanges: [], factionChanges: [],
+			sourceEntryIds: [], sourceEventIds: [], metadata: {} });
+		const next = buildServerTurnPrompt({ ...ctx, chapters: [chapter], entities: ctx.entities.map(entity => entity.id === 'pc_balaerys'
+			? { ...entity, state: { ...entity.state as object, developments: ['Learned the new bridge signal.'] } } : entity) },
+			packet('Enter.', []), 'current', { authoredContext });
+		expect(next.stableReferenceContext).toBe(first.stableReferenceContext);
+		expect(next.stableContext.startsWith(first.stableReferenceContext)).toBe(true);
+		expect(next.stableContext.indexOf('Stable project setting reference.')).toBeLessThan(next.stableContext.indexOf('The bridge opens.'));
+		expect(next.stableContext).not.toContain('Learned the new bridge signal.');
+		expect(next.dynamicPrompt).toContain('Learned the new bridge signal.');
+		expect(next.stableContextRecords.map(record => record.id)).toEqual(expect.arrayContaining(['lore@1', 'chapter_new']));
+	});
+
 	it('injects terminal wiki context into the narration prompt', () => {
 		const report = buildPromptHarnessReport({
 			name: 'wiki-context-not-injected',
@@ -796,17 +817,21 @@ describe('turn prompt harness', () => {
 		expect(report.promptSectionTrace.find((section) => section.id === 'turn_context')?.sourceIds).toContain('terminal_wiki_context');
 	});
 
-	it('moves scene-only wiki context behind the cached campaign history', () => {
+	it('keeps searched wiki context out of stable campaign history even for scene-only searches', () => {
 		const ctx = baseContext();
-		const options = { wikiContextMarkdown: 'Stable harbor geography.', stableWikiContext: true };
+		const options = { wikiContextMarkdown: 'Stable harbor geography.' };
 		const first = buildServerTurnPrompt(ctx, packet('Look around.', []), 'current', options);
 		const second = buildServerTurnPrompt(ctx, packet('Walk to the gate.', []), 'current', options);
 		expect(first.stableContext).toBe(second.stableContext);
-		expect(first.stableContext).toContain('Stable harbor geography.');
-		expect(first.dynamicPrompt).not.toContain('Stable harbor geography.');
-		expect(first.stableContextRecords).toEqual(expect.arrayContaining([
+		expect(first.stableContext).not.toContain('Stable harbor geography.');
+		expect(first.dynamicPrompt).toContain('Stable harbor geography.');
+		expect(first.dynamicContextRecords).toEqual(expect.arrayContaining([
 			expect.objectContaining({ kind: 'wikiBlocks', id: 'terminal_wiki_context' }),
 		]));
+		const changed = buildServerTurnPrompt(ctx, packet('Look around.', []), 'current',
+			{ ...options, wikiContextMarkdown: 'A newly refreshed description.' });
+		expect(changed.stableContext).toBe(first.stableContext);
+		expect(changed.dynamicPrompt).toContain('A newly refreshed description.');
 	});
 
 	it('recognizes relationship.status player_character as the protagonist', () => {

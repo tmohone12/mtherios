@@ -161,7 +161,7 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 	const requestedEntityIds = [...new Set([...presentNpcIds, ...sceneEntityIds, story.currentLocationId ?? ''].map((id) => id.trim()).filter((id) => id.length > 0))];
 
 	const [
-		recentEntriesDesc,
+		recentEntriesTail,
 		entityRows,
 		requestedEntityRows,
 		factionRows,
@@ -199,6 +199,15 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		db.select().from(entityAliases).where(eq(entityAliases.storyId, storyId)).limit(500),
 	]);
 
+	// The initial bounded read is only an optimization. It must not become a
+	// sliding prompt window while the current chapter is still being written.
+	const lastChapterEnd = chapterRows.at(-1)?.metadata?.endPosition;
+	const tailCoversChapter = typeof lastChapterEnd === 'number'
+		&& (recentEntriesTail.at(-1)?.position ?? Infinity) < lastChapterEnd - 4;
+	const recentEntriesDesc = recentEntriesTail.length >= NARRATOR_RECENT_ENTRY_LIMIT && !tailCoversChapter
+		? await db.select().from(storyEntries).where(and(eq(storyEntries.storyId, storyId),
+			inArray(storyEntries.type, ['user_action', 'narration']))).orderBy(desc(storyEntries.position))
+		: recentEntriesTail;
 	const requestedEntityById = new Map(requestedEntityRows.map((entity) => [entity.id, entity]));
 	const broadEntityById = new Map(entityRows.map((entity) => [entity.id, entity]));
 	const mergedEntityRows = [

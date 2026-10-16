@@ -40,7 +40,8 @@ export interface ServerTurnPromptOptions {
 	presentNpcIds?: string[];
 	maxFactions?: number;
 	wikiContextMarkdown?: string | null;
-	stableWikiContext?: boolean;
+	/** Keep the chapter's dialogue append-only; capacity is checked on the full request. */
+	appendOnlyDialogue?: boolean;
 	suppressStrategicPressure?: boolean;
 	playerAction?: string;
 	recentDialogueTokens?: number;
@@ -89,8 +90,8 @@ export interface ServerTurnPromptPacket {
 	system: string;
 	prompt: string;
 	stableContext: string;
+	stableReferenceContext: string;
 	stableHistoryContext: string;
-	stableWikiContext: string;
 	dynamicPrompt: string;
 	messages: Array<{ role: 'user' | 'assistant'; content: string }>;
 	compiledPrompt: CompiledPrompt;
@@ -341,7 +342,7 @@ function renderPlayerCharacter(ctx: TurnContext, entity: TurnContext['entities']
 		identity.push(`[bio]: ${characterBioValue(entity, state, metadata, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
 		if (playerPrompt) identity.push(`[bio]: ${compact(playerPrompt, PLAYER_CHARACTER_PROMPT_CHAR_LIMIT)}`);
 		const developments = readCharacterDevelopments(state);
-		if (developments.length) identity.push(`[Developments]: ${newestWithin(developments, 12, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
+		if (developments.length) current.push(`[Developments]: ${newestWithin(developments, 12, PLAYER_DESCRIPTION_CHAR_LIMIT)}`);
 		current.push(`[Key History]: ${inlineList([
 			...currentState,
 			...goals,
@@ -1062,7 +1063,7 @@ export function unchapteredDialogueEntries(ctx: Pick<TurnContext, 'recentEntries
 	return ctx.recentEntries.filter(entry => entry.position > boundary || bridgeIds.has(entry.id));
 }
 
-function renderEntries(ctx: TurnContext, currentEntryId: string, budget?: number, turns?: number): DialogueMessage[] {
+function renderEntries(ctx: TurnContext, currentEntryId: string, budget?: number, turns?: number, appendOnly = false): DialogueMessage[] {
 	const messages: DialogueMessage[] = [];
 	for (const entry of unchapteredDialogueEntries({ recentEntries: narratorHistoryEntries(ctx), chapters: ctx.chapters })) {
 		if (entry.id === currentEntryId) continue;
@@ -1077,7 +1078,8 @@ function renderEntries(ctx: TurnContext, currentEntryId: string, budget?: number
 			messages.push({ role: 'assistant', content: entry.content, sourceId: entry.id });
 		}
 	}
-	return selectRecentDialogue(messages, budget, turns);
+	return appendOnly ? messages.map(message => ({ ...message, content: toWellFormedText(message.content) }))
+		.filter(message => message.content.trim()) : selectRecentDialogue(messages, budget, turns);
 }
 
 export function dialogueRhythmGuidance(messages: Pick<DialogueMessage, 'role' | 'content'>[]): string {
@@ -1711,7 +1713,7 @@ export function buildServerTurnPrompt(
 	const configuredDialogueTurns = useTurnLimit ? normalizeRecentDialogueTurns(options.recentDialogueTurns) : undefined;
 	const configuredDialogueTokens = useTurnLimit ? RECENT_DIALOGUE_SAFETY_TOKENS : normalizeRecentDialogueTokens(options.recentDialogueTokens);
 	const compactDialogueTokens = useTurnLimit ? RECENT_DIALOGUE_SAFETY_TOKENS : Math.min(configuredDialogueTokens, 8_000);
-	const compactMessages = ctx.sceneCheckpoint?.notes.length ? renderEntries(ctx, currentEntryId, compactDialogueTokens,
+	const compactMessages = !options.appendOnlyDialogue && ctx.sceneCheckpoint?.notes.length ? renderEntries(ctx, currentEntryId, compactDialogueTokens,
 		configuredDialogueTurns === undefined ? undefined : Math.min(configuredDialogueTurns, 10)) : [];
 	const compactFirstPosition = ctx.recentEntries.find(entry => entry.id === compactMessages[0]?.sourceId)?.position;
 	const checkpointCoversOlderDialogue = compactFirstPosition != null
@@ -1719,7 +1721,7 @@ export function buildServerTurnPrompt(
 		&& selectSceneCheckpointNotes(ctx.sceneCheckpoint, compactFirstPosition, retrieved.query).length > 0;
 	const renderedMessages = checkpointCoversOlderDialogue
 		? compactMessages
-		: renderEntries(ctx, currentEntryId, configuredDialogueTokens, configuredDialogueTurns);
+		: renderEntries(ctx, currentEntryId, configuredDialogueTokens, configuredDialogueTurns, options.appendOnlyDialogue);
 	const latestSceneEntry = latestNarrationForPov(narratorHistoryEntries(ctx), ctx.scenePov, ctx.recentEntries);
 	const sceneAlreadyInDialogue = latestSceneEntry && renderedMessages.some(message =>
 		message.sourceId === latestSceneEntry.id && message.role === 'assistant' && !message.partial);
@@ -1785,16 +1787,20 @@ export function buildServerTurnPrompt(
 		retrievedMemory,
 		{ stable: canonTimeline },
 		{ stable: authoredReference },
-		options.stableWikiContext ? { stable: terminalWikiContext } : terminalWikiContext,
+		terminalWikiContext,
 		factionLines.length ? `Faction canon:\n${factionLines.join('\n')}` : '',
 		CONTEXT_DATA_FOOTER,
 		dialogueRhythmGuidance(renderedMessages),
 		'Return only GM narration prose for the player action. Do not include JSON, ending choices, numbered options, menus, or OOC notes in this response.',
 	];
 	const prompt = promptParts.map(part => typeof part === 'string' ? part : part.stable).filter(Boolean).join('\n\n');
-	const stableContext = promptParts.flatMap(part => typeof part === 'string' ? [] : [part.stable]).filter(Boolean).join('\n\n');
-	const stableHistoryContext = [premise, playerCharacter.identity, canonTimeline, authoredReference].filter(Boolean).join('\n\n');
-	const stableWikiContext = options.stableWikiContext ? terminalWikiContext : '';
+	// Authored reference changes less often than accepted history. A new chapter
+	// must not invalidate the project lore and character identity ahead of it.
+	const stableReferenceContext = [premise, authoredReference, playerCharacter.identity].filter(Boolean).join('\n\n');
+	const stableHistoryContext = [stableReferenceContext, canonTimeline].filter(Boolean).join('\n\n');
+	// Search results are derived scene evidence, including location-only searches.
+	// Never let a refreshed page or a search miss invalidate accepted history.
+	const stableContext = stableHistoryContext;
 	const dynamicPrompt = promptParts.filter((part): part is string => typeof part === 'string').filter(Boolean).join('\n\n');
 
 	const messages = renderedMessages.map(({ role, content }) => ({ role, content }));
@@ -1852,8 +1858,8 @@ export function buildServerTurnPrompt(
 		system,
 		prompt,
 		stableContext,
+		stableReferenceContext,
 		stableHistoryContext,
-		stableWikiContext,
 		dynamicPrompt,
 		messages,
 		compiledPrompt,

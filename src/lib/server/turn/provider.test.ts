@@ -257,7 +257,11 @@ describe('server generation provider cache hints', () => {
 				{ role: 'user', content: 'I wait.' }, { role: 'assistant', content: 'The gate opens.' }],
 			prompt: 'Player action: I enter.' });
 		const firstPrefix = requests[0].body.messages.slice(0, -1);
-		expect(requests[1].body.messages.slice(0, firstPrefix.length)).toEqual(firstPrefix);
+		const textMessages = (messages: any[]) => messages.map(message => ({ ...message,
+			content: Array.isArray(message.content) ? message.content.map((block: any) => block.text).join('') : message.content }));
+		expect(textMessages(requests[1].body.messages.slice(0, firstPrefix.length))).toEqual(textMessages(firstPrefix));
+		expect(firstPrefix.at(-1).content[0].cache_control).toEqual({ type: 'ephemeral' });
+		expect(requests[1].body.messages.at(-2).content[0]).toMatchObject({ text: 'The gate opens.', cache_control: { type: 'ephemeral' } });
 		expect(firstPrefix.map((message: { role: string }) => message.role)).toEqual(['system', 'user', 'assistant']);
 		expect(firstPrefix[0].content).toEqual([
 			{ type: 'text', text: 'Stable rules.\n\n', cache_control: { type: 'ephemeral' } },
@@ -276,6 +280,67 @@ describe('server generation provider cache hints', () => {
 			prompt: 'Player action: I listen.' });
 		expect(requests[3].body.messages[0]).toEqual(requests[0].body.messages[0]);
 		expect(requests[3].body.messages[1]).not.toEqual(requests[0].body.messages[1]);
+	});
+
+	it.each(['openrouter', 'anthropic', 'openai', 'nanogpt'])('keeps fresh native GM context after history on %s, including tool continuations', async providerType => {
+		stubFetch({ choices: [{ message: { content: 'Done.' } }], content: [{ type: 'text', text: 'Done.' }] });
+		const history = [
+			{ role: 'user' as const, content: 'Earlier action.' },
+			{ role: 'assistant' as const, content: 'Earlier narration.' },
+			{ role: 'user' as const, content: 'Current action.' },
+			{ role: 'assistant' as const, content: '', toolCalls: [{ id: 'read-1', name: 'read', arguments: {} }] },
+			{ role: 'tool' as const, content: 'Fresh evidence.', toolCallId: 'read-1', toolName: 'read' },
+		];
+		const before = structuredClone(history);
+		const common = { profile: { providerType, apiKey: 'test-key' } as any,
+			model: providerType === 'anthropic' ? 'claude-sonnet-4-5' : 'anthropic/claude-sonnet-4',
+			system: 'Instructions. Reference. History. Wiki.', systemCacheBoundaries: [13, 23],
+			messages: history, appendPrompt: false, prompt: '', contextAfterDialogue: true,
+			cache: { key: 'stable-story' } };
+		for (const snapshot of ['Scene revision 1.', 'Scene revision 2.']) {
+			await generateServerTextWithMetrics({ ...common, systemDynamic: snapshot });
+		}
+		const bodies = requests.map(request => request.body);
+		const system = providerType === 'anthropic' ? bodies[0].system : bodies[0].messages[0].content;
+		expect(JSON.stringify(system)).not.toContain('Scene revision');
+		const dialogue = bodies.map(body => providerType === 'anthropic' ? body.messages : body.messages.slice(1));
+		expect(dialogue[1].slice(0, 2)).toEqual(dialogue[0].slice(0, 2));
+		expect(JSON.stringify(dialogue[0][2])).toContain('Scene revision 1.');
+		expect(JSON.stringify(dialogue[1][2])).toContain('Scene revision 2.');
+		expect(JSON.stringify(dialogue[1][2])).toContain('Current action.');
+		expect(JSON.stringify(dialogue[1].slice(3))).toContain('read-1');
+		expect(JSON.stringify(dialogue[1].slice(3))).toContain('Fresh evidence.');
+		expect(JSON.stringify(bodies[0]).match(/cache_control/g)?.length ?? 0).toBe(['anthropic', 'openrouter'].includes(providerType) ? 4 : 0);
+		expect(history).toEqual(before);
+	});
+
+	it('extends Gemini explicit caching through stable dialogue while searches stay in the final message', async () => {
+		stubFetch({ choices: [{ message: { content: 'Done.' } }] });
+		const common = { profile: { providerType: 'openrouter', apiKey: 'test-key' } as any,
+			model: 'google/gemini-4-argon', system: 'Stable authored lore. Accepted chapter. Wiki.',
+			systemCacheBoundaries: [20, 38], contextAfterDialogue: true, appendPrompt: false,
+			prompt: '', cache: { key: 'stable-session' } };
+		const earlier = [{ role: 'user' as const, content: 'Earlier action.' }, { role: 'assistant' as const, content: 'Earlier narration.' }];
+		await generateServerTextWithMetrics({ ...common, systemDynamic: 'Scene 1.', messages: [...earlier, { role: 'user', content: 'Act 1.' }] });
+		await generateServerTextWithMetrics({ ...common, systemDynamic: 'Scene 2.', messages: [...earlier,
+			{ role: 'user', content: 'Act 1.' }, { role: 'assistant', content: 'Result 1.' }, { role: 'user', content: 'Act 2.' }] });
+		expect(requests[1].body.messages[0]).toEqual(requests[0].body.messages[0]);
+		expect(requests[1].body.messages[1]).toEqual(requests[0].body.messages[1]);
+		expect(requests[0].body.messages[2].content[0]).toMatchObject({ text: 'Earlier narration.', cache_control: { type: 'ephemeral' } });
+		expect(requests[1].body.messages.at(-2).content[0]).toMatchObject({ text: 'Result 1.', cache_control: { type: 'ephemeral' } });
+		for (const request of requests) {
+			expect(JSON.stringify(request.body.messages.at(-1))).not.toContain('cache_control');
+			expect(request.body.messages[0].content.map((block: any) => block.text).join('')).toBe(common.system);
+			expect(request.body.session_id).toBe('stable-session');
+		}
+		expect(requests[1].body.messages.at(-1).content).toMatch(/Scene 2\.[\s\S]*Act 2\./);
+	});
+
+	it('caches a stable Anthropic system even without a dynamic system tail', async () => {
+		stubFetch({ content: [{ type: 'text', text: 'Done.' }] });
+		await generateServerTextWithMetrics({ profile: { providerType: 'anthropic', apiKey: 'test-key' } as any,
+			model: 'claude-sonnet-4-5', system: 'Stable instructions.', prompt: 'Act.', cache: { key: 'story' } });
+		expect(requests[0].body.system).toEqual([{ type: 'text', text: 'Stable instructions.', cache_control: { type: 'ephemeral' } }]);
 	});
 
 	it('captures OpenAI-compatible length finish reasons from provider responses', async () => {

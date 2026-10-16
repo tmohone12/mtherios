@@ -78,6 +78,8 @@ export interface ServerGenerationOptions {
 	contextAfterDialogue?: boolean;
 	/** Character offset where a second, shorter-lived system cache segment begins. */
 	systemCacheBoundary?: number;
+	/** Ordered stable-prefix boundaries; at most three system blocks are cached. */
+	systemCacheBoundaries?: number[];
 	messages?: ServerGenerationMessage[];
 	prompt: string;
 	/** Native agent history already includes the current user message. */
@@ -319,38 +321,45 @@ function wellFormedMessages(messages: ServerGenerationMessage[]): ServerGenerati
 	}));
 }
 
-function openAiNativeMessages(messages: ServerGenerationMessage[]): Array<Record<string, unknown>> {
-	return messages.map(message => {
+function openAiNativeMessages(messages: ServerGenerationMessage[], cacheIndex = -1): Array<Record<string, unknown>> {
+	return messages.map((message, index) => {
+		const content = index === cacheIndex && message.content
+			? [{ type: 'text', text: message.content, cache_control: { type: 'ephemeral' } }] : message.content;
 		if (message.role === 'tool') {
 			if (!message.toolCallId) throw new Error('Native tool result requires a tool call ID.');
-			return { role: 'tool', content: message.content, tool_call_id: message.toolCallId };
+			return { role: 'tool', content, tool_call_id: message.toolCallId };
 		}
-		if (message.role === 'user') return { role: message.role, content: message.content };
+		if (message.role === 'user') return { role: message.role, content };
 		const continuation = message.providerContinuation ?? {};
 		return {
-			role: 'assistant', content: message.content || null,
+			role: 'assistant', content: content || null,
 			...Object.fromEntries(['reasoning_content', 'reasoning', 'reasoning_details'].filter(key => continuation[key] != null).map(key => [key, continuation[key]])),
 			...(message.toolCalls?.length ? { tool_calls: message.toolCalls.map(call => ({ id: call.id, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) } : {}),
 		};
 	});
 }
 
-function anthropicNativeMessages(messages: ServerGenerationMessage[]): Array<Record<string, unknown>> {
+function anthropicNativeMessages(messages: ServerGenerationMessage[], cacheIndex = -1): Array<Record<string, unknown>> {
 	if (!messages.some(message => message.role === 'tool' || (message.role === 'assistant' && (message.toolCalls?.length || message.providerContinuation)))) {
-		return messages.map(message => ({ role: message.role, content: message.content }));
+		return messages.map((message, index) => ({ role: message.role, content: index === cacheIndex
+			? [{ type: 'text', text: message.content, cache_control: { type: 'ephemeral' } }] : message.content }));
 	}
 	const output: Array<{ role: 'user' | 'assistant'; content: Array<Record<string, unknown>> }> = [];
-	for (const message of messages) {
+	for (const [index, message] of messages.entries()) {
 		const role = message.role === 'assistant' ? 'assistant' : 'user';
 		const content: Array<Record<string, unknown>> = message.role === 'tool'
 			? [{ type: 'tool_result', tool_use_id: message.toolCallId, content: message.content, ...(message.isError ? { is_error: true } : {}) }]
 			: message.role === 'assistant' && Array.isArray(message.providerContinuation?.anthropicContent)
-				? message.providerContinuation.anthropicContent as Array<Record<string, unknown>>
+				? (message.providerContinuation.anthropicContent as Array<Record<string, unknown>>).map(block => ({ ...block }))
 				: [
 					...(message.content ? [{ type: 'text', text: message.content }] : []),
 					...(message.role === 'assistant' ? (message.toolCalls ?? []).map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.arguments })) : []),
 				];
 		if (message.role === 'tool' && !message.toolCallId) throw new Error('Native tool result requires a tool call ID.');
+		if (index === cacheIndex && content.length) {
+			const last = content.findLastIndex(block => block.type !== 'thinking' && block.type !== 'redacted_thinking');
+			if (last >= 0) content[last] = { ...content[last], cache_control: { type: 'ephemeral' } };
+		}
 		const previous = output.at(-1);
 		if (previous?.role === role) previous.content.push(...content);
 		else output.push({ role, content });
@@ -358,27 +367,29 @@ function anthropicNativeMessages(messages: ServerGenerationMessage[]): Array<Rec
 	return output;
 }
 
-function cachedSystemBlocks(system: string, systemDynamic: string, boundary?: number): Array<Record<string, unknown>> {
-	const split = typeof boundary === 'number' && boundary > 0 && boundary < system.length;
+function cachedSystemBlocks(system: string, systemDynamic: string, boundary?: number, boundaries?: number[]): Array<Record<string, unknown>> {
+	const ends = [...new Set((boundaries ?? [boundary ?? 0]).filter(offset => Number.isInteger(offset) && offset > 0 && offset < system.length))]
+		.sort((a, b) => a - b).slice(0, 2).concat(system.length);
+	let start = 0;
 	return [
-		...(split ? [{ type: 'text', text: system.slice(0, boundary), cache_control: { type: 'ephemeral' } }] : []),
-		{ type: 'text', text: split ? system.slice(boundary) : system, cache_control: { type: 'ephemeral' } },
+		...ends.map(end => { const text = system.slice(start, end); start = end;
+			return { type: 'text', text, cache_control: { type: 'ephemeral' } }; }),
 		...(systemDynamic ? [{ type: 'text', text: systemDynamic }] : []),
 	];
 }
 
-function buildAnthropicSystem(system: string, systemDynamic?: string, boundary?: number): string | Array<Record<string, unknown>> {
-	if (systemDynamic && systemDynamic.length > 0 && system.length > 0) {
-		return cachedSystemBlocks(system, systemDynamic, boundary);
+function buildAnthropicSystem(system: string, systemDynamic?: string, boundary?: number, boundaries?: number[], cacheStableSystem = false): string | Array<Record<string, unknown>> {
+	if (system.length > 0 && (systemDynamic || cacheStableSystem)) {
+		return cachedSystemBlocks(system, systemDynamic ?? '', boundary, boundaries);
 	}
 	return combinedSystem(system, systemDynamic);
 }
 
-function buildOpenAiSystemMessage(profile: ProviderProfile, system: string, systemDynamic?: string, boundary?: number, cacheStableSystem = false): { role: 'system'; content: unknown } {
+function buildOpenAiSystemMessage(profile: ProviderProfile, system: string, systemDynamic?: string, boundary?: number, cacheStableSystem = false, boundaries?: number[]): { role: 'system'; content: unknown } {
 	if (system.length > 0 && (systemDynamic || cacheStableSystem) && supportsOpenRouterStyleCaching(profile)) {
 		return {
 			role: 'system',
-			content: cachedSystemBlocks(system, systemDynamic ?? '', boundary),
+			content: cachedSystemBlocks(system, systemDynamic ?? '', boundary, boundaries),
 		};
 	}
 	return { role: 'system', content: combinedSystem(system, systemDynamic) };
@@ -697,12 +708,27 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 		: baseUrlFor(options.profile);
 	const messages = wellFormedMessages(options.messages ?? []);
 	const system = toWellFormedText(options.system);
-	const contextAfterDialogue = options.contextAfterDialogue === true && ['nanogpt', 'openrouter'].includes(providerType);
+	const contextAfterDialogue = options.contextAfterDialogue === true;
 	const turnContext = options.systemDynamic == null ? undefined : toWellFormedText(options.systemDynamic);
 	const systemDynamic = contextAfterDialogue ? undefined : turnContext;
-	const prompt = toWellFormedText(contextAfterDialogue && turnContext
-		? `Current turn context (newer than the dialogue above; apply source priority when details conflict):\n${turnContext}\n\n${options.prompt}`
-		: options.prompt);
+	const contextPrefix = contextAfterDialogue && turnContext
+		? `Current turn context (newer than the dialogue above; apply source priority when details conflict):\n${turnContext}\n\n` : '';
+	const prompt = toWellFormedText(options.appendPrompt === false ? options.prompt : contextPrefix + options.prompt);
+	// Pi already includes the action in native history. Insert the fresh snapshot
+	// in its latest user message, retaining tool call/result order and raw history.
+	const dynamicMessageIndex = options.appendPrompt === false ? messages.findLastIndex(message => message.role === 'user') : messages.length;
+	if (options.appendPrompt === false && contextPrefix) {
+		if (dynamicMessageIndex < 0) throw new Error('Cache-ordered native history requires a user message for current turn context.');
+		messages[dynamicMessageIndex].content = contextPrefix + messages[dynamicMessageIndex].content;
+	}
+	// A fourth (rolling) breakpoint covers unchanged dialogue before the action.
+	// Never mark the fresh context or the player action as reusable history.
+	let cacheDialogueIndex = -1;
+	if (contextAfterDialogue && (useAnthropic || supportsOpenRouterStyleCaching(options.profile))) {
+		for (let index = dynamicMessageIndex - 1; index >= 0; index--) {
+			if (messages[index].content && messages[index].role !== 'tool') { cacheDialogueIndex = index; break; }
+		}
+	}
 	const timeoutMs = generationTimeoutMs(options.timeoutMs);
 	const maxRetries = generationRetryLimit(options.maxRetries);
 	const scopedHooks = options.agentBudgetManaged ? undefined : currentServerProviderHooks();
@@ -712,7 +738,7 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 	const endpoint = useAnthropic
 		? `${baseUrl || 'https://api.anthropic.com'}/v1/messages`
 		: `${baseUrl}/chat/completions`;
-	const inputChars = promptChars({ ...options, systemDynamic, prompt });
+	const inputChars = promptChars({ ...options, systemDynamic, prompt, messages });
 	const shouldStream = Boolean(options.onTextDelta) && options.responseFormat !== 'json_object' && !options.responseSchema && !options.tools?.length;
 	const dialogue = [...messages, ...(options.appendPrompt === false ? [] : [{ role: 'user' as const, content: prompt }])];
 
@@ -725,8 +751,8 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 				? { thinking: { type: 'adaptive' }, output_config: { effort: ['minimal', 'low'].includes(requestedReasoningEffort!) ? 'low' : requestedReasoningEffort === 'medium' ? 'medium' : requestedReasoningEffort === 'max' ? 'max' : 'high' } }
 				: anthropicThinking ? { thinking: { type: 'enabled', budget_tokens: Math.min(maxTokens - 1, Math.max(1024, maxTokens - 1024), requestedReasoningEffort === 'low' || requestedReasoningEffort === 'minimal' ? 1024 : requestedReasoningEffort === 'medium' ? 2048 : 4096) } } : {}),
 			...(shouldStream ? { stream: true } : {}),
-			system: buildAnthropicSystem(system, systemDynamic, options.systemCacheBoundary),
-			messages: anthropicNativeMessages(dialogue),
+			system: buildAnthropicSystem(system, systemDynamic, options.systemCacheBoundary, options.systemCacheBoundaries, contextAfterDialogue || Boolean(options.cache)),
+			messages: anthropicNativeMessages(dialogue, cacheDialogueIndex),
 			...(options.tools?.length ? { tools: options.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
 		}
 		: {
@@ -734,8 +760,8 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 			temperature,
 			...(options.providerOutputLimit ? {} : { max_tokens: maxTokens }),
 			messages: [
-				buildOpenAiSystemMessage(options.profile, system, systemDynamic, options.systemCacheBoundary, contextAfterDialogue),
-				...openAiNativeMessages(dialogue),
+				buildOpenAiSystemMessage(options.profile, system, systemDynamic, options.systemCacheBoundary, contextAfterDialogue || Boolean(options.cache), options.systemCacheBoundaries),
+				...openAiNativeMessages(dialogue, cacheDialogueIndex),
 			],
 			...buildOpenAiPromptCacheFields(options.profile, options.cache),
 			...(options.profile.providerType === 'openrouter' && options.cache?.key

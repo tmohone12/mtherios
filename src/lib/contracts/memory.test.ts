@@ -7,6 +7,7 @@ import {
 	gmTimelineBriefSchema,
 	memoryNodeSchema,
 	patchProposalSchema,
+	statePatchSchema,
 	sourceRefSchema,
 	npcEventLinkSchema,
 	storyEventSchema,
@@ -14,6 +15,14 @@ import {
 } from './memory';
 
 describe('timeline contracts', () => {
+	it('accepts stored patch history with server-defined op names', () => {
+		const operations = ['item_acquire', 'item_equip', 'item_unequip', 'condition_add', 'condition_remove', 'annul', 'review']
+			.map(op => ({ op, path: '/state' }));
+		expect(statePatchSchema.shape.operations.parse(operations).map(operation => operation.op))
+			.toEqual(operations.map(operation => operation.op));
+		expect(() => statePatchSchema.shape.operations.parse([{ op: '', path: '/state' }])).toThrow();
+	});
+
 	it('accepts legacy memory nodes whose metadata is JSON but not an object', () => {
 		const node = memoryNodeSchema.parse({
 			id: 'mem_legacy_array_metadata',
