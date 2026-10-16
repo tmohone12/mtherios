@@ -112,11 +112,12 @@ export async function readImageAsset(scope: AssetScope & { assetId: string }): P
 export async function importImageAsset(tx: Tx, input: AssetScope & {
   mediaType: MediaType; sha256: string; bytesBase64: string; visibility: 'gm' | 'public'; createdKeys: string[];
 }): Promise<string> {
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.bytesBase64))
-    throw new MutationError('INVALID_IMAGE', 'Imported image is not canonical base64.');
   const bytes = Buffer.from(input.bytesBase64, 'base64');
+  // Round-trip validation remains strict without regex stack growth on large portraits.
+  if (bytes.toString('base64') !== input.bytesBase64)
+    throw new MutationError('INVALID_IMAGE', 'Imported image is not canonical base64.');
   const digest = createHash('sha256').update(bytes).digest('hex');
-  if (imageMediaType(bytes) !== input.mediaType || digest !== input.sha256 || bytes.toString('base64') !== input.bytesBase64)
+  if (imageMediaType(bytes) !== input.mediaType || digest !== input.sha256)
     throw new MutationError('INVALID_IMAGE', 'Imported image failed its media or integrity check.');
   const id = randomUUID();
   const key = `${id}.${input.mediaType === 'image/png' ? 'png' : input.mediaType === 'image/jpeg' ? 'jpg' : 'webp'}`;
