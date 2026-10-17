@@ -16,6 +16,7 @@
 	import { downloadStoryVaultArchive, fetchStoryVaultStatus, runStoryVaultJob, type StoryVaultStatus } from '$lib/services/storyVault';
 	import { terminalSyncDisplay, terminalSyncToneClass } from './terminalSyncDisplay';
 	import PlotDirectorPanel from './PlotDirectorPanel.svelte';
+	import WorldChroniclePanel from './WorldChroniclePanel.svelte';
 	import type { EngineCacheSegmentDiagnostics } from '$lib/contracts/engine';
 	import type { Arc, Character, Entry, FactionActionRecord, FactionEntryState, Saga, Story, SyncOutboxOp } from '$lib/types';
 	import { fly } from 'svelte/transition';
@@ -1576,6 +1577,9 @@
 			</div>
 			{/if}
 
+
+			<!-- World Chronicle — off-screen happenings when in-world time passes -->
+			<WorldChroniclePanel {open} />
 
 			<!-- Living World — factions, rumors, world events -->
 			{#if recentFactionActions.length > 0 || activeRumors.length > 0 || recentWorldEvents.length > 0}

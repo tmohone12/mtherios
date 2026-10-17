@@ -3391,3 +3391,68 @@ describe('engine command envelope', () => {
 		});
 	});
 });
+
+describe('World Chronicle commands', () => {
+	it('advances the world through the shared job command and reports the batch', async () => {
+		resetEngineEventsForTest();
+		const events: Array<{ type: string; data: unknown }> = [];
+		const unsubscribe = subscribeEngineEvents('story_alpha', (event) => events.push({ type: event.type, data: event.data }));
+		const runWorldChronicle = vi.fn(async (input: Record<string, unknown>) => ({ ok: true, storyId: input.storyId, jobId: 'job_chronicle', status: 'complete',
+			job: { jobId: 'job_chronicle', completed: true, result: { created: 3, proposed: 2, autoAccepted: 1, clockAdvancedMinutes: 10080 } } }));
+		try {
+			const advanced = await executeEngineCommand({ command: 'world.chronicle.advance', storyId: 'story_alpha', clientCommandId: 'chronicle_week',
+				args: { span: 'week', eventfulness: 'turbulent' } }, { runWorldChronicle });
+			expect(advanced.status).toBe('succeeded');
+			expect(runWorldChronicle).toHaveBeenCalledExactlyOnceWith({ storyId: 'story_alpha', span: 'week', eventfulness: 'turbulent', runNow: true });
+			expect(advanced.projectionChanges).toEqual({ worldChronicle: { advance: { ok: true, jobId: 'job_chronicle', status: 'complete', created: 3, proposed: 2, autoAccepted: 1, clockAdvancedMinutes: 10080 } } });
+			expect(events.some(event => event.type === 'state.changed')).toBe(true);
+
+			for (const args of [{ span: 'month' }, { span: 'day', creativity: 'chaotic' }, { span: 'day', storyId: 'story_beta' }]) {
+				const rejected = await executeEngineCommand({ command: 'world.chronicle.advance', storyId: 'story_alpha', args }, { runWorldChronicle });
+				expect(rejected.status).toBe('failed');
+			}
+			expect(runWorldChronicle).toHaveBeenCalledTimes(1);
+		} finally {
+			unsubscribe();
+		}
+	});
+
+	it('reviews a happening in the command story and refreshes the projection only when something changed', async () => {
+		resetEngineEventsForTest();
+		const events: Array<{ type: string; data: unknown }> = [];
+		const unsubscribe = subscribeEngineEvents('story_alpha', (event) => events.push({ type: event.type, data: event.data }));
+		const reviewWorldChronicle = vi.fn(async (input: { eventId: string; action: string }) => ({
+			event: { id: input.eventId, status: input.action === 'dismiss' ? 'cancelled' : 'committed' }, changed: input.action !== 'edit', serverVersion: 12 }));
+		try {
+			const accepted = await executeEngineCommand({ command: 'world.chronicle.review', storyId: 'story_alpha',
+				args: { eventId: 'world_happening_1', action: 'accept', title: '  Guild doubles tolls  ' } }, { reviewWorldChronicle });
+			expect(accepted.status).toBe('succeeded');
+			expect(reviewWorldChronicle).toHaveBeenLastCalledWith({ storyId: 'story_alpha', eventId: 'world_happening_1', action: 'accept', title: 'Guild doubles tolls' });
+			expect(accepted.projectionChanges).toEqual({ worldChronicle: { review: { eventId: 'world_happening_1', action: 'accept', status: 'committed', serverVersion: 12 } } });
+			expect(events.filter(event => event.type === 'state.changed')).toHaveLength(1);
+
+			const unchanged = await executeEngineCommand({ command: 'world.chronicle.review', storyId: 'story_alpha',
+				args: { eventId: 'world_happening_1', action: 'edit', body: 'Same text.' } }, { reviewWorldChronicle });
+			expect(unchanged.projectionChanges).toEqual({});
+			expect(events.filter(event => event.type === 'state.changed')).toHaveLength(1);
+
+			const invalid = await executeEngineCommand({ command: 'world.chronicle.review', storyId: 'story_alpha',
+				args: { eventId: 'world_happening_1', action: 'delete' } }, { reviewWorldChronicle });
+			expect(invalid.status).toBe('failed');
+			const refused = await executeEngineCommand({ command: 'world.chronicle.review', storyId: 'story_alpha', args: { eventId: 'event_other', action: 'dismiss' } },
+				{ reviewWorldChronicle: async () => { throw new Error('Only World Chronicle happenings can be reviewed here.'); } });
+			expect(refused).toMatchObject({ status: 'failed', error: 'Only World Chronicle happenings can be reviewed here.' });
+		} finally {
+			unsubscribe();
+		}
+	});
+
+	it('lists the chronicle as a read without projection changes', async () => {
+		const listWorldChronicle = vi.fn(async () => ({ events: [], settings: { eventfulness: 'quiet', creativity: 'grounded' }, currentWorldTime: 'Day 3' }));
+		const listed = await executeEngineCommand({ command: 'world.chronicle.list', storyId: 'story_alpha', args: {} }, { listWorldChronicle });
+		expect(listed).toMatchObject({ status: 'succeeded', projectionChanges: {}, result: { settings: { eventfulness: 'quiet' } } });
+		expect(listWorldChronicle).toHaveBeenCalledExactlyOnceWith('story_alpha', 60);
+		const tooMany = await executeEngineCommand({ command: 'world.chronicle.list', storyId: 'story_alpha', args: { limit: 500 } }, { listWorldChronicle });
+		expect(tooMany.status).toBe('failed');
+	});
+});

@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	fetchBackendEntriesAround,
+	listBackendWorldChronicle,
 	previewBackendTurn,
 	pullBackendChanges,
+	reviewBackendWorldChronicle,
 	runBackendPlotBrainPlan,
+	runBackendWorldChronicle,
 	runBackendWorldSimTick,
 	TerminalRequestError,
 } from './backendMemory';
@@ -131,6 +134,32 @@ describe('backend memory turn client', () => {
 				since: 12,
 			},
 		});
+	});
+
+	it('routes World Chronicle advance, list and review through the shared engine command gateway', async () => {
+		const envelope = (command: string, result: unknown) => jsonResponse({ commandId: `cmd_${command}`, clientCommandId: null, storyId: 'story_alpha', command,
+			status: 'succeeded', result, projectionChanges: {}, error: null, createdAt: '2026-10-16T12:00:00.000Z', updatedAt: '2026-10-16T12:00:01.000Z' });
+		const fetchMock = vi.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce(envelope('world.chronicle.advance', { ok: true, jobId: 'job_chronicle', status: 'complete',
+				job: { completed: true, result: { created: 3, proposed: 2, autoAccepted: 1, skippedDuplicates: 1, dropped: [{ title: 'x', reason: 'y' }],
+					clockAdvancedMinutes: 10080, clockAdvancedDays: 7, clockLabel: 'Day 11 | 09:00' } } }))
+			.mockResolvedValueOnce(envelope('world.chronicle.advance', { ok: false, jobId: 'job_chronicle', status: 'failed', error: 'Model configuration needed: World planning has no model profile.' }))
+			.mockResolvedValueOnce(envelope('world.chronicle.list', { events: [{ id: 'wh_1', status: 'proposed', type: 'world_happening', title: 'Tolls rise', body: 'The guild raised tolls.',
+				visibility: 'player_known', worldTime: 'Day 9', createdAt: '2026-10-16 12:00:00+00', metadata: { stakes: 'medium' } }], settings: { eventfulness: 'quiet', creativity: 'wild' }, currentWorldTime: 'Day 11' }))
+			.mockResolvedValueOnce(envelope('world.chronicle.review', { changed: true, event: { id: 'wh_1', status: 'committed' }, serverVersion: 12 }));
+
+		expect(await runBackendWorldChronicle('story_alpha', { span: 'week', eventfulness: 'turbulent', creativity: 'grounded' })).toEqual({
+			jobId: 'job_chronicle', status: 'complete', created: 3, proposed: 2, autoAccepted: 1, skippedDuplicates: 1, dropped: 1,
+			clockAdvancedMinutes: 10080, clockAdvancedDays: 7, clockLabel: 'Day 11 | 09:00', clockReason: null, alreadyComplete: false, error: null });
+		expect(await runBackendWorldChronicle('story_alpha', { span: 'day' })).toMatchObject({ status: 'failed', error: 'Model configuration needed: World planning has no model profile.' });
+		expect(await listBackendWorldChronicle('story_alpha')).toMatchObject({ settings: { eventfulness: 'quiet', creativity: 'wild' }, events: [{ id: 'wh_1', status: 'proposed' }] });
+		expect(await reviewBackendWorldChronicle('story_alpha', { eventId: 'wh_1', action: 'accept' })).toEqual({ changed: true, status: 'committed' });
+		expect(fetchMock.mock.calls.map(call => JSON.parse(String(call[1]?.body)))).toEqual([
+			{ storyId: 'story_alpha', command: 'world.chronicle.advance', args: { span: 'week', eventfulness: 'turbulent', creativity: 'grounded', runNow: true } },
+			{ storyId: 'story_alpha', command: 'world.chronicle.advance', args: { span: 'day', runNow: true } },
+			{ storyId: 'story_alpha', command: 'world.chronicle.list', args: { limit: 60 } },
+			{ storyId: 'story_alpha', command: 'world.chronicle.review', args: { eventId: 'wh_1', action: 'accept' } },
+		]);
 	});
 
 	it('routes world-sim ticks through the shared engine command gateway', async () => {

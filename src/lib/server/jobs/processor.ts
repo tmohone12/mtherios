@@ -4229,6 +4229,10 @@ async function processBackendJob(job: BackendJobRow, recorder?: TimingRecorder):
 				return { status: 'retired' };
 			case 'plan_plot_brain':
 				return planPlotBrain(job, recorder);
+			case 'simulate_world_happenings': {
+				const { simulateWorldHappenings } = await import('./worldChronicle');
+				return simulateWorldHappenings(job);
+			}
 			default:
 				throw new Error(`Unknown backend job type: ${job.type}`);
 		}

@@ -1035,6 +1035,23 @@ describe('turn prompt harness', () => {
 		expect(report.tokens.messages).toBeLessThanOrEqual(24_000);
 	});
 
+	it('opens after a World Chronicle time skip instead of continuing the last moment', () => {
+		const timeSkip = { changeId: 'change_1', jobId: 'job_7', span: 'week', days: 7, appliedMinutes: 7 * 1440,
+			beforeLabel: 'Fifth Moon 24, 305 AC', afterLabel: 'Sixth Moon 1, 305 AC', reason: 'World Chronicle: one week.', createdAt: now };
+		const news = row({ id: 'event_riot', storyId: 'story_balaerys', type: 'world_happening', status: 'committed', visibility: 'public', title: 'Grain riots in Oldtown',
+			body: 'Crowds stormed the granaries.', worldTime: 'Fifth Moon 27, 305 AC', actorEntityIds: [], targetEntityIds: [], locationIds: [], factionIds: [], threadIds: [],
+			scheduledTurn: null, memoryImpact: {}, sourceEntryIds: [], sourcePatchIds: [], metadata: { chronicleJobId: 'job_7', sourceType: 'world_chronicle' } });
+		const skipped = buildPromptHarnessReport({ name: 'time-skip', playerText: 'I call for my steward.', ctx: baseContext({ timeSkip, events: [news] as never }), retrieved: packet('steward', []) });
+		expect(skipped.prompt).toContain('Time skip: one week (7 days) passed off-screen');
+		expect(skipped.prompt).toContain('- Grain riots in Oldtown: Crowds stormed the granaries.');
+		expect(skipped.prompt).toContain('Scene before the time skip (it has ended; do not resume it)');
+		expect(skipped.prompt).not.toContain('Current scene: continue from the latest narrator message');
+		expect(skipped.prompt.indexOf('Time skip:')).toBeLessThan(skipped.prompt.indexOf('Scene before the time skip'));
+		expect(skipped.compiledPrompt.dynamicTail[0].content).toContain('Time skip:');
+		const played = buildPromptHarnessReport({ name: 'no-skip', playerText: 'I call for my steward.', ctx: baseContext({ timeSkip: null }), retrieved: packet('steward', []) });
+		expect(played.prompt).not.toContain('Time skip:');
+	});
+
 	it('sends the history as one canon timeline in the middle of the request, each period once', () => {
 		const chapter = (number: number) => row({ id: `chapter_${number}`, storyId: 'story_balaerys', number, title: `Passage ${number}`,
 			sceneOutcome: `Chapter ${number} sentinel.`, irreversibleChanges: [], npcKnowledgeChanges: [], promisesDebtsOaths: [], discoveredClues: [],
@@ -2929,6 +2946,26 @@ describe('turn prompt harness', () => {
 		expect(quiet.prompt).toContain('The Morning Toast');
 		const asked = buildPromptHarnessReport({ name: 'asked-recent-signal', playerText: 'I ask about the distant war.', ctx });
 		expect(asked.prompt).toContain('The Distant War');
+	});
+
+	it('narrates World Chronicle happenings as known only when public or reaching the scene', () => {
+		const happening = (id: string, title: string, visibility: 'public' | 'player_known', locationIds: string[] = []) => ({
+			id, type: 'world_happening', status: 'committed', title, body: `${title} off-screen.`, turnsUntilDue: null,
+			worldTime: 'Day 9', npcEntityIds: [], factionIds: [], locationIds, visibility });
+		const gmBrief = { storyId: 'story_balaerys', currentTurn: 4, currentWorldTime: null, dueEvents: [], scheduledEvents: [], npcEvents: [], recentEvents: [
+			happening('wh_public', 'The Grain Tax Doubles', 'public'),
+			happening('wh_regional', 'The Ferryman Vanishes', 'player_known'),
+			happening('wh_local', 'Lanterns Fail Along The Spire', 'player_known', ['loc_crimson_spire']),
+			happening('wh_remote', 'Harbor Fishmarket Burns', 'public', ['loc_harbor']),
+		] } as unknown as GmTimelineBrief;
+		const ctx = baseContext({ gmBrief });
+		const quiet = buildPromptHarnessReport({ name: 'quiet-world-happenings', playerText: 'I share breakfast.', ctx });
+		expect(quiet.prompt).toContain('The Grain Tax Doubles');
+		expect(quiet.prompt).toContain('Lanterns Fail Along The Spire');
+		expect(quiet.prompt).not.toContain('The Ferryman Vanishes');
+		expect(quiet.prompt).not.toContain('Harbor Fishmarket Burns');
+		const asked = buildPromptHarnessReport({ name: 'asked-world-happening', playerText: 'I ask who saw the ferryman vanish.', ctx });
+		expect(asked.prompt).toContain('The Ferryman Vanishes');
 	});
 
 	it('does not restage an unscoped due faction signal on every quiet turn', () => {

@@ -155,6 +155,8 @@ const storyEventTypeEnumSchema = z.enum([
 	'rumor',
 	'marriage',
 	'alliance',
+	// Off-screen World Chronicle happening (server/jobs/worldChronicle.ts).
+	'world_happening',
 ]);
 
 export const storyEventTypeSchema = z.preprocess(

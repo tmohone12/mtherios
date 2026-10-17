@@ -11,6 +11,14 @@ import {
 	type TurnPreviewResponse,
 } from '$lib/contracts/memory';
 import { engineCommandResponseSchema } from '$lib/contracts/engine';
+import {
+	worldChronicleListResultSchema,
+	type WorldChronicleCreativity,
+	type WorldChronicleEventfulness,
+	type WorldChronicleListResult,
+	type WorldChronicleReviewAction,
+	type WorldChronicleSpan,
+} from '$lib/contracts/worldChronicle';
 import { importStoryBundleToBackend } from '$lib/services/backendImport';
 import { exportStory } from '$lib/services/storySync';
 import {
@@ -124,6 +132,69 @@ export async function runBackendArcRollup(serverStoryId: string): Promise<Backen
 		reason: typeof result.reason === 'string' ? result.reason : null,
 		error: job.completed === false ? (typeof job.error === 'string' && job.error ? job.error : 'The arc job failed.') : null,
 	};
+}
+
+export interface BackendWorldChronicleAdvanceResult {
+	jobId: string | null;
+	/** complete, failed, running, queued or retry. */
+	status: string;
+	created: number;
+	proposed: number;
+	autoAccepted: number;
+	skippedDuplicates: number;
+	dropped: number;
+	clockAdvancedMinutes: number;
+	clockAdvancedDays: number;
+	clockLabel: string | null;
+	clockReason: string | null;
+	/** The batch for this span and story version had already been written; nothing new ran. */
+	alreadyComplete: boolean;
+	/** The job's or command's recorded failure. */
+	error: string | null;
+}
+
+/** Runs the server's `simulate_world_happenings` job now for one span (`world.chronicle.advance`). */
+export async function runBackendWorldChronicle(serverStoryId: string, options: {
+	span: WorldChronicleSpan;
+	eventfulness?: WorldChronicleEventfulness;
+	creativity?: WorldChronicleCreativity;
+}): Promise<BackendWorldChronicleAdvanceResult> {
+	const raw = await postEngineCommand(serverStoryId, 'world.chronicle.advance', { ...options, runNow: true }) as Record<string, unknown>;
+	const job = raw.job && typeof raw.job === 'object' ? raw.job as Record<string, unknown> : {};
+	const result = job.result && typeof job.result === 'object' ? job.result as Record<string, unknown> : {};
+	const count = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : 0;
+	const failed = raw.ok === false;
+	return {
+		jobId: typeof raw.jobId === 'string' ? raw.jobId : null,
+		status: typeof raw.status === 'string' ? raw.status : failed ? 'failed' : 'complete',
+		created: count(result.created),
+		proposed: count(result.proposed),
+		autoAccepted: count(result.autoAccepted),
+		skippedDuplicates: count(result.skippedDuplicates),
+		dropped: Array.isArray(result.dropped) ? result.dropped.length : 0,
+		clockAdvancedMinutes: count(result.clockAdvancedMinutes),
+		clockAdvancedDays: count(result.clockAdvancedDays),
+		clockLabel: typeof result.clockLabel === 'string' ? result.clockLabel : null,
+		clockReason: typeof result.clockReason === 'string' ? result.clockReason : null,
+		alreadyComplete: raw.alreadyComplete === true,
+		error: failed ? (typeof raw.error === 'string' && raw.error ? raw.error : typeof job.error === 'string' && job.error ? job.error : 'The World Chronicle job failed.') : null,
+	};
+}
+
+export async function listBackendWorldChronicle(serverStoryId: string, limit = 60): Promise<WorldChronicleListResult> {
+	return worldChronicleListResultSchema.parse(await postEngineCommand(serverStoryId, 'world.chronicle.list', { limit }));
+}
+
+export async function reviewBackendWorldChronicle(serverStoryId: string, review: {
+	eventId: string;
+	action: WorldChronicleReviewAction;
+	title?: string;
+	body?: string;
+	visibility?: 'public' | 'player_known' | 'secret';
+}): Promise<{ changed: boolean; status: string }> {
+	const raw = await postEngineCommand(serverStoryId, 'world.chronicle.review', review) as Record<string, unknown>;
+	const event = raw.event && typeof raw.event === 'object' ? raw.event as Record<string, unknown> : {};
+	return { changed: raw.changed === true, status: typeof event.status === 'string' ? event.status : 'unknown' };
 }
 
 export async function saveBackendPlotEdit(story: Story, edit: import('$lib/contracts/plotEditing').PlotEdit) {

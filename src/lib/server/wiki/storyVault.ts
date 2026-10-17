@@ -681,7 +681,8 @@ async function loadStoryVaultData(storyId: string) {
 		chapters: chapterRows,
 		arcs: arcRows,
 		sagas: sagaRows,
-		events: eventRows,
+		// World Chronicle drafts and dismissed happenings are not canon; they enter the vault once accepted.
+		events: eventRows.filter(row => asRecord(row.metadata).sourceType !== 'world_chronicle' || row.status === 'committed'),
 		memoryNodes: nodeRows.filter(row => asRecord(row.metadata).playerDeleted !== true),
 	};
 }

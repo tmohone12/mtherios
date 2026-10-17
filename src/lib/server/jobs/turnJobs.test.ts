@@ -164,7 +164,9 @@ describe('turn jobs', () => {
 		expect(historyJobTypes).toEqual(expect.arrayContaining(['summarize_chapter', 'chapter_threads', 'chapter_characters', 'rollup_arc', 'rollup_saga']));
 		// Vault syncs can spend minutes on embeddings; they must not hold a turn up either.
 		expect(memoryJobTypes).not.toContain('sync_story_vault');
-		expect(worldJobTypes).toEqual(expect.arrayContaining(['update_faction_pressure', 'evaluate_world_sim_tick', 'plan_plot_brain']));
+		expect(worldJobTypes).toEqual(expect.arrayContaining(['update_faction_pressure', 'evaluate_world_sim_tick', 'plan_plot_brain', 'simulate_world_happenings']));
+		// A World Chronicle batch can take minutes of model time; a turn never waits for it.
+		expect(memoryJobTypes).not.toContain('simulate_world_happenings');
 		// No turn prompt reads the search index; it must not hold a turn up.
 		expect(memoryJobTypes).not.toContain('index_canonical_records');
 		expect(backgroundJobTypes).toContain('index_canonical_records');

@@ -394,7 +394,7 @@ describe('job retry classification', () => {
 
 	it('allows chapter and arc jobs to be retried only after a configuration failure', () => {
 		const configuration = 'Model configuration needed: Summaries has no model profile. Choose one in Settings → Models.';
-		for (const type of ['summarize_chapter', 'rollup_arc']) {
+		for (const type of ['summarize_chapter', 'rollup_arc', 'simulate_world_happenings']) {
 			const job = { type, status: 'failed', lockedAt: null, lockedBy: null, lastError: configuration };
 			expect(backendJobRetryBlockReason(job), type).toBeNull();
 			expect(backendJobRetryBlockReason({ ...job, lastError: 'Server LLM request timed out after 120000ms.' }), type).toMatch(/^Manual retry is blocked/);
@@ -403,7 +403,7 @@ describe('job retry classification', () => {
 		// Saga rollups are deterministic stable-ID upserts, so they are replay-safe for any failure.
 		expect(backendJobRetryBlockReason({ type: 'rollup_saga', status: 'failed', lockedAt: null, lockedBy: null, lastError: 'Deadlock detected.' })).toBeNull();
 		const guard = compiledSql(backendJobRetryWhere('story_1', 'job_1', '2026-09-05 21:00:00.123456+00'));
-		expect(guard.params).toEqual(expect.arrayContaining(['summarize_chapter', 'rollup_arc', 'rollup_saga']));
+		expect(guard.params).toEqual(expect.arrayContaining(['summarize_chapter', 'rollup_arc', 'rollup_saga', 'simulate_world_happenings']));
 	});
 
 	it('refuses to requeue an arc job whose failure was not configuration', async () => {
@@ -493,6 +493,7 @@ describe('claimed job order', () => {
 		expect(order.sql).toContain('"backend_jobs"."type" = \'extract_turn_state\'');
 		expect(order.sql).not.toContain('continuity_audit');
 		expect(order.sql).toContain('"backend_jobs"."type" = \'evaluate_world_sim_tick\' then 5');
+		expect(order.sql).toContain('"backend_jobs"."type" = \'simulate_world_happenings\' then 5');
 		expect(order.sql).toContain('"backend_jobs"."payload"->>\'trigger\' = \'scheduled_refresh\'');
 		expect(order.params).toEqual([]);
 	});

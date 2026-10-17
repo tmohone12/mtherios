@@ -94,7 +94,7 @@ describe('engine stream client helpers', () => {
 			type: 'extract_turn_state',
 			status: 'completed',
 		}))).toBe(true);
-		for (const type of ['rollup_arc', 'rollup_saga']) {
+		for (const type of ['rollup_arc', 'rollup_saga', 'simulate_world_happenings']) {
 			expect(shouldRefreshCampaignProjection(event('job.status', { type, status: 'completed' }))).toBe(true);
 		}
 		expect(shouldRefreshCampaignProjection(event('job.status', {
