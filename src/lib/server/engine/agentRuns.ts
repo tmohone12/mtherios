@@ -110,6 +110,8 @@ const toolDescriptions: Record<ToolCall['tool'], string> = {
   map: 'Read or save a location map in this game. Get returns the current map and revision. Save requires the full bounded map document and that exact expected revision. Drawing changes the map only; it never moves characters.',
 };
 const definitions = {} as Record<ToolCall['tool'], NativeToolDefinition>;
+/** The GM planner's native tool definitions, as sent to providers. */
+export const gmToolDefinitions: Readonly<Record<ToolCall['tool'], NativeToolDefinition>> = definitions;
 for (const option of toolSchema.options) {
   const name = option.shape.tool.value;
   const parameters = z.toJSONSchema(option.shape.args, { io: 'input' });

@@ -12,13 +12,14 @@
 	import { app } from '$lib/stores/app.svelte';
 	import { settings, SERVICE_DEFINITIONS, SERVICE_PROFILES } from '$lib/stores/settings.svelte';
 	import { PROVIDERS, getProviderList } from '$lib/services/ai/sdk/providers/config';
+	import { anthropicHeaders, fetchAnthropicModels, fetchOpenAICompatibleModels } from '$lib/services/ai/sdk/modelLists';
 	import {
 		CONTEXT_BUDGET_STEPS,
 		contextBudgetSliderIndexToValue,
 		contextBudgetValueToSliderIndex,
 		formatTokenBudgetCompact,
 	} from '$lib/services/memorySettings';
-	import { defaultTerminalApiKeyRef, refreshTerminalLlmSettings, patchTerminalLlmSettings } from '$lib/services/terminalSettings';
+	import { defaultTerminalApiKeyRef, fetchSavedAnthropicModels, refreshTerminalLlmSettings, patchTerminalLlmSettings } from '$lib/services/terminalSettings';
 	import type { ProviderType, APIProfile, UISettings } from '$lib/types';
 	import { uuid } from '$lib/utils/uuid';
 	import { fade } from 'svelte/transition';
@@ -112,30 +113,18 @@
 	});
 
 	/**
-	 * Fetch the live model list from an OpenAI-compatible /models endpoint.
-	 * Returns deduplicated, sorted model IDs. Handles the standard
-	 * { data: [{ id }] } shape plus a couple of common variants.
+	 * Live model IDs: Anthropic's own /v1/models, otherwise the OpenAI-compatible /models.
+	 * Anthropic refuses to list models without a key, so a key saved on the server (never in
+	 * the browser) is used there, through its saved key reference.
 	 */
-	async function fetchOpenAIModels(baseUrl: string, key: string): Promise<string[]> {
-		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-		if (key) headers['Authorization'] = `Bearer ${key}`;
-		const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/models`, { headers });
-		if (!res.ok) {
-			const body = await res.text().catch(() => '');
-			throw new Error(`HTTP ${res.status}${body ? `: ${body.slice(0, 150)}` : ''}`);
+	async function fetchProviderModels(providerType: ProviderType, baseUrl: string, key: string, savedKeyRef?: string | null): Promise<string[]> {
+		if (providerType === 'anthropic') {
+			if (!key && savedKeyRef) return fetchSavedAnthropicModels(savedKeyRef, baseUrl || null);
+			if (!key) throw new Error('Enter an Anthropic API key or setup token to fetch its models.');
+			return fetchAnthropicModels(baseUrl, key);
 		}
-		const data = await res.json();
-		const list: unknown[] = Array.isArray(data?.data)
-			? data.data
-			: Array.isArray(data?.models)
-				? data.models
-				: Array.isArray(data)
-					? data
-					: [];
-		const ids = list
-			.map((m) => (typeof m === 'string' ? m : (m as any)?.id ?? (m as any)?.name))
-			.filter((id): id is string => typeof id === 'string' && id.length > 0);
-		return Array.from(new Set(ids)).sort((a, b) => a.localeCompare(b));
+		if (!baseUrl) throw new Error('This provider does not expose an OpenAI-compatible /models endpoint.');
+		return fetchOpenAICompatibleModels(baseUrl, key);
 	}
 
 	// Merged chip list: fetched (live, canonical) wins, fallback fills gaps.
@@ -234,8 +223,7 @@
 		fetchingModels = true;
 		modelFetchMessage = '';
 		try {
-			if (!baseUrl) throw new Error('This provider does not expose an OpenAI-compatible /models endpoint.');
-			const ids = await fetchOpenAIModels(baseUrl, key);
+			const ids = await fetchProviderModels(profile.providerType as ProviderType, baseUrl, key, profile.terminalApiKeyRef);
 			if (!isCurrent()) return;
 			profile.fetchedModels = ids;
 			await settings.saveProfiles();
@@ -258,8 +246,7 @@
 		try {
 			const provider = PROVIDERS[editingProvider];
 			const baseUrl = customUrl || provider.baseUrl;
-			if (!baseUrl) throw new Error('This provider does not expose an OpenAI-compatible /models endpoint.');
-			const ids = await fetchOpenAIModels(baseUrl, apiKey);
+			const ids = await fetchProviderModels(providerId, baseUrl, key, getProfileByProvider(providerId)?.terminalApiKeyRef);
 			if (!isCurrent()) return;
 			fetchedModelsForProfile = ids;
 			testStatus = 'success';
@@ -340,27 +327,22 @@
 			const provider = PROVIDERS[editingProvider];
 			const testModel = model || provider.fallbackModels[0];
 			const baseUrl = customUrl || provider.baseUrl;
-			const isAnthropicShape = editingProvider === 'anthropic' || editingProvider === 'anthropic-proxy';
 			const isZaiShape = editingProvider === 'z-ai';
-			const isOAuth = apiKey.startsWith('sk-ant-oat-');
 
-			if (isAnthropicShape) {
-				const anthropicUrl = baseUrl || '/api/anthropic';
-				const headers: Record<string, string> = {
-					'Content-Type': 'application/json',
-					'anthropic-version': '2023-06-01',
-				};
-				if (apiKey) {
-					if (isOAuth) {
-						headers['Authorization'] = `Bearer ${apiKey}`;
-						headers['anthropic-beta'] = 'oauth-2025-04-01';
-					} else {
-						headers['x-api-key'] = apiKey;
-					}
-				}
-				const res = await fetch(`${anthropicUrl}/v1/messages`, {
+			if (editingProvider === 'anthropic') {
+				// Listing models checks the key without choosing a model or spending tokens.
+				const ids = await fetchProviderModels('anthropic', baseUrl, apiKey, getProfileByProvider('anthropic')?.terminalApiKeyRef);
+				if (!isCurrent()) return;
+				fetchedModelsForProfile = ids;
+				testStatus = 'success';
+				testMessage = ids.length > 0
+					? `Connected — fetched ${ids.length} model${ids.length === 1 ? '' : 's'}`
+					: 'Connected, but no models returned';
+			} else if (editingProvider === 'anthropic-proxy') {
+				// The bridge proxy keeps its one-token message check.
+				const res = await fetch(`${baseUrl || '/api/anthropic'}/v1/messages`, {
 					method: 'POST',
-					headers,
+					headers: anthropicHeaders(apiKey),
 					body: JSON.stringify({
 						model: testModel,
 						messages: [{ role: 'user', content: 'Hi' }],
@@ -388,7 +370,7 @@
 			} else {
 				// OpenAI-compatible: hit /models, parse the list, persist it.
 				try {
-					const ids = await fetchOpenAIModels(baseUrl, apiKey);
+					const ids = await fetchOpenAICompatibleModels(baseUrl, apiKey);
 					if (!isCurrent()) return;
 					fetchedModelsForProfile = ids;
 					testStatus = 'success';

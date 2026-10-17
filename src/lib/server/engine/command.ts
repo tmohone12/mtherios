@@ -222,6 +222,7 @@ import {
 import { importWorldDatabaseBundle } from '$lib/server/db/worldDatabaseImport';
 import { TERMINAL_WORLD_DATABASE_SCHEMA } from '$lib/server/db/worldDatabaseSchema';
 import { listGoogleAgentModels } from './googleAgentProxy';
+import { listSavedAnthropicModels } from './anthropicModels';
 import {
 	archiveWikiStoryVault,
 	getWikiRuntimeStatus,
@@ -884,6 +885,19 @@ export async function executeEngineCommand(
 							settingCount: settings.length,
 						},
 					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'settings.llm.models': {
+				// Only Anthropic needs this: its model list requires the key, which stays on the server.
+				const models = await listSavedAnthropicModels(request.args ?? {}, await listLlmSettings());
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: { models },
+					projectionChanges: { llmSettings: { modelCount: models.length } },
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;
 				publishSucceededEvent(response);

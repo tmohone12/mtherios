@@ -3,6 +3,7 @@ import { getMtheriosAppConfig } from '$lib/server/app/config';
 import { requestScope } from '$lib/server/requestScopes';
 import { isJevModel } from './jev';
 import { PROVIDERS } from '$lib/services/ai/sdk/providers/config';
+import { anthropicModelRules } from '$lib/services/ai/sdk/claudeModelRules';
 import type { TurnRequest } from '$lib/contracts/memory';
 import type { ProviderType } from '$lib/types';
 import { getModelContextWindowInfo } from '$lib/services/ai/context/modelWindows';
@@ -272,7 +273,58 @@ function requiresApiKey(profile: ProviderProfile): boolean {
 
 function baseUrlFor(profile: ProviderProfile): string {
 	const provider = PROVIDERS[profile.providerType as ProviderType];
-	return profile.baseUrl || provider?.baseUrl || 'https://api.openai.com/v1';
+	// The Anthropic provider has no listed base URL (the SDK default); never fall back to OpenAI's.
+	return profile.baseUrl || provider?.baseUrl || (isAnthropicProvider(profile) ? 'https://api.anthropic.com' : 'https://api.openai.com/v1');
+}
+
+type JsonSchema = Record<string, unknown>;
+const isObjectSchema = (value: unknown): value is JsonSchema => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+	&& (value as JsonSchema).type === 'object';
+
+/** "{command, args?}" or "{kind: "source", sourceRef, …}": one argument form, for a merged schema's description. */
+function describeArgumentForm(branch: JsonSchema): string {
+	const required = new Set(Array.isArray(branch.required) ? branch.required as string[] : []);
+	const properties = Object.entries((branch.properties ?? {}) as Record<string, JsonSchema>);
+	const fields = properties.map(([key, value]) => 'const' in value ? `${key}: ${JSON.stringify(value.const)}` : required.has(key) ? key : `${key}?`);
+	return `{${fields.join(', ')}}`;
+}
+
+/**
+ * Anthropic requires a tool's input_schema to be an object schema and rejects anyOf/oneOf/allOf at
+ * its top level. A union of object shapes (one tool, several argument forms) becomes one object
+ * with every form's properties, required only where every form requires them, and the forms named
+ * in its description. The server still validates each call against the exact union.
+ */
+export function anthropicInputSchema(schema: JsonSchema): JsonSchema {
+	const branches = Array.isArray(schema.anyOf) ? schema.anyOf : Array.isArray(schema.oneOf) ? schema.oneOf : null;
+	if (!branches) return schema.type === 'object' ? schema : { ...schema, type: 'object' };
+	if (!branches.every(isObjectSchema)) return { type: 'object', properties: {}, ...(schema.description ? { description: schema.description } : {}) };
+	const variants = new Map<string, JsonSchema[]>();
+	for (const branch of branches) {
+		for (const [key, value] of Object.entries((branch.properties ?? {}) as Record<string, JsonSchema>)) {
+			const seen = variants.get(key) ?? [];
+			if (!seen.some(item => JSON.stringify(item) === JSON.stringify(value))) seen.push(value);
+			variants.set(key, seen);
+		}
+	}
+	const requiredIn = (branch: JsonSchema) => new Set(Array.isArray(branch.required) ? branch.required as string[] : []);
+	const required = [...variants.keys()].filter(key => branches.every(branch => requiredIn(branch).has(key)));
+	const { anyOf: _anyOf, oneOf: _oneOf, ...rest } = schema;
+	return {
+		...rest,
+		type: 'object',
+		description: [schema.description, `Use exactly one argument form: ${branches.map(describeArgumentForm).join(' or ')}.`].filter(Boolean).join(' '),
+		properties: Object.fromEntries([...variants].map(([key, items]) => [key, items.length === 1 ? items[0] : { anyOf: items }])),
+		...(required.length ? { required } : {}),
+		...(branches.every(branch => branch.additionalProperties === false) ? { additionalProperties: false } : {}),
+	};
+}
+
+function anthropicEffort(requested: string, rules: { xhigh: boolean }): string {
+	if (['minimal', 'low'].includes(requested)) return 'low';
+	if (requested === 'medium') return 'medium';
+	if (requested === 'max') return 'max';
+	return requested === 'xhigh' && rules.xhigh ? 'xhigh' : 'high';
 }
 
 function fallbackModelFor(profile: ProviderProfile, override?: string): string {
@@ -288,7 +340,7 @@ function anthropicHeaders(profile: ProviderProfile): Record<string, string> {
 	};
 	if (profile.apiKey.startsWith('sk-ant-oat-')) {
 		headers.Authorization = `Bearer ${profile.apiKey}`;
-		headers['anthropic-beta'] = 'oauth-2025-04-01';
+		headers['anthropic-beta'] = 'oauth-2025-04-20';
 	} else {
 		headers['x-api-key'] = profile.apiKey;
 	}
@@ -699,8 +751,9 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 				: { thinking: { type: 'enabled' }, reasoning_effort: requestedReasoningEffort === 'max' ? 'max' : 'high' }
 			: {};
 	const useAnthropic = isAnthropicProvider(options.profile);
+	const claudeRules = anthropicModelRules(model);
 	const anthropicThinking = useAnthropic && requestedReasoningEffort && !['off', 'none'].includes(requestedReasoningEffort);
-	const anthropicAdaptive = anthropicThinking && /claude-(?:opus|sonnet)-4[.-]6/i.test(model);
+	const anthropicAdaptive = anthropicThinking && claudeRules.adaptive;
 	if (anthropicThinking && !anthropicAdaptive && maxTokens <= 1024) throw new Error('Anthropic thinking requires an output allowance above 1024 tokens.');
 	const useGoogleAgentPlatform = isGoogleAgentPlatformProvider(options.profile);
 	const baseUrl = useGoogleAgentPlatform
@@ -746,14 +799,16 @@ export async function generateServerTextWithMetrics(options: ServerGenerationOpt
 		? {
 			model,
 			max_tokens: maxTokens,
-			...(anthropicAdaptive ? {} : { temperature: anthropicThinking ? 1 : temperature }),
+			...(anthropicAdaptive || !claudeRules.sampling ? {} : { temperature: anthropicThinking ? 1 : temperature }),
 			...(anthropicAdaptive
-				? { thinking: { type: 'adaptive' }, output_config: { effort: ['minimal', 'low'].includes(requestedReasoningEffort!) ? 'low' : requestedReasoningEffort === 'medium' ? 'medium' : requestedReasoningEffort === 'max' ? 'max' : 'high' } }
-				: anthropicThinking ? { thinking: { type: 'enabled', budget_tokens: Math.min(maxTokens - 1, Math.max(1024, maxTokens - 1024), requestedReasoningEffort === 'low' || requestedReasoningEffort === 'minimal' ? 1024 : requestedReasoningEffort === 'medium' ? 2048 : 4096) } } : {}),
+				? { thinking: { type: 'adaptive' }, output_config: { effort: anthropicEffort(requestedReasoningEffort!, claudeRules) } }
+				: anthropicThinking ? { thinking: { type: 'enabled', budget_tokens: Math.min(maxTokens - 1, Math.max(1024, maxTokens - 1024), requestedReasoningEffort === 'low' || requestedReasoningEffort === 'minimal' ? 1024 : requestedReasoningEffort === 'medium' ? 2048 : 4096) } }
+				// Reasoning off: these models think anyway and some reject disabling it, so ask for the least.
+				: claudeRules.thinksByDefault ? { output_config: { effort: 'low' } } : {}),
 			...(shouldStream ? { stream: true } : {}),
 			system: buildAnthropicSystem(system, systemDynamic, options.systemCacheBoundary, options.systemCacheBoundaries, contextAfterDialogue || Boolean(options.cache)),
 			messages: anthropicNativeMessages(dialogue, cacheDialogueIndex),
-			...(options.tools?.length ? { tools: options.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) } : {}),
+			...(options.tools?.length ? { tools: options.tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: anthropicInputSchema(tool.parameters) })) } : {}),
 		}
 		: {
 			model,

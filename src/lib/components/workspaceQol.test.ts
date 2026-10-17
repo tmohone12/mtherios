@@ -100,23 +100,25 @@ describe('reader controls', () => {
 
 describe('provider model request ownership', () => {
 	function provider() {
-		return handlers('settings/SettingsModal', ['fetchModelsForEditing', 'testConnection', 'fetchModelsForActiveProfile'], { editingProvider: 'first', modelRequest: 0, activeModelRequest: 0, apiKey: 'key', customUrl: '', model: '', fetchingEditorModels: false, fetchingModels: false, fetchedModelsForProfile: [], testStatus: 'idle', testMessage: '', modelFetchMessage: '', PROVIDERS: { first: { baseUrl: 'https://first.example', fallbackModels: ['first-model'] }, second: { baseUrl: 'https://second.example', fallbackModels: [] } } });
+		return handlers('settings/SettingsModal', ['fetchModelsForEditing', 'testConnection', 'fetchModelsForActiveProfile'], { editingProvider: 'first', modelRequest: 0, activeModelRequest: 0, apiKey: 'key', customUrl: '', model: '', fetchingEditorModels: false, fetchingModels: false, fetchedModelsForProfile: [], testStatus: 'idle', testMessage: '', modelFetchMessage: '', getProfileByProvider: () => undefined, PROVIDERS: { first: { baseUrl: 'https://first.example', fallbackModels: ['first-model'] }, second: { baseUrl: 'https://second.example', fallbackModels: [] } } });
 	}
+	// The handlers list models through fetchProviderModels; testConnection's generic branch calls the OpenAI-compatible list directly.
+	const stubModelList = (page: Record<string, any>, list: () => Promise<string[]>) => { page.fetchProviderModels = list; page.fetchOpenAICompatibleModels = list; };
 	it.each(['fetchModelsForEditing', 'testConnection'])('ignores stale %s results after switching provider', async handler => {
 		const page = provider(), pending = deferred<string[]>();
-		page.fetchOpenAIModels = () => pending.promise;
+		stubModelList(page, () => pending.promise);
 		const request = page[handler](); page.editingProvider = 'second'; page.modelRequest += 1;
 		page.testStatus = 'idle'; page.testMessage = 'Second provider'; page.fetchedModelsForProfile = ['second-model'];
 		pending.resolve(['first-model']); await request;
 		expect(page.fetchedModelsForProfile).toEqual(['second-model']); expect(page.testMessage).toBe('Second provider'); expect(page.testStatus).toBe('idle');
 	});
 	it('ignores changed credentials and releases the loading state for a retry', async () => {
-		const page = provider(), pending = deferred<string[]>(); page.fetchOpenAIModels = () => pending.promise;
+		const page = provider(), pending = deferred<string[]>(); stubModelList(page, () => pending.promise);
 		const request = page.fetchModelsForEditing(); page.apiKey = 'different-key'; pending.reject(new Error('Old credentials')); await request;
 		expect(page.fetchedModelsForProfile).toEqual([]); expect(page.testMessage).toBe(''); expect(page.testStatus).toBe('idle'); expect(page.fetchingEditorModels).toBe(false);
 	});
 	it('does not persist the old active profile list after changing profiles', async () => {
-		const page = provider(), pending = deferred<string[]>(); page.fetchOpenAIModels = () => pending.promise;
+		const page = provider(), pending = deferred<string[]>(); stubModelList(page, () => pending.promise);
 		const first = { id: 'first', apiKey: 'key', fetchedModels: ['old'] };
 		page.settings = { activeProfile: first, activeProvider: { baseUrl: 'https://first.example' }, saveProfiles: vi.fn() };
 		const request = page.fetchModelsForActiveProfile(); page.settings.activeProfile = { id: 'second', apiKey: 'other' };
