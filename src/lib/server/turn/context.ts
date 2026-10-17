@@ -13,6 +13,7 @@ import { characterAliases, selectRelevantCharacters } from '$lib/utils/character
 import { sceneEvidenceExcerpt } from '$lib/utils/sceneEvidence';
 import { memoryQueryTokens, normalizeLookup } from '$lib/server/memory/ranking';
 import { selectProtagonistEntity } from './promptPacket';
+import { pendingTimeSkip, type PendingTimeSkip } from './timeSkip';
 import {
 	agreements,
 	arcs,
@@ -33,6 +34,7 @@ import {
 	storyThreads,
 	continuityWarnings,
 	entityAliases,
+	worldTimeChanges,
 } from '$lib/server/db/schema';
 
 export const NARRATOR_RECENT_ENTRY_LIMIT = 200;
@@ -64,6 +66,8 @@ export interface TurnContext {
 	arcs: Array<typeof arcs.$inferSelect>;
 	sagas: Array<typeof sagas.$inferSelect>;
 	gmBrief: GmTimelineBrief | null;
+	/** A World Chronicle clock advance no narration has followed yet (see timeSkip.ts); the narrator reopens after the gap. */
+	timeSkip?: PendingTimeSkip | null;
 	/** Set when an earlier turn's gameplay state is still pending or failed (see unsettledStateNotice). */
 	gameplayNotice?: string | null;
 }
@@ -175,6 +179,7 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		arcRows,
 		sagaRows,
 		aliasRows,
+		clockChangeRows,
 	] = await Promise.all([
 		db.select().from(storyEntries).where(and(
 			eq(storyEntries.storyId, storyId),
@@ -197,6 +202,8 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		db.select().from(arcs).where(eq(arcs.storyId, storyId)).orderBy(asc(arcs.number)),
 		db.select().from(sagas).where(eq(sagas.storyId, storyId)).orderBy(asc(sagas.number)),
 		db.select().from(entityAliases).where(eq(entityAliases.storyId, storyId)).limit(500),
+		db.select().from(worldTimeChanges).where(and(eq(worldTimeChanges.storyId, storyId), eq(worldTimeChanges.branch, 'primary'),
+			eq(worldTimeChanges.status, 'applied'), eq(worldTimeChanges.proposer, 'world_chronicle'))).orderBy(desc(worldTimeChanges.createdAt)).limit(1),
 	]);
 
 	// The initial bounded read is only an optimization. It must not become a
@@ -308,5 +315,6 @@ export async function loadTurnContext(storyId: string, presentNpcIds: string[] =
 		arcs: arcRows,
 		sagas: sagaRows,
 		gmBrief: null,
+		timeSkip: pendingTimeSkip(clockChangeRows[0] ?? null, recentEntries),
 	};
 }

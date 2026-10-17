@@ -26,6 +26,7 @@ export const backendJobTypes = [
 	'extract_turn_state',
 	'continuity_audit',
 	'plan_plot_brain',
+	'simulate_world_happenings',
 ] as const;
 
 export type BackendJobType = typeof backendJobTypes[number];
@@ -35,8 +36,11 @@ export const factionWorkerJobTypes = [
 	'plan_plot_brain',
 ] as const satisfies readonly BackendJobType[];
 
-/** Faction and Director work; runs after a story's memory jobs and never holds up a turn. */
-export const worldJobTypes = factionWorkerJobTypes;
+/** Faction and Director work, and World Chronicle batches; runs after a story's memory jobs and never holds up a turn. */
+export const worldJobTypes = [
+	...factionWorkerJobTypes,
+	'simulate_world_happenings',
+] as const satisfies readonly BackendJobType[];
 
 /**
  * Runs after memory without holding up a turn: no turn prompt reads the canonical search index, and
@@ -103,6 +107,8 @@ export const manuallyRetryableBackendJobTypes = [
 export const configurationRetryableBackendJobTypes = [
 	'summarize_chapter',
 	'rollup_arc',
+	// World Chronicle checks its model before any request; its batch is checkpointed.
+	'simulate_world_happenings',
 ] as const satisfies readonly BackendJobType[];
 
 const explicitlyRetryableBackendJobTypes: readonly BackendJobType[] = [...manuallyRetryableBackendJobTypes, ...configurationRetryableBackendJobTypes];
@@ -183,6 +189,7 @@ export const backendJobClaimPriorityOrder = sql<number>`case
 	when ${backendJobs.type} = 'refresh_scene_checkpoint' then 0
 	when ${backendJobs.type} = 'extract_turn_state' then 1
 	when ${backendJobs.type} = 'evaluate_world_sim_tick' then 5
+	when ${backendJobs.type} = 'simulate_world_happenings' then 5
 	when ${backendJobs.type} = 'plan_plot_brain'
 		and ${backendJobs.payload}->>'trigger' = 'scheduled_refresh' then 5
 	else 3

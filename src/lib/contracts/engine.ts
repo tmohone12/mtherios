@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { jsonObjectSchema, memoryVisibilitySchema, storyEventTypeSchema } from './memory';
+import { worldChronicleCreativitySchema, worldChronicleEventfulnessSchema, worldChronicleReviewActionSchema, worldChronicleSpanSchema } from './worldChronicle';
 import { smallBrainModeSchema, smallBrainResultSchema } from '../services/ai/sdk/schemas/smallBrain';
 
 export const llmServiceSettingSchema = z.object({
@@ -149,6 +150,27 @@ export const engineRollupArcJobArgsSchema = z.object({
 	/** Accepted from older callers and ignored: arcs always cover CHAPTERS_PER_ARC consecutive chapters. */
 	chaptersPerArc: z.number().int().min(1).max(50).optional(),
 });
+
+/** `world.chronicle.advance`: omitted dials use the story's last-used ones (`story.metadata.worldChronicle`). */
+export const engineWorldChronicleAdvanceArgsSchema = z.object({
+	span: worldChronicleSpanSchema,
+	eventfulness: worldChronicleEventfulnessSchema.optional(),
+	creativity: worldChronicleCreativitySchema.optional(),
+	runNow: z.boolean().default(true),
+	workerId: z.string().min(1).optional(),
+}).strict();
+
+export const engineWorldChronicleReviewArgsSchema = z.object({
+	eventId: z.string().trim().min(1),
+	action: worldChronicleReviewActionSchema,
+	title: z.string().trim().min(1).max(200).optional(),
+	body: z.string().trim().min(1).max(2000).optional(),
+	visibility: memoryVisibilitySchema.optional(),
+}).strict();
+
+export const engineWorldChronicleListArgsSchema = z.object({
+	limit: z.number().int().min(1).max(200).default(60),
+}).strict();
 
 export const engineJobStatusArgsSchema = z.object({
 	limit: z.number().int().min(1).max(200).default(80),
@@ -561,6 +583,8 @@ export type EngineOrchestratorContext = z.infer<typeof engineOrchestratorContext
 export type EngineOrchestratorRunArgs = z.infer<typeof engineOrchestratorRunArgsSchema>;
 export type EngineRunDueJobsArgs = z.infer<typeof engineRunDueJobsArgsSchema>;
 export type EngineRollupArcJobArgs = z.infer<typeof engineRollupArcJobArgsSchema>;
+export type EngineWorldChronicleAdvanceArgs = z.infer<typeof engineWorldChronicleAdvanceArgsSchema>;
+export type EngineWorldChronicleReviewArgs = z.infer<typeof engineWorldChronicleReviewArgsSchema>;
 export type EngineJobStatusArgs = z.infer<typeof engineJobStatusArgsSchema>;
 export type EngineRetryJobArgs = z.infer<typeof engineRetryJobArgsSchema>;
 export type EngineMemoryRecoveryArgs = z.infer<typeof engineMemoryRecoveryArgsSchema>;

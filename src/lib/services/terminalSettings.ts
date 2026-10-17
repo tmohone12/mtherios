@@ -135,6 +135,17 @@ export async function syncTerminalLlmSettingsFromBrowser(serviceIds = Object.key
 	await patchTerminalLlmSettings(payload, secrets);
 }
 
+/** Anthropic model IDs for a saved server setting; the server uses the key, which stays there. */
+export async function fetchSavedAnthropicModels(apiKeyRef: string, baseUrl: string | null): Promise<string[]> {
+	const response = await fetch('/api/engine/command', {
+		method: 'POST', headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ storyId: '__app__', command: 'settings.llm.models', args: { apiKeyRef, baseUrl } }),
+	});
+	const body = await response.json();
+	if (!response.ok || body.status !== 'succeeded') throw new Error(body.error || 'Could not fetch Anthropic models.');
+	return Array.isArray(body.result?.models) ? body.result.models.filter((id: unknown): id is string => typeof id === 'string') : [];
+}
+
 /** Server settings are authoritative. Secret values are never fetched into the browser. */
 export async function refreshTerminalLlmSettings(): Promise<void> {
 	const response = await fetch('/api/engine/command', {

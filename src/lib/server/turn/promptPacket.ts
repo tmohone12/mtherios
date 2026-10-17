@@ -1,3 +1,4 @@
+import { renderTimeSkipNotice } from './timeSkip';
 import {projectAdjudicationBrief} from '$lib/server/factions/projectLifecycle';
 import { factionResourceAvailability, intentionBrief } from '$lib/server/factions/intentions';
 import { isCurrentAgreement } from '$lib/contracts/agreements';
@@ -1013,6 +1014,9 @@ function narratorDueEvents<T extends GmTimelineBriefEvent | TurnContext['events'
 		if (locations.length) return locations.some(id => sceneLocationIds.has(id));
 		const actors = 'npcEntityIds' in event ? asStringArray(event.npcEntityIds) : [...asStringArray(event.actorEntityIds), ...asStringArray(event.targetEntityIds)];
 		if (actors.length) return actors.some(id => sceneEntityIds.has(id));
+		// An off-screen World Chronicle happening with no place or actor in the scene is common
+		// knowledge only when public; regional or secret news is not narrated as known.
+		if (event.type === 'world_happening' && event.visibility !== 'public') return false;
 		return event.type !== 'faction_move' && event.type !== 'faction_signal' && !event.id.startsWith('plot_event_')
 			&& asRecord('metadata' in event ? event.metadata : null).plotBrain !== true;
 	});
@@ -1725,9 +1729,13 @@ export function buildServerTurnPrompt(
 	const latestSceneEntry = latestNarrationForPov(narratorHistoryEntries(ctx), ctx.scenePov, ctx.recentEntries);
 	const sceneAlreadyInDialogue = latestSceneEntry && renderedMessages.some(message =>
 		message.sourceId === latestSceneEntry.id && message.role === 'assistant' && !message.partial);
-	const requiredScene = sceneAlreadyInDialogue
-		? 'Current scene: continue from the latest narrator message in recent dialogue.'
-		: currentScene;
+	// After a World Chronicle time skip the latest narration is the scene before the gap, not the scene to continue.
+	const timeSkipNotice = ctx.timeSkip ? renderTimeSkipNotice(ctx.timeSkip, ctx.events, capture) : '';
+	const requiredScene = ctx.timeSkip
+		? `Scene before the time skip (it has ended; do not resume it):\n${sceneAlreadyInDialogue ? 'the latest narrator message in recent dialogue.' : latestNarrationExcerpt(ctx) || compact(currentScene, 900)}`
+		: sceneAlreadyInDialogue
+			? 'Current scene: continue from the latest narrator message in recent dialogue.'
+			: currentScene;
 	const firstDialoguePosition = ctx.recentEntries.find(entry => entry.id === renderedMessages[0]?.sourceId)?.position ?? 0;
 	const checkpointNotes = selectSceneCheckpointNotes(ctx.sceneCheckpoint, firstDialoguePosition, retrieved.query);
 	const sceneCheckpoint: SceneCheckpointSelection | undefined = ctx.sceneCheckpoint && checkpointNotes.length ? {
@@ -1771,6 +1779,7 @@ export function buildServerTurnPrompt(
 		{ stable: premise },
 		{ stable: capture('requiredPlayer', protagonist?.id ?? ctx.story.id, playerCharacter.identity) },
 		capture('requiredPlayer', protagonist?.id ?? ctx.story.id, playerCharacter.current),
+		timeSkipNotice,
 		capture('requiredScene', latestSceneEntry?.id ?? ctx.story.id, requiredScene || (currentLocation ? `Current location:\n${currentLocation.name}: ${compact(currentLocation.description, 320)}` : '')),
 		dueTimelineBrief,
 		locationLore.text,

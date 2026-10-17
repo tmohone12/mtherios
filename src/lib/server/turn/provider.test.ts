@@ -343,6 +343,32 @@ describe('server generation provider cache hints', () => {
 		expect(requests[0].body.system).toEqual([{ type: 'text', text: 'Stable instructions.', cache_control: { type: 'ephemeral' } }]);
 	});
 
+	it('sends an Anthropic profile without a base URL to the Anthropic API, not OpenAI', async () => {
+		stubFetch({ content: [{ type: 'text', text: 'Done.' }] });
+		await generateServerTextWithMetrics({ profile: { providerType: 'anthropic', apiKey: 'test-key' } as any,
+			model: 'claude-opus-5-5', system: 'Rules.', prompt: 'Act.' });
+		expect(requests[0].url).toBe('https://api.anthropic.com/v1/messages');
+	});
+
+	it.each([
+		// Opus 5.5 rejects sampling parameters and fixed thinking budgets; "off" still thinks, at the lowest effort.
+		['claude-opus-5-5', 'low', { thinking: { type: 'adaptive' }, output_config: { effort: 'low' } }],
+		['claude-opus-5-5', 'xhigh', { thinking: { type: 'adaptive' }, output_config: { effort: 'xhigh' } }],
+		['claude-opus-5-5', 'off', { output_config: { effort: 'low' } }],
+		['claude-sonnet-5-5', 'medium', { thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } }],
+		['claude-opus-4-8', 'off', {}],
+		// 4.6 has adaptive thinking but no xhigh; pre-4.6 models keep budgets and temperature.
+		['claude-opus-4-6', 'xhigh', { thinking: { type: 'adaptive' }, output_config: { effort: 'high' } }],
+		['claude-haiku-4-5-20251001', 'low', { temperature: 1, thinking: { type: 'enabled', budget_tokens: 1024 } }],
+		['claude-sonnet-4-5', 'off', { temperature: 0.7 }],
+	])('asks %s with reasoning %s only for what it accepts', async (model, reasoningEffort, expected) => {
+		stubFetch({ content: [{ type: 'text', text: 'Done.' }] });
+		await generateServerTextWithMetrics({ profile: { providerType: 'anthropic', apiKey: 'test-key' } as any,
+			model, reasoningEffort, temperature: 0.7, maxTokens: 8192, system: 'Rules.', prompt: 'Act.' });
+		const { temperature, thinking, output_config } = requests[0].body;
+		expect(Object.fromEntries(Object.entries({ temperature, thinking, output_config }).filter(([, value]) => value !== undefined))).toEqual(expected);
+	});
+
 	it('captures OpenAI-compatible length finish reasons from provider responses', async () => {
 		stubFetch({
 			choices: [{ message: { content: 'The sentence is' }, finish_reason: 'length' }],

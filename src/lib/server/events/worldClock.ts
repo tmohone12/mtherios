@@ -58,7 +58,8 @@ export type WorldTimeProposal =
 	| { kind: 'anchor'; label: string }
 	| { kind: 'set'; label: string };
 
-export type WorldTimeProposer = 'gm_header' | 'classifier' | 'operator' | 'external_label' | 'migration';
+/** `world_chronicle`: an author-requested World Chronicle span (server/jobs/worldChronicle.ts). */
+export type WorldTimeProposer = 'gm_header' | 'classifier' | 'operator' | 'external_label' | 'migration' | 'world_chronicle';
 
 export interface WorldTimeChangeResult {
 	status: 'applied' | 'duplicate' | 'rejected';
@@ -332,6 +333,8 @@ export interface ApplyWorldTimeChangeInput {
 	/** The turn path writes the label in its own story update. */
 	writeStoryLabel?: boolean;
 	serverVersion?: number;
+	/** Stored on the change row, e.g. the World Chronicle's span and day count. */
+	metadata?: Record<string, unknown>;
 }
 
 /**
@@ -356,7 +359,7 @@ export async function applyWorldTimeChange(tx: WorldClockDb, input: ApplyWorldTi
 		.where(and(eq(worldTimeChanges.storyId, input.storyId), eq(worldTimeChanges.branch, WORLD_CLOCK_BRANCH), eq(worldTimeChanges.opKey, input.opKey))).limit(1);
 	if (existing) return result('duplicate', { changeId: existing.id });
 
-	const base = { storyId: input.storyId, proposer: input.proposer, sourceEntryId: input.sourceEntryId ?? null, sourceTurn: input.sourceTurn ?? null };
+	const base = { storyId: input.storyId, proposer: input.proposer, sourceEntryId: input.sourceEntryId ?? null, sourceTurn: input.sourceTurn ?? null, metadata: input.metadata ?? {} };
 	// A label changed outside the clock (import, checkpoint revert, operator edit) re-anchors it, on the record.
 	if (row && (storyLabel ?? null) !== (row.label ?? null)) {
 		const before = state;

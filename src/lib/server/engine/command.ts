@@ -47,6 +47,9 @@ import {
 	engineTimelineAdvanceArgsSchema,
 	engineTimelineBriefArgsSchema,
 	engineTimelineScheduleArgsSchema,
+	engineWorldChronicleAdvanceArgsSchema,
+	engineWorldChronicleListArgsSchema,
+	engineWorldChronicleReviewArgsSchema,
 	engineWorldRecordDetailArgsSchema,
 	engineWorldRecordPatchArgsSchema,
 	llmSettingsPatchSchema,
@@ -59,6 +62,7 @@ import {
 	type EngineCommandResponse,
 	type EnginePlotBrainPlanArgs,
 	type EnginePlotBrainRetireArgs,
+	type EngineWorldChronicleAdvanceArgs,
 	type LlmServiceSetting,
 	type LlmServiceSettingPatch,
 	type RecordPatchRequest,
@@ -172,6 +176,8 @@ import {
 	type SyncPushCommandResult,
 	type WorldSimJobCommandInput,
 } from './serviceCommands';
+import { runWorldChronicleAdvanceCommand } from './worldChronicleCommands';
+import { listWorldChronicleEvents, reviewWorldChronicleEvent, type WorldChronicleReviewInput } from '$lib/server/jobs/worldChronicle';
 import {
 	runEngineOrchestrator,
 	type EngineOrchestratorRunInput,
@@ -222,6 +228,7 @@ import {
 import { importWorldDatabaseBundle } from '$lib/server/db/worldDatabaseImport';
 import { TERMINAL_WORLD_DATABASE_SCHEMA } from '$lib/server/db/worldDatabaseSchema';
 import { listGoogleAgentModels } from './googleAgentProxy';
+import { listSavedAnthropicModels } from './anthropicModels';
 import {
 	archiveWikiStoryVault,
 	getWikiRuntimeStatus,
@@ -337,6 +344,9 @@ export interface EngineCommandHandlers {
 	runRollupArcJob?: (input: RollupArcJobCommandInput) => Promise<JsonRecord>;
 	runStoryVaultSyncJob?: (input: StoryVaultSyncJobCommandInput) => Promise<JsonRecord>;
 	runWorldSimJob?: (input: WorldSimJobCommandInput) => Promise<JsonRecord>;
+	runWorldChronicle?: (input: EngineWorldChronicleAdvanceArgs & { storyId: string }) => Promise<JsonRecord>;
+	reviewWorldChronicle?: (input: WorldChronicleReviewInput) => Promise<{ event: { id: string; status: string }; changed: boolean; serverVersion: number }>;
+	listWorldChronicle?: (storyId: string, limit: number) => Promise<unknown>;
 	runPlotBrainPlan?: (input: EnginePlotBrainPlanArgs & { storyId: string }) => Promise<JsonRecord>;
 	runPlotBrainRetire?: (input: EnginePlotBrainRetireArgs & { storyId: string }) => Promise<JsonRecord>;
 	runOrchestrator?: (input: EngineOrchestratorRunInput) => Promise<EngineOrchestratorRunResult>;
@@ -494,6 +504,9 @@ export async function executeEngineCommand(
 	const runRollupArcJob = handlers.runRollupArcJob ?? runRollupArcJobCommand;
 	const runStoryVaultSyncJob = handlers.runStoryVaultSyncJob ?? runStoryVaultSyncJobCommand;
 	const runWorldSimJob = handlers.runWorldSimJob ?? runWorldSimJobCommand;
+	const runWorldChronicle = handlers.runWorldChronicle ?? runWorldChronicleAdvanceCommand;
+	const reviewWorldChronicle = handlers.reviewWorldChronicle ?? ((input: WorldChronicleReviewInput) => reviewWorldChronicleEvent(input));
+	const listWorldChronicle = handlers.listWorldChronicle ?? ((storyId: string, limit: number) => listWorldChronicleEvents(storyId, limit));
 	const runPlotBrainPlan = handlers.runPlotBrainPlan ?? runPlotBrainPlanCommand;
 	const runPlotBrainRetire = handlers.runPlotBrainRetire ?? runPlotBrainRetireCommand;
 	const previewResolution = handlers.previewEntityResolution ?? previewEntityResolutionCommand;
@@ -884,6 +897,19 @@ export async function executeEngineCommand(
 							settingCount: settings.length,
 						},
 					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'settings.llm.models': {
+				// Only Anthropic needs this: its model list requires the key, which stays on the server.
+				const models = await listSavedAnthropicModels(request.args ?? {}, await listLlmSettings());
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: { models },
+					projectionChanges: { llmSettings: { modelCount: models.length } },
 					updatedAt: nowIso(),
 				} satisfies EngineCommandResponse;
 				publishSucceededEvent(response);
@@ -2858,6 +2884,59 @@ export async function executeEngineCommand(
 				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
 				publishSucceededEvent(response);
 				return response;
+			}
+			case 'world.chronicle.advance': {
+				const args = engineWorldChronicleAdvanceArgsSchema.parse(request.args ?? {});
+				const outcome = await runWorldChronicle({ storyId: request.storyId, ...args });
+				const jobResult = asRecord(asRecord(outcome.job).result);
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: outcome,
+					projectionChanges: {
+						worldChronicle: {
+							advance: {
+								ok: outcome.ok !== false,
+								jobId: typeof outcome.jobId === 'string' ? outcome.jobId : null,
+								status: typeof outcome.status === 'string' ? outcome.status : null,
+								created: typeof jobResult.created === 'number' ? jobResult.created : 0,
+								proposed: typeof jobResult.proposed === 'number' ? jobResult.proposed : 0,
+								autoAccepted: typeof jobResult.autoAccepted === 'number' ? jobResult.autoAccepted : 0,
+								clockAdvancedMinutes: typeof jobResult.clockAdvancedMinutes === 'number' ? jobResult.clockAdvancedMinutes : 0,
+							},
+						},
+					},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.chronicle.review': {
+				const args = engineWorldChronicleReviewArgsSchema.parse(request.args ?? {});
+				const reviewed = await reviewWorldChronicle({ storyId: request.storyId, ...args });
+				const response = {
+					...base,
+					status: 'succeeded',
+					result: reviewed,
+					projectionChanges: reviewed.changed ? {
+						worldChronicle: { review: { eventId: args.eventId, action: args.action, status: reviewed.event.status, serverVersion: reviewed.serverVersion } },
+					} : {},
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
+				if (reviewed.changed) publishEngineEvent({ storyId: request.storyId, type: 'state.changed', data: response.projectionChanges });
+				publishSucceededEvent(response);
+				return response;
+			}
+			case 'world.chronicle.list': {
+				const args = engineWorldChronicleListArgsSchema.parse(request.args ?? {});
+				// A read: no projection change and no stream event.
+				return {
+					...base,
+					status: 'succeeded',
+					result: await listWorldChronicle(request.storyId, args.limit),
+					updatedAt: nowIso(),
+				} satisfies EngineCommandResponse;
 			}
 			case 'jobs.storyVaultSync': {
 				const args = engineStoryVaultSyncJobArgsSchema.parse(request.args ?? {});

@@ -193,6 +193,7 @@ export function shouldRefreshCampaignProjection(event: EngineStreamEvent | null 
 			'evaluate_world_sim_tick',
 			'continuity_audit',
 			'plan_plot_brain',
+			'simulate_world_happenings',
 		].includes(asString(event.data.type));
 	}
 	if (event.type === 'command.succeeded') {

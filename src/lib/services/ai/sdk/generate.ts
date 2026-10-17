@@ -10,6 +10,8 @@
 import { getSetting } from '$lib/services/database';
 import { uuid } from '$lib/utils/uuid';
 import { PROVIDERS } from './providers/config';
+import { anthropicHeaders } from './modelLists';
+import { anthropicModelRules } from './claudeModelRules';
 import type { APIProfile, ProviderType } from '$lib/types';
 
 export interface ChatMessage {
@@ -70,13 +72,6 @@ function addLogEntry(entry: APILogEntry) {
 }
 
 /**
- * Detect if a key is an Anthropic OAuth setup-token (sk-ant-oat-*).
- */
-function isOAuthToken(apiKey: string): boolean {
-	return apiKey.startsWith('sk-ant-oat-');
-}
-
-/**
  * Check if a profile targets the Anthropic Messages API shape (native or
  * the cc-bridge proxy). Both speak `/v1/messages` and accept `x-api-key`.
  */
@@ -115,17 +110,7 @@ function buildAuthHeaders(profile: APIProfile): Record<string, string> {
  * OAuth tokens use Authorization: Bearer; API keys use x-api-key.
  */
 function buildAnthropicHeaders(profile: APIProfile): Record<string, string> {
-	const headers: Record<string, string> = {
-		'Content-Type': 'application/json',
-		'anthropic-version': '2023-06-01',
-	};
-	if (isOAuthToken(profile.apiKey)) {
-		headers['Authorization'] = `Bearer ${profile.apiKey}`;
-		headers['anthropic-beta'] = 'oauth-2025-04-01';
-	} else {
-		headers['x-api-key'] = profile.apiKey;
-	}
-	return headers;
+	return anthropicHeaders(profile.apiKey);
 }
 
 /**
@@ -163,7 +148,8 @@ function toAnthropicBody(
 		system: systemPrompt,
 		messages: merged,
 		max_tokens: maxTokens,
-		temperature,
+		// Claude 4.7 and later reject sampling parameters.
+		...(anthropicModelRules(model).sampling ? { temperature } : {}),
 		stream: false,
 	};
 }

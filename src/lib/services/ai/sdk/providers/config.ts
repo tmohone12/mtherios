@@ -348,13 +348,14 @@ export const PROVIDERS: Record<ProviderType, ProviderConfig> = {
       reasoning: 'native',
       reasoningExtraction: 'sdk-native',
     },
+    // Used until the account's own list is fetched from /v1/models.
     fallbackModels: [
-      'claude-opus-4-5-20251101',
-      'claude-haiku-4-5-20251001',
-      'claude-sonnet-4-5-20250929',
-      'claude-opus-4-1-20250805',
-      'claude-sonnet-4-20250514',
-      'claude-opus-4-20250514',
+      'claude-opus-5-5',
+      'claude-sonnet-5-5',
+      'claude-haiku-5-5',
+      'claude-fable-5-1',
+      'claude-opus-5',
+      'claude-sonnet-5',
     ],
     // No service defaults - user must configure models in Generation Settings
   },
